@@ -16,180 +16,200 @@ interface ProjectContext {
   recentMessages: any[];
 }
 
-// Function to generate assistant reply - structured to easily plug in LLM later
-function generateAssistantReply(context: ProjectContext, question: string): string {
-  const { project, numericStats, categoricalStats, models, productionModel, featureImportances, recentMessages } = context;
+// Build system prompt for the LLM
+function buildSystemPrompt(): string {
+  return `Você é o Assistente IA da plataforma PredictSys AI, uma plataforma de machine learning preditivo para negócios.
+
+Seu papel é:
+- Explicar em português, usando linguagem de negócios simples (evite jargões técnicos quando possível)
+- Ajudar usuários a entender os resultados dos modelos de machine learning
+- Fornecer insights acionáveis baseados nos dados e métricas do projeto
+- Responder perguntas sobre o pipeline de ML: dados, EDA, modelos treinados, métricas, importância de variáveis
+
+Diretrizes de comunicação:
+- Seja conciso mas completo
+- Use exemplos práticos quando apropriado
+- Explique métricas técnicas (AUC, F1, RMSE) em termos de impacto no negócio
+- Se não souber algo específico, diga que não tem essa informação
+- Sempre baseie suas respostas nos dados reais do projeto fornecidos no contexto`;
+}
+
+// Build context prompt with project data
+function buildContextPrompt(context: ProjectContext): string {
+  const { project, numericStats, categoricalStats, models, productionModel, featureImportances } = context;
+  
+  let contextStr = `=== CONTEXTO DO PROJETO ===\n\n`;
+  
+  // Project info
+  contextStr += `**Projeto:** ${project.name}\n`;
+  contextStr += `**Tipo de problema:** ${project.problem_type === "classification" ? "Classificação" : "Regressão"}\n`;
+  contextStr += `**Variável alvo:** ${project.target_column || "Não definida"}\n`;
+  contextStr += `**Status:** ${project.status}\n`;
+  
+  if (project.business_objective) {
+    contextStr += `**Objetivo de negócio:** ${project.business_objective}\n`;
+  }
+  if (project.description) {
+    contextStr += `**Descrição:** ${project.description}\n`;
+  }
+  
+  // Dataset info
+  if (project.dataset_rows && project.dataset_columns) {
+    contextStr += `\n**Dataset:** ${project.dataset_rows.toLocaleString("pt-BR")} registros, ${project.dataset_columns} variáveis\n`;
+  }
+  
+  // EDA stats
+  if (numericStats.length > 0) {
+    contextStr += `\n**Variáveis numéricas (${numericStats.length}):**\n`;
+    numericStats.slice(0, 10).forEach((stat: any) => {
+      contextStr += `- ${stat.column_name}: média=${stat.mean_value?.toFixed(2) || 'N/A'}, min=${stat.min_value?.toFixed(2) || 'N/A'}, max=${stat.max_value?.toFixed(2) || 'N/A'}, nulos=${stat.null_count || 0}\n`;
+    });
+  }
+  
+  if (categoricalStats.length > 0) {
+    contextStr += `\n**Variáveis categóricas (${categoricalStats.length}):**\n`;
+    categoricalStats.slice(0, 10).forEach((stat: any) => {
+      contextStr += `- ${stat.column_name}: ${stat.distinct_count || 0} categorias distintas\n`;
+    });
+  }
+  
+  // Models
+  if (models.length > 0) {
+    contextStr += `\n**Modelos treinados (${models.length}):**\n`;
+    models.forEach((model: any) => {
+      const metricsStr = model.metrics?.map((m: any) => `${m.metric_name}: ${m.metric_value.toFixed(4)}`).join(", ") || "sem métricas";
+      const prodTag = model.is_production ? " [EM PRODUÇÃO]" : "";
+      contextStr += `- ${model.algorithm_name}${prodTag}: ${metricsStr}\n`;
+    });
+  } else {
+    contextStr += `\n**Modelos:** Nenhum modelo treinado ainda.\n`;
+  }
+  
+  // Feature importance
+  if (featureImportances.length > 0) {
+    const sortedFeatures = featureImportances
+      .sort((a: any, b: any) => b.importance_value - a.importance_value)
+      .slice(0, 10);
+    
+    contextStr += `\n**Top variáveis mais importantes:**\n`;
+    sortedFeatures.forEach((f: any, i: number) => {
+      contextStr += `${i + 1}. ${f.feature_name}: ${(f.importance_value * 100).toFixed(1)}%\n`;
+    });
+  }
+  
+  // Production model details
+  if (productionModel) {
+    contextStr += `\n**Modelo em produção:** ${productionModel.algorithm_name}\n`;
+    if (productionModel.metrics?.length > 0) {
+      contextStr += `Métricas do modelo em produção:\n`;
+      productionModel.metrics.forEach((m: any) => {
+        const isPercentage = ["AUC", "Accuracy", "F1", "Precision", "Recall", "R2"].includes(m.metric_name);
+        const value = isPercentage ? `${(m.metric_value * 100).toFixed(1)}%` : m.metric_value.toFixed(4);
+        contextStr += `- ${m.metric_name}: ${value}\n`;
+      });
+    }
+  }
+  
+  return contextStr;
+}
+
+// Build conversation history for context
+function buildConversationHistory(recentMessages: any[]): string {
+  if (recentMessages.length === 0) return "";
+  
+  // Reverse to get chronological order (they come desc)
+  const chronological = [...recentMessages].reverse().slice(-6); // Last 6 messages (3 turns)
+  
+  let historyStr = "\n=== HISTÓRICO RECENTE DA CONVERSA ===\n";
+  chronological.forEach((msg: any) => {
+    const role = msg.sender_type === "user" ? "Usuário" : "Assistente";
+    historyStr += `${role}: ${msg.message_text.slice(0, 500)}\n\n`;
+  });
+  
+  return historyStr;
+}
+
+// Call Lovable AI gateway
+async function callLLM(systemPrompt: string, userMessage: string, projectContext: string, conversationHistory: string): Promise<string> {
+  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
+  
+  if (!LOVABLE_API_KEY) {
+    throw new Error("LOVABLE_API_KEY not configured");
+  }
+  
+  const fullPrompt = `${projectContext}\n${conversationHistory}\n=== PERGUNTA DO USUÁRIO ===\n${userMessage}`;
+  
+  console.log("Calling Lovable AI with context length:", fullPrompt.length);
+  
+  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${LOVABLE_API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      model: "google/gemini-2.5-flash",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: fullPrompt },
+      ],
+      max_tokens: 2000,
+      temperature: 0.7,
+    }),
+  });
+  
+  if (!response.ok) {
+    const errorText = await response.text();
+    console.error("LLM API error:", response.status, errorText);
+    
+    if (response.status === 429) {
+      throw new Error("RATE_LIMITED");
+    }
+    if (response.status === 402) {
+      throw new Error("PAYMENT_REQUIRED");
+    }
+    throw new Error(`LLM API error: ${response.status}`);
+  }
+  
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  
+  if (!content) {
+    throw new Error("Empty response from LLM");
+  }
+  
+  return content;
+}
+
+// Fallback template-based response (when LLM is unavailable)
+function generateFallbackReply(context: ProjectContext, question: string): string {
+  const { project, numericStats, categoricalStats, models, productionModel, featureImportances } = context;
   const questionLower = question.toLowerCase();
 
-  // Question about best model or model comparison
-  if (questionLower.includes("melhor modelo") || questionLower.includes("qual modelo") || questionLower.includes("comparar modelo")) {
+  if (questionLower.includes("melhor modelo") || questionLower.includes("qual modelo")) {
     if (models.length === 0) {
       return "Ainda não há modelos treinados neste projeto. Vá até a aba 'Modelos' e clique em 'Treinar Modelos' para começar.";
     }
-
     const modelsSummary = models.map((m: any) => {
       const metricsStr = m.metrics?.map((met: any) => `${met.metric_name}: ${(met.metric_value * 100).toFixed(1)}%`).join(", ") || "sem métricas";
       return `- ${m.algorithm_name}: ${metricsStr}`;
     }).join("\n");
-
-    let response = `📊 **Modelos treinados neste projeto:**\n\n${modelsSummary}\n\n`;
-    
-    if (productionModel) {
-      response += `✅ **Modelo em produção:** ${productionModel.algorithm_name}\n`;
-    } else {
-      response += `⚠️ Nenhum modelo foi selecionado para produção ainda. Escolha o melhor modelo na aba 'Modelos'.`;
-    }
-
-    return response;
+    return `📊 **Modelos treinados:**\n\n${modelsSummary}`;
   }
 
-  // Question about feature importance / important variables
-  if (questionLower.includes("variáveis importantes") || questionLower.includes("features importantes") || 
-      questionLower.includes("importância") || questionLower.includes("variavel") || questionLower.includes("influencia")) {
+  if (questionLower.includes("variáveis importantes") || questionLower.includes("importância")) {
     if (featureImportances.length === 0) {
       return "Ainda não temos dados de importância de variáveis. Isso é calculado após o treinamento dos modelos.";
     }
-
-    const topFeatures = featureImportances
-      .sort((a: any, b: any) => b.importance_value - a.importance_value)
-      .slice(0, 5);
-
+    const topFeatures = featureImportances.sort((a: any, b: any) => b.importance_value - a.importance_value).slice(0, 5);
     const featuresStr = topFeatures.map((f: any, i: number) => 
-      `${i + 1}. **${f.feature_name}**: ${(f.importance_value * 100).toFixed(1)}% de importância`
+      `${i + 1}. **${f.feature_name}**: ${(f.importance_value * 100).toFixed(1)}%`
     ).join("\n");
-
-    return `🎯 **Top 5 variáveis mais importantes:**\n\n${featuresStr}\n\nEssas são as variáveis que mais influenciam as previsões do modelo.`;
+    return `🎯 **Top variáveis mais importantes:**\n\n${featuresStr}`;
   }
 
-  // Question about metrics / performance
-  if (questionLower.includes("métrica") || questionLower.includes("performance") || questionLower.includes("desempenho") ||
-      questionLower.includes("acurácia") || questionLower.includes("auc") || questionLower.includes("rmse") || questionLower.includes("precisão")) {
-    if (!productionModel && models.length === 0) {
-      return "Ainda não há modelos treinados. Treine os modelos primeiro para ver as métricas de performance.";
-    }
-
-    const targetModel = productionModel || models[0];
-    const metricsStr = targetModel.metrics?.map((m: any) => {
-      const value = m.metric_name.includes("R2") || m.metric_name === "AUC" || m.metric_name === "Accuracy" || m.metric_name === "F1"
-        ? `${(m.metric_value * 100).toFixed(1)}%`
-        : m.metric_value.toFixed(4);
-      return `- **${m.metric_name}**: ${value}`;
-    }).join("\n") || "Métricas não disponíveis";
-
-    return `📈 **Performance do modelo ${targetModel.algorithm_name}:**\n\n${metricsStr}\n\n${
-      project.problem_type === "classification" 
-        ? "Para classificação, AUC e F1 são as métricas mais importantes." 
-        : "Para regressão, RMSE e R² são as métricas mais importantes."
-    }`;
-  }
-
-  // Question about summary / resume
-  if (questionLower.includes("resumo") || questionLower.includes("resuma") || questionLower.includes("tópicos") || questionLower.includes("diretor")) {
-    let summary = `📋 **Resumo do Projeto: ${project.name}**\n\n`;
-    
-    if (project.business_objective) {
-      summary += `**Objetivo de negócio:** ${project.business_objective}\n\n`;
-    }
-
-    summary += `**Tipo de problema:** ${project.problem_type === "classification" ? "Classificação" : "Regressão"}\n`;
-    summary += `**Variável alvo:** ${project.target_column || "Não definida"}\n\n`;
-
-    if (project.dataset_rows && project.dataset_columns) {
-      summary += `**Dataset:** ${project.dataset_rows.toLocaleString("pt-BR")} registros com ${project.dataset_columns} variáveis\n\n`;
-    }
-
-    if (models.length > 0) {
-      summary += `**Modelos treinados:** ${models.length} algoritmos testados\n`;
-      if (productionModel) {
-        const mainMetric = productionModel.metrics?.find((m: any) => 
-          m.metric_name === "AUC" || m.metric_name === "R2"
-        );
-        summary += `**Modelo em produção:** ${productionModel.algorithm_name}`;
-        if (mainMetric) {
-          summary += ` (${mainMetric.metric_name}: ${(mainMetric.metric_value * 100).toFixed(1)}%)`;
-        }
-        summary += "\n";
-      }
-    } else {
-      summary += "**Status:** Aguardando treinamento de modelos\n";
-    }
-
-    if (featureImportances.length > 0) {
-      const top3 = featureImportances
-        .sort((a: any, b: any) => b.importance_value - a.importance_value)
-        .slice(0, 3)
-        .map((f: any) => f.feature_name)
-        .join(", ");
-      summary += `\n**Principais variáveis preditoras:** ${top3}`;
-    }
-
-    return summary;
-  }
-
-  // Question about data / EDA
-  if (questionLower.includes("dados") || questionLower.includes("dataset") || questionLower.includes("eda") || 
-      questionLower.includes("estatística") || questionLower.includes("coluna")) {
-    let response = `📊 **Informações do Dataset:**\n\n`;
-    
-    if (project.dataset_rows && project.dataset_columns) {
-      response += `- **Total de registros:** ${project.dataset_rows.toLocaleString("pt-BR")}\n`;
-      response += `- **Total de variáveis:** ${project.dataset_columns}\n`;
-      response += `- **Variável alvo:** ${project.target_column || "Não definida"}\n\n`;
-    }
-
-    if (numericStats.length > 0) {
-      response += `**Variáveis numéricas:** ${numericStats.length}\n`;
-      const numExamples = numericStats.slice(0, 3).map((s: any) => s.column_name).join(", ");
-      response += `Exemplos: ${numExamples}\n\n`;
-    }
-
-    if (categoricalStats.length > 0) {
-      response += `**Variáveis categóricas:** ${categoricalStats.length}\n`;
-      const catExamples = categoricalStats.slice(0, 3).map((s: any) => s.column_name).join(", ");
-      response += `Exemplos: ${catExamples}\n`;
-    }
-
-    return response;
-  }
-
-  // Question about API / deploy / endpoint
-  if (questionLower.includes("api") || questionLower.includes("deploy") || questionLower.includes("endpoint") || 
-      questionLower.includes("integrar") || questionLower.includes("produção")) {
-    if (!productionModel) {
-      return "Para usar a API de predição, primeiro você precisa selecionar um modelo para produção na aba 'Modelos'.";
-    }
-
-    return `🚀 **API de Predição**\n\nSeu modelo **${productionModel.algorithm_name}** está em produção!\n\nPara fazer predições, acesse a aba **'API & Deploy'** onde você encontrará:\n- URL do endpoint\n- Exemplo de requisição\n- Instruções de integração`;
-  }
-
-  // Default response with suggestions
-  const suggestions = [
-    "• \"Qual é o melhor modelo treinado?\"",
-    "• \"Quais são as variáveis mais importantes?\"",
-    "• \"Resuma este projeto para eu apresentar ao diretor\"",
-    "• \"Qual é a performance do modelo em produção?\"",
-    "• \"Como posso integrar a API de predição?\"",
-  ];
-
-  let defaultResponse = `Olá! Sou o assistente IA do projeto **${project.name}**.\n\n`;
-  defaultResponse += `Este é um projeto de **${project.problem_type === "classification" ? "classificação" : "regressão"}**`;
-  
-  if (project.target_column) {
-    defaultResponse += ` que prevê a variável **${project.target_column}**`;
-  }
-  defaultResponse += ".\n\n";
-
-  if (models.length > 0) {
-    defaultResponse += `Já temos **${models.length} modelos** treinados`;
-    if (productionModel) {
-      defaultResponse += ` e o modelo **${productionModel.algorithm_name}** está em produção`;
-    }
-    defaultResponse += ".\n\n";
-  }
-
-  defaultResponse += `**Algumas perguntas que posso responder:**\n${suggestions.join("\n")}`;
-
-  return defaultResponse;
+  // Default fallback
+  return `Olá! Sou o assistente IA do projeto **${project.name}**.\n\nPor favor, configure a API de IA para respostas mais completas. No momento, posso responder apenas perguntas básicas sobre modelos e variáveis importantes.`;
 }
 
 serve(async (req) => {
@@ -244,6 +264,8 @@ serve(async (req) => {
       });
     }
 
+    console.log(`Processing chat for project: ${project.name}`);
+
     // Fetch all context data in parallel
     const [
       numericStatsResult,
@@ -288,8 +310,35 @@ serve(async (req) => {
       recentMessages: recentMessagesResult.data || [],
     };
 
-    // Generate response
-    const assistantReply = generateAssistantReply(context, message);
+    // Generate response using LLM or fallback
+    let assistantReply: string;
+    
+    try {
+      const systemPrompt = buildSystemPrompt();
+      const projectContext = buildContextPrompt(context);
+      const conversationHistory = buildConversationHistory(context.recentMessages);
+      
+      assistantReply = await callLLM(systemPrompt, message, projectContext, conversationHistory);
+      console.log("LLM response generated successfully");
+    } catch (llmError) {
+      console.error("LLM error, using fallback:", llmError);
+      
+      // Check for specific errors
+      if (llmError instanceof Error) {
+        if (llmError.message === "RATE_LIMITED") {
+          assistantReply = "⚠️ O assistente está temporariamente indisponível devido a muitas requisições. Tente novamente em alguns segundos.";
+        } else if (llmError.message === "PAYMENT_REQUIRED") {
+          assistantReply = "⚠️ O assistente está temporariamente indisponível. Entre em contato com o suporte.";
+        } else if (llmError.message === "LOVABLE_API_KEY not configured") {
+          // Use fallback for unconfigured API
+          assistantReply = generateFallbackReply(context, message);
+        } else {
+          assistantReply = "Não consegui gerar uma resposta agora. Tente novamente em alguns instantes.";
+        }
+      } else {
+        assistantReply = generateFallbackReply(context, message);
+      }
+    }
 
     // Save both messages to database
     const { error: insertUserError } = await supabase
