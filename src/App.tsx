@@ -6,8 +6,10 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
+import ProjectDetails from "./pages/ProjectDetails";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
+import WizardContainer from "./components/wizard/WizardContainer";
 
 const queryClient = new QueryClient();
 
@@ -25,6 +27,30 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/projeto/novo/wizard" 
+            element={
+              <ProtectedRoute>
+                <WizardContainer />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/projeto/:projectId/wizard" 
+            element={
+              <ProtectedRoute>
+                <WizardContainer />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/projeto/:projectId" 
+            element={
+              <ProtectedRoute>
+                <ProjectDetails />
               </ProtectedRoute>
             } 
           />

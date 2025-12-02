@@ -1,13 +1,56 @@
+import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
-import { Brain, Plus, FolderKanban, LogOut, MessageSquare } from "lucide-react";
+import { Brain, Plus, FolderKanban, LogOut, MessageSquare, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+
+interface Project {
+  id: string;
+  name: string;
+  problem_type: string;
+  status: string;
+  created_at: string;
+}
+
+const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+  draft: { label: "Rascunho", color: "bg-muted text-muted-foreground" },
+  configuring: { label: "Configurando", color: "bg-secondary/20 text-secondary" },
+  data_uploaded: { label: "Dados enviados", color: "bg-primary/20 text-primary" },
+  eda_complete: { label: "EDA completa", color: "bg-accent/20 text-accent" },
+  training: { label: "Treinando", color: "bg-destructive/20 text-destructive" },
+  evaluated: { label: "Avaliado", color: "bg-accent/20 text-accent" },
+  deployed: { label: "Em produção", color: "bg-accent text-accent-foreground" },
+};
 
 const Dashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    loadProjects();
+  }, []);
+
+  const loadProjects = async () => {
+    const { data, error } = await supabase
+      .from("projects")
+      .select("id, name, problem_type, status, created_at")
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      toast({
+        title: "Erro ao carregar projetos",
+        description: error.message,
+        variant: "destructive",
+      });
+    } else {
+      setProjects(data || []);
+    }
+    setLoading(false);
+  };
 
   const handleLogout = async () => {
     const { error } = await supabase.auth.signOut();
@@ -22,8 +65,13 @@ const Dashboard = () => {
     }
   };
 
-  // Mock data for projects - will be replaced with real data later
-  const projects = [];
+  const handleCreateProject = () => {
+    navigate("/projeto/novo/wizard");
+  };
+
+  const handleOpenProject = (projectId: string) => {
+    navigate(`/projeto/${projectId}`);
+  };
 
   return (
     <div className="min-h-screen bg-gradient-hero">
@@ -63,14 +111,22 @@ const Dashboard = () => {
           <Button 
             size="lg"
             className="bg-gradient-primary hover:shadow-hover transition-all"
+            onClick={handleCreateProject}
           >
             <Plus className="w-5 h-5 mr-2" />
             Novo Projeto
           </Button>
         </div>
 
+        {/* Loading state */}
+        {loading && (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="w-8 h-8 animate-spin text-primary" />
+          </div>
+        )}
+
         {/* Projects Grid or Empty State */}
-        {projects.length === 0 ? (
+        {!loading && projects.length === 0 ? (
           <Card className="bg-gradient-card shadow-card p-12 text-center">
             <div className="max-w-md mx-auto space-y-6">
               <div className="w-20 h-20 bg-gradient-primary rounded-2xl flex items-center justify-center mx-auto">
@@ -87,6 +143,7 @@ const Dashboard = () => {
               <Button 
                 size="lg"
                 className="bg-gradient-primary hover:shadow-hover transition-all"
+                onClick={handleCreateProject}
               >
                 <Plus className="w-5 h-5 mr-2" />
                 Criar Primeiro Projeto
@@ -94,9 +151,43 @@ const Dashboard = () => {
             </div>
           </Card>
         ) : (
-          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {/* Project cards will be rendered here */}
-          </div>
+          !loading && (
+            <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {projects.map((project) => {
+                const statusInfo = STATUS_LABELS[project.status] || STATUS_LABELS.draft;
+                return (
+                  <Card
+                    key={project.id}
+                    className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all cursor-pointer"
+                    onClick={() => handleOpenProject(project.id)}
+                  >
+                    <div className="flex items-start justify-between mb-4">
+                      <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center">
+                        <Brain className="w-6 h-6 text-primary-foreground" />
+                      </div>
+                      <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
+                        {statusInfo.label}
+                      </span>
+                    </div>
+                    <h3 className="font-semibold text-lg mb-1 line-clamp-1">
+                      {project.name}
+                    </h3>
+                    <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                      <span>
+                        {project.problem_type === "classification"
+                          ? "Classificação"
+                          : "Regressão"}
+                      </span>
+                      <span>•</span>
+                      <span>
+                        {new Date(project.created_at).toLocaleDateString("pt-BR")}
+                      </span>
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )
         )}
 
         {/* Quick Actions */}
