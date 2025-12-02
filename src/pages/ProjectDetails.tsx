@@ -17,6 +17,7 @@ import {
   Edit,
   Loader2,
 } from "lucide-react";
+import EDADisplay from "@/components/eda/EDADisplay";
 
 interface Project {
   id: string;
@@ -213,14 +214,46 @@ const ProjectDetails = () => {
             </div>
           </TabsContent>
 
-          <TabsContent value="data">
-            <Card className="bg-gradient-card shadow-card p-8 text-center">
-              <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">Dados e Análise Exploratória</h3>
-              <p className="text-muted-foreground">
-                Esta seção mostrará os dados carregados e análises exploratórias.
-              </p>
-            </Card>
+          <TabsContent value="data" className="space-y-6">
+            {/* Dataset info */}
+            {project.dataset_filename && (
+              <Card className="bg-gradient-card shadow-card p-6">
+                <h3 className="font-semibold mb-4 flex items-center gap-2">
+                  <Database className="w-5 h-5 text-primary" />
+                  Informações do Dataset
+                </h3>
+                <div className="grid sm:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-sm text-muted-foreground">Arquivo</p>
+                    <p className="font-medium truncate">{project.dataset_filename.split("/").pop()}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Linhas</p>
+                    <p className="font-medium">{project.dataset_rows?.toLocaleString("pt-BR") || "-"}</p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-muted-foreground">Colunas</p>
+                    <p className="font-medium">{project.dataset_columns || "-"}</p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* EDA Display */}
+            {project.dataset_filename ? (
+              <EDADisplay projectId={project.id} />
+            ) : (
+              <Card className="bg-gradient-card shadow-card p-8 text-center">
+                <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="font-semibold text-lg mb-2">Nenhum dado carregado</h3>
+                <p className="text-muted-foreground mb-4">
+                  Faça upload de um arquivo CSV para ver a análise exploratória.
+                </p>
+                <Button onClick={() => navigate(`/projeto/${project.id}/wizard`)}>
+                  Ir para o Wizard
+                </Button>
+              </Card>
+            )}
           </TabsContent>
 
           <TabsContent value="models">

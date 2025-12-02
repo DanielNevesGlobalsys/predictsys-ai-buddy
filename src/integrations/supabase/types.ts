@@ -35,6 +35,41 @@ export type Database = {
         }
         Relationships: []
       }
+      project_categorical_stats: {
+        Row: {
+          column_name: string
+          created_at: string
+          distinct_count: number | null
+          id: string
+          project_id: string
+          top_categories: Json | null
+        }
+        Insert: {
+          column_name: string
+          created_at?: string
+          distinct_count?: number | null
+          id?: string
+          project_id: string
+          top_categories?: Json | null
+        }
+        Update: {
+          column_name?: string
+          created_at?: string
+          distinct_count?: number | null
+          id?: string
+          project_id?: string
+          top_categories?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_categorical_stats_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_columns: {
         Row: {
           column_index: number
@@ -63,6 +98,53 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "project_columns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_numeric_stats: {
+        Row: {
+          column_name: string
+          created_at: string
+          id: string
+          max_value: number | null
+          mean_value: number | null
+          median_value: number | null
+          min_value: number | null
+          null_count: number | null
+          project_id: string
+          std_value: number | null
+        }
+        Insert: {
+          column_name: string
+          created_at?: string
+          id?: string
+          max_value?: number | null
+          mean_value?: number | null
+          median_value?: number | null
+          min_value?: number | null
+          null_count?: number | null
+          project_id: string
+          std_value?: number | null
+        }
+        Update: {
+          column_name?: string
+          created_at?: string
+          id?: string
+          max_value?: number | null
+          mean_value?: number | null
+          median_value?: number | null
+          min_value?: number | null
+          null_count?: number | null
+          project_id?: string
+          std_value?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_numeric_stats_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
