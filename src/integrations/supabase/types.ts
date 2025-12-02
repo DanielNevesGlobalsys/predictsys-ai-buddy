@@ -35,6 +35,41 @@ export type Database = {
         }
         Relationships: []
       }
+      project_columns: {
+        Row: {
+          column_index: number
+          column_name: string
+          created_at: string
+          id: string
+          inferred_type: string
+          project_id: string
+        }
+        Insert: {
+          column_index: number
+          column_name: string
+          created_at?: string
+          id?: string
+          inferred_type?: string
+          project_id: string
+        }
+        Update: {
+          column_index?: number
+          column_name?: string
+          created_at?: string
+          id?: string
+          inferred_type?: string
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_columns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           business_objective: string | null
