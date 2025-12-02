@@ -105,6 +105,117 @@ export type Database = {
           },
         ]
       }
+      project_feature_importances: {
+        Row: {
+          created_at: string
+          feature_name: string
+          id: string
+          importance_value: number
+          project_model_id: string
+        }
+        Insert: {
+          created_at?: string
+          feature_name: string
+          id?: string
+          importance_value: number
+          project_model_id: string
+        }
+        Update: {
+          created_at?: string
+          feature_name?: string
+          id?: string
+          importance_value?: number
+          project_model_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_feature_importances_project_model_id_fkey"
+            columns: ["project_model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_model_metrics: {
+        Row: {
+          created_at: string
+          id: string
+          metric_name: string
+          metric_value: number
+          project_model_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          metric_name: string
+          metric_value: number
+          project_model_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          metric_name?: string
+          metric_value?: number
+          project_model_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_model_metrics_project_model_id_fkey"
+            columns: ["project_model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_models: {
+        Row: {
+          algorithm_name: string
+          created_at: string
+          hyperparameters: Json | null
+          id: string
+          is_production: boolean
+          model_location: string | null
+          problem_type: string
+          project_id: string
+          status: string
+          trained_at: string | null
+        }
+        Insert: {
+          algorithm_name: string
+          created_at?: string
+          hyperparameters?: Json | null
+          id?: string
+          is_production?: boolean
+          model_location?: string | null
+          problem_type: string
+          project_id: string
+          status?: string
+          trained_at?: string | null
+        }
+        Update: {
+          algorithm_name?: string
+          created_at?: string
+          hyperparameters?: Json | null
+          id?: string
+          is_production?: boolean
+          model_location?: string | null
+          problem_type?: string
+          project_id?: string
+          status?: string
+          trained_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_models_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_numeric_stats: {
         Row: {
           column_name: string
