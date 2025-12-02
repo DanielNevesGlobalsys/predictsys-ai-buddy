@@ -254,20 +254,20 @@ function predictTree(tree: any, x: number[]): number {
     : predictTree(tree.right, x);
 }
 
-// Random Forest
-function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 10): any[] {
+// Random Forest - optimized for speed
+function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 5): any[] {
   const trees: any[] = [];
-  const n = X.length;
+  const n = Math.min(X.length, 2000); // Limit samples per tree for speed
   
   for (let t = 0; t < numTrees; t++) {
-    // Bootstrap sample
+    // Bootstrap sample with limited size
     const indices: number[] = [];
     for (let i = 0; i < n; i++) {
-      indices.push(Math.floor(Math.random() * n));
+      indices.push(Math.floor(Math.random() * X.length));
     }
     const Xb = indices.map(i => X[i]);
     const yb = indices.map(i => y[i]);
-    trees.push(trainSimpleTree(Xb, yb, isClassification, 5));
+    trees.push(trainSimpleTree(Xb, yb, isClassification, 4)); // Reduced depth
   }
   
   return trees;
@@ -283,19 +283,25 @@ function predictRandomForest(trees: any[], X: number[][], isClassification: bool
   });
 }
 
-// Gradient Boosting (simplified)
-function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 10): { trees: any[]; lr: number; base: number } {
-  const base = mean(y);
-  let residuals = y.map(v => v - base);
+// Gradient Boosting (simplified) - optimized for speed
+function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 5): { trees: any[]; lr: number; base: number } {
+  // Use subset of data for speed
+  const sampleSize = Math.min(X.length, 3000);
+  const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, sampleSize);
+  const Xs = sampleIndices.map(i => X[i]);
+  const ys = sampleIndices.map(i => y[i]);
+  
+  const base = mean(ys);
+  let residuals = ys.map(v => v - base);
   const trees: any[] = [];
   const lr = 0.1;
   
   for (let t = 0; t < numTrees; t++) {
-    const tree = trainSimpleTree(X, residuals, false, 3);
+    const tree = trainSimpleTree(Xs, residuals, false, 3);
     trees.push(tree);
     
-    for (let i = 0; i < X.length; i++) {
-      const pred = predictTree(tree, X[i]);
+    for (let i = 0; i < Xs.length; i++) {
+      const pred = predictTree(tree, Xs[i]);
       residuals[i] -= lr * pred;
     }
   }
@@ -449,7 +455,9 @@ serve(async (req) => {
     const X: number[][] = [];
     const y: number[] = [];
     
-    for (let i = 1; i < Math.min(lines.length, 50001); i++) { // Limit to 50k rows for memory
+    // Limit to 10k rows to avoid CPU timeout in edge functions
+    const MAX_ROWS = 10000;
+    for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
       const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, "").replace(",", "."));
       const features = featureIndices.map(idx => parseFloat(values[idx]));
       const target = parseFloat(values[targetIndex]?.replace(",", ".") || "");
@@ -534,7 +542,7 @@ serve(async (req) => {
           predictions = predictLinear(Xtest, model.weights, model.bias);
           featureImportances = calcFeatureImportance(model.weights, featureNames);
         } else if (algo.train === "rf") {
-          const trees = trainRandomForest(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 10);
+          const trees = trainRandomForest(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 5);
           predictions = predictRandomForest(trees, Xtest, isClassification);
           // Approximate feature importance for RF
           const importances = featureNames.map(() => Math.random());
@@ -544,7 +552,7 @@ serve(async (req) => {
             importance_value: importances[i] / total
           }));
         } else {
-          const model = trainGradientBoosting(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 10);
+          const model = trainGradientBoosting(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 5);
           predictions = predictGradientBoosting(model, Xtest, isClassification);
           const importances = featureNames.map(() => Math.random());
           const total = importances.reduce((a, b) => a + b, 0);
