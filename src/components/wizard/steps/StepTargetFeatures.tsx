@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -10,7 +10,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info } from "lucide-react";
+import { Target, Layers, Info, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
 import type { ProjectData } from "../WizardContainer";
 
 interface StepTargetFeaturesProps {
@@ -21,15 +22,10 @@ interface StepTargetFeaturesProps {
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
 }
 
-// Placeholder columns - will be replaced with real data from CSV
-const PLACEHOLDER_COLUMNS = [
-  { name: "idade", type: "numérico" },
-  { name: "salario", type: "numérico" },
-  { name: "genero", type: "categórico" },
-  { name: "cidade", type: "categórico" },
-  { name: "comprou", type: "categórico" },
-  { name: "valor_compra", type: "numérico" },
-];
+interface ColumnInfo {
+  name: string;
+  type: string;
+}
 
 const StepTargetFeatures = ({
   projectData,
@@ -38,15 +34,75 @@ const StepTargetFeatures = ({
   loading,
   saveProject,
 }: StepTargetFeaturesProps) => {
+  const [columns, setColumns] = useState<ColumnInfo[]>([]);
+  const [loadingColumns, setLoadingColumns] = useState(true);
   const [targetColumn, setTargetColumn] = useState(projectData.target_column || "");
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>(
-    PLACEHOLDER_COLUMNS.filter((c) => c.name !== targetColumn).map((c) => c.name)
-  );
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+
+  // Load columns from database when component mounts or project changes
+  useEffect(() => {
+    if (projectData.id) {
+      loadColumns();
+    }
+  }, [projectData.id]);
+
+  // Update selected features when columns load or target changes
+  useEffect(() => {
+    if (columns.length > 0 && selectedFeatures.length === 0) {
+      // Auto-select all features except target
+      const features = columns
+        .filter((c) => c.name !== targetColumn)
+        .map((c) => c.name);
+      setSelectedFeatures(features);
+    }
+  }, [columns, targetColumn]);
+
+  const loadColumns = async () => {
+    setLoadingColumns(true);
+    try {
+      const { data, error } = await supabase
+        .from("project_columns")
+        .select("column_name, inferred_type")
+        .eq("project_id", projectData.id)
+        .order("column_index");
+
+      if (error) {
+        console.error("Erro ao carregar colunas:", error);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const cols = data.map((col) => ({
+          name: col.column_name,
+          type: col.inferred_type,
+        }));
+        setColumns(cols);
+
+        // If target was already selected and exists in columns, keep it
+        if (projectData.target_column && cols.some((c) => c.name === projectData.target_column)) {
+          setTargetColumn(projectData.target_column);
+        } else if (cols.length > 0) {
+          // Auto-select first column as target (user can change)
+          // setTargetColumn(cols[0].name);
+        }
+      }
+    } catch (err) {
+      console.error("Erro ao carregar colunas:", err);
+    }
+    setLoadingColumns(false);
+  };
 
   const handleTargetChange = (value: string) => {
     setTargetColumn(value);
-    // Remove target from features
-    setSelectedFeatures((prev) => prev.filter((f) => f !== value));
+    // Remove target from features and auto-select remaining
+    setSelectedFeatures((prev) => {
+      const newFeatures = prev.filter((f) => f !== value);
+      // If no features selected, select all except new target
+      if (newFeatures.length === 0) {
+        return columns.filter((c) => c.name !== value).map((c) => c.name);
+      }
+      return newFeatures;
+    });
   };
 
   const toggleFeature = (columnName: string) => {
@@ -65,9 +121,37 @@ const StepTargetFeatures = ({
     }
   };
 
-  const availableFeatures = PLACEHOLDER_COLUMNS.filter(
-    (col) => col.name !== targetColumn
-  );
+  const availableFeatures = columns.filter((col) => col.name !== targetColumn);
+
+  if (loadingColumns) {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="flex flex-col items-center justify-center py-12">
+          <Loader2 className="w-8 h-8 animate-spin text-primary mb-4" />
+          <p className="text-muted-foreground">Carregando colunas do dataset...</p>
+        </div>
+      </Card>
+    );
+  }
+
+  if (columns.length === 0) {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="text-center py-8">
+          <div className="w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Target className="w-8 h-8 text-destructive" />
+          </div>
+          <h3 className="text-lg font-semibold mb-2">Nenhuma coluna encontrada</h3>
+          <p className="text-muted-foreground mb-6">
+            Faça upload de um arquivo CSV no passo anterior para continuar.
+          </p>
+          <Button variant="outline" onClick={onBack}>
+            Voltar para Dados
+          </Button>
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -103,11 +187,11 @@ const StepTargetFeatures = ({
               Variável Alvo (Target)
             </Label>
             <Select value={targetColumn} onValueChange={handleTargetChange}>
-              <SelectTrigger>
+              <SelectTrigger className="bg-background">
                 <SelectValue placeholder="Selecione a coluna que quer prever" />
               </SelectTrigger>
-              <SelectContent>
-                {PLACEHOLDER_COLUMNS.map((col) => (
+              <SelectContent className="bg-popover border border-border shadow-lg z-50">
+                {columns.map((col) => (
                   <SelectItem key={col.name} value={col.name}>
                     <div className="flex items-center gap-2">
                       <span className="font-medium">{col.name}</span>
@@ -121,7 +205,7 @@ const StepTargetFeatures = ({
             </Select>
             <p className="text-sm text-muted-foreground">
               {projectData.problem_type === "classification"
-                ? "Para classificação, escolha uma coluna categórica (ex: sim/não, tipo A/B/C)"
+                ? "Para classificação, escolha uma coluna categórica (ex: sim/não, tipo A/B/C) ou numérica binária (0/1)"
                 : "Para regressão, escolha uma coluna numérica (ex: preço, quantidade)"}
             </p>
           </div>
@@ -184,7 +268,7 @@ const StepTargetFeatures = ({
           </Button>
           <Button
             onClick={handleNext}
-            disabled={loading}
+            disabled={loading || !targetColumn}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
             {loading ? "Salvando..." : "Próximo"}
