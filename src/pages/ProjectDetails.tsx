@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -21,6 +21,7 @@ import EDADisplay from "@/components/eda/EDADisplay";
 import ModelsTab from "@/components/project/ModelsTab";
 import APIDeployTab from "@/components/project/APIDeployTab";
 import ChatTab from "@/components/project/ChatTab";
+import SettingsTab from "@/components/project/SettingsTab";
 
 interface Project {
   id: string;
@@ -53,6 +54,7 @@ const ProjectDetails = () => {
   const { toast } = useToast();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
+  const [chatKey, setChatKey] = useState(0);
 
   useEffect(() => {
     if (projectId) {
@@ -79,6 +81,11 @@ const ProjectDetails = () => {
     }
     setLoading(false);
   };
+
+  const handleChatCleared = useCallback(() => {
+    // Force re-render of ChatTab by changing key
+    setChatKey((prev) => prev + 1);
+  }, []);
 
   if (loading) {
     return (
@@ -126,9 +133,6 @@ const ProjectDetails = () => {
               <Edit className="w-4 h-4 mr-2" />
               Editar
             </Button>
-            <Button variant="ghost" size="icon">
-              <Settings className="w-5 h-5" />
-            </Button>
           </div>
         </div>
       </header>
@@ -156,6 +160,10 @@ const ProjectDetails = () => {
             <TabsTrigger value="chat" className="gap-2">
               <MessageSquare className="w-4 h-4" />
               Assistente IA
+            </TabsTrigger>
+            <TabsTrigger value="settings" className="gap-2">
+              <Settings className="w-4 h-4" />
+              Configurações
             </TabsTrigger>
           </TabsList>
 
@@ -272,7 +280,15 @@ const ProjectDetails = () => {
           </TabsContent>
 
           <TabsContent value="chat">
-            <ChatTab projectId={project.id} projectName={project.name} />
+            <ChatTab key={chatKey} projectId={project.id} projectName={project.name} />
+          </TabsContent>
+
+          <TabsContent value="settings">
+            <SettingsTab
+              projectId={project.id}
+              projectName={project.name}
+              onChatCleared={handleChatCleared}
+            />
           </TabsContent>
         </Tabs>
       </main>
