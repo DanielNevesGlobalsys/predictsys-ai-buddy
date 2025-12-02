@@ -70,6 +70,41 @@ export type Database = {
           },
         ]
       }
+      project_chat_messages: {
+        Row: {
+          created_at: string
+          id: string
+          message_text: string
+          project_id: string
+          sender_type: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          message_text: string
+          project_id: string
+          sender_type: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          message_text?: string
+          project_id?: string
+          sender_type?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_chat_messages_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_columns: {
         Row: {
           column_index: number
