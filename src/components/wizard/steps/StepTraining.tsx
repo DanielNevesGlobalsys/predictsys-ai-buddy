@@ -18,13 +18,11 @@ interface StepTrainingProps {
 const ALGORITHMS_CLASSIFICATION = [
   { name: "Regressão Logística", description: "Modelo linear simples e interpretável" },
   { name: "Random Forest", description: "Conjunto de árvores de decisão" },
-  { name: "Gradient Boosting", description: "Boosting sequencial de árvores" },
 ];
 
 const ALGORITHMS_REGRESSION = [
   { name: "Regressão Linear", description: "Modelo linear para valores contínuos" },
   { name: "Random Forest Regressor", description: "Conjunto de árvores para regressão" },
-  { name: "Gradient Boosting Regressor", description: "Boosting sequencial para regressão" },
 ];
 
 interface ModelResult {

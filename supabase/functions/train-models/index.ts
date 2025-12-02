@@ -455,8 +455,8 @@ serve(async (req) => {
     const X: number[][] = [];
     const y: number[] = [];
     
-    // Limit to 10k rows to avoid CPU timeout in edge functions
-    const MAX_ROWS = 10000;
+    // Limit to 5k rows to avoid CPU timeout in edge functions
+    const MAX_ROWS = 5000;
     for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
       const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, "").replace(",", "."));
       const features = featureIndices.map(idx => parseFloat(values[idx]));
@@ -511,17 +511,15 @@ serve(async (req) => {
       .delete()
       .eq("project_id", project_id);
 
-    // Define algorithms
+    // Define algorithms - limited to 2 to avoid CPU timeout in edge functions
     const algorithms = isClassification
       ? [
           { name: "Regressão Logística", train: "logistic" },
-          { name: "Random Forest", train: "rf" },
-          { name: "Gradient Boosting", train: "gb" }
+          { name: "Random Forest", train: "rf" }
         ]
       : [
           { name: "Regressão Linear", train: "linear" },
-          { name: "Random Forest Regressor", train: "rf" },
-          { name: "Gradient Boosting Regressor", train: "gb" }
+          { name: "Random Forest Regressor", train: "rf" }
         ];
 
     const results: any[] = [];
