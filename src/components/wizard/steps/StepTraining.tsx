@@ -1,7 +1,13 @@
 import { useState, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
+import { Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, HelpCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
@@ -296,14 +302,33 @@ const StepTraining = ({
               bestModelId={bestModel?.id}
             />
 
-            <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
-              <p className="text-sm">
-                <strong>Melhor modelo:</strong> {bestModel?.algorithm_name} com {primaryMetric} de{" "}
-                <span className="font-bold text-primary">
-                  {(bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0).toFixed(4)}
-                </span>
-              </p>
-            </div>
+            <TooltipProvider delayDuration={200}>
+              <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
+                <p className="text-sm">
+                  <strong>Melhor modelo:</strong> {bestModel?.algorithm_name} com{" "}
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span className="inline-flex items-center gap-1 cursor-help font-semibold">
+                        {primaryMetric}
+                        <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-sm text-sm">
+                      <p>
+                        {primaryMetric === "AUC" 
+                          ? "Por que AUC? A AUC foi escolhida como métrica principal porque funciona bem quando há desbalanceamento entre churn e não churn, não depende de um único ponto de corte e resume o quão bem o modelo separa clientes em risco dos clientes que devem permanecer."
+                          : "R² foi escolhido como métrica principal porque mostra o quanto o modelo consegue explicar a variação dos dados. Quanto mais próximo de 1, melhor o modelo representa a realidade."
+                        }
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                  {" "}de{" "}
+                  <span className="font-bold text-primary">
+                    {(bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0).toFixed(4)}
+                  </span>
+                </p>
+              </div>
+            </TooltipProvider>
           </div>
         )}
 
