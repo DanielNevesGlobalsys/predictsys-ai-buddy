@@ -244,7 +244,7 @@ const ProjectDetails = () => {
 
             {/* EDA Display */}
             {project.dataset_filename ? (
-              <EDADisplay projectId={project.id} />
+              <EDADisplay projectId={project.id} datasetFilename={project.dataset_filename} />
             ) : (
               <Card className="bg-gradient-card shadow-card p-8 text-center">
                 <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
