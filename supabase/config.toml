@@ -11,3 +11,9 @@ verify_jwt = false
 
 [functions.project-chat]
 verify_jwt = false
+
+[functions.delete-project]
+verify_jwt = false
+
+[functions.clear-project-chat]
+verify_jwt = false

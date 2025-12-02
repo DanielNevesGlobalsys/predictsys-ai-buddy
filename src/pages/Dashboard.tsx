@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { Brain, Plus, FolderKanban, LogOut, MessageSquare, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import ProjectCardMenu from "@/components/project/ProjectCardMenu";
 
 interface Project {
   id: string;
@@ -71,6 +72,10 @@ const Dashboard = () => {
 
   const handleOpenProject = (projectId: string) => {
     navigate(`/projeto/${projectId}`);
+  };
+
+  const handleProjectDeleted = (projectId: string) => {
+    setProjects((prev) => prev.filter((p) => p.id !== projectId));
   };
 
   return (
@@ -165,9 +170,16 @@ const Dashboard = () => {
                       <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center">
                         <Brain className="w-6 h-6 text-primary-foreground" />
                       </div>
-                      <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
-                        {statusInfo.label}
-                      </span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
+                          {statusInfo.label}
+                        </span>
+                        <ProjectCardMenu
+                          projectId={project.id}
+                          projectName={project.name}
+                          onDeleted={() => handleProjectDeleted(project.id)}
+                        />
+                      </div>
                     </div>
                     <h3 className="font-semibold text-lg mb-1 line-clamp-1">
                       {project.name}
