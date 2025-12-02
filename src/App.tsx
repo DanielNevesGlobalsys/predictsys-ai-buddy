@@ -7,6 +7,9 @@ import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
 import ProjectDetails from "./pages/ProjectDetails";
+import QuickGuide from "./pages/QuickGuide";
+import GlobalChat from "./pages/GlobalChat";
+import Documentation from "./pages/Documentation";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import WizardContainer from "./components/wizard/WizardContainer";
@@ -27,6 +30,30 @@ const App = () => (
             element={
               <ProtectedRoute>
                 <Dashboard />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/guia-rapido" 
+            element={
+              <ProtectedRoute>
+                <QuickGuide />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/chatbot" 
+            element={
+              <ProtectedRoute>
+                <GlobalChat />
+              </ProtectedRoute>
+            } 
+          />
+          <Route 
+            path="/documentacao" 
+            element={
+              <ProtectedRoute>
+                <Documentation />
               </ProtectedRoute>
             } 
           />
