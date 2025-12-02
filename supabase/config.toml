@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.clear-project-chat]
 verify_jwt = false
+
+[functions.global-chat]
+verify_jwt = false

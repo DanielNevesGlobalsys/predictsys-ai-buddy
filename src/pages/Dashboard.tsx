@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
-import { Brain, Plus, FolderKanban, LogOut, MessageSquare, Loader2 } from "lucide-react";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { Brain, Plus, FolderKanban, LogOut, MessageSquare, Loader2, BookOpen, Bot } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
@@ -92,9 +93,16 @@ const Dashboard = () => {
             </h1>
           </div>
           <div className="flex items-center gap-4">
-            <Button variant="ghost" size="icon">
-              <MessageSquare className="w-5 h-5" />
-            </Button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button variant="ghost" size="icon" onClick={() => navigate("/chatbot")}>
+                  <MessageSquare className="w-5 h-5" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>
+                <p>Abrir Chatbot IA (ajuda)</p>
+              </TooltipContent>
+            </Tooltip>
             <Button variant="ghost" onClick={handleLogout}>
               <LogOut className="w-4 h-4 mr-2" />
               Sair
@@ -204,7 +212,10 @@ const Dashboard = () => {
 
         {/* Quick Actions */}
         <div className="mt-12 grid md:grid-cols-3 gap-6">
-          <Card className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all">
+          <Card 
+            className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all cursor-pointer"
+            onClick={() => navigate("/guia-rapido")}
+          >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center flex-shrink-0">
                 <Brain className="w-6 h-6 text-primary" />
@@ -218,10 +229,13 @@ const Dashboard = () => {
             </div>
           </Card>
 
-          <Card className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all">
+          <Card 
+            className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all cursor-pointer"
+            onClick={() => navigate("/chatbot")}
+          >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 bg-secondary/10 rounded-xl flex items-center justify-center flex-shrink-0">
-                <MessageSquare className="w-6 h-6 text-secondary" />
+                <Bot className="w-6 h-6 text-secondary" />
               </div>
               <div>
                 <h3 className="font-semibold mb-1">Chatbot IA</h3>
@@ -232,10 +246,13 @@ const Dashboard = () => {
             </div>
           </Card>
 
-          <Card className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all">
+          <Card 
+            className="bg-gradient-card shadow-card p-6 hover:shadow-hover transition-all cursor-pointer"
+            onClick={() => navigate("/documentacao")}
+          >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 bg-accent/10 rounded-xl flex items-center justify-center flex-shrink-0">
-                <FolderKanban className="w-6 h-6 text-accent" />
+                <BookOpen className="w-6 h-6 text-accent" />
               </div>
               <div>
                 <h3 className="font-semibold mb-1">Documentação</h3>
