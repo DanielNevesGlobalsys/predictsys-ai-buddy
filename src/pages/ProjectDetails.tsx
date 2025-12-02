@@ -20,6 +20,7 @@ import {
 import EDADisplay from "@/components/eda/EDADisplay";
 import ModelsTab from "@/components/project/ModelsTab";
 import APIDeployTab from "@/components/project/APIDeployTab";
+import ChatTab from "@/components/project/ChatTab";
 
 interface Project {
   id: string;
@@ -154,7 +155,7 @@ const ProjectDetails = () => {
             </TabsTrigger>
             <TabsTrigger value="chat" className="gap-2">
               <MessageSquare className="w-4 h-4" />
-              Chatbot
+              Assistente IA
             </TabsTrigger>
           </TabsList>
 
@@ -271,13 +272,7 @@ const ProjectDetails = () => {
           </TabsContent>
 
           <TabsContent value="chat">
-            <Card className="bg-gradient-card shadow-card p-8 text-center">
-              <MessageSquare className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">Chatbot IA</h3>
-              <p className="text-muted-foreground">
-                Converse sobre este projeto e tire dúvidas sobre os dados e modelos.
-              </p>
-            </Card>
+            <ChatTab projectId={project.id} projectName={project.name} />
           </TabsContent>
         </Tabs>
       </main>
