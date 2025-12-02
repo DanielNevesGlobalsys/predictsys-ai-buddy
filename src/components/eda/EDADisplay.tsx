@@ -49,10 +49,11 @@ interface CategoricalStat {
 
 interface EDADisplayProps {
   projectId: string;
+  datasetFilename?: string | null;
   onEDAComplete?: () => void;
 }
 
-const EDADisplay = ({ projectId, onEDAComplete }: EDADisplayProps) => {
+const EDADisplay = ({ projectId, datasetFilename, onEDAComplete }: EDADisplayProps) => {
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
   const [calculating, setCalculating] = useState(false);
@@ -61,10 +62,34 @@ const EDADisplay = ({ projectId, onEDAComplete }: EDADisplayProps) => {
   const [selectedNumericColumn, setSelectedNumericColumn] = useState<string>("");
   const [selectedCategoricalColumn, setSelectedCategoricalColumn] = useState<string>("");
   const [hasData, setHasData] = useState(false);
+  const [projectHasDataset, setProjectHasDataset] = useState<boolean | null>(null);
 
   useEffect(() => {
+    checkProjectDataset();
     loadEDAStats();
   }, [projectId]);
+
+  const checkProjectDataset = async () => {
+    // If datasetFilename is passed as prop, use it
+    if (datasetFilename !== undefined) {
+      setProjectHasDataset(!!datasetFilename);
+      return;
+    }
+    
+    // Otherwise fetch from database
+    try {
+      const { data: project } = await supabase
+        .from("projects")
+        .select("dataset_filename")
+        .eq("id", projectId)
+        .single();
+      
+      setProjectHasDataset(!!project?.dataset_filename);
+    } catch (error) {
+      console.error("Erro ao verificar dataset:", error);
+      setProjectHasDataset(false);
+    }
+  };
 
   const loadEDAStats = async () => {
     setLoading(true);
@@ -160,6 +185,23 @@ const EDADisplay = ({ projectId, onEDAComplete }: EDADisplayProps) => {
     );
   }
 
+  // Show message if no dataset is loaded
+  if (projectHasDataset === false) {
+    return (
+      <div className="space-y-6">
+        <div className="text-center py-8">
+          <div className="w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+            <Calculator className="w-8 h-8 text-destructive" />
+          </div>
+          <h3 className="text-lg font-semibold mb-2">Nenhum dataset carregado</h3>
+          <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+            Para calcular a EDA, primeiro envie um arquivo de dados no passo 2 (Dados) do wizard.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (!hasData) {
     return (
       <div className="space-y-6">
@@ -174,7 +216,7 @@ const EDADisplay = ({ projectId, onEDAComplete }: EDADisplayProps) => {
           </p>
           <Button
             onClick={calculateEDA}
-            disabled={calculating}
+            disabled={calculating || projectHasDataset === null}
             className="bg-gradient-primary hover:shadow-hover"
           >
             {calculating ? (

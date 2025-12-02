@@ -42,7 +42,11 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
 
         {/* EDA Display */}
         {projectData.id ? (
-          <EDADisplay projectId={projectData.id} onEDAComplete={handleEDAComplete} />
+          <EDADisplay 
+            projectId={projectData.id} 
+            datasetFilename={projectData.dataset_filename}
+            onEDAComplete={handleEDAComplete} 
+          />
         ) : (
           <div className="text-center py-8 text-muted-foreground">
             Salve o projeto primeiro para calcular a EDA.
