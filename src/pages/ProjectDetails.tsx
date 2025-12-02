@@ -18,6 +18,8 @@ import {
   Loader2,
 } from "lucide-react";
 import EDADisplay from "@/components/eda/EDADisplay";
+import ModelsTab from "@/components/project/ModelsTab";
+import APIDeployTab from "@/components/project/APIDeployTab";
 
 interface Project {
   id: string;
@@ -257,23 +259,15 @@ const ProjectDetails = () => {
           </TabsContent>
 
           <TabsContent value="models">
-            <Card className="bg-gradient-card shadow-card p-8 text-center">
-              <Cpu className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">Modelos Treinados</h3>
-              <p className="text-muted-foreground">
-                Esta seção mostrará os modelos treinados e suas métricas.
-              </p>
-            </Card>
+            <ModelsTab projectId={project.id} problemType={project.problem_type} />
           </TabsContent>
 
           <TabsContent value="deploy">
-            <Card className="bg-gradient-card shadow-card p-8 text-center">
-              <Rocket className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="font-semibold text-lg mb-2">API e Deploy</h3>
-              <p className="text-muted-foreground">
-                Esta seção mostrará informações da API e opções de deploy.
-              </p>
-            </Card>
+            <APIDeployTab 
+              projectId={project.id} 
+              problemType={project.problem_type}
+              targetColumn={project.target_column}
+            />
           </TabsContent>
 
           <TabsContent value="chat">

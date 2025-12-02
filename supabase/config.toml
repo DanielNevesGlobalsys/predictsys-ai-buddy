@@ -5,3 +5,6 @@ verify_jwt = false
 
 [functions.train-models]
 verify_jwt = false
+
+[functions.predict]
+verify_jwt = false

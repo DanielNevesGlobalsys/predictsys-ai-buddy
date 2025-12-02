@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Table,
   TableBody,
@@ -7,7 +8,10 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Trophy } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Trophy, Rocket, Loader2 } from "lucide-react";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 interface ModelMetric {
   metric_name: string;
@@ -26,12 +30,24 @@ interface ModelResultsTableProps {
   models: ModelResult[];
   problemType: string;
   bestModelId?: string;
+  projectId?: string;
+  allowSelectProduction?: boolean;
+  onProductionChange?: () => void;
 }
 
 const CLASSIFICATION_METRICS = ["AUC", "F1", "Precisão", "Recall", "Acurácia"];
 const REGRESSION_METRICS = ["R²", "RMSE", "MAE", "MSE"];
 
-const ModelResultsTable = ({ models, problemType, bestModelId }: ModelResultsTableProps) => {
+const ModelResultsTable = ({ 
+  models, 
+  problemType, 
+  bestModelId, 
+  projectId,
+  allowSelectProduction = false,
+  onProductionChange 
+}: ModelResultsTableProps) => {
+  const [settingProduction, setSettingProduction] = useState<string | null>(null);
+  
   const metrics = problemType === "classification" ? CLASSIFICATION_METRICS : REGRESSION_METRICS;
   const trainedModels = models.filter(m => m.status === "trained");
 
@@ -54,6 +70,43 @@ const ModelResultsTable = ({ models, problemType, bestModelId }: ModelResultsTab
       "MSE": "Erro quadrático médio ao quadrado - quanto menor, melhor",
     };
     return explanations[metricName] || "";
+  };
+
+  const handleSetProduction = async (modelId: string) => {
+    if (!projectId) return;
+    
+    setSettingProduction(modelId);
+    try {
+      // First, set all models of this project to is_production = false
+      const { error: resetError } = await supabase
+        .from("project_models")
+        .update({ is_production: false })
+        .eq("project_id", projectId);
+
+      if (resetError) throw resetError;
+
+      // Then set the selected model to is_production = true
+      const { error: setError } = await supabase
+        .from("project_models")
+        .update({ is_production: true })
+        .eq("id", modelId);
+
+      if (setError) throw setError;
+
+      // Update project status to deployed
+      await supabase
+        .from("projects")
+        .update({ status: "deployed" })
+        .eq("id", projectId);
+
+      toast.success("Modelo definido como produção!");
+      onProductionChange?.();
+    } catch (error) {
+      console.error("Erro ao definir modelo de produção:", error);
+      toast.error("Erro ao definir modelo de produção");
+    } finally {
+      setSettingProduction(null);
+    }
   };
 
   if (trainedModels.length === 0) {
@@ -79,25 +132,43 @@ const ModelResultsTable = ({ models, problemType, bestModelId }: ModelResultsTab
                 {metric}
               </TableHead>
             ))}
+            {allowSelectProduction && (
+              <TableHead className="font-semibold text-center">Produção</TableHead>
+            )}
           </TableRow>
         </TableHeader>
         <TableBody>
           {trainedModels.map((model) => {
             const isBest = model.id === bestModelId;
+            const isProduction = model.is_production;
             return (
               <TableRow 
                 key={model.id}
-                className={isBest ? "bg-accent/10 hover:bg-accent/20" : "hover:bg-muted/50"}
+                className={
+                  isProduction 
+                    ? "bg-primary/10 hover:bg-primary/20" 
+                    : isBest 
+                      ? "bg-accent/10 hover:bg-accent/20" 
+                      : "hover:bg-muted/50"
+                }
               >
                 <TableCell className="font-medium">
                   <div className="flex items-center gap-2">
                     {isBest && <Trophy className="w-4 h-4 text-primary" />}
+                    {isProduction && <Rocket className="w-4 h-4 text-accent" />}
                     <span>{model.algorithm_name}</span>
-                    {isBest && (
-                      <Badge variant="secondary" className="text-xs">
-                        Melhor
-                      </Badge>
-                    )}
+                    <div className="flex gap-1">
+                      {isBest && (
+                        <Badge variant="secondary" className="text-xs">
+                          Melhor
+                        </Badge>
+                      )}
+                      {isProduction && (
+                        <Badge className="text-xs bg-accent text-accent-foreground">
+                          Produção
+                        </Badge>
+                      )}
+                    </div>
                   </div>
                 </TableCell>
                 {metrics.map((metric) => (
@@ -105,6 +176,26 @@ const ModelResultsTable = ({ models, problemType, bestModelId }: ModelResultsTab
                     {getMetricValue(model, metric)}
                   </TableCell>
                 ))}
+                {allowSelectProduction && (
+                  <TableCell className="text-center">
+                    {isProduction ? (
+                      <span className="text-sm text-accent font-medium">Ativo</span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleSetProduction(model.id)}
+                        disabled={settingProduction !== null}
+                      >
+                        {settingProduction === model.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          "Selecionar"
+                        )}
+                      </Button>
+                    )}
+                  </TableCell>
+                )}
               </TableRow>
             );
           })}
@@ -114,6 +205,7 @@ const ModelResultsTable = ({ models, problemType, bestModelId }: ModelResultsTab
       <div className="p-3 bg-muted/30 border-t">
         <p className="text-xs text-muted-foreground">
           <strong>Dica:</strong> Passe o mouse sobre o nome da métrica para ver uma explicação simples.
+          {allowSelectProduction && " Clique em 'Selecionar' para colocar um modelo em produção."}
         </p>
       </div>
     </div>
