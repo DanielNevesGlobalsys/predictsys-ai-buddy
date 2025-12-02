@@ -2,3 +2,6 @@ project_id = "gmkgoymjuqyxlfsutaxa"
 
 [functions.calculate-eda]
 verify_jwt = false
+
+[functions.train-models]
+verify_jwt = false
