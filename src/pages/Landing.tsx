@@ -1,0 +1,202 @@
+import { Button } from "@/components/ui/button";
+import { useNavigate } from "react-router-dom";
+import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp } from "lucide-react";
+
+const Landing = () => {
+  const navigate = useNavigate();
+
+  const features = [
+    {
+      icon: Brain,
+      title: "AutoML Simplificado",
+      description: "Treine modelos de ML sem escrever código. Upload de CSV, clique em treinar e pronto."
+    },
+    {
+      icon: MessageSquare,
+      title: "Chatbot Inteligente",
+      description: "Converse com seus dados. O chatbot entende todo o pipeline e explica resultados em linguagem de negócio."
+    },
+    {
+      icon: BarChart3,
+      title: "Análise Exploratória Automática",
+      description: "Gráficos e estatísticas gerados automaticamente para entender seus dados rapidamente."
+    },
+    {
+      icon: Zap,
+      title: "Deploy com 1 Clique",
+      description: "Publique seu modelo em produção instantaneamente. API REST pronta para integração."
+    },
+    {
+      icon: Shield,
+      title: "Multi-Cliente Seguro",
+      description: "Cada empresa tem seu próprio ambiente isolado. Dados e modelos sempre protegidos."
+    },
+    {
+      icon: TrendingUp,
+      title: "Aprendizado Contínuo",
+      description: "O sistema aprende com seus projetos e se adapta às necessidades do seu negócio."
+    }
+  ];
+
+  return (
+    <div className="min-h-screen bg-gradient-hero">
+      {/* Header */}
+      <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
+        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
+              <Brain className="w-6 h-6 text-primary-foreground" />
+            </div>
+            <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
+              PredictSys AI
+            </h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <Button 
+              variant="ghost" 
+              onClick={() => navigate("/auth")}
+              className="hover:bg-primary/10"
+            >
+              Entrar
+            </Button>
+            <Button 
+              onClick={() => navigate("/auth")}
+              className="bg-gradient-primary hover:shadow-hover transition-all"
+            >
+              Começar Grátis
+            </Button>
+          </div>
+        </div>
+      </header>
+
+      {/* Hero Section */}
+      <section className="container mx-auto px-4 py-20 text-center">
+        <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
+          <div className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full text-sm font-medium text-primary mb-4">
+            <Zap className="w-4 h-4" />
+            <span>IA Preditiva para Negócios</span>
+          </div>
+          
+          <h1 className="text-5xl md:text-7xl font-display font-bold leading-tight">
+            Machine Learning
+            <br />
+            <span className="bg-gradient-primary bg-clip-text text-transparent">
+              Sem Escrever Código
+            </span>
+          </h1>
+          
+          <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+            Plataforma B2B de IA preditiva com chatbot integrado. 
+            Crie modelos de classificação e regressão em minutos, não em semanas.
+          </p>
+          
+          <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
+            <Button 
+              size="lg"
+              onClick={() => navigate("/auth")}
+              className="bg-gradient-primary hover:shadow-hover transition-all text-lg px-8 py-6"
+            >
+              Criar Conta Grátis
+            </Button>
+            <Button 
+              size="lg"
+              variant="outline"
+              className="text-lg px-8 py-6 border-2 hover:bg-primary/5"
+            >
+              Ver Demonstração
+            </Button>
+          </div>
+
+          <div className="flex items-center justify-center gap-8 pt-8 text-sm text-muted-foreground">
+            <div className="flex items-center gap-2">
+              <Shield className="w-4 h-4 text-accent" />
+              <span>100% Seguro</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <Zap className="w-4 h-4 text-accent" />
+              <span>Deploy Instantâneo</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <MessageSquare className="w-4 h-4 text-accent" />
+              <span>Chatbot IA</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Features Grid */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="text-center mb-16">
+          <h2 className="text-4xl font-display font-bold mb-4">
+            Tudo que você precisa para
+            <span className="bg-gradient-primary bg-clip-text text-transparent"> prever o futuro</span>
+          </h2>
+          <p className="text-xl text-muted-foreground">
+            AutoML intuitivo + Chatbot inteligente = Decisões mais rápidas
+          </p>
+        </div>
+
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+          {features.map((feature, index) => {
+            const Icon = feature.icon;
+            return (
+              <div
+                key={index}
+                className="group bg-gradient-card rounded-2xl p-8 shadow-card hover:shadow-hover transition-all duration-300 hover:-translate-y-1"
+                style={{ animationDelay: `${index * 100}ms` }}
+              >
+                <div className="w-14 h-14 bg-gradient-primary rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                  <Icon className="w-7 h-7 text-primary-foreground" />
+                </div>
+                <h3 className="text-xl font-display font-semibold mb-3">
+                  {feature.title}
+                </h3>
+                <p className="text-muted-foreground leading-relaxed">
+                  {feature.description}
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </section>
+
+      {/* CTA Section */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="bg-gradient-primary rounded-3xl p-12 text-center shadow-hover">
+          <h2 className="text-4xl font-display font-bold text-primary-foreground mb-4">
+            Pronto para começar?
+          </h2>
+          <p className="text-xl text-primary-foreground/90 mb-8 max-w-2xl mx-auto">
+            Crie sua conta gratuitamente e comece a treinar modelos preditivos em minutos.
+          </p>
+          <Button 
+            size="lg"
+            onClick={() => navigate("/auth")}
+            className="bg-background text-foreground hover:bg-background/90 text-lg px-8 py-6"
+          >
+            Começar Agora
+          </Button>
+        </div>
+      </section>
+
+      {/* Footer */}
+      <footer className="border-t border-border/40 bg-card/50 backdrop-blur-sm">
+        <div className="container mx-auto px-4 py-8">
+          <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center">
+                <Brain className="w-5 h-5 text-primary-foreground" />
+              </div>
+              <span className="font-semibold">PredictSys AI</span>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              © 2025 PredictSys AI. Tornando ML acessível para negócios.
+            </p>
+          </div>
+        </div>
+      </footer>
+    </div>
+  );
+};
+
+export default Landing;
