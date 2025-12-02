@@ -401,28 +401,43 @@ serve(async (req) => {
       });
     }
 
-    // Parse CSV
+    // Parse CSV - auto-detect delimiter
     const text = await fileData.text();
-    const lines = text.split("\n").filter(line => line.trim());
-    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    const lines = text.split(/\r?\n/).filter(line => line.trim());
+    
+    // Detect delimiter (comma or semicolon)
+    const firstLine = lines[0];
+    const commaCount = (firstLine.match(/,/g) || []).length;
+    const semicolonCount = (firstLine.match(/;/g) || []).length;
+    const delimiter = semicolonCount > commaCount ? ";" : ",";
+    
+    console.log(`Delimitador detectado: "${delimiter}"`);
+    
+    const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ""));
+    console.log(`Headers encontrados: ${headers.slice(0, 5).join(", ")}...`);
     
     const targetIndex = headers.indexOf(target_column);
     if (targetIndex === -1) {
-      return new Response(JSON.stringify({ error: "Coluna alvo não encontrada no dataset" }), {
+      // Try to find similar column names
+      const availableColumns = columns.map(c => c.column_name).join(", ");
+      console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${availableColumns}`);
+      return new Response(JSON.stringify({ 
+        error: `Coluna alvo "${target_column}" não encontrada no dataset. Volte ao passo de Features e selecione uma coluna válida. Colunas disponíveis: ${availableColumns}` 
+      }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get numeric feature columns (excluding target)
+    // Get numeric feature columns (excluding target) - check both "numérico" and "numerico"
     const numericColumns = columns.filter(c => 
-      c.inferred_type === "numerico" && c.column_name !== target_column
+      (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
     );
     const featureIndices = numericColumns.map(c => headers.indexOf(c.column_name)).filter(i => i !== -1);
     const featureNames = featureIndices.map(i => headers[i]);
 
     if (featureNames.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada" }), {
+      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada. Verifique se o dataset possui colunas numéricas além da coluna alvo." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -430,14 +445,14 @@ serve(async (req) => {
 
     console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column}`);
 
-    // Parse data
+    // Parse data with detected delimiter
     const X: number[][] = [];
     const y: number[] = [];
     
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+    for (let i = 1; i < Math.min(lines.length, 50001); i++) { // Limit to 50k rows for memory
+      const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, "").replace(",", "."));
       const features = featureIndices.map(idx => parseFloat(values[idx]));
-      const target = parseFloat(values[targetIndex]);
+      const target = parseFloat(values[targetIndex]?.replace(",", ".") || "");
       
       if (features.every(f => !isNaN(f)) && !isNaN(target)) {
         X.push(features);
