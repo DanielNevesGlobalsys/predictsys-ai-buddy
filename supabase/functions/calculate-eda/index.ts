@@ -1,5 +1,4 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { parse } from "https://esm.sh/csv-parse@5.5.6/sync";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -24,6 +23,9 @@ interface CategoricalStats {
   top_categories: { category: string; count: number }[];
 }
 
+// Maximum rows to process for EDA (sample for large files)
+const MAX_ROWS_TO_PROCESS = 50000;
+
 function calculateMedian(sortedValues: number[]): number | null {
   if (sortedValues.length === 0) return null;
   const mid = Math.floor(sortedValues.length / 2);
@@ -37,6 +39,60 @@ function calculateStd(values: number[], mean: number): number | null {
   const squareDiffs = values.map((value) => Math.pow(value - mean, 2));
   const avgSquareDiff = squareDiffs.reduce((a, b) => a + b, 0) / (values.length - 1);
   return Math.sqrt(avgSquareDiff);
+}
+
+// Simple CSV parser that processes line by line to reduce memory usage
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if ((char === ',' || char === ';') && !inQuotes) {
+      result.push(current.trim());
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim());
+  return result;
+}
+
+function parseCSVChunked(csvText: string, maxRows: number): { headers: string[], records: Record<string, string>[] } {
+  const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
+  
+  if (lines.length === 0) {
+    return { headers: [], records: [] };
+  }
+  
+  // Parse headers
+  const headers = parseCSVLine(lines[0]);
+  
+  // Calculate sampling rate if needed
+  const dataLines = lines.length - 1;
+  const sampleRate = dataLines > maxRows ? Math.ceil(dataLines / maxRows) : 1;
+  
+  const records: Record<string, string>[] = [];
+  
+  for (let i = 1; i < lines.length && records.length < maxRows; i++) {
+    // Sample every Nth row if file is large
+    if (sampleRate > 1 && (i - 1) % sampleRate !== 0) continue;
+    
+    const values = parseCSVLine(lines[i]);
+    const record: Record<string, string> = {};
+    
+    for (let j = 0; j < headers.length && j < values.length; j++) {
+      record[headers[j]] = values[j];
+    }
+    
+    records.push(record);
+  }
+  
+  return { headers, records };
 }
 
 Deno.serve(async (req) => {
@@ -83,6 +139,8 @@ Deno.serve(async (req) => {
       );
     }
 
+    console.log(`Dataset: ${project.dataset_filename}`);
+
     // Get column metadata
     const { data: columns, error: columnsError } = await supabase
       .from("project_columns")
@@ -93,7 +151,7 @@ Deno.serve(async (req) => {
     if (columnsError || !columns || columns.length === 0) {
       console.error("Colunas não encontradas:", columnsError);
       return new Response(
-        JSON.stringify({ error: "Metadados de colunas não encontrados" }),
+        JSON.stringify({ error: "Metadados de colunas não encontrados. Faça upload do dataset novamente." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -108,30 +166,25 @@ Deno.serve(async (req) => {
     if (downloadError || !fileData) {
       console.error("Erro ao baixar arquivo:", downloadError);
       return new Response(
-        JSON.stringify({ error: "Erro ao acessar o arquivo do dataset" }),
+        JSON.stringify({ error: "Arquivo de dados não encontrado no storage. Faça upload novamente." }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Parse CSV
+    // Parse CSV with memory-efficient chunked parser
     const csvText = await fileData.text();
-    let records: Record<string, string>[];
+    console.log(`Tamanho do arquivo: ${(csvText.length / 1024 / 1024).toFixed(2)} MB`);
     
-    try {
-      records = parse(csvText, {
-        columns: true,
-        skip_empty_lines: true,
-        trim: true,
-      });
-    } catch (parseError) {
-      console.error("Erro ao parsear CSV:", parseError);
+    const { records } = parseCSVChunked(csvText, MAX_ROWS_TO_PROCESS);
+    
+    if (records.length === 0) {
       return new Response(
-        JSON.stringify({ error: "Erro ao processar o arquivo CSV" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ error: "Arquivo CSV está vazio ou não pôde ser processado" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`Registros carregados: ${records.length}`);
+    console.log(`Registros processados: ${records.length} (máx: ${MAX_ROWS_TO_PROCESS})`);
 
     const numericStats: NumericStats[] = [];
     const categoricalStats: CategoricalStats[] = [];
@@ -140,14 +193,14 @@ Deno.serve(async (req) => {
     for (const column of columns) {
       const columnName = column.column_name;
       const columnType = column.inferred_type;
-      const values = records.map((r) => r[columnName]);
-
+      
       if (columnType === "numérico") {
         // Parse numeric values
         const numericValues: number[] = [];
         let nullCount = 0;
 
-        for (const val of values) {
+        for (const record of records) {
+          const val = record[columnName];
           if (val === null || val === undefined || val === "" || val.toLowerCase() === "nan" || val.toLowerCase() === "null") {
             nullCount++;
           } else {
@@ -184,17 +237,16 @@ Deno.serve(async (req) => {
             mean_value: null,
             median_value: null,
             std_value: null,
-            null_count: values.length,
+            null_count: records.length,
           });
         }
       } else {
         // Categorical column
         const counts: Record<string, number> = {};
-        let nullCount = 0;
 
-        for (const val of values) {
+        for (const record of records) {
+          const val = record[columnName];
           if (val === null || val === undefined || val === "") {
-            nullCount++;
             const key = "(vazio)";
             counts[key] = (counts[key] || 0) + 1;
           } else {
@@ -246,10 +298,13 @@ Deno.serve(async (req) => {
       .update({ status: "eda_complete" })
       .eq("id", project_id);
 
+    console.log("EDA calculada com sucesso!");
+
     return new Response(
       JSON.stringify({
         success: true,
         message: "EDA calculada com sucesso",
+        rows_processed: records.length,
         numeric_columns: numericStats.length,
         categorical_columns: categoricalStats.length,
       }),
@@ -258,7 +313,7 @@ Deno.serve(async (req) => {
   } catch (error) {
     console.error("Erro inesperado:", error);
     return new Response(
-      JSON.stringify({ error: "Erro interno do servidor" }),
+      JSON.stringify({ error: "Erro interno do servidor. Tente com um arquivo menor." }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
