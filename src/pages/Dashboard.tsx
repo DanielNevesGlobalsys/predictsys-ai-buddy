@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { Brain, Plus, FolderKanban, LogOut, MessageSquare, Loader2, BookOpen, Bot } from "lucide-react";
+import { Brain, Plus, FolderKanban, Loader2, BookOpen, Bot } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
+import Header from "@/components/layout/Header";
 
 interface Project {
   id: string;
@@ -16,21 +17,22 @@ interface Project {
   created_at: string;
 }
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  draft: { label: "Rascunho", color: "bg-muted text-muted-foreground" },
-  configuring: { label: "Configurando", color: "bg-secondary/20 text-secondary" },
-  data_uploaded: { label: "Dados enviados", color: "bg-primary/20 text-primary" },
-  eda_complete: { label: "EDA completa", color: "bg-accent/20 text-accent" },
-  training: { label: "Treinando", color: "bg-destructive/20 text-destructive" },
-  evaluated: { label: "Avaliado", color: "bg-accent/20 text-accent" },
-  deployed: { label: "Em produção", color: "bg-accent text-accent-foreground" },
-};
-
 const Dashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { t, i18n } = useTranslation();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const STATUS_LABELS: Record<string, { label: string; color: string }> = {
+    draft: { label: t("status.draft"), color: "bg-muted text-muted-foreground" },
+    configuring: { label: t("status.configuring"), color: "bg-secondary/20 text-secondary" },
+    data_uploaded: { label: t("status.data_uploaded"), color: "bg-primary/20 text-primary" },
+    eda_complete: { label: t("status.eda_complete"), color: "bg-accent/20 text-accent" },
+    training: { label: t("status.training"), color: "bg-destructive/20 text-destructive" },
+    evaluated: { label: t("status.evaluated"), color: "bg-accent/20 text-accent" },
+    deployed: { label: t("status.deployed"), color: "bg-accent text-accent-foreground" },
+  };
 
   useEffect(() => {
     loadProjects();
@@ -44,7 +46,7 @@ const Dashboard = () => {
 
     if (error) {
       toast({
-        title: "Erro ao carregar projetos",
+        title: t("dashboard.errorLoadingProjects"),
         description: error.message,
         variant: "destructive",
       });
@@ -52,19 +54,6 @@ const Dashboard = () => {
       setProjects(data || []);
     }
     setLoading(false);
-  };
-
-  const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut();
-    if (error) {
-      toast({
-        title: "Erro ao sair",
-        description: error.message,
-        variant: "destructive",
-      });
-    } else {
-      navigate("/auth");
-    }
   };
 
   const handleCreateProject = () => {
@@ -79,46 +68,25 @@ const Dashboard = () => {
     setProjects((prev) => prev.filter((p) => p.id !== projectId));
   };
 
+  const getDateLocale = () => {
+    const lang = i18n.language;
+    if (lang === "en") return "en-US";
+    if (lang === "es") return "es-ES";
+    return "pt-BR";
+  };
+
   return (
     <div className="min-h-screen bg-gradient-hero">
-      {/* Header */}
-      <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="container mx-auto px-4 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-primary-foreground" />
-            </div>
-            <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
-              PredictSys AI
-            </h1>
-          </div>
-          <div className="flex items-center gap-4">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button variant="ghost" size="icon" onClick={() => navigate("/chatbot")}>
-                  <MessageSquare className="w-5 h-5" />
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>Abrir Chatbot IA (ajuda)</p>
-              </TooltipContent>
-            </Tooltip>
-            <Button variant="ghost" onClick={handleLogout}>
-              <LogOut className="w-4 h-4 mr-2" />
-              Sair
-            </Button>
-          </div>
-        </div>
-      </header>
+      <Header />
 
       {/* Main Content */}
       <main className="container mx-auto px-4 py-8">
         {/* Page Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-4xl font-display font-bold mb-2">Meus Projetos</h1>
+            <h1 className="text-4xl font-display font-bold mb-2">{t("dashboard.myProjects")}</h1>
             <p className="text-muted-foreground text-lg">
-              Gerencie seus projetos de machine learning
+              {t("dashboard.manageProjects")}
             </p>
           </div>
           <Button 
@@ -127,7 +95,7 @@ const Dashboard = () => {
             onClick={handleCreateProject}
           >
             <Plus className="w-5 h-5 mr-2" />
-            Novo Projeto
+            {t("dashboard.newProject")}
           </Button>
         </div>
 
@@ -147,10 +115,10 @@ const Dashboard = () => {
               </div>
               <div>
                 <h3 className="text-2xl font-display font-semibold mb-2">
-                  Nenhum projeto ainda
+                  {t("dashboard.noProjectsYet")}
                 </h3>
                 <p className="text-muted-foreground text-lg">
-                  Crie seu primeiro projeto de machine learning e comece a fazer previsões em minutos.
+                  {t("dashboard.createFirstProject")}
                 </p>
               </div>
               <Button 
@@ -159,7 +127,7 @@ const Dashboard = () => {
                 onClick={handleCreateProject}
               >
                 <Plus className="w-5 h-5 mr-2" />
-                Criar Primeiro Projeto
+                {t("dashboard.createFirstProjectBtn")}
               </Button>
             </div>
           </Card>
@@ -195,12 +163,12 @@ const Dashboard = () => {
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
                       <span>
                         {project.problem_type === "classification"
-                          ? "Classificação"
-                          : "Regressão"}
+                          ? t("dashboard.classification")
+                          : t("dashboard.regression")}
                       </span>
                       <span>•</span>
                       <span>
-                        {new Date(project.created_at).toLocaleDateString("pt-BR")}
+                        {new Date(project.created_at).toLocaleDateString(getDateLocale())}
                       </span>
                     </div>
                   </Card>
@@ -221,9 +189,9 @@ const Dashboard = () => {
                 <Brain className="w-6 h-6 text-primary" />
               </div>
               <div>
-                <h3 className="font-semibold mb-1">Guia Rápido</h3>
+                <h3 className="font-semibold mb-1">{t("dashboard.quickGuide")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Aprenda a criar seu primeiro modelo em 5 minutos
+                  {t("dashboard.quickGuideDesc")}
                 </p>
               </div>
             </div>
@@ -238,9 +206,9 @@ const Dashboard = () => {
                 <Bot className="w-6 h-6 text-secondary" />
               </div>
               <div>
-                <h3 className="font-semibold mb-1">Chatbot IA</h3>
+                <h3 className="font-semibold mb-1">{t("dashboard.chatbotAI")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Converse sobre seus projetos e obtenha insights
+                  {t("dashboard.chatbotAIDesc")}
                 </p>
               </div>
             </div>
@@ -255,9 +223,9 @@ const Dashboard = () => {
                 <BookOpen className="w-6 h-6 text-accent" />
               </div>
               <div>
-                <h3 className="font-semibold mb-1">Documentação</h3>
+                <h3 className="font-semibold mb-1">{t("dashboard.documentation")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Acesse exemplos e melhores práticas
+                  {t("dashboard.documentationDesc")}
                 </p>
               </div>
             </div>

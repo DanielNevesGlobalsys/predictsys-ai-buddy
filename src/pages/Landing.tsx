@@ -1,40 +1,42 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp } from "lucide-react";
 
 const Landing = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
 
   const features = [
     {
       icon: Brain,
-      title: "AutoML Simplificado",
-      description: "Treine modelos de ML sem escrever código. Upload de CSV, clique em treinar e pronto."
+      titleKey: "landing.features.automl",
+      descKey: "landing.features.automlDesc"
     },
     {
       icon: MessageSquare,
-      title: "Chatbot Inteligente",
-      description: "Converse com seus dados. O chatbot entende todo o pipeline e explica resultados em linguagem de negócio."
+      titleKey: "landing.features.chatbot",
+      descKey: "landing.features.chatbotDesc"
     },
     {
       icon: BarChart3,
-      title: "Análise Exploratória Automática",
-      description: "Gráficos e estatísticas gerados automaticamente para entender seus dados rapidamente."
+      titleKey: "landing.features.eda",
+      descKey: "landing.features.edaDesc"
     },
     {
       icon: Zap,
-      title: "Deploy com 1 Clique",
-      description: "Publique seu modelo em produção instantaneamente. API REST pronta para integração."
+      titleKey: "landing.features.deploy",
+      descKey: "landing.features.deployDesc"
     },
     {
       icon: Shield,
-      title: "Multi-Cliente Seguro",
-      description: "Cada empresa tem seu próprio ambiente isolado. Dados e modelos sempre protegidos."
+      titleKey: "landing.features.security",
+      descKey: "landing.features.securityDesc"
     },
     {
       icon: TrendingUp,
-      title: "Aprendizado Contínuo",
-      description: "O sistema aprende com seus projetos e se adapta às necessidades do seu negócio."
+      titleKey: "landing.features.learning",
+      descKey: "landing.features.learningDesc"
     }
   ];
 
@@ -57,13 +59,13 @@ const Landing = () => {
               onClick={() => navigate("/auth")}
               className="hover:bg-primary/10"
             >
-              Entrar
+              {t("header.login")}
             </Button>
             <Button 
               onClick={() => navigate("/auth")}
               className="bg-gradient-primary hover:shadow-hover transition-all"
             >
-              Começar Grátis
+              {t("header.startFree")}
             </Button>
           </div>
         </div>
@@ -74,20 +76,19 @@ const Landing = () => {
         <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full text-sm font-medium text-primary mb-4">
             <Zap className="w-4 h-4" />
-            <span>IA Preditiva para Negócios</span>
+            <span>{t("landing.predictiveAI")}</span>
           </div>
           
           <h1 className="text-5xl md:text-7xl font-display font-bold leading-tight">
-            Machine Learning
+            {t("landing.heroTitle1")}
             <br />
             <span className="bg-gradient-primary bg-clip-text text-transparent">
-              Sem Escrever Código
+              {t("landing.heroTitle2")}
             </span>
           </h1>
           
           <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
-            Plataforma B2B de IA preditiva com chatbot integrado. 
-            Crie modelos de classificação e regressão em minutos, não em semanas.
+            {t("landing.heroSubtitle")}
           </p>
           
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
@@ -96,29 +97,29 @@ const Landing = () => {
               onClick={() => navigate("/auth")}
               className="bg-gradient-primary hover:shadow-hover transition-all text-lg px-8 py-6"
             >
-              Criar Conta Grátis
+              {t("landing.createFreeAccount")}
             </Button>
             <Button 
               size="lg"
               variant="outline"
               className="text-lg px-8 py-6 border-2 hover:bg-primary/5"
             >
-              Ver Demonstração
+              {t("landing.viewDemo")}
             </Button>
           </div>
 
           <div className="flex items-center justify-center gap-8 pt-8 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
               <Shield className="w-4 h-4 text-accent" />
-              <span>100% Seguro</span>
+              <span>{t("landing.secure")}</span>
             </div>
             <div className="flex items-center gap-2">
               <Zap className="w-4 h-4 text-accent" />
-              <span>Deploy Instantâneo</span>
+              <span>{t("landing.instantDeploy")}</span>
             </div>
             <div className="flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-accent" />
-              <span>Chatbot IA</span>
+              <span>{t("landing.aiChatbot")}</span>
             </div>
           </div>
         </div>
@@ -128,11 +129,11 @@ const Landing = () => {
       <section className="container mx-auto px-4 py-20">
         <div className="text-center mb-16">
           <h2 className="text-4xl font-display font-bold mb-4">
-            Tudo que você precisa para
-            <span className="bg-gradient-primary bg-clip-text text-transparent"> prever o futuro</span>
+            {t("landing.allYouNeed")}
+            <span className="bg-gradient-primary bg-clip-text text-transparent">{t("landing.predictFuture")}</span>
           </h2>
           <p className="text-xl text-muted-foreground">
-            AutoML intuitivo + Chatbot inteligente = Decisões mais rápidas
+            {t("landing.autoMLDescription")}
           </p>
         </div>
 
@@ -149,10 +150,10 @@ const Landing = () => {
                   <Icon className="w-7 h-7 text-primary-foreground" />
                 </div>
                 <h3 className="text-xl font-display font-semibold mb-3">
-                  {feature.title}
+                  {t(feature.titleKey)}
                 </h3>
                 <p className="text-muted-foreground leading-relaxed">
-                  {feature.description}
+                  {t(feature.descKey)}
                 </p>
               </div>
             );
@@ -164,17 +165,17 @@ const Landing = () => {
       <section className="container mx-auto px-4 py-20">
         <div className="bg-gradient-primary rounded-3xl p-12 text-center shadow-hover">
           <h2 className="text-4xl font-display font-bold text-primary-foreground mb-4">
-            Pronto para começar?
+            {t("landing.readyToStart")}
           </h2>
           <p className="text-xl text-primary-foreground/90 mb-8 max-w-2xl mx-auto">
-            Crie sua conta gratuitamente e comece a treinar modelos preditivos em minutos.
+            {t("landing.readyDescription")}
           </p>
           <Button 
             size="lg"
             onClick={() => navigate("/auth")}
             className="bg-background text-foreground hover:bg-background/90 text-lg px-8 py-6"
           >
-            Começar Agora
+            {t("landing.startNow")}
           </Button>
         </div>
       </section>
@@ -190,7 +191,7 @@ const Landing = () => {
               <span className="font-semibold">PredictSys AI</span>
             </div>
             <p className="text-sm text-muted-foreground">
-              © 2025 PredictSys AI. Tornando ML acessível para negócios.
+              {t("landing.footer")}
             </p>
           </div>
         </div>

@@ -16,9 +16,10 @@ interface ProjectContext {
   recentMessages: any[];
 }
 
-// Build system prompt for the LLM
-function buildSystemPrompt(): string {
-  return `Você é o Assistente IA da plataforma PredictSys AI, uma plataforma de machine learning preditivo para negócios.
+// Build system prompt for the LLM based on language
+function buildSystemPrompt(language: string): string {
+  const prompts: Record<string, string> = {
+    pt: `Você é o Assistente IA da plataforma PredictSys AI, uma plataforma de machine learning preditivo para negócios.
 
 Seu papel é:
 - Explicar em português, usando linguagem de negócios simples (evite jargões técnicos quando possível)
@@ -31,7 +32,40 @@ Diretrizes de comunicação:
 - Use exemplos práticos quando apropriado
 - Explique métricas técnicas (AUC, F1, RMSE) em termos de impacto no negócio
 - Se não souber algo específico, diga que não tem essa informação
-- Sempre baseie suas respostas nos dados reais do projeto fornecidos no contexto`;
+- Sempre baseie suas respostas nos dados reais do projeto fornecidos no contexto`,
+
+    en: `You are the AI Assistant of the PredictSys AI platform, a predictive machine learning platform for business.
+
+Your role is:
+- Explain in English, using simple business language (avoid technical jargon when possible)
+- Help users understand machine learning model results
+- Provide actionable insights based on project data and metrics
+- Answer questions about the ML pipeline: data, EDA, trained models, metrics, feature importance
+
+Communication guidelines:
+- Be concise but complete
+- Use practical examples when appropriate
+- Explain technical metrics (AUC, F1, RMSE) in terms of business impact
+- If you don't know something specific, say you don't have that information
+- Always base your answers on the actual project data provided in context`,
+
+    es: `Eres el Asistente IA de la plataforma PredictSys AI, una plataforma de machine learning predictivo para negocios.
+
+Tu rol es:
+- Explicar en español, usando lenguaje de negocios simple (evita jerga técnica cuando sea posible)
+- Ayudar a usuarios a entender los resultados de los modelos de machine learning
+- Proporcionar insights accionables basados en los datos y métricas del proyecto
+- Responder preguntas sobre el pipeline de ML: datos, EDA, modelos entrenados, métricas, importancia de variables
+
+Directrices de comunicación:
+- Sé conciso pero completo
+- Usa ejemplos prácticos cuando sea apropiado
+- Explica métricas técnicas (AUC, F1, RMSE) en términos de impacto en el negocio
+- Si no sabes algo específico, di que no tienes esa información
+- Siempre basa tus respuestas en los datos reales del proyecto proporcionados en el contexto`,
+  };
+
+  return prompts[language] || prompts.pt;
 }
 
 // Build context prompt with project data
@@ -240,7 +274,7 @@ serve(async (req) => {
       });
     }
 
-    const { projectId, message } = await req.json();
+    const { projectId, message, language = "pt" } = await req.json();
 
     if (!projectId || !message) {
       return new Response(JSON.stringify({ error: "projectId e message são obrigatórios" }), {
@@ -264,7 +298,7 @@ serve(async (req) => {
       });
     }
 
-    console.log(`Processing chat for project: ${project.name}`);
+    console.log(`Processing chat for project: ${project.name} (lang: ${language})`);
 
     // Fetch all context data in parallel
     const [
@@ -314,7 +348,7 @@ serve(async (req) => {
     let assistantReply: string;
     
     try {
-      const systemPrompt = buildSystemPrompt();
+      const systemPrompt = buildSystemPrompt(language);
       const projectContext = buildContextPrompt(context);
       const conversationHistory = buildConversationHistory(context.recentMessages);
       
