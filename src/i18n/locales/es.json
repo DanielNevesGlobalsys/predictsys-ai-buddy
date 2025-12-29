@@ -1,0 +1,243 @@
+{
+  "common": {
+    "back": "Volver",
+    "cancel": "Cancelar",
+    "save": "Guardar",
+    "delete": "Eliminar",
+    "edit": "Editar",
+    "loading": "Cargando...",
+    "error": "Error",
+    "success": "Éxito",
+    "send": "Enviar",
+    "clear": "Limpiar",
+    "export": "Exportar",
+    "close": "Cerrar",
+    "confirm": "Confirmar"
+  },
+  "auth": {
+    "login": "Iniciar Sesión",
+    "logout": "Cerrar Sesión",
+    "signup": "Crear Cuenta",
+    "email": "Correo electrónico",
+    "password": "Contraseña",
+    "fullName": "Nombre completo"
+  },
+  "header": {
+    "openChatbot": "Abrir Chatbot IA (ayuda)",
+    "toggleTheme": "Cambiar tema (claro/oscuro)"
+  },
+  "landing": {
+    "title": "Machine Learning",
+    "titleHighlight": "Sin Escribir Código",
+    "subtitle": "Plataforma B2B de IA predictiva con chatbot integrado. Crea modelos de clasificación y regresión en minutos, no en semanas.",
+    "cta": "Crear Cuenta Gratis",
+    "demo": "Ver Demostración",
+    "secure": "100% Seguro",
+    "instantDeploy": "Deploy Instantáneo",
+    "aiChatbot": "Chatbot IA",
+    "aiPredictive": "IA Predictiva para Negocios",
+    "featuresTitle": "Todo lo que necesitas para",
+    "featuresHighlight": "predecir el futuro",
+    "featuresSubtitle": "AutoML intuitivo + Chatbot inteligente = Decisiones más rápidas",
+    "ctaTitle": "¿Listo para empezar?",
+    "ctaSubtitle": "Crea tu cuenta gratis y comienza a entrenar modelos predictivos en minutos.",
+    "ctaButton": "Empezar Ahora",
+    "footer": "Haciendo ML accesible para negocios.",
+    "features": {
+      "automl": "AutoML Simplificado",
+      "automlDesc": "Entrena modelos de ML sin escribir código. Sube CSV, haz clic en entrenar y listo.",
+      "chatbot": "Chatbot Inteligente",
+      "chatbotDesc": "Conversa con tus datos. El chatbot entiende todo el pipeline y explica resultados en lenguaje de negocios.",
+      "eda": "Análisis Exploratorio Automático",
+      "edaDesc": "Gráficos y estadísticas generados automáticamente para entender tus datos rápidamente.",
+      "deploy": "Deploy con 1 Clic",
+      "deployDesc": "Publica tu modelo en producción instantáneamente. API REST lista para integración.",
+      "secure": "Multi-Cliente Seguro",
+      "secureDesc": "Cada empresa tiene su propio entorno aislado. Datos y modelos siempre protegidos.",
+      "learning": "Aprendizaje Continuo",
+      "learningDesc": "El sistema aprende de tus proyectos y se adapta a las necesidades de tu negocio."
+    }
+  },
+  "dashboard": {
+    "title": "Mis Proyectos",
+    "subtitle": "Gestiona tus proyectos de machine learning",
+    "newProject": "Nuevo Proyecto",
+    "createFirst": "Crear Primer Proyecto",
+    "noProjects": "Aún no hay proyectos",
+    "noProjectsDesc": "Crea tu primer proyecto de machine learning y comienza a hacer predicciones en minutos.",
+    "errorLoading": "Error al cargar proyectos",
+    "quickGuide": "Guía Rápida",
+    "quickGuideDesc": "Aprende a crear tu primer modelo en 5 minutos",
+    "chatbot": "Chatbot IA",
+    "chatbotDesc": "Conversa sobre tus proyectos y obtén insights",
+    "documentation": "Documentación",
+    "documentationDesc": "Accede a ejemplos y mejores prácticas"
+  },
+  "project": {
+    "classification": "Clasificación",
+    "regression": "Regresión",
+    "status": {
+      "draft": "Borrador",
+      "configuring": "Configurando",
+      "data_uploaded": "Datos subidos",
+      "eda_complete": "EDA completo",
+      "training": "Entrenando",
+      "evaluated": "Evaluado",
+      "deployed": "En producción"
+    },
+    "tabs": {
+      "overview": "Visión General",
+      "data": "Datos & EDA",
+      "models": "Modelos",
+      "deploy": "API & Deploy",
+      "chat": "Asistente IA",
+      "settings": "Configuración"
+    }
+  },
+  "chat": {
+    "title": "Asistente IA",
+    "globalTitle": "Chatbot IA",
+    "globalSubtitle": "Asistente de PredictSys AI",
+    "placeholder": "Escribe tu pregunta...",
+    "enterToSend": "Presiona Enter para enviar o Shift+Enter para nueva línea",
+    "askAboutProject": "Haz preguntas sobre el proyecto",
+    "askAboutPlatform": "Haz preguntas sobre la plataforma, conceptos de modelos predictivos y mejores prácticas.",
+    "howCanIHelp": "¡Hola! ¿Cómo puedo ayudarte?",
+    "iAmAssistant": "Soy el asistente IA de este proyecto. Puedo responder preguntas sobre los datos, modelos entrenados, métricas y más.",
+    "suggestions": "Sugerencias:",
+    "clearHistory": "Limpiar historial",
+    "historyCleared": "Historial limpiado",
+    "allMessagesRemoved": "Todos los mensajes han sido eliminados.",
+    "errorSending": "Error al enviar mensaje",
+    "errorClearing": "Error al limpiar historial",
+    "exportPdf": "Exportar PDF",
+    "exportTitle": "Exportar conversación",
+    "exportDescription": "¿Qué deseas exportar?",
+    "exportComplete": "Historial completo de este proyecto",
+    "exportCurrent": "Solo conversación actual",
+    "exportSuccess": "¡Chat exportado exitosamente!",
+    "noMessages": "Aún no hay mensajes para exportar",
+    "suggestedQuestions": {
+      "bestModel": "¿Cuál es el mejor modelo entrenado?",
+      "importantVars": "¿Cuáles son las variables más importantes?",
+      "summary": "Resume este proyecto para presentar al director",
+      "performance": "¿Cuál es el rendimiento del modelo?",
+      "createModel": "¿Cómo creo mi primer modelo?",
+      "whatIsAuc": "¿Qué es AUC y por qué es importante?",
+      "interpretChurn": "¿Cómo interpretar el resultado de churn a 90 días?",
+      "integrateApi": "¿Cómo integrar la API de predicción en mi sistema?",
+      "classificationRegression": "¿Cuál es la diferencia entre clasificación y regresión?",
+      "featuresTarget": "¿Qué son features y variable objetivo?"
+    }
+  },
+  "quickGuide": {
+    "title": "Guía Rápida",
+    "heroTitle": "Tu primer modelo en 5 minutos",
+    "heroSubtitle": "Sigue los pasos a continuación para crear tu primer modelo de machine learning en PredictSys AI",
+    "backToProjects": "Volver a Mis Proyectos",
+    "tip": "Consejo",
+    "tipText": "En cualquier momento, puedes abrir el Asistente IA del proyecto para pedir explicaciones en lenguaje simple sobre lo que se hizo, las métricas y los próximos pasos.",
+    "steps": {
+      "1": {
+        "title": "Crea un nuevo proyecto",
+        "content": "Haz clic en \"Nuevo Proyecto\" y completa:\n• Nombre del proyecto (ej.: \"Predicción de churn de clientes\")\n• Descripción de lo que quieres predecir\n• Objetivo de negocio en lenguaje simple\n• Tipo de problema: Clasificación (0/1) o Regresión (valor numérico)"
+      },
+      "2": {
+        "title": "Sube tus datos (CSV)",
+        "content": "En el paso \"Datos\", sube un archivo CSV con tu información.\nPredictSys detectará automáticamente columnas numéricas y categóricas y mostrará una vista previa de las primeras filas."
+      },
+      "3": {
+        "title": "Entiende tu dataset (EDA)",
+        "content": "En el paso \"Análisis (EDA)\", haz clic en \"Calcular EDA\".\nVerás estadísticas y gráficos que ayudan a entender tus datos: distribución de valores, variables categóricas más frecuentes, datos faltantes, etc."
+      },
+      "4": {
+        "title": "Elige la variable objetivo y features",
+        "content": "En el paso \"Variables\", selecciona la columna que quieres predecir (variable objetivo) y qué columnas se usarán como entrada del modelo (features).\nSi tienes dudas, el Asistente IA puede explicar cada métrica y concepto."
+      },
+      "5": {
+        "title": "Entrena el modelo",
+        "content": "En el paso \"Entrenamiento\", haz clic en \"Entrenar modelos\".\nPredictSys prueba automáticamente diferentes algoritmos y presenta una tabla comparando AUC, F1, Precisión, Recall y Exactitud (para clasificación) o MAE/RMSE/R² (para regresión)."
+      },
+      "6": {
+        "title": "Pon el modelo en producción",
+        "content": "Elige el mejor modelo y publica en producción con 1 clic.\nEn \"API & Deploy\" encontrarás el endpoint de predicción y ejemplos de cómo integrar tu sistema."
+      }
+    }
+  },
+  "documentation": {
+    "title": "Documentación",
+    "sections": {
+      "intro": "Introducción",
+      "concepts": "Conceptos básicos",
+      "flow": "Flujo de creación",
+      "metrics": "Métricas del modelo",
+      "assistant": "Asistente IA",
+      "faq": "Preguntas frecuentes"
+    },
+    "introText": "PredictSys AI es una plataforma de modelos predictivos enfocada en datos tabulares. Permite que usuarios de negocios creen proyectos de machine learning sin escribir código, pasando por etapas de datos, análisis, entrenamiento y deploy de forma guiada.",
+    "concepts": {
+      "project": { "term": "Proyecto", "desc": "Conjunto de datos, modelado y resultados para un objetivo de negocio específico (ej.: \"Predicción de churn en el journey\")." },
+      "dataset": { "term": "Dataset", "desc": "Archivo CSV con historial de clientes, transacciones o eventos." },
+      "target": { "term": "Variable objetivo (target)", "desc": "Lo que quieres predecir (ej.: churn_90d, valor de compra, morosidad)." },
+      "features": { "term": "Features", "desc": "Columnas usadas como entrada para el modelo (edad del cliente, número de compras, canal, etc.)." },
+      "eda": { "term": "EDA", "desc": "Análisis Exploratorio que muestra estadísticas y gráficos sobre los datos." },
+      "production": { "term": "Modelo en producción", "desc": "Modelo elegido para ser usado por la API de predicción." }
+    },
+    "flowSteps": {
+      "1": "Información del proyecto: Nombre, descripción, objetivo y tipo de problema.",
+      "2": "Subida de datos: Sube un archivo CSV con tus datos históricos.",
+      "3": "Análisis exploratorio (EDA): Visualiza estadísticas y gráficos de tus datos.",
+      "4": "Selección de variables: Elige la variable objetivo y las features de entrada.",
+      "5": "Entrenamiento: La plataforma entrena automáticamente múltiples algoritmos.",
+      "6": "Deploy: Publica el modelo elegido y obtén la API de predicción."
+    },
+    "metricsClassification": "Clasificación",
+    "metricsRegression": "Regresión",
+    "metrics": {
+      "AUC": "Mide qué tan bien el modelo puede separar quiénes van a hacer churn de quiénes no, en todos los umbrales posibles. Va de 0 a 1: cuanto más cerca de 1, mejor. Buena métrica cuando los datos están desbalanceados (pocos churns).",
+      "F1": "Media armónica entre Precisión y Recall. Resume en un número el equilibrio entre: cuántos churns predichos son realmente churns (Precisión) y cuántos churns reales el modelo encontró (Recall).",
+      "Precision": "De todos los clientes que el modelo dijo que harán churn, qué porcentaje realmente lo hizo. Útil cuando el costo de contactar a alguien que no hará churn es alto.",
+      "Recall": "De todos los clientes que realmente hicieron churn, qué porcentaje el modelo identificó como churn. Útil cuando es muy importante NO dejar pasar churns.",
+      "Accuracy": "Porcentaje total de aciertos del modelo, considerando churn y no churn. Puede ser engañosa si la base está muy desbalanceada (casi nadie hace churn).",
+      "MAE": "Media de la diferencia absoluta entre el valor predicho y el real. Dice, en promedio, cuánto el modelo erra hacia arriba o abajo, en la misma unidad que la variable objetivo.",
+      "MSE": "Media de los errores al cuadrado. Penaliza más fuertemente los errores grandes. Útil para comparar modelos, pero no tan intuitivo para negocios.",
+      "RMSE": "Raíz cuadrada del MSE. Queda en la misma unidad que la variable objetivo y también penaliza bastante los errores grandes.",
+      "R2": "Mide cuánto de la variación del objetivo el modelo explica (de 0 a 1). Cuanto más cerca de 1, más el modelo explica el comportamiento de la variable."
+    },
+    "assistantProject": {
+      "title": "Asistente IA del proyecto",
+      "desc": "Responde sobre datos, modelos y métricas de ese proyecto específico. Tiene acceso al contexto completo del proyecto: dataset, EDA, modelos entrenados e importancia de features."
+    },
+    "assistantGlobal": {
+      "title": "Chatbot IA global",
+      "desc": "Responde sobre uso de la plataforma y conceptos generales de machine learning. Ideal para dudas sobre cómo usar PredictSys o entender métricas y términos técnicos."
+    },
+    "faq": {
+      "q1": { "question": "¿Necesito saber programar para usar PredictSys?", "answer": "¡No! PredictSys AI fue creada para ser 100% no-code. Todos los pasos se hacen mediante botones, formularios y selecciones visuales. No necesitas escribir ninguna línea de código." },
+      "q2": { "question": "¿Qué formato de archivo se acepta?", "answer": "Actualmente aceptamos archivos CSV (valores separados por coma) con codificación UTF-8. Es el formato más común para exportar datos de hojas de cálculo y sistemas." },
+      "q3": { "question": "¿Cuántas filas puede tener mi dataset?", "answer": "El archivo puede tener hasta 50 MB. Para el entrenamiento de modelos, utilizamos hasta 5.000 filas para garantizar que el procesamiento sea rápido y eficiente." },
+      "q4": { "question": "¿Puedo usar la plataforma para otros casos además de churn?", "answer": "¡Sí! PredictSys sirve para cualquier problema de clasificación (predecir categorías, como sí/no, A/B/C) o regresión (predecir valores numéricos, como ventas, precio). Ejemplos: morosidad, propensión de compra, pronóstico de ventas, score de crédito." },
+      "q5": { "question": "¿Cómo funciona la API de predicción?", "answer": "Después de publicar un modelo en producción, recibes un endpoint de API REST. Solo envía los datos de entrada en formato JSON y recibe la predicción como respuesta. Ejemplos de código se proporcionan en la pestaña 'API & Deploy'." }
+    }
+  },
+  "settings": {
+    "title": "Configuración",
+    "projectActions": "Acciones del Proyecto",
+    "clearChat": "Limpiar historial del Asistente IA",
+    "clearChatDesc": "Esto eliminará todos los mensajes intercambiados con el Asistente IA en este proyecto, pero no cambiará los datos ni los modelos entrenados.",
+    "clearChatButton": "Limpiar historial",
+    "clearChatSuccess": "Historial del Asistente IA limpiado exitosamente.",
+    "deleteProject": "Eliminar este proyecto",
+    "deleteConfirmTitle": "Eliminar proyecto",
+    "deleteConfirmText": "¿Estás seguro de que deseas eliminar el proyecto",
+    "deleteConfirmWarning": "Esta acción es permanente y también eliminará:",
+    "deleteConfirmItems": {
+      "models": "Modelos y métricas de entrenamiento",
+      "eda": "Estadísticas de EDA",
+      "data": "Archivo de datos asociado",
+      "chat": "Historial del Asistente IA de este proyecto"
+    },
+    "deleteButton": "Eliminar definitivamente",
+    "deleteSuccess": "Proyecto eliminado exitosamente."
+  }
+}

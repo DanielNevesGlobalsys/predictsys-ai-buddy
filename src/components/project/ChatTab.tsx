@@ -1,11 +1,13 @@
 import { useState, useEffect, useRef } from "react";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, User, Send, Loader2, Sparkles, Trash2 } from "lucide-react";
+import { Bot, User, Send, Loader2, Sparkles, Trash2, Download } from "lucide-react";
+import ExportChatDialog from "@/components/chat/ExportChatDialog";
 
 interface Message {
   id: string;
@@ -27,11 +29,13 @@ const suggestedQuestions = [
 ];
 
 const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+  const [showExportDialog, setShowExportDialog] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -135,18 +139,20 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
 
     if (error) {
       toast({
-        title: "Erro ao limpar histórico",
+        title: t("chat.errorClearing"),
         description: error.message,
         variant: "destructive",
       });
     } else {
       setMessages([]);
       toast({
-        title: "Histórico limpo",
-        description: "Todas as mensagens foram removidas.",
+        title: t("chat.historyCleared"),
+        description: t("chat.allMessagesRemoved"),
       });
     }
   };
+
+  const hasMessages = messages.length > 0;
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -175,6 +181,15 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
 
   return (
     <div className="flex flex-col h-[600px]">
+      {/* Export Dialog */}
+      <ExportChatDialog
+        open={showExportDialog}
+        onOpenChange={setShowExportDialog}
+        messages={messages}
+        projectName={projectName}
+        allMessages={messages}
+      />
+
       {/* Header */}
       <Card className="bg-gradient-card shadow-card p-4 mb-4">
         <div className="flex items-center justify-between">
@@ -183,23 +198,35 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
               <Bot className="w-5 h-5 text-primary-foreground" />
             </div>
             <div>
-              <h3 className="font-semibold">Assistente IA</h3>
+              <h3 className="font-semibold">{t("chat.title")}</h3>
               <p className="text-sm text-muted-foreground">
-                Tire dúvidas sobre o projeto {projectName}
+                {t("chat.askAboutProject")} {projectName}
               </p>
             </div>
           </div>
-          {messages.length > 0 && (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={clearHistory}
-              className="text-muted-foreground hover:text-destructive"
-            >
-              <Trash2 className="w-4 h-4 mr-1" />
-              Limpar
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {hasMessages && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowExportDialog(true)}
+              >
+                <Download className="w-4 h-4 mr-1" />
+                {t("chat.exportPdf")}
+              </Button>
+            )}
+            {hasMessages && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={clearHistory}
+                className="text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="w-4 h-4 mr-1" />
+                {t("common.clear")}
+              </Button>
+            )}
+          </div>
         </div>
       </Card>
 
