@@ -1,0 +1,243 @@
+{
+  "common": {
+    "back": "Back",
+    "cancel": "Cancel",
+    "save": "Save",
+    "delete": "Delete",
+    "edit": "Edit",
+    "loading": "Loading...",
+    "error": "Error",
+    "success": "Success",
+    "send": "Send",
+    "clear": "Clear",
+    "export": "Export",
+    "close": "Close",
+    "confirm": "Confirm"
+  },
+  "auth": {
+    "login": "Log In",
+    "logout": "Log Out",
+    "signup": "Sign Up",
+    "email": "Email",
+    "password": "Password",
+    "fullName": "Full name"
+  },
+  "header": {
+    "openChatbot": "Open AI Chatbot (help)",
+    "toggleTheme": "Toggle theme (light/dark)"
+  },
+  "landing": {
+    "title": "Machine Learning",
+    "titleHighlight": "Without Writing Code",
+    "subtitle": "B2B predictive AI platform with integrated chatbot. Create classification and regression models in minutes, not weeks.",
+    "cta": "Create Free Account",
+    "demo": "Watch Demo",
+    "secure": "100% Secure",
+    "instantDeploy": "Instant Deploy",
+    "aiChatbot": "AI Chatbot",
+    "aiPredictive": "Predictive AI for Business",
+    "featuresTitle": "Everything you need to",
+    "featuresHighlight": "predict the future",
+    "featuresSubtitle": "Intuitive AutoML + Smart Chatbot = Faster Decisions",
+    "ctaTitle": "Ready to get started?",
+    "ctaSubtitle": "Create your free account and start training predictive models in minutes.",
+    "ctaButton": "Start Now",
+    "footer": "Making ML accessible for businesses.",
+    "features": {
+      "automl": "Simplified AutoML",
+      "automlDesc": "Train ML models without writing code. Upload CSV, click train, and done.",
+      "chatbot": "Intelligent Chatbot",
+      "chatbotDesc": "Talk to your data. The chatbot understands the entire pipeline and explains results in business language.",
+      "eda": "Automatic Exploratory Analysis",
+      "edaDesc": "Charts and statistics automatically generated to understand your data quickly.",
+      "deploy": "1-Click Deploy",
+      "deployDesc": "Publish your model to production instantly. REST API ready for integration.",
+      "secure": "Secure Multi-Tenant",
+      "secureDesc": "Each company has its own isolated environment. Data and models always protected.",
+      "learning": "Continuous Learning",
+      "learningDesc": "The system learns from your projects and adapts to your business needs."
+    }
+  },
+  "dashboard": {
+    "title": "My Projects",
+    "subtitle": "Manage your machine learning projects",
+    "newProject": "New Project",
+    "createFirst": "Create First Project",
+    "noProjects": "No projects yet",
+    "noProjectsDesc": "Create your first machine learning project and start making predictions in minutes.",
+    "errorLoading": "Error loading projects",
+    "quickGuide": "Quick Guide",
+    "quickGuideDesc": "Learn to create your first model in 5 minutes",
+    "chatbot": "AI Chatbot",
+    "chatbotDesc": "Chat about your projects and get insights",
+    "documentation": "Documentation",
+    "documentationDesc": "Access examples and best practices"
+  },
+  "project": {
+    "classification": "Classification",
+    "regression": "Regression",
+    "status": {
+      "draft": "Draft",
+      "configuring": "Configuring",
+      "data_uploaded": "Data uploaded",
+      "eda_complete": "EDA complete",
+      "training": "Training",
+      "evaluated": "Evaluated",
+      "deployed": "In production"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "data": "Data & EDA",
+      "models": "Models",
+      "deploy": "API & Deploy",
+      "chat": "AI Assistant",
+      "settings": "Settings"
+    }
+  },
+  "chat": {
+    "title": "AI Assistant",
+    "globalTitle": "AI Chatbot",
+    "globalSubtitle": "PredictSys AI Assistant",
+    "placeholder": "Type your question...",
+    "enterToSend": "Press Enter to send or Shift+Enter for new line",
+    "askAboutProject": "Ask questions about the project",
+    "askAboutPlatform": "Ask questions about the platform, predictive model concepts, and best practices.",
+    "howCanIHelp": "Hello! How can I help?",
+    "iAmAssistant": "I'm this project's AI assistant. I can answer questions about the data, trained models, metrics, and more.",
+    "suggestions": "Suggestions:",
+    "clearHistory": "Clear history",
+    "historyCleared": "History cleared",
+    "allMessagesRemoved": "All messages have been removed.",
+    "errorSending": "Error sending message",
+    "errorClearing": "Error clearing history",
+    "exportPdf": "Export PDF",
+    "exportTitle": "Export conversation",
+    "exportDescription": "What would you like to export?",
+    "exportComplete": "Complete history of this project",
+    "exportCurrent": "Current conversation only",
+    "exportSuccess": "Chat exported successfully!",
+    "noMessages": "No messages to export yet",
+    "suggestedQuestions": {
+      "bestModel": "What is the best trained model?",
+      "importantVars": "What are the most important variables?",
+      "summary": "Summarize this project to present to the director",
+      "performance": "What is the model's performance?",
+      "createModel": "How do I create my first model?",
+      "whatIsAuc": "What is AUC and why is it important?",
+      "interpretChurn": "How to interpret the 90-day churn result?",
+      "integrateApi": "How to integrate the prediction API into my system?",
+      "classificationRegression": "What's the difference between classification and regression?",
+      "featuresTarget": "What are features and target variable?"
+    }
+  },
+  "quickGuide": {
+    "title": "Quick Guide",
+    "heroTitle": "Your first model in 5 minutes",
+    "heroSubtitle": "Follow the steps below to create your first machine learning model in PredictSys AI",
+    "backToProjects": "Back to My Projects",
+    "tip": "Tip",
+    "tipText": "At any time, you can open the project's AI Assistant to request simple explanations about what was done, the metrics, and next steps.",
+    "steps": {
+      "1": {
+        "title": "Create a new project",
+        "content": "Click \"New Project\" and fill in:\n• Project name (e.g., \"Customer churn prediction\")\n• Description of what you want to predict\n• Business objective in simple language\n• Problem type: Classification (0/1) or Regression (numeric value)"
+      },
+      "2": {
+        "title": "Upload your data (CSV)",
+        "content": "In the \"Data\" step, upload a CSV file with your information.\nPredictSys will automatically detect numeric and categorical columns and show a preview of the first rows."
+      },
+      "3": {
+        "title": "Understand your dataset (EDA)",
+        "content": "In the \"Analysis (EDA)\" step, click \"Calculate EDA\".\nYou'll see statistics and charts that help understand your data: value distribution, most frequent categorical variables, missing data, etc."
+      },
+      "4": {
+        "title": "Choose target variable and features",
+        "content": "In the \"Variables\" step, select the column you want to predict (target variable) and which columns will be used as model input (features).\nIf in doubt, the AI Assistant can explain each metric and concept."
+      },
+      "5": {
+        "title": "Train the model",
+        "content": "In the \"Training\" step, click \"Train models\".\nPredictSys automatically tests different algorithms and presents a table comparing AUC, F1, Precision, Recall, and Accuracy (for classification) or MAE/RMSE/R² (for regression)."
+      },
+      "6": {
+        "title": "Deploy the model to production",
+        "content": "Choose the best model and publish to production with 1 click.\nIn \"API & Deploy\" you'll find the prediction endpoint and examples of how to integrate your system."
+      }
+    }
+  },
+  "documentation": {
+    "title": "Documentation",
+    "sections": {
+      "intro": "Introduction",
+      "concepts": "Basic concepts",
+      "flow": "Project creation flow",
+      "metrics": "Model metrics",
+      "assistant": "AI Assistant",
+      "faq": "FAQ"
+    },
+    "introText": "PredictSys AI is a predictive models platform focused on tabular data. It allows business users to create machine learning projects without writing code, going through data, analysis, training, and deployment stages in a guided manner.",
+    "concepts": {
+      "project": { "term": "Project", "desc": "Set of data, modeling, and results for a specific business objective (e.g., \"Churn prediction in the journey\")." },
+      "dataset": { "term": "Dataset", "desc": "CSV file with customer history, transactions, or events." },
+      "target": { "term": "Target variable", "desc": "What you want to predict (e.g., churn_90d, purchase value, default)." },
+      "features": { "term": "Features", "desc": "Columns used as model input (customer age, number of purchases, channel, etc.)." },
+      "eda": { "term": "EDA", "desc": "Exploratory Analysis that shows statistics and charts about the data." },
+      "production": { "term": "Production model", "desc": "Chosen model to be used by the prediction API." }
+    },
+    "flowSteps": {
+      "1": "Project information: Name, description, objective, and problem type.",
+      "2": "Data upload: Upload a CSV file with your historical data.",
+      "3": "Exploratory analysis (EDA): Visualize statistics and charts of your data.",
+      "4": "Variable selection: Choose the target variable and input features.",
+      "5": "Training: The platform automatically trains multiple algorithms.",
+      "6": "Deploy: Publish the chosen model and get the prediction API."
+    },
+    "metricsClassification": "Classification",
+    "metricsRegression": "Regression",
+    "metrics": {
+      "AUC": "Measures how well the model can separate churners from non-churners across all possible thresholds. Ranges from 0 to 1: the closer to 1, the better. Good metric when data is imbalanced (few churns).",
+      "F1": "Harmonic mean between Precision and Recall. Summarizes in one number the balance between: how many predicted churns are actually churns (Precision) and how many actual churns the model found (Recall).",
+      "Precision": "Of all customers the model said will churn, what percentage actually churned. Useful when the cost of reaching someone who won't churn is high.",
+      "Recall": "Of all customers who actually churned, what percentage the model identified as churn. Useful when it's very important NOT to miss churns.",
+      "Accuracy": "Total percentage of correct predictions, considering churn and non-churn. Can be misleading if the base is very imbalanced (almost no one churning).",
+      "MAE": "Mean absolute difference between predicted and actual values. Shows, on average, how much the model errs up or down, in the same unit as the target variable.",
+      "MSE": "Mean of squared errors. Penalizes large errors more heavily. Useful for comparing models, but not as intuitive for business.",
+      "RMSE": "Square root of MSE. In the same unit as the target variable and also penalizes large errors significantly.",
+      "R2": "Measures how much of the target variation the model explains (0 to 1). The closer to 1, the more the model explains the variable's behavior."
+    },
+    "assistantProject": {
+      "title": "Project AI Assistant",
+      "desc": "Responds about data, models, and metrics of that specific project. Has access to the complete project context: dataset, EDA, trained models, and feature importance."
+    },
+    "assistantGlobal": {
+      "title": "Global AI Chatbot",
+      "desc": "Responds about platform usage and general machine learning concepts. Ideal for questions about how to use PredictSys or understanding metrics and technical terms."
+    },
+    "faq": {
+      "q1": { "question": "Do I need to know how to code to use PredictSys?", "answer": "No! PredictSys AI was created to be 100% no-code. All steps are done through buttons, forms, and visual selections. You don't need to write any code." },
+      "q2": { "question": "What file format is accepted?", "answer": "We currently accept CSV files (comma-separated values) with UTF-8 encoding. It's the most common format for exporting data from spreadsheets and systems." },
+      "q3": { "question": "How many rows can my dataset have?", "answer": "The file can be up to 50 MB. For model training, we use up to 5,000 rows to ensure processing is fast and efficient." },
+      "q4": { "question": "Can I use the platform for cases other than churn?", "answer": "Yes! PredictSys works for any classification problem (predicting categories, like yes/no, A/B/C) or regression (predicting numeric values, like sales, price). Examples: default, purchase propensity, sales forecast, credit score." },
+      "q5": { "question": "How does the prediction API work?", "answer": "After publishing a model to production, you get a REST API endpoint. Just send input data in JSON format and receive the prediction as a response. Code examples are provided in the 'API & Deploy' tab." }
+    }
+  },
+  "settings": {
+    "title": "Settings",
+    "projectActions": "Project Actions",
+    "clearChat": "Clear AI Assistant history",
+    "clearChatDesc": "This will delete all messages exchanged with the AI Assistant in this project, but won't change the data or trained models.",
+    "clearChatButton": "Clear history",
+    "clearChatSuccess": "AI Assistant history cleared successfully.",
+    "deleteProject": "Delete this project",
+    "deleteConfirmTitle": "Delete project",
+    "deleteConfirmText": "Are you sure you want to delete the project",
+    "deleteConfirmWarning": "This action is permanent and will also delete:",
+    "deleteConfirmItems": {
+      "models": "Models and training metrics",
+      "eda": "EDA statistics",
+      "data": "Associated data file",
+      "chat": "AI Assistant history for this project"
+    },
+    "deleteButton": "Delete permanently",
+    "deleteSuccess": "Project deleted successfully."
+  }
+}
