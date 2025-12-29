@@ -1,3 +1,4 @@
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
@@ -13,56 +14,18 @@ import {
   Lightbulb,
 } from "lucide-react";
 
-const steps = [
-  {
-    number: 1,
-    title: "Crie um novo projeto",
-    icon: Brain,
-    content: `Clique em "Novo Projeto" e preencha:
-• Nome do projeto (ex.: "Previsão de churn clientes")
-• Descrição do que você quer prever
-• Objetivo de negócio em linguagem simples
-• Tipo de problema: Classificação (0/1) ou Regressão (valor numérico)`,
-  },
-  {
-    number: 2,
-    title: "Envie seus dados (CSV)",
-    icon: FileSpreadsheet,
-    content: `No passo "Dados", envie um arquivo CSV com suas informações.
-A PredictSys vai detectar automaticamente colunas numéricas e categóricas e mostrar uma pré-visualização das primeiras linhas.`,
-  },
-  {
-    number: 3,
-    title: "Entenda seu dataset (EDA)",
-    icon: BarChart3,
-    content: `No passo "Análise (EDA)", clique em "Calcular EDA".
-Você verá estatísticas e gráficos que ajudam a entender seus dados: distribuição de valores, variáveis categóricas mais frequentes, dados ausentes etc.`,
-  },
-  {
-    number: 4,
-    title: "Escolha a variável alvo e features",
-    icon: Target,
-    content: `No passo "Variáveis", selecione a coluna que você quer prever (variável alvo) e quais colunas serão usadas como entrada do modelo (features).
-Se tiver dúvidas, o Assistente IA pode explicar cada métrica e conceito.`,
-  },
-  {
-    number: 5,
-    title: "Treine o modelo",
-    icon: Cpu,
-    content: `No passo "Treinamento", clique em "Treinar modelos".
-A PredictSys testa automaticamente diferentes algoritmos e apresenta uma tabela comparando AUC, F1, Precisão, Recall e Acurácia (para classificação) ou MAE/RMSE/R² (para regressão).`,
-  },
-  {
-    number: 6,
-    title: "Coloque o modelo em produção",
-    icon: Rocket,
-    content: `Escolha o melhor modelo e publique em produção com 1 clique.
-Em "API & Deploy" você encontra o endpoint de predição e exemplos de como integrar seu sistema.`,
-  },
-];
-
 const QuickGuide = () => {
   const navigate = useNavigate();
+  const { t } = useTranslation();
+
+  const steps = [
+    { number: 1, titleKey: "quickGuide.steps.step1.title", contentKey: "quickGuide.steps.step1.content", icon: Brain },
+    { number: 2, titleKey: "quickGuide.steps.step2.title", contentKey: "quickGuide.steps.step2.content", icon: FileSpreadsheet },
+    { number: 3, titleKey: "quickGuide.steps.step3.title", contentKey: "quickGuide.steps.step3.content", icon: BarChart3 },
+    { number: 4, titleKey: "quickGuide.steps.step4.title", contentKey: "quickGuide.steps.step4.content", icon: Target },
+    { number: 5, titleKey: "quickGuide.steps.step5.title", contentKey: "quickGuide.steps.step5.content", icon: Cpu },
+    { number: 6, titleKey: "quickGuide.steps.step6.title", contentKey: "quickGuide.steps.step6.content", icon: Rocket },
+  ];
 
   return (
     <div className="min-h-screen bg-gradient-hero">
@@ -75,17 +38,17 @@ const QuickGuide = () => {
           <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
             <Brain className="w-6 h-6 text-primary-foreground" />
           </div>
-          <h1 className="text-xl font-bold">Guia Rápido</h1>
+          <h1 className="text-xl font-bold">{t("quickGuide.title")}</h1>
         </div>
       </header>
 
       <main className="container mx-auto px-4 py-8 max-w-4xl">
         <Card className="bg-gradient-card shadow-card p-8 mb-8">
           <h1 className="text-3xl font-display font-bold mb-2 text-center">
-            Seu primeiro modelo em 5 minutos
+            {t("quickGuide.subtitle")}
           </h1>
           <p className="text-muted-foreground text-center text-lg">
-            Siga os passos abaixo para criar seu primeiro modelo de machine learning na PredictSys AI
+            {t("quickGuide.description")}
           </p>
         </Card>
 
@@ -101,9 +64,9 @@ const QuickGuide = () => {
                     <span className="w-7 h-7 bg-primary/10 rounded-full flex items-center justify-center text-sm font-bold text-primary">
                       {step.number}
                     </span>
-                    {step.title}
+                    {t(step.titleKey)}
                   </h3>
-                  <p className="text-muted-foreground whitespace-pre-line">{step.content}</p>
+                  <p className="text-muted-foreground whitespace-pre-line">{t(step.contentKey)}</p>
                 </div>
               </div>
             </Card>
@@ -119,11 +82,10 @@ const QuickGuide = () => {
             <div>
               <h3 className="font-semibold mb-2 flex items-center gap-2">
                 <MessageSquare className="w-4 h-4" />
-                Dica
+                {t("quickGuide.tip")}
               </h3>
               <p className="text-muted-foreground">
-                A qualquer momento, você pode abrir o Assistente IA do projeto para pedir explicações 
-                em linguagem simples sobre o que foi feito, as métricas e os próximos passos.
+                {t("quickGuide.tipContent")}
               </p>
             </div>
           </div>
@@ -136,7 +98,7 @@ const QuickGuide = () => {
             onClick={() => navigate("/dashboard")}
           >
             <ChevronLeft className="w-5 h-5 mr-2" />
-            Voltar para Meus Projetos
+            {t("quickGuide.backToProjects")}
           </Button>
         </div>
       </main>

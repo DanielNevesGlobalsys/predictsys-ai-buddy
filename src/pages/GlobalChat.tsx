@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
@@ -23,23 +24,24 @@ interface Message {
   created_at: string;
 }
 
-const suggestedQuestions = [
-  "Como criar meu primeiro modelo?",
-  "O que é AUC e por que ela é importante?",
-  "Como interpretar o resultado de churn 90 dias?",
-  "Como integrar a API de predição no meu sistema?",
-  "Qual a diferença entre classificação e regressão?",
-  "O que são features e variável alvo?",
-];
-
 const GlobalChat = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { t, i18n } = useTranslation();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isLoadingHistory, setIsLoadingHistory] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const suggestedQuestions = [
+    t("globalChat.suggestedQuestions.q1"),
+    t("globalChat.suggestedQuestions.q2"),
+    t("globalChat.suggestedQuestions.q3"),
+    t("globalChat.suggestedQuestions.q4"),
+    t("globalChat.suggestedQuestions.q5"),
+    t("globalChat.suggestedQuestions.q6"),
+  ];
 
   useEffect(() => {
     loadChatHistory();
@@ -83,7 +85,7 @@ const GlobalChat = () => {
 
     try {
       const response = await supabase.functions.invoke("global-chat", {
-        body: { message: messageText },
+        body: { message: messageText, language: i18n.language },
       });
 
       if (response.error || !response.data?.success) {
@@ -98,7 +100,7 @@ const GlobalChat = () => {
       setMessages((prev) => [...prev, assistantMessage]);
     } catch (error: any) {
       toast({
-        title: "Erro ao enviar mensagem",
+        title: t("globalChat.errorSending"),
         description: error.message,
         variant: "destructive",
       });
@@ -120,12 +122,12 @@ const GlobalChat = () => {
 
       setMessages([]);
       toast({
-        title: "Histórico limpo",
-        description: "Todas as mensagens foram apagadas.",
+        title: t("globalChat.historyCleared"),
+        description: t("globalChat.allMessagesDeleted"),
       });
     } catch (error: any) {
       toast({
-        title: "Erro ao limpar histórico",
+        title: t("globalChat.errorClearHistory"),
         description: error.message,
         variant: "destructive",
       });
@@ -161,13 +163,13 @@ const GlobalChat = () => {
               <Bot className="w-6 h-6 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-xl font-bold">Chatbot IA</h1>
-              <p className="text-sm text-muted-foreground">Assistente da PredictSys AI</p>
+              <h1 className="text-xl font-bold">{t("globalChat.title")}</h1>
+              <p className="text-sm text-muted-foreground">{t("globalChat.subtitle")}</p>
             </div>
           </div>
           <Button variant="outline" size="sm" onClick={clearHistory}>
             <Trash2 className="w-4 h-4 mr-2" />
-            Limpar
+            {t("globalChat.clear")}
           </Button>
         </div>
       </header>
@@ -178,7 +180,7 @@ const GlobalChat = () => {
           <div className="p-4 border-b border-border/40 bg-primary/5">
             <p className="text-sm text-muted-foreground flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-primary" />
-              Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.
+              {t("globalChat.infoBanner")}
             </p>
           </div>
 
@@ -192,13 +194,13 @@ const GlobalChat = () => {
               <div className="space-y-6">
                 <div className="text-center py-8">
                   <Bot className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
-                  <h3 className="font-semibold text-lg mb-2">Como posso ajudar?</h3>
+                  <h3 className="font-semibold text-lg mb-2">{t("globalChat.howCanIHelp")}</h3>
                   <p className="text-muted-foreground">
-                    Pergunte sobre a plataforma ou conceitos de machine learning.
+                    {t("globalChat.askAboutPlatform")}
                   </p>
                 </div>
                 <div className="space-y-3">
-                  <p className="text-sm font-medium text-muted-foreground">Sugestões:</p>
+                  <p className="text-sm font-medium text-muted-foreground">{t("globalChat.suggestions")}</p>
                   <div className="grid gap-2">
                     {suggestedQuestions.map((question, index) => (
                       <Button
@@ -268,7 +270,7 @@ const GlobalChat = () => {
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Digite sua pergunta..."
+                placeholder={t("globalChat.placeholder")}
                 className="min-h-[60px] resize-none"
                 disabled={isLoading}
               />
