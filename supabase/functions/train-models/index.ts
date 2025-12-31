@@ -449,29 +449,67 @@ serve(async (req) => {
       });
     }
 
-    console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column}`);
+    // Check if target column is categorical (needs label encoding for classification)
+    const targetColumnInfo = columns.find(c => c.column_name === target_column);
+    const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" || 
+                                 targetColumnInfo?.inferred_type === "categorico" ||
+                                 targetColumnInfo?.inferred_type === "texto";
+    
+    console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
     // Parse data with detected delimiter
     const X: number[][] = [];
+    const yRaw: string[] = []; // Store raw target values for label encoding
     const y: number[] = [];
     
-    // Limit to 5k rows to avoid CPU timeout in edge functions
+    // For categorical targets, build label encoding map
+    const labelMap: Map<string, number> = new Map();
+    
+    // First pass: collect all target values if categorical
+    if (isTargetCategorical) {
+      const MAX_ROWS = 5000;
+      for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
+        const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
+        const targetVal = values[targetIndex]?.trim() || "";
+        if (targetVal && !labelMap.has(targetVal)) {
+          labelMap.set(targetVal, labelMap.size);
+        }
+      }
+      console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
+    }
+    
+    // Second pass: parse data
     const MAX_ROWS = 5000;
     for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
-      const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, "").replace(",", "."));
-      const features = featureIndices.map(idx => parseFloat(values[idx]));
-      const target = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+      const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
+      const features = featureIndices.map(idx => {
+        const val = values[idx]?.replace(",", ".") || "";
+        return parseFloat(val);
+      });
       
-      if (features.every(f => !isNaN(f)) && !isNaN(target)) {
+      let targetNumeric: number;
+      if (isTargetCategorical) {
+        const targetVal = values[targetIndex]?.trim() || "";
+        targetNumeric = labelMap.get(targetVal) ?? -1;
+      } else {
+        targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+      }
+      
+      if (features.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
         X.push(features);
-        y.push(target);
+        y.push(targetNumeric);
       }
     }
 
     console.log(`Dados carregados: ${X.length} amostras, ${featureNames.length} features`);
 
     if (X.length < 10) {
-      return new Response(JSON.stringify({ error: "Dados insuficientes para treinamento" }), {
+      const debugInfo = isTargetCategorical 
+        ? `Target categórico com ${labelMap.size} classes: ${[...labelMap.keys()].slice(0, 5).join(", ")}` 
+        : "Verifique se as features numéricas têm valores válidos";
+      return new Response(JSON.stringify({ 
+        error: `Dados insuficientes para treinamento (${X.length} amostras válidas). ${debugInfo}` 
+      }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -491,18 +529,21 @@ serve(async (req) => {
     const Xtest = testIdx.map(i => Xnorm[i]);
     const ytest = testIdx.map(i => y[i]);
 
-    // For classification, ensure binary target
+    // For classification, ensure binary target (for 2 classes) or multi-class handling
     const isClassification = problem_type === "classification";
     let ytrainBin = ytrain;
     let ytestBin = ytest;
+    const numClasses = isTargetCategorical ? labelMap.size : new Set(y).size;
     
-    if (isClassification) {
-      const uniqueVals = [...new Set(y)];
-      if (uniqueVals.length === 2) {
-        const minVal = Math.min(...uniqueVals);
-        ytrainBin = ytrain.map(v => v === minVal ? 0 : 1);
-        ytestBin = ytest.map(v => v === minVal ? 0 : 1);
-      }
+    if (isClassification && numClasses === 2) {
+      // Binary classification - convert to 0/1
+      const uniqueVals = [...new Set(y)].sort((a, b) => a - b);
+      ytrainBin = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
+      ytestBin = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
+    } else if (isClassification) {
+      // Multi-class: values are already 0, 1, 2, ... from label encoding
+      // For simplicity with current algorithms, we'll treat as one-vs-rest for the first class
+      console.log(`Multi-class classification com ${numClasses} classes`);
     }
 
     // Delete existing models for this project
