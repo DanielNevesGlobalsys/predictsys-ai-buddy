@@ -152,6 +152,28 @@
       "featuresTarget": "What are features and target variable?"
     }
   },
+  "globalChat": {
+    "title": "AI Chatbot",
+    "subtitle": "PredictSys AI Assistant",
+    "placeholder": "Type your question...",
+    "infoBanner": "Ask questions about the platform, predictive model concepts, and best practices.",
+    "howCanIHelp": "Hello! How can I help?",
+    "askAboutPlatform": "Ask questions about the platform, predictive model concepts, and best practices.",
+    "suggestions": "Suggestions:",
+    "clear": "Clear",
+    "historyCleared": "History cleared",
+    "allMessagesDeleted": "All messages have been removed.",
+    "errorSending": "Error sending message",
+    "errorClearHistory": "Error clearing history",
+    "suggestedQuestions": {
+      "q1": "How do I create my first model?",
+      "q2": "What is AUC and why is it important?",
+      "q3": "What's the difference between classification and regression?",
+      "q4": "What are features and target variable?",
+      "q5": "How to integrate the prediction API?",
+      "q6": "How to interpret model metrics?"
+    }
+  },
   "quickGuide": {
     "title": "Quick Guide",
     "heroTitle": "Your first model in 5 minutes",

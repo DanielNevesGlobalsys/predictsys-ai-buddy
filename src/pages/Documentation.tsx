@@ -20,7 +20,7 @@ const Documentation = () => {
   const [activeSection, setActiveSection] = useState("introducao");
 
   const sections = [
-    { id: "introducao", titleKey: "documentation.sections.introduction", icon: BookOpen },
+    { id: "introducao", titleKey: "documentation.sections.intro", icon: BookOpen },
     { id: "conceitos", titleKey: "documentation.sections.concepts", icon: Lightbulb },
     { id: "fluxo", titleKey: "documentation.sections.flow", icon: GitBranch },
     { id: "metricas", titleKey: "documentation.sections.metrics", icon: BarChart3 },
@@ -29,33 +29,15 @@ const Documentation = () => {
   ];
 
   const concepts = [
-    { termKey: "documentation.concepts.project.term", descKey: "documentation.concepts.project.desc" },
-    { termKey: "documentation.concepts.dataset.term", descKey: "documentation.concepts.dataset.desc" },
-    { termKey: "documentation.concepts.target.term", descKey: "documentation.concepts.target.desc" },
-    { termKey: "documentation.concepts.features.term", descKey: "documentation.concepts.features.desc" },
-    { termKey: "documentation.concepts.eda.term", descKey: "documentation.concepts.eda.desc" },
-    { termKey: "documentation.concepts.production.term", descKey: "documentation.concepts.production.desc" },
+    "project", "dataset", "target", "features", "eda", "production"
   ];
 
-  const flowSteps = [
-    "documentation.flowSteps.step1",
-    "documentation.flowSteps.step2",
-    "documentation.flowSteps.step3",
-    "documentation.flowSteps.step4",
-    "documentation.flowSteps.step5",
-    "documentation.flowSteps.step6",
-  ];
+  const flowStepNumbers = ["1", "2", "3", "4", "5", "6"];
 
-  const classificationMetrics = ["AUC", "F1", "Precisão", "Recall", "Acurácia"];
+  const classificationMetrics = ["AUC", "F1", "Precision", "Recall", "Accuracy"];
   const regressionMetrics = ["MAE", "MSE", "RMSE", "R2"];
 
-  const faqItems = [
-    { questionKey: "documentation.faq.q1.question", answerKey: "documentation.faq.q1.answer" },
-    { questionKey: "documentation.faq.q2.question", answerKey: "documentation.faq.q2.answer" },
-    { questionKey: "documentation.faq.q3.question", answerKey: "documentation.faq.q3.answer" },
-    { questionKey: "documentation.faq.q4.question", answerKey: "documentation.faq.q4.answer" },
-    { questionKey: "documentation.faq.q5.question", answerKey: "documentation.faq.q5.answer" },
-  ];
+  const faqNumbers = ["q1", "q2", "q3", "q4", "q5"];
 
   const scrollToSection = (id: string) => {
     setActiveSection(id);
@@ -127,10 +109,10 @@ const Documentation = () => {
                   {t("documentation.sections.concepts")}
                 </h2>
                 <div className="space-y-4">
-                  {concepts.map((item, index) => (
-                    <div key={index} className="border-l-2 border-primary/30 pl-4">
-                      <h4 className="font-semibold">{t(item.termKey)}</h4>
-                      <p className="text-sm text-muted-foreground">{t(item.descKey)}</p>
+                  {concepts.map((key) => (
+                    <div key={key} className="border-l-2 border-primary/30 pl-4">
+                      <h4 className="font-semibold">{t(`documentation.concepts.${key}.term`)}</h4>
+                      <p className="text-sm text-muted-foreground">{t(`documentation.concepts.${key}.desc`)}</p>
                     </div>
                   ))}
                 </div>
@@ -145,8 +127,8 @@ const Documentation = () => {
                   {t("documentation.sections.flow")}
                 </h2>
                 <ol className="space-y-3 list-decimal list-inside text-muted-foreground">
-                  {flowSteps.map((stepKey, index) => (
-                    <li key={index}>{t(stepKey)}</li>
+                  {flowStepNumbers.map((stepNum) => (
+                    <li key={stepNum}>{t(`documentation.flowSteps.${stepNum}`)}</li>
                   ))}
                 </ol>
               </Card>
@@ -224,10 +206,10 @@ const Documentation = () => {
                   {t("documentation.sections.faq")}
                 </h2>
                 <div className="space-y-4">
-                  {faqItems.map((item, index) => (
-                    <div key={index} className="border-b border-border/40 pb-4 last:border-0 last:pb-0">
-                      <h4 className="font-semibold mb-2">{t(item.questionKey)}</h4>
-                      <p className="text-sm text-muted-foreground">{t(item.answerKey)}</p>
+                  {faqNumbers.map((qNum) => (
+                    <div key={qNum} className="border-b border-border/40 pb-4 last:border-0 last:pb-0">
+                      <h4 className="font-semibold mb-2">{t(`documentation.faq.${qNum}.question`)}</h4>
+                      <p className="text-sm text-muted-foreground">{t(`documentation.faq.${qNum}.answer`)}</p>
                     </div>
                   ))}
                 </div>

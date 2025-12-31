@@ -21,15 +21,8 @@ interface ChatTabProps {
   projectName: string;
 }
 
-const suggestedQuestions = [
-  "Qual é o melhor modelo treinado?",
-  "Quais são as variáveis mais importantes?",
-  "Resuma este projeto para apresentar ao diretor",
-  "Qual a performance do modelo?",
-];
-
 const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState("");
@@ -98,6 +91,7 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
           body: JSON.stringify({
             projectId,
             message: text,
+            language: i18n.language,
           }),
         }
       );
@@ -241,24 +235,44 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
             <div className="flex flex-col items-center justify-center h-full text-center p-6">
               <Sparkles className="w-12 h-12 text-primary mb-4" />
               <h4 className="font-semibold text-lg mb-2">
-                Olá! Como posso ajudar?
+                {t("chat.howCanIHelp")}
               </h4>
               <p className="text-muted-foreground mb-6 max-w-md">
-                Sou o assistente IA deste projeto. Posso responder perguntas sobre
-                os dados, modelos treinados, métricas e muito mais.
+                {t("chat.iAmAssistant")}
               </p>
               <div className="flex flex-wrap gap-2 justify-center">
-                {suggestedQuestions.map((question, i) => (
-                  <Button
-                    key={i}
-                    variant="outline"
-                    size="sm"
-                    onClick={() => sendMessage(question)}
-                    className="text-xs"
-                  >
-                    {question}
-                  </Button>
-                ))}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => sendMessage(t("chat.suggestedQuestions.bestModel"))}
+                  className="text-xs"
+                >
+                  {t("chat.suggestedQuestions.bestModel")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => sendMessage(t("chat.suggestedQuestions.importantVars"))}
+                  className="text-xs"
+                >
+                  {t("chat.suggestedQuestions.importantVars")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => sendMessage(t("chat.suggestedQuestions.summary"))}
+                  className="text-xs"
+                >
+                  {t("chat.suggestedQuestions.summary")}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => sendMessage(t("chat.suggestedQuestions.performance"))}
+                  className="text-xs"
+                >
+                  {t("chat.suggestedQuestions.performance")}
+                </Button>
               </div>
             </div>
           ) : (
@@ -312,7 +326,7 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
       <Card className="bg-gradient-card shadow-card p-4 mt-4">
         <div className="flex gap-3">
           <Textarea
-            placeholder="Digite sua pergunta..."
+            placeholder={t("chat.placeholder")}
             value={inputValue}
             onChange={(e) => setInputValue(e.target.value)}
             onKeyDown={handleKeyDown}
@@ -331,9 +345,9 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
             )}
           </Button>
         </div>
-        <p className="text-xs text-muted-foreground mt-2">
-          Pressione Enter para enviar ou Shift+Enter para nova linha
-        </p>
+          <p className="text-xs text-muted-foreground mt-2">
+            {t("chat.enterToSend")}
+          </p>
       </Card>
     </div>
   );

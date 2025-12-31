@@ -152,6 +152,28 @@
       "featuresTarget": "O que são features e variável alvo?"
     }
   },
+  "globalChat": {
+    "title": "Chatbot IA",
+    "subtitle": "Assistente da PredictSys AI",
+    "placeholder": "Digite sua pergunta...",
+    "infoBanner": "Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.",
+    "howCanIHelp": "Olá! Como posso ajudar?",
+    "askAboutPlatform": "Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.",
+    "suggestions": "Sugestões:",
+    "clear": "Limpar",
+    "historyCleared": "Histórico limpo",
+    "allMessagesDeleted": "Todas as mensagens foram removidas.",
+    "errorSending": "Erro ao enviar mensagem",
+    "errorClearHistory": "Erro ao limpar histórico",
+    "suggestedQuestions": {
+      "q1": "Como criar meu primeiro modelo?",
+      "q2": "O que é AUC e por que ela é importante?",
+      "q3": "Qual a diferença entre classificação e regressão?",
+      "q4": "O que são features e variável alvo?",
+      "q5": "Como integrar a API de predição?",
+      "q6": "Como interpretar as métricas do modelo?"
+    }
+  },
   "quickGuide": {
     "title": "Guia Rápido",
     "heroTitle": "Seu primeiro modelo em 5 minutos",
