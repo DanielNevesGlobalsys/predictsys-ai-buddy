@@ -49,6 +49,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null }>({
     rows: 0, columns: 0, target: null
   });
+  const [aiInsights, setAiInsights] = useState<string[]>([]);
 
   useEffect(() => {
     checkProjectDataset();
@@ -196,6 +197,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
             kpiData={kpiData}
             numericStats={numericStats}
             categoricalStats={categoricalStats}
+            aiInsights={aiInsights}
           />
           <Button variant="outline" size="sm" onClick={calculateEDA} disabled={calculating}>
             {calculating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
@@ -221,11 +223,13 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
 
       {/* AI Insights */}
       <EDAInsightsSection
+        projectId={projectId}
         numericStats={numericStats}
         categoricalStats={categoricalStats}
         totalRows={projectInfo.rows}
         targetColumn={projectInfo.target || undefined}
         projectName={projectName}
+        onInsightsChange={setAiInsights}
       />
     </div>
   );

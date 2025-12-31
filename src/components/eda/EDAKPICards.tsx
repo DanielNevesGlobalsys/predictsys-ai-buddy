@@ -15,7 +15,7 @@ import {
   Target,
   Gauge,
   BarChart3,
-  Info,
+  HelpCircle,
 } from "lucide-react";
 
 interface KPIData {
@@ -128,36 +128,45 @@ const EDAKPICards = ({ data }: EDAKPICardsProps) => {
   }
 
   return (
-    <TooltipProvider>
-      <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-4">
+    <TooltipProvider delayDuration={200}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {kpis.map((kpi) => (
           <Card
             key={kpi.id}
-            className="bg-gradient-card shadow-card p-4 relative group hover:shadow-hover transition-all"
+            className="bg-gradient-card shadow-card p-5 relative group hover:shadow-hover transition-all duration-200 border border-border/50"
           >
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <button className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                  <Info className="w-4 h-4 text-muted-foreground" />
-                </button>
-              </TooltipTrigger>
-              <TooltipContent side="top" className="max-w-xs">
-                <p className="text-sm">{kpi.tooltip}</p>
-              </TooltipContent>
-            </Tooltip>
-
-            <div className="flex items-start gap-3">
-              <div className={`w-10 h-10 ${kpi.bgColor} rounded-lg flex items-center justify-center shrink-0`}>
-                <kpi.icon className={`w-5 h-5 ${kpi.color}`} />
+            <div className="flex items-start gap-4">
+              {/* Icon container */}
+              <div className={`w-12 h-12 ${kpi.bgColor} rounded-xl flex items-center justify-center shrink-0`}>
+                <kpi.icon className={`w-6 h-6 ${kpi.color}`} />
               </div>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs text-muted-foreground font-medium truncate">
-                  {kpi.label}
-                </p>
-                <p className={`text-lg font-bold ${kpi.color} truncate`}>
+              
+              {/* Content */}
+              <div className="flex-1 min-w-0 space-y-1">
+                {/* Label with tooltip */}
+                <div className="flex items-center gap-1.5">
+                  <p className="text-sm font-medium text-muted-foreground">
+                    {kpi.label}
+                  </p>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button className="opacity-50 hover:opacity-100 transition-opacity">
+                        <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" className="max-w-xs">
+                      <p className="text-sm">{kpi.tooltip}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </div>
+                
+                {/* Value */}
+                <p className={`text-xl font-bold ${kpi.color} break-words`}>
                   {kpi.value}
                 </p>
-                <p className="text-xs text-muted-foreground truncate">
+                
+                {/* Description */}
+                <p className="text-xs text-muted-foreground leading-relaxed">
                   {kpi.description}
                 </p>
               </div>

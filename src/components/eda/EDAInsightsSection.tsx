@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { supabase } from "@/integrations/supabase/client";
 import { Sparkles, Loader2, RefreshCw, Lightbulb, TrendingUp, AlertTriangle, Target } from "lucide-react";
+import { toast } from "sonner";
 
 interface NumericStat {
   column_name: string;
@@ -19,24 +20,89 @@ interface CategoricalStat {
 }
 
 interface EDAInsightsSectionProps {
+  projectId: string;
   numericStats: NumericStat[];
   categoricalStats: CategoricalStat[];
   totalRows: number;
   targetColumn?: string;
   projectName: string;
+  onInsightsChange?: (insights: string[]) => void;
 }
 
 const EDAInsightsSection = ({
+  projectId,
   numericStats,
   categoricalStats,
   totalRows,
   targetColumn,
   projectName,
+  onInsightsChange,
 }: EDAInsightsSectionProps) => {
   const { t, i18n } = useTranslation();
   const [insights, setInsights] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
+  const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // Load persisted insights on mount and language change
+  useEffect(() => {
+    loadPersistedInsights();
+  }, [projectId, i18n.language]);
+
+  const loadPersistedInsights = async () => {
+    if (!projectId) {
+      setInitialLoading(false);
+      return;
+    }
+
+    try {
+      const { data, error: fetchError } = await supabase
+        .from("project_eda_insights")
+        .select("insights")
+        .eq("project_id", projectId)
+        .eq("language", i18n.language)
+        .maybeSingle();
+
+      if (fetchError) {
+        console.error("Error loading insights:", fetchError);
+      } else if (data?.insights) {
+        const rawInsights = data.insights as unknown[];
+        const parsedInsights = Array.isArray(rawInsights) 
+          ? rawInsights.filter((item): item is string => typeof item === 'string')
+          : [];
+        setInsights(parsedInsights);
+        onInsightsChange?.(parsedInsights);
+      }
+    } catch (err) {
+      console.error("Error loading persisted insights:", err);
+    } finally {
+      setInitialLoading(false);
+    }
+  };
+
+  const saveInsights = async (newInsights: string[]) => {
+    if (!projectId) return;
+
+    try {
+      const { error: upsertError } = await supabase
+        .from("project_eda_insights")
+        .upsert({
+          project_id: projectId,
+          language: i18n.language,
+          insights: newInsights,
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: "project_id,language",
+        });
+
+      if (upsertError) {
+        console.error("Error saving insights:", upsertError);
+        toast.error(t("eda.insights.saveError"));
+      }
+    } catch (err) {
+      console.error("Error saving insights:", err);
+    }
+  };
 
   const generateInsights = async () => {
     setLoading(true);
@@ -101,17 +167,27 @@ Requirements:
       const responseText = data?.response || data?.message || "";
       const jsonMatch = responseText.match(/\[[\s\S]*\]/);
       
+      let newInsights: string[] = [];
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
-        setInsights(parsed);
+        newInsights = parsed;
       } else {
         // Fallback: split by newlines if not JSON
         const lines = responseText.split('\n').filter((l: string) => l.trim().length > 10);
-        setInsights(lines.slice(0, 5));
+        newInsights = lines.slice(0, 5);
       }
+
+      setInsights(newInsights);
+      onInsightsChange?.(newInsights);
+      
+      // Save to database
+      await saveInsights(newInsights);
+      toast.success(t("eda.insights.generated"));
+      
     } catch (err: any) {
       console.error("Error generating insights:", err);
       setError(err.message || t("eda.insights.error"));
+      toast.error(t("eda.insights.error"));
     }
     
     setLoading(false);
@@ -133,6 +209,16 @@ Requirements:
     ];
     return colors[index % colors.length];
   };
+
+  if (initialLoading) {
+    return (
+      <Card className="bg-gradient-card shadow-card p-6">
+        <div className="flex items-center justify-center py-8">
+          <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
+        </div>
+      </Card>
+    );
+  }
 
   return (
     <Card className="bg-gradient-card shadow-card p-6">
@@ -160,7 +246,7 @@ Requirements:
             <Sparkles className="w-4 h-4" />
           )}
           <span className="ml-2">
-            {loading ? t("eda.insights.generating") : insights.length > 0 ? t("eda.insights.regenerate") : t("eda.insights.title")}
+            {loading ? t("eda.insights.generating") : insights.length > 0 ? t("eda.insights.regenerate") : t("eda.insights.generate")}
           </span>
         </Button>
       </div>
@@ -196,7 +282,7 @@ Requirements:
             className="mt-4"
           >
             <Sparkles className="w-4 h-4 mr-2" />
-            {t("eda.insights.title")}
+            {t("eda.insights.generate")}
           </Button>
         </div>
       )}

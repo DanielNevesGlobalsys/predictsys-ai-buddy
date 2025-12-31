@@ -379,6 +379,8 @@
       "noModelsDesc": "Haz clic en \"Entrenar Modelos\" para iniciar el entrenamiento y comparar algoritmos.",
       "success": "Modelos entrenados exitosamente",
       "error": "Error al entrenar modelos",
+      "statusError": "Ocurrió un error de configuración del proyecto. Por favor, inténtalo de nuevo.",
+      "serverError": "Ocurrió un error en el servidor. Por favor, inténtalo de nuevo en unos momentos.",
       "results": "Resultados del Entrenamiento",
       "resultsDesc": "Compara el rendimiento de diferentes algoritmos"
     },
@@ -506,7 +508,13 @@
       "generating": "Generando insights...",
       "error": "Error al generar insights",
       "regenerate": "Regenerar",
+      "generate": "Generar Insights",
+      "generated": "¡Insights generados con éxito!",
+      "saveError": "Error al guardar insights",
       "noInsights": "Haz clic para generar insights automáticos sobre tus datos."
-    }
+    },
+    "pdfInterpretTitle": "Cómo Interpretar este Informe",
+    "pdfInterpretText": "Este informe de EDA (Análisis Exploratorio de Datos) resume las principales características de tu dataset. Úsalo para entender la calidad de los datos, identificar patrones y problemas antes del entrenamiento del modelo. Columnas con muchos valores faltantes pueden necesitar tratamiento especial. Correlaciones fuertes entre variables pueden indicar redundancia o relación causal.",
+    "pdfPage": "Página"
   }
 }

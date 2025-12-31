@@ -379,6 +379,8 @@
       "noModelsDesc": "Click \"Train Models\" to start training and compare algorithms.",
       "success": "Models trained successfully",
       "error": "Error training models",
+      "statusError": "A project configuration error occurred. Please try again.",
+      "serverError": "A server error occurred. Please try again in a few moments.",
       "results": "Training Results",
       "resultsDesc": "Compare the performance of different algorithms"
     },
@@ -506,7 +508,13 @@
       "generating": "Generating insights...",
       "error": "Error generating insights",
       "regenerate": "Regenerate",
+      "generate": "Generate Insights",
+      "generated": "Insights generated successfully!",
+      "saveError": "Error saving insights",
       "noInsights": "Click to generate automatic insights about your data."
-    }
+    },
+    "pdfInterpretTitle": "How to Interpret this Report",
+    "pdfInterpretText": "This EDA (Exploratory Data Analysis) report summarizes the main characteristics of your dataset. Use it to understand data quality, identify patterns and issues before model training. Columns with many missing values may need special treatment. Strong correlations between variables may indicate redundancy or causal relationship.",
+    "pdfPage": "Page"
   }
 }

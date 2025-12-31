@@ -164,6 +164,41 @@ export type Database = {
           },
         ]
       }
+      project_eda_insights: {
+        Row: {
+          created_at: string
+          id: string
+          insights: Json
+          language: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          insights?: Json
+          language?: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          insights?: Json
+          language?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_eda_insights_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_feature_importances: {
         Row: {
           created_at: string
