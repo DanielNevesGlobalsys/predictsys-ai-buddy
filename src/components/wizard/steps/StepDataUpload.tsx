@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Upload, FileSpreadsheet, CheckCircle, Info, AlertCircle, Loader2 } from "lucide-react";
@@ -27,20 +28,17 @@ const inferColumnType = (values: string[]): string => {
   const nonEmpty = values.filter(v => v !== null && v !== undefined && v.trim() !== "");
   if (nonEmpty.length === 0) return "texto";
   
-  // Check if all values are numbers
   const allNumbers = nonEmpty.every(v => !isNaN(Number(v.replace(",", "."))));
   if (allNumbers) return "numérico";
   
-  // Check if values look like dates
   const datePatterns = [
-    /^\d{4}-\d{2}-\d{2}/, // ISO format
-    /^\d{2}\/\d{2}\/\d{4}/, // DD/MM/YYYY
-    /^\d{2}-\d{2}-\d{4}/, // DD-MM-YYYY
+    /^\d{4}-\d{2}-\d{2}/,
+    /^\d{2}\/\d{2}\/\d{4}/,
+    /^\d{2}-\d{2}-\d{4}/,
   ];
   const allDates = nonEmpty.every(v => datePatterns.some(p => p.test(v)));
   if (allDates) return "data";
   
-  // Check for categorical (few unique values compared to total)
   const uniqueValues = new Set(nonEmpty);
   if (uniqueValues.size <= Math.min(10, nonEmpty.length * 0.3)) {
     return "categórico";
@@ -50,6 +48,7 @@ const inferColumnType = (values: string[]): string => {
 };
 
 const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: StepDataUploadProps) => {
+  const { t } = useTranslation();
   const { toast } = useToast();
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -59,7 +58,6 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [rowCount, setRowCount] = useState(0);
 
-  // Check if dataset was already uploaded
   useEffect(() => {
     if (projectData.dataset_filename) {
       setUploadStatus("success");
@@ -70,7 +68,6 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
   const loadExistingData = async () => {
     if (!projectData.id) return;
     
-    // Load existing columns
     const { data: columnsData } = await supabase
       .from("project_columns")
       .select("*")
@@ -117,16 +114,14 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
     setErrorMessage("");
     setUploadStatus("idle");
     
-    // Validate file extension
     if (!file.name.toLowerCase().endsWith(".csv")) {
-      setErrorMessage("Por favor, envie um arquivo no formato CSV (.csv)");
+      setErrorMessage(t("stepData.errors.invalidFormat"));
       setUploadStatus("error");
       return;
     }
     
-    // Validate file size
     if (file.size > MAX_FILE_SIZE) {
-      setErrorMessage(`O arquivo excede o limite de 50 MB. Tamanho atual: ${(file.size / 1024 / 1024).toFixed(2)} MB`);
+      setErrorMessage(t("stepData.errors.fileTooLarge", { size: (file.size / 1024 / 1024).toFixed(2) }));
       setUploadStatus("error");
       return;
     }
@@ -137,35 +132,31 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
   const parseAndUploadFile = async (file: File) => {
     if (!projectData.id) {
-      setErrorMessage("Erro: Projeto não encontrado. Por favor, volte ao passo anterior.");
+      setErrorMessage(t("stepData.errors.projectNotFound"));
       setUploadStatus("error");
       return;
     }
 
     setUploadStatus("processing");
 
-    // Parse CSV to get metadata and preview
     Papa.parse(file, {
       complete: async (results) => {
         try {
           const data = results.data as string[][];
           
           if (data.length < 2) {
-            setErrorMessage("O arquivo CSV deve ter pelo menos uma linha de cabeçalho e uma linha de dados.");
+            setErrorMessage(t("stepData.errors.minRows"));
             setUploadStatus("error");
             return;
           }
 
-          // Extract header and data
           const headers = data[0];
           const dataRows = data.slice(1).filter(row => row.some(cell => cell.trim() !== ""));
           
-          // Prepare preview (first 10 rows)
           const preview = [headers, ...dataRows.slice(0, 10)];
           setPreviewData(preview);
           setRowCount(dataRows.length);
 
-          // Infer column types
           const columnInfos: ColumnInfo[] = headers.map((header, index) => {
             const columnValues = dataRows.map(row => row[index] || "");
             return {
@@ -176,20 +167,17 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
           });
           setColumns(columnInfos);
 
-          // Now upload the file
           setUploadStatus("uploading");
 
           const { data: { user } } = await supabase.auth.getUser();
           if (!user) {
-            setErrorMessage("Usuário não autenticado. Por favor, faça login novamente.");
+            setErrorMessage(t("stepData.errors.notAuthenticated"));
             setUploadStatus("error");
             return;
           }
 
-          // Create file path: userId/projectId/filename
           const filePath = `${user.id}/${projectData.id}/${file.name}`;
 
-          // Upload to storage
           const { error: uploadError } = await supabase.storage
             .from("datasets")
             .upload(filePath, file, {
@@ -199,18 +187,16 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
           if (uploadError) {
             console.error("Upload error:", uploadError);
-            setErrorMessage("Erro ao enviar arquivo. Por favor, tente novamente.");
+            setErrorMessage(t("stepData.errors.uploadFailed"));
             setUploadStatus("error");
             return;
           }
 
-          // Delete existing columns for this project
           await supabase
             .from("project_columns")
             .delete()
             .eq("project_id", projectData.id);
 
-          // Save column metadata
           const columnsToInsert = columnInfos.map(col => ({
             project_id: projectData.id,
             column_name: col.name,
@@ -218,16 +204,10 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
             column_index: col.index
           }));
 
-          const { error: columnsError } = await supabase
+          await supabase
             .from("project_columns")
             .insert(columnsToInsert);
 
-          if (columnsError) {
-            console.error("Columns error:", columnsError);
-            // Continue anyway, this is not critical
-          }
-
-          // Update project with dataset info
           await saveProject({
             dataset_filename: filePath,
             dataset_rows: dataRows.length,
@@ -237,19 +217,23 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
           setUploadStatus("success");
           toast({
-            title: "Arquivo enviado!",
-            description: `${file.name} foi processado com sucesso. ${dataRows.length} linhas e ${headers.length} colunas detectadas.`,
+            title: t("stepData.uploadSuccess"),
+            description: t("stepData.uploadSuccessDesc", { 
+              filename: file.name, 
+              rows: dataRows.length, 
+              columns: headers.length 
+            }),
           });
 
         } catch (error: any) {
           console.error("Processing error:", error);
-          setErrorMessage("Erro ao processar o arquivo. Verifique se é um CSV válido.");
+          setErrorMessage(t("stepData.errors.processingFailed"));
           setUploadStatus("error");
         }
       },
       error: (error) => {
         console.error("Parse error:", error);
-        setErrorMessage("Erro ao ler o arquivo. Verifique se o arquivo está no formato CSV correto.");
+        setErrorMessage(t("stepData.errors.parseFailed"));
         setUploadStatus("error");
       },
       encoding: "UTF-8"
@@ -275,10 +259,10 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
             <Upload className="w-8 h-8 text-primary-foreground" />
           </div>
           <h2 className="text-2xl font-display font-bold mb-2">
-            Upload dos Dados
+            {t("stepData.title")}
           </h2>
           <p className="text-muted-foreground">
-            Envie um arquivo CSV com os dados que serão usados para treinar o modelo
+            {t("stepData.subtitle")}
           </p>
         </div>
 
@@ -286,12 +270,12 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
         <div className="flex items-start gap-3 p-4 bg-primary/5 border border-primary/20 rounded-lg">
           <Info className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
           <div className="text-sm">
-            <p className="font-medium text-primary mb-1">Requisitos do arquivo:</p>
+            <p className="font-medium text-primary mb-1">{t("stepData.requirements")}</p>
             <ul className="text-muted-foreground space-y-1">
-              <li>• Formato CSV (valores separados por vírgula)</li>
-              <li>• Tamanho máximo: 50 MB</li>
-              <li>• Codificação UTF-8</li>
-              <li>• Primeira linha deve conter os nomes das colunas</li>
+              <li>• {t("stepData.reqFormat")}</li>
+              <li>• {t("stepData.reqSize")}</li>
+              <li>• {t("stepData.reqEncoding")}</li>
+              <li>• {t("stepData.reqHeader")}</li>
             </ul>
           </div>
         </div>
@@ -335,12 +319,12 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
               </div>
               <div>
                 <p className="font-semibold text-lg">
-                  {uploadStatus === "processing" ? "Processando arquivo..." : "Enviando arquivo..."}
+                  {uploadStatus === "processing" ? t("stepData.processing") : t("stepData.uploading")}
                 </p>
                 <p className="text-sm text-muted-foreground">
                   {uploadStatus === "processing" 
-                    ? "Analisando estrutura dos dados" 
-                    : "Fazendo upload para o servidor"}
+                    ? t("stepData.processingDesc") 
+                    : t("stepData.uploadingDesc")}
                 </p>
               </div>
             </div>
@@ -350,9 +334,9 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
                 <CheckCircle className="w-8 h-8 text-accent" />
               </div>
               <div>
-                <p className="font-semibold text-lg">Arquivo enviado com sucesso!</p>
+                <p className="font-semibold text-lg">{t("stepData.uploadComplete")}</p>
                 <p className="text-sm text-muted-foreground">
-                  {selectedFile?.name || projectData.dataset_filename?.split("/").pop()} • {rowCount} linhas • {columns.length} colunas
+                  {selectedFile?.name || projectData.dataset_filename?.split("/").pop()} • {rowCount} {t("stepData.rows")} • {columns.length} {t("stepData.columns")}
                 </p>
               </div>
               <Button
@@ -363,7 +347,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
                   resetUpload();
                 }}
               >
-                Trocar arquivo
+                {t("stepData.changeFile")}
               </Button>
             </div>
           ) : (
@@ -373,10 +357,10 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
               </div>
               <div>
                 <p className="font-semibold text-lg">
-                  Arraste e solte seu arquivo CSV aqui
+                  {t("stepData.dragDrop")}
                 </p>
                 <p className="text-muted-foreground">
-                  ou clique para selecionar
+                  {t("stepData.orClick")}
                 </p>
               </div>
             </div>
@@ -386,7 +370,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
         {/* Preview table */}
         {previewData.length > 0 && uploadStatus === "success" && (
           <div className="space-y-3">
-            <h3 className="font-semibold">Pré-visualização dos dados</h3>
+            <h3 className="font-semibold">{t("stepData.preview")}</h3>
             <div className="bg-muted/30 rounded-lg overflow-hidden border border-border">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -409,7 +393,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
                       <tr key={rowIndex} className="hover:bg-muted/20">
                         {row.map((cell, cellIndex) => (
                           <td key={cellIndex} className="px-4 py-2 border-b border-border/50 text-muted-foreground">
-                            {cell || <span className="text-muted-foreground/50 italic">vazio</span>}
+                            {cell || <span className="text-muted-foreground/50 italic">{t("stepData.empty")}</span>}
                           </td>
                         ))}
                       </tr>
@@ -418,7 +402,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
                 </table>
               </div>
               <div className="px-4 py-2 bg-muted/30 text-xs text-muted-foreground border-t border-border">
-                Mostrando {Math.min(10, previewData.length - 1)} de {rowCount} linhas
+                {t("stepData.showingRows", { shown: Math.min(10, previewData.length - 1), total: rowCount })}
               </div>
             </div>
           </div>
@@ -427,7 +411,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
         {/* Column summary */}
         {columns.length > 0 && uploadStatus === "success" && (
           <div className="space-y-3">
-            <h3 className="font-semibold">Colunas detectadas</h3>
+            <h3 className="font-semibold">{t("stepData.detectedColumns")}</h3>
             <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
               {columns.map((col, i) => (
                 <div key={i} className="p-3 bg-muted/30 rounded-lg border border-border/50">
@@ -442,14 +426,14 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
           <Button variant="outline" onClick={onBack} disabled={loading || uploadStatus === "uploading" || uploadStatus === "processing"}>
-            Voltar
+            {t("common.back")}
           </Button>
           <Button
             onClick={() => onNext()}
             disabled={loading || !isUploadComplete}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {isUploadComplete ? "Próximo" : "Envie um arquivo para continuar"}
+            {isUploadComplete ? t("stepInfo.next") : t("stepData.uploadToContinue")}
           </Button>
         </div>
       </div>

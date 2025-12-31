@@ -24,14 +24,24 @@ const Dashboard = () => {
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-    draft: { label: t("status.draft"), color: "bg-muted text-muted-foreground" },
-    configuring: { label: t("status.configuring"), color: "bg-secondary/20 text-secondary" },
-    data_uploaded: { label: t("status.data_uploaded"), color: "bg-primary/20 text-primary" },
-    eda_complete: { label: t("status.eda_complete"), color: "bg-accent/20 text-accent" },
-    training: { label: t("status.training"), color: "bg-destructive/20 text-destructive" },
-    evaluated: { label: t("status.evaluated"), color: "bg-accent/20 text-accent" },
-    deployed: { label: t("status.deployed"), color: "bg-accent text-accent-foreground" },
+  const getStatusInfo = (status: string) => {
+    const colors: Record<string, string> = {
+      draft: "bg-muted text-muted-foreground",
+      configuring: "bg-secondary/20 text-secondary",
+      data_uploaded: "bg-primary/20 text-primary",
+      eda_complete: "bg-accent/20 text-accent",
+      training: "bg-destructive/20 text-destructive",
+      evaluated: "bg-accent/20 text-accent",
+      deployed: "bg-accent text-accent-foreground",
+    };
+    return {
+      label: t(`project.status.${status}`, status),
+      color: colors[status] || colors.draft,
+    };
+  };
+
+  const getProblemTypeLabel = (type: string) => {
+    return t(`project.${type}`, type);
   };
 
   useEffect(() => {
@@ -46,7 +56,7 @@ const Dashboard = () => {
 
     if (error) {
       toast({
-        title: t("dashboard.errorLoadingProjects"),
+        title: t("dashboard.errorLoading"),
         description: error.message,
         variant: "destructive",
       });
@@ -84,9 +94,9 @@ const Dashboard = () => {
         {/* Page Header */}
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-4xl font-display font-bold mb-2">{t("dashboard.myProjects")}</h1>
+            <h1 className="text-4xl font-display font-bold mb-2">{t("dashboard.title")}</h1>
             <p className="text-muted-foreground text-lg">
-              {t("dashboard.manageProjects")}
+              {t("dashboard.subtitle")}
             </p>
           </div>
           <Button 
@@ -115,10 +125,10 @@ const Dashboard = () => {
               </div>
               <div>
                 <h3 className="text-2xl font-display font-semibold mb-2">
-                  {t("dashboard.noProjectsYet")}
+                  {t("dashboard.noProjects")}
                 </h3>
                 <p className="text-muted-foreground text-lg">
-                  {t("dashboard.createFirstProject")}
+                  {t("dashboard.noProjectsDesc")}
                 </p>
               </div>
               <Button 
@@ -127,7 +137,7 @@ const Dashboard = () => {
                 onClick={handleCreateProject}
               >
                 <Plus className="w-5 h-5 mr-2" />
-                {t("dashboard.createFirstProjectBtn")}
+                {t("dashboard.createFirst")}
               </Button>
             </div>
           </Card>
@@ -135,7 +145,7 @@ const Dashboard = () => {
           !loading && (
             <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
               {projects.map((project) => {
-                const statusInfo = STATUS_LABELS[project.status] || STATUS_LABELS.draft;
+                const statusInfo = getStatusInfo(project.status);
                 return (
                   <Card
                     key={project.id}
@@ -161,11 +171,7 @@ const Dashboard = () => {
                       {project.name}
                     </h3>
                     <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                      <span>
-                        {project.problem_type === "classification"
-                          ? t("dashboard.classification")
-                          : t("dashboard.regression")}
-                      </span>
+                      <span>{getProblemTypeLabel(project.problem_type)}</span>
                       <span>•</span>
                       <span>
                         {new Date(project.created_at).toLocaleDateString(getDateLocale())}
@@ -206,9 +212,9 @@ const Dashboard = () => {
                 <Bot className="w-6 h-6 text-secondary" />
               </div>
               <div>
-                <h3 className="font-semibold mb-1">{t("dashboard.chatbotAI")}</h3>
+                <h3 className="font-semibold mb-1">{t("dashboard.chatbot")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  {t("dashboard.chatbotAIDesc")}
+                  {t("dashboard.chatbotDesc")}
                 </p>
               </div>
             </div>
