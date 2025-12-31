@@ -516,5 +516,77 @@
     "pdfInterpretTitle": "Cómo Interpretar este Informe",
     "pdfInterpretText": "Este informe de EDA (Análisis Exploratorio de Datos) resume las principales características de tu dataset. Úsalo para entender la calidad de los datos, identificar patrones y problemas antes del entrenamiento del modelo. Columnas con muchos valores faltantes pueden necesitar tratamiento especial. Correlaciones fuertes entre variables pueden indicar redundancia o relación causal.",
     "pdfPage": "Página"
+  },
+  "models": {
+    "noModels": "Ningún modelo entrenado",
+    "noModelsDesc": "Aún no has entrenado ningún modelo para este proyecto. Vuelve al wizard para entrenar tus modelos.",
+    "goToWizard": "Ir al Wizard",
+    "noModelsTrained": "Ningún modelo entrenado aún.",
+    "selectProductionTitle": "Selecciona el modelo para producción",
+    "selectProductionDesc": "Haz clic en 'Seleccionar' junto al modelo que deseas usar para predicciones via API. Solo un modelo puede estar en producción a la vez.",
+    "productionSet": "¡Modelo configurado como producción!",
+    "productionError": "Error al configurar modelo de producción",
+    "summary": {
+      "bestModel": "Mejor Modelo",
+      "productionModel": "Modelo en Producción",
+      "noProductionModel": "Ninguno seleccionado",
+      "active": "Activo",
+      "selectProductionHint": "Selecciona un modelo de la tabla para ponerlo en producción.",
+      "bestModelTooltip": "El modelo con mejor rendimiento en la métrica principal, elegido automáticamente por el sistema.",
+      "productionModelTooltip": "El modelo actualmente activo para hacer predicciones via API.",
+      "bestExplanationClassification": "Mayor {{metric}} ({{value}}) entre todos los modelos probados. Cuanto mayor sea el AUC, mejor separa las clases el modelo.",
+      "bestExplanationRegression": "Mayor {{metric}} ({{value}}) entre todos los modelos probados. Cuanto más cerca de 1, mejor explica los datos el modelo."
+    },
+    "table": {
+      "model": "Modelo",
+      "status": "Estado",
+      "action": "Acción",
+      "best": "Mejor",
+      "production": "Producción",
+      "candidate": "Candidato",
+      "active": "Activo",
+      "select": "Seleccionar",
+      "tip": "Consejo",
+      "tipText": "Pasa el mouse sobre el nombre de la métrica para ver una explicación simple. Haz clic en 'Seleccionar' para poner un modelo en producción."
+    },
+    "metrics": {
+      "AUC": "Mide qué tan bien el modelo puede separar las clases. Va de 0 a 1: más cerca de 1 es mejor.",
+      "F1": "Media armónica entre Precisión y Recall. Equilibra la detección de positivos con la precisión de las predicciones.",
+      "Precision": "Precisión",
+      "PrecisionDesc": "De todos los predichos como positivos, qué porcentaje es realmente positivo.",
+      "Recall": "Recall",
+      "RecallDesc": "De todos los positivos reales, qué porcentaje el modelo pudo identificar.",
+      "Accuracy": "Exactitud",
+      "AccuracyDesc": "Porcentaje total de predicciones correctas, considerando todas las clases.",
+      "MAE": "Diferencia absoluta promedio entre valores predichos y reales. Menor es mejor.",
+      "MSE": "Promedio de errores al cuadrado. Penaliza más fuertemente los errores grandes.",
+      "RMSE": "Raíz cuadrada del MSE. En la misma unidad que la variable objetivo.",
+      "R2": "Mide cuánto de la variación del objetivo el modelo explica (0 a 1). Más cerca de 1 es mejor."
+    },
+    "insights": {
+      "title": "Insights de IA sobre los Modelos",
+      "description": "Análisis automático de rendimiento y sugerencias de mejora",
+      "generating": "Generando...",
+      "regenerate": "Regenerar",
+      "generate": "Generar Insights",
+      "generated": "¡Insights generados con éxito!",
+      "error": "Error al generar insights",
+      "noInsights": "Haz clic para generar insights automáticos sobre el rendimiento de los modelos."
+    },
+    "recalibration": {
+      "button": "Recalibrar",
+      "title": "Recalibración del Modelo",
+      "description": "Ajusta el threshold de decisión del modelo {{model}}",
+      "explanation": "El threshold (umbral) define a partir de qué probabilidad el modelo clasifica un caso como positivo. Al ajustar este valor, puedes equilibrar entre detectar más casos (Recall) o tener más certeza en las predicciones (Precisión).",
+      "threshold": "Threshold de Decisión",
+      "moreRecall": "← Más Recall",
+      "morePrecision": "Más Precisión →",
+      "businessImpact": "Impacto estimado",
+      "impactText": "Con este threshold, aproximadamente {{positiveRate}}% de los casos serán clasificados como positivos.",
+      "save": "Guardar Calibración",
+      "saved": "¡Calibración guardada con éxito!",
+      "productionCalibration": "Calibración del modelo en producción",
+      "currentThreshold": "Threshold actual"
+    }
   }
 }

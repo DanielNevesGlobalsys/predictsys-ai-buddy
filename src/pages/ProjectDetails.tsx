@@ -327,7 +327,12 @@ const ProjectDetails = () => {
           </TabsContent>
 
           <TabsContent value="models">
-            <ModelsTab projectId={project.id} problemType={project.problem_type} />
+            <ModelsTab 
+              projectId={project.id} 
+              problemType={project.problem_type}
+              datasetRows={project.dataset_rows || undefined}
+              targetColumn={project.target_column || undefined}
+            />
           </TabsContent>
 
           <TabsContent value="deploy">
