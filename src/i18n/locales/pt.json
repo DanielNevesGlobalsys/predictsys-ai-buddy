@@ -466,5 +466,75 @@
     "goToWizard": "Ir para o Wizard",
     "translating": "Traduzindo...",
     "translatedFrom": "Texto traduzido automaticamente do {{language}}"
+  },
+  "eda": {
+    "title": "Análise Exploratória",
+    "subtitle": "Estatísticas e visualizações que ajudam a entender seus dados",
+    "noDataset": "Nenhum dataset carregado",
+    "noDatasetDesc": "Para calcular a EDA, primeiro envie um arquivo de dados.",
+    "notCalculated": "Análise ainda não calculada",
+    "notCalculatedDesc": "Clique no botão abaixo para gerar estatísticas e gráficos dos seus dados.",
+    "calculating": "Calculando...",
+    "calculateNow": "Calcular EDA agora",
+    "calculateSuccess": "EDA calculada com sucesso!",
+    "calculateSuccessDesc": "As estatísticas foram geradas para suas colunas.",
+    "calculateError": "Erro ao calcular EDA",
+    "recalculate": "Recalcular",
+    "sortBy": "Ordenar por",
+    "sortByName": "Nome",
+    "sortByMissing": "Valores ausentes",
+    "kpis": {
+      "rows": { "label": "Linhas", "description": "Registros no dataset", "tooltip": "Quantidade total de registros (linhas) no seu arquivo de dados." },
+      "columns": { "label": "Colunas", "description": "Variáveis disponíveis", "tooltip": "Quantidade de colunas/variáveis no dataset." },
+      "numeric": { "label": "Numéricas", "description": "Variáveis numéricas", "tooltip": "Colunas com valores numéricos que podem ser usadas em cálculos." },
+      "categorical": { "label": "Categóricas", "description": "Variáveis de texto", "tooltip": "Colunas com categorias ou valores de texto." },
+      "missing": { "label": "Valores Ausentes", "description": "Células vazias", "tooltip": "Porcentagem de células vazias no conjunto de dados; quanto maior, maior o risco de problemas no modelo." },
+      "target": { "label": "Variável Alvo", "description": "Coluna a prever", "tooltip": "A coluna que o modelo irá prever." },
+      "quality": { "label": "Qualidade", "description": "Score de dados", "tooltip": "Indicador de 0 a 100 que resume missing values, outliers e outros problemas de qualidade." },
+      "sampled": { "label": "Amostra", "description": "de {{total}} total", "tooltip": "Para datasets grandes, uma amostra é usada para calcular as estatísticas." }
+    },
+    "numeric": {
+      "title": "Variáveis Numéricas",
+      "description": "Estatísticas como média, mediana e valores extremos",
+      "tooltip": "Variáveis numéricas são usadas para cálculos e previsões quantitativas.",
+      "column": "Coluna", "min": "Mínimo", "max": "Máximo", "mean": "Média", "median": "Mediana", "std": "Desvio Padrão", "nulls": "Nulos", "warnings": "Alertas", "value": "Valor",
+      "viewDistribution": "Ver distribuição de",
+      "outliers": "Outliers", "highMissing": "Alto missing"
+    },
+    "categorical": {
+      "title": "Variáveis Categóricas",
+      "description": "Quantidade de categorias e valores mais frequentes",
+      "tooltip": "Variáveis categóricas representam grupos ou classes nos dados.",
+      "column": "Coluna", "distinctCount": "Categorias", "topCategory": "Mais Frequente", "topPercent": "% do Top", "warnings": "Alertas",
+      "highCardinality": "Alta cardinalidade", "imbalanced": "Desbalanceada",
+      "viewCategories": "Ver categorias de", "showTop": "Top", "barChart": "Barras", "pieChart": "Pizza",
+      "detailsFor": "Detalhes de", "category": "Categoria", "count": "Contagem", "percentage": "Percentual"
+    },
+    "missing": {
+      "title": "Valores Ausentes",
+      "description": "Análise de dados faltantes por coluna",
+      "tooltip": "Valores ausentes podem afetar a qualidade do modelo. Identifique e trate antes do treinamento.",
+      "overallMissing": "Missing Total", "columnsWithMissing": "Colunas c/ Missing", "highMissingColumns": "Colunas c/ Alto Missing",
+      "goodQuality": "Boa qualidade", "missingByColumn": "Missing por Coluna", "values": "valores", "noMissing": "Nenhum valor ausente detectado!",
+      "column": "Coluna", "type": "Tipo", "count": "Quantidade", "status": "Status",
+      "numeric": "Numérica", "categorical": "Categórica",
+      "complete": "Completo", "critical": "Crítico", "attention": "Atenção", "ok": "OK",
+      "interpretation": "Interpretação",
+      "interpretationHigh": "Existem {{count}} colunas com mais de 20% de dados faltantes. Considere tratá-las antes do treinamento.",
+      "interpretationLow": "{{count}} colunas têm alguns dados faltantes, mas em níveis aceitáveis.",
+      "interpretationNone": "Excelente! Não há valores ausentes significativos no dataset."
+    },
+    "correlation": {
+      "title": "Correlação entre Variáveis",
+      "description": "Como as variáveis numéricas se relacionam entre si",
+      "tooltip": "Correlação mostra como duas variáveis se movem juntas; valores próximos de 1 ou -1 indicam forte relação.",
+      "selectColumns": "Selecione colunas", "selectAtLeast2": "Selecione pelo menos 2 colunas para ver a matriz de correlação.",
+      "strongNegative": "Negativa forte", "weak": "Fraca", "strongPositive": "Positiva forte",
+      "topCorrelations": "Principais Correlações",
+      "variable1": "Variável 1", "variable2": "Variável 2", "correlation": "Correlação", "strength": "Força",
+      "strong": "Forte", "moderate": "Moderada",
+      "interpretation": "Interpretação",
+      "interpretationText": "Correlações fortes (>0.7 ou <-0.7) indicam que as variáveis se movem juntas. Isso pode indicar redundância ou relação causal."
+    }
   }
 }
