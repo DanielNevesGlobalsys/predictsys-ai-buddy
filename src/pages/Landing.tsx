@@ -2,6 +2,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
 import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp } from "lucide-react";
+import GlobalControls from "@/components/layout/GlobalControls";
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -53,19 +54,20 @@ const Landing = () => {
               PredictSys AI
             </h1>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <GlobalControls />
             <Button 
               variant="ghost" 
               onClick={() => navigate("/auth")}
               className="hover:bg-primary/10"
             >
-              {t("header.login")}
+              {t("auth.login")}
             </Button>
             <Button 
               onClick={() => navigate("/auth")}
               className="bg-gradient-primary hover:shadow-hover transition-all"
             >
-              {t("header.startFree")}
+              {t("landing.startFree")}
             </Button>
           </div>
         </div>
