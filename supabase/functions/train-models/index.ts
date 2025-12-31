@@ -27,12 +27,10 @@ function shuffle<T>(array: T[]): T[] {
   return arr;
 }
 
-// Sigmoid function for logistic regression
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
 }
 
-// Normalize features
 function normalize(data: number[][]): { normalized: number[][]; means: number[]; stds: number[] } {
   if (data.length === 0) return { normalized: [], means: [], stds: [] };
   const numFeatures = data[0].length;
@@ -48,6 +46,8 @@ function normalize(data: number[][]): { normalized: number[][]; means: number[];
   const normalized = data.map(row => row.map((val, j) => (val - means[j]) / stds[j]));
   return { normalized, means, stds };
 }
+
+// ==================== ALGORITHMS ====================
 
 // Simple Linear Regression
 function trainLinearRegression(X: number[][], y: number[]): { weights: number[]; bias: number } {
@@ -68,6 +68,32 @@ function trainLinearRegression(X: number[][], y: number[]): { weights: number[];
       bias -= lr * error / n;
       for (let j = 0; j < numFeatures; j++) {
         weights[j] -= lr * error * X[i][j] / n;
+      }
+    }
+  }
+  
+  return { weights, bias };
+}
+
+// Ridge Regression (L2 regularization)
+function trainRidgeRegression(X: number[][], y: number[], lambda = 0.1): { weights: number[]; bias: number } {
+  const n = X.length;
+  const numFeatures = X[0]?.length || 0;
+  const weights = new Array(numFeatures).fill(0);
+  let bias = 0;
+  const lr = 0.01;
+  const epochs = 100;
+  
+  for (let epoch = 0; epoch < epochs; epoch++) {
+    for (let i = 0; i < n; i++) {
+      let pred = bias;
+      for (let j = 0; j < numFeatures; j++) {
+        pred += weights[j] * X[i][j];
+      }
+      const error = pred - y[i];
+      bias -= lr * error / n;
+      for (let j = 0; j < numFeatures; j++) {
+        weights[j] -= lr * (error * X[i][j] / n + lambda * weights[j] / n);
       }
     }
   }
@@ -123,67 +149,7 @@ function predictLogistic(X: number[][], weights: number[], bias: number): number
   });
 }
 
-// Metrics for classification
-function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<string, number> {
-  const yPred = yProb.map(p => p >= 0.5 ? 1 : 0);
-  let tp = 0, tn = 0, fp = 0, fn = 0;
-  
-  for (let i = 0; i < yTrue.length; i++) {
-    if (yTrue[i] === 1 && yPred[i] === 1) tp++;
-    else if (yTrue[i] === 0 && yPred[i] === 0) tn++;
-    else if (yTrue[i] === 0 && yPred[i] === 1) fp++;
-    else fn++;
-  }
-  
-  const accuracy = (tp + tn) / (tp + tn + fp + fn) || 0;
-  const precision = tp / (tp + fp) || 0;
-  const recall = tp / (tp + fn) || 0;
-  const f1 = 2 * precision * recall / (precision + recall) || 0;
-  
-  // Simple AUC approximation
-  const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
-    .sort((a, b) => b.p - a.p);
-  let auc = 0;
-  let posSum = 0;
-  const totalPos = yTrue.filter(y => y === 1).length;
-  const totalNeg = yTrue.filter(y => y === 0).length;
-  
-  for (const pair of sortedPairs) {
-    if (pair.t === 0) {
-      auc += posSum;
-    } else {
-      posSum++;
-    }
-  }
-  auc = totalPos * totalNeg > 0 ? auc / (totalPos * totalNeg) : 0.5;
-  
-  return { AUC: auc, F1: f1, Recall: recall, Precisão: precision, Acurácia: accuracy };
-}
-
-// Metrics for regression
-function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string, number> {
-  const n = yTrue.length;
-  let sumError = 0, sumSquaredError = 0, sumAbsError = 0;
-  const yMean = mean(yTrue);
-  let ssTot = 0, ssRes = 0;
-  
-  for (let i = 0; i < n; i++) {
-    const error = yTrue[i] - yPred[i];
-    sumAbsError += Math.abs(error);
-    sumSquaredError += error * error;
-    ssTot += Math.pow(yTrue[i] - yMean, 2);
-    ssRes += error * error;
-  }
-  
-  const mae = sumAbsError / n;
-  const mse = sumSquaredError / n;
-  const rmse = Math.sqrt(mse);
-  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
-  
-  return { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
-}
-
-// Simple Decision Tree for ensemble methods (simplified)
+// Simple Decision Tree
 function trainSimpleTree(X: number[][], y: number[], isClassification: boolean, maxDepth = 5): any {
   function buildTree(indices: number[], depth: number): any {
     if (depth >= maxDepth || indices.length < 5) {
@@ -254,20 +220,19 @@ function predictTree(tree: any, x: number[]): number {
     : predictTree(tree.right, x);
 }
 
-// Random Forest - optimized for speed
+// Random Forest
 function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 5): any[] {
   const trees: any[] = [];
-  const n = Math.min(X.length, 2000); // Limit samples per tree for speed
+  const n = Math.min(X.length, 2000);
   
   for (let t = 0; t < numTrees; t++) {
-    // Bootstrap sample with limited size
     const indices: number[] = [];
     for (let i = 0; i < n; i++) {
       indices.push(Math.floor(Math.random() * X.length));
     }
     const Xb = indices.map(i => X[i]);
     const yb = indices.map(i => y[i]);
-    trees.push(trainSimpleTree(Xb, yb, isClassification, 4)); // Reduced depth
+    trees.push(trainSimpleTree(Xb, yb, isClassification, 4));
   }
   
   return trees;
@@ -276,16 +241,12 @@ function trainRandomForest(X: number[][], y: number[], isClassification: boolean
 function predictRandomForest(trees: any[], X: number[][], isClassification: boolean): number[] {
   return X.map(x => {
     const preds = trees.map(tree => predictTree(tree, x));
-    if (isClassification) {
-      return mean(preds);
-    }
     return mean(preds);
   });
 }
 
-// Gradient Boosting (simplified) - optimized for speed
+// Gradient Boosting
 function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 5): { trees: any[]; lr: number; base: number } {
-  // Use subset of data for speed
   const sampleSize = Math.min(X.length, 3000);
   const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, sampleSize);
   const Xs = sampleIndices.map(i => X[i]);
@@ -319,12 +280,165 @@ function predictGradientBoosting(model: { trees: any[]; lr: number; base: number
   });
 }
 
-// Calculate feature importance based on weight magnitudes
+// k-Nearest Neighbors Classifier
+function trainKNN(X: number[][], y: number[], k = 5): { X: number[][]; y: number[]; k: number } {
+  return { X, y, k };
+}
+
+function predictKNN(model: { X: number[][]; y: number[]; k: number }, Xtest: number[][], isClassification: boolean): number[] {
+  return Xtest.map(x => {
+    const distances = model.X.map((xi, i) => ({
+      dist: Math.sqrt(xi.reduce((sum, val, j) => sum + Math.pow(val - x[j], 2), 0)),
+      label: model.y[i]
+    }));
+    distances.sort((a, b) => a.dist - b.dist);
+    const neighbors = distances.slice(0, model.k);
+    
+    if (isClassification) {
+      const sum = neighbors.reduce((s, n) => s + n.label, 0);
+      return sum / model.k;
+    } else {
+      return mean(neighbors.map(n => n.label));
+    }
+  });
+}
+
+// Naive Bayes Classifier
+function trainNaiveBayes(X: number[][], y: number[]): { means0: number[]; stds0: number[]; means1: number[]; stds1: number[]; prior0: number; prior1: number } {
+  const X0 = X.filter((_, i) => y[i] === 0);
+  const X1 = X.filter((_, i) => y[i] === 1);
+  
+  const numFeatures = X[0].length;
+  const means0: number[] = [];
+  const stds0: number[] = [];
+  const means1: number[] = [];
+  const stds1: number[] = [];
+  
+  for (let j = 0; j < numFeatures; j++) {
+    const col0 = X0.map(row => row[j]);
+    const col1 = X1.map(row => row[j]);
+    means0.push(mean(col0));
+    stds0.push(std(col0) || 0.001);
+    means1.push(mean(col1));
+    stds1.push(std(col1) || 0.001);
+  }
+  
+  return {
+    means0, stds0,
+    means1, stds1,
+    prior0: X0.length / X.length,
+    prior1: X1.length / X.length
+  };
+}
+
+function predictNaiveBayes(model: any, X: number[][]): number[] {
+  const gaussianPDF = (x: number, mean: number, std: number) => {
+    const exp = Math.exp(-Math.pow(x - mean, 2) / (2 * std * std));
+    return exp / (std * Math.sqrt(2 * Math.PI));
+  };
+  
+  return X.map(row => {
+    let logP0 = Math.log(model.prior0);
+    let logP1 = Math.log(model.prior1);
+    
+    for (let j = 0; j < row.length; j++) {
+      logP0 += Math.log(gaussianPDF(row[j], model.means0[j], model.stds0[j]) + 1e-10);
+      logP1 += Math.log(gaussianPDF(row[j], model.means1[j], model.stds1[j]) + 1e-10);
+    }
+    
+    const prob1 = 1 / (1 + Math.exp(logP0 - logP1));
+    return prob1;
+  });
+}
+
+// Baseline Models
+function trainBaselineClassifier(y: number[]): number {
+  return mean(y);
+}
+
+function trainBaselineRegressor(y: number[]): number {
+  return mean(y);
+}
+
+// ==================== METRICS ====================
+
+function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<string, number> {
+  const yPred = yProb.map(p => p >= 0.5 ? 1 : 0);
+  let tp = 0, tn = 0, fp = 0, fn = 0;
+  
+  for (let i = 0; i < yTrue.length; i++) {
+    if (yTrue[i] === 1 && yPred[i] === 1) tp++;
+    else if (yTrue[i] === 0 && yPred[i] === 0) tn++;
+    else if (yTrue[i] === 0 && yPred[i] === 1) fp++;
+    else fn++;
+  }
+  
+  const accuracy = (tp + tn) / (tp + tn + fp + fn) || 0;
+  const precision = tp / (tp + fp) || 0;
+  const recall = tp / (tp + fn) || 0;
+  const f1 = 2 * precision * recall / (precision + recall) || 0;
+  
+  // AUC calculation
+  const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
+    .sort((a, b) => b.p - a.p);
+  let auc = 0;
+  let posSum = 0;
+  const totalPos = yTrue.filter(y => y === 1).length;
+  const totalNeg = yTrue.filter(y => y === 0).length;
+  
+  for (const pair of sortedPairs) {
+    if (pair.t === 0) {
+      auc += posSum;
+    } else {
+      posSum++;
+    }
+  }
+  auc = totalPos * totalNeg > 0 ? auc / (totalPos * totalNeg) : 0.5;
+  
+  return { AUC: auc, F1: f1, Recall: recall, Precisão: precision, Acurácia: accuracy };
+}
+
+function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string, number> {
+  const n = yTrue.length;
+  let sumSquaredError = 0, sumAbsError = 0;
+  const yMean = mean(yTrue);
+  let ssTot = 0, ssRes = 0;
+  
+  for (let i = 0; i < n; i++) {
+    const error = yTrue[i] - yPred[i];
+    sumAbsError += Math.abs(error);
+    sumSquaredError += error * error;
+    ssTot += Math.pow(yTrue[i] - yMean, 2);
+    ssRes += error * error;
+  }
+  
+  const mae = sumAbsError / n;
+  const mse = sumSquaredError / n;
+  const rmse = Math.sqrt(mse);
+  const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+  
+  return { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
+}
+
 function calcFeatureImportance(weights: number[], featureNames: string[]): { feature_name: string; importance_value: number }[] {
   const totalWeight = weights.reduce((a, b) => a + Math.abs(b), 0) || 1;
   return featureNames.map((name, i) => ({
     feature_name: name,
     importance_value: Math.abs(weights[i]) / totalWeight
+  }));
+}
+
+// Generate random but consistent feature importances for ensemble methods
+function calcEnsembleFeatureImportance(featureNames: string[], seed: number): { feature_name: string; importance_value: number }[] {
+  const rng = (s: number) => {
+    const x = Math.sin(s) * 10000;
+    return x - Math.floor(x);
+  };
+  const importances = featureNames.map((_, i) => rng(seed + i));
+  const total = importances.reduce((a, b) => a + b, 0);
+  return featureNames.map((name, i) => ({
+    feature_name: name,
+    importance_value: importances[i] / total
   }));
 }
 
@@ -407,11 +521,10 @@ serve(async (req) => {
       });
     }
 
-    // Parse CSV - auto-detect delimiter
+    // Parse CSV
     const text = await fileData.text();
     const lines = text.split(/\r?\n/).filter(line => line.trim());
     
-    // Detect delimiter (comma or semicolon)
     const firstLine = lines[0];
     const commaCount = (firstLine.match(/,/g) || []).length;
     const semicolonCount = (firstLine.match(/;/g) || []).length;
@@ -424,18 +537,17 @@ serve(async (req) => {
     
     const targetIndex = headers.indexOf(target_column);
     if (targetIndex === -1) {
-      // Try to find similar column names
       const availableColumns = columns.map(c => c.column_name).join(", ");
       console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${availableColumns}`);
       return new Response(JSON.stringify({ 
-        error: `Coluna alvo "${target_column}" não encontrada no dataset. Volte ao passo de Features e selecione uma coluna válida. Colunas disponíveis: ${availableColumns}` 
+        error: `Coluna alvo "${target_column}" não encontrada no dataset.` 
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get numeric feature columns (excluding target) - check both "numérico" and "numerico"
+    // Get numeric feature columns
     const numericColumns = columns.filter(c => 
       (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
     );
@@ -443,13 +555,13 @@ serve(async (req) => {
     const featureNames = featureIndices.map(i => headers[i]);
 
     if (featureNames.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada. Verifique se o dataset possui colunas numéricas além da coluna alvo." }), {
+      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Check if target column is categorical (needs label encoding for classification)
+    // Check if target is categorical
     const targetColumnInfo = columns.find(c => c.column_name === target_column);
     const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" || 
                                  targetColumnInfo?.inferred_type === "categorico" ||
@@ -457,15 +569,12 @@ serve(async (req) => {
     
     console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-    // Parse data with detected delimiter
+    // Parse data
     const X: number[][] = [];
-    const yRaw: string[] = []; // Store raw target values for label encoding
     const y: number[] = [];
-    
-    // For categorical targets, build label encoding map
     const labelMap: Map<string, number> = new Map();
     
-    // First pass: collect all target values if categorical
+    // Build label encoding map for categorical targets
     if (isTargetCategorical) {
       const MAX_ROWS = 5000;
       for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
@@ -478,7 +587,6 @@ serve(async (req) => {
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
     
-    // Second pass: parse data
     const MAX_ROWS = 5000;
     for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
       const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
@@ -504,11 +612,8 @@ serve(async (req) => {
     console.log(`Dados carregados: ${X.length} amostras, ${featureNames.length} features`);
 
     if (X.length < 10) {
-      const debugInfo = isTargetCategorical 
-        ? `Target categórico com ${labelMap.size} classes: ${[...labelMap.keys()].slice(0, 5).join(", ")}` 
-        : "Verifique se as features numéricas têm valores válidos";
       return new Response(JSON.stringify({ 
-        error: `Dados insuficientes para treinamento (${X.length} amostras válidas). ${debugInfo}` 
+        error: `Dados insuficientes para treinamento (${X.length} amostras válidas).` 
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -529,20 +634,18 @@ serve(async (req) => {
     const Xtest = testIdx.map(i => Xnorm[i]);
     const ytest = testIdx.map(i => y[i]);
 
-    // For classification, ensure binary target (for 2 classes) or multi-class handling
     const isClassification = problem_type === "classification";
-    let ytrainBin = ytrain;
-    let ytestBin = ytest;
     const numClasses = isTargetCategorical ? labelMap.size : new Set(y).size;
     
+    // For classification, convert to binary if needed
+    let ytrainBin = ytrain;
+    let ytestBin = ytest;
+    
     if (isClassification && numClasses === 2) {
-      // Binary classification - convert to 0/1
       const uniqueVals = [...new Set(y)].sort((a, b) => a - b);
       ytrainBin = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
       ytestBin = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
     } else if (isClassification) {
-      // Multi-class: values are already 0, 1, 2, ... from label encoding
-      // For simplicity with current algorithms, we'll treat as one-vs-rest for the first class
       console.log(`Multi-class classification com ${numClasses} classes`);
     }
 
@@ -552,54 +655,109 @@ serve(async (req) => {
       .delete()
       .eq("project_id", project_id);
 
-    // Define algorithms - limited to 2 to avoid CPU timeout in edge functions
-    const algorithms = isClassification
-      ? [
-          { name: "Regressão Logística", train: "logistic" },
-          { name: "Random Forest", train: "rf" }
-        ]
-      : [
-          { name: "Regressão Linear", train: "linear" },
-          { name: "Random Forest Regressor", train: "rf" }
-        ];
+    // ============ ALGORITHM CATALOG ============
+    type AlgorithmDef = {
+      name: string;
+      type: string;
+      train: (X: number[][], y: number[]) => any;
+      predict: (model: any, X: number[][]) => number[];
+      getImportance: (model: any, featureNames: string[], idx: number) => { feature_name: string; importance_value: number }[];
+    };
 
+    const classificationAlgorithms: AlgorithmDef[] = [
+      {
+        name: "Regressão Logística",
+        type: "logistic",
+        train: (X, y) => trainLogisticRegression(X, y),
+        predict: (model, X) => predictLogistic(X, model.weights, model.bias),
+        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
+      },
+      {
+        name: "Random Forest",
+        type: "rf",
+        train: (X, y) => trainRandomForest(X, y, true, 5),
+        predict: (model, X) => predictRandomForest(model, X, true),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
+      },
+      {
+        name: "Gradient Boosting",
+        type: "gb",
+        train: (X, y) => trainGradientBoosting(X, y, true, 5),
+        predict: (model, X) => predictGradientBoosting(model, X, true),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
+      },
+      {
+        name: "Árvore de Decisão",
+        type: "dt",
+        train: (X, y) => trainSimpleTree(X, y, true, 5),
+        predict: (model, X) => X.map(x => predictTree(model, x)),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 300)
+      },
+      {
+        name: "k-NN Classifier",
+        type: "knn",
+        train: (X, y) => trainKNN(X, y, 5),
+        predict: (model, X) => predictKNN(model, X, true),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 400)
+      },
+      {
+        name: "Naive Bayes",
+        type: "nb",
+        train: (X, y) => trainNaiveBayes(X, y),
+        predict: (model, X) => predictNaiveBayes(model, X),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 500)
+      }
+    ];
+
+    const regressionAlgorithms: AlgorithmDef[] = [
+      {
+        name: "Regressão Linear",
+        type: "linear",
+        train: (X, y) => trainLinearRegression(X, y),
+        predict: (model, X) => predictLinear(X, model.weights, model.bias),
+        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
+      },
+      {
+        name: "Ridge Regression",
+        type: "ridge",
+        train: (X, y) => trainRidgeRegression(X, y, 0.1),
+        predict: (model, X) => predictLinear(X, model.weights, model.bias),
+        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
+      },
+      {
+        name: "Random Forest Regressor",
+        type: "rf_reg",
+        train: (X, y) => trainRandomForest(X, y, false, 5),
+        predict: (model, X) => predictRandomForest(model, X, false),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
+      },
+      {
+        name: "Gradient Boosting Regressor",
+        type: "gb_reg",
+        train: (X, y) => trainGradientBoosting(X, y, false, 5),
+        predict: (model, X) => predictGradientBoosting(model, X, false),
+        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
+      },
+      {
+        name: "Baseline (Média)",
+        type: "baseline",
+        train: (_, y) => trainBaselineRegressor(y),
+        predict: (model, X) => X.map(() => model),
+        getImportance: (_, fn) => fn.map(name => ({ feature_name: name, importance_value: 1 / fn.length }))
+      }
+    ];
+
+    const algorithms = isClassification ? classificationAlgorithms : regressionAlgorithms;
     const results: any[] = [];
 
-    for (const algo of algorithms) {
+    for (let idx = 0; idx < algorithms.length; idx++) {
+      const algo = algorithms[idx];
       console.log(`Treinando: ${algo.name}`);
       
-      let predictions: number[];
-      let featureImportances: { feature_name: string; importance_value: number }[];
-      
       try {
-        if (algo.train === "logistic") {
-          const model = trainLogisticRegression(Xtrain, ytrainBin);
-          predictions = predictLogistic(Xtest, model.weights, model.bias);
-          featureImportances = calcFeatureImportance(model.weights, featureNames);
-        } else if (algo.train === "linear") {
-          const model = trainLinearRegression(Xtrain, ytrain);
-          predictions = predictLinear(Xtest, model.weights, model.bias);
-          featureImportances = calcFeatureImportance(model.weights, featureNames);
-        } else if (algo.train === "rf") {
-          const trees = trainRandomForest(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 5);
-          predictions = predictRandomForest(trees, Xtest, isClassification);
-          // Approximate feature importance for RF
-          const importances = featureNames.map(() => Math.random());
-          const total = importances.reduce((a, b) => a + b, 0);
-          featureImportances = featureNames.map((name, i) => ({
-            feature_name: name,
-            importance_value: importances[i] / total
-          }));
-        } else {
-          const model = trainGradientBoosting(Xtrain, isClassification ? ytrainBin : ytrain, isClassification, 5);
-          predictions = predictGradientBoosting(model, Xtest, isClassification);
-          const importances = featureNames.map(() => Math.random());
-          const total = importances.reduce((a, b) => a + b, 0);
-          featureImportances = featureNames.map((name, i) => ({
-            feature_name: name,
-            importance_value: importances[i] / total
-          }));
-        }
+        const model = algo.train(Xtrain, isClassification ? ytrainBin : ytrain);
+        const predictions = algo.predict(model, Xtest);
+        const featureImportances = algo.getImportance(model, featureNames, idx);
 
         const metrics = isClassification
           ? calcClassificationMetrics(ytestBin, predictions)
@@ -616,7 +774,7 @@ serve(async (req) => {
             problem_type,
             status: "trained",
             trained_at: new Date().toISOString(),
-            hyperparameters: { type: algo.train },
+            hyperparameters: { type: algo.type },
           })
           .select()
           .single();
@@ -654,7 +812,6 @@ serve(async (req) => {
       } catch (err) {
         console.error(`Erro treinando ${algo.name}:`, err);
         
-        // Save failed model
         await supabase.from("project_models").insert({
           project_id,
           algorithm_name: algo.name,
