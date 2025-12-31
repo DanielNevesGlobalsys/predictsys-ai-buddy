@@ -45,6 +45,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
         {projectData.id ? (
           <EDADisplay 
             projectId={projectData.id} 
+            projectName={projectData.name}
             datasetFilename={projectData.dataset_filename}
             onEDAComplete={handleEDAComplete} 
           />

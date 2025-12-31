@@ -3,12 +3,14 @@ import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, FileDown, BarChart3, Calculator } from "lucide-react";
+import { Loader2, RefreshCw, BarChart3, Calculator } from "lucide-react";
 import EDAKPICards from "./EDAKPICards";
 import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
 import EDAMissingSection from "./EDAMissingSection";
 import EDACorrelationSection from "./EDACorrelationSection";
+import EDAInsightsSection from "./EDAInsightsSection";
+import EDAExportPDF from "./EDAExportPDF";
 
 interface NumericStat {
   id: string;
@@ -30,11 +32,12 @@ interface CategoricalStat {
 
 interface EDADisplayProps {
   projectId: string;
+  projectName?: string;
   datasetFilename?: string | null;
   onEDAComplete?: () => void;
 }
 
-const EDADisplay = ({ projectId, datasetFilename, onEDAComplete }: EDADisplayProps) => {
+const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDAComplete }: EDADisplayProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [loading, setLoading] = useState(true);
@@ -188,6 +191,12 @@ const EDADisplay = ({ projectId, datasetFilename, onEDAComplete }: EDADisplayPro
           <p className="text-muted-foreground text-sm">{t("eda.subtitle")}</p>
         </div>
         <div className="flex gap-2">
+          <EDAExportPDF
+            projectName={projectName}
+            kpiData={kpiData}
+            numericStats={numericStats}
+            categoricalStats={categoricalStats}
+          />
           <Button variant="outline" size="sm" onClick={calculateEDA} disabled={calculating}>
             {calculating ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
             <span className="ml-2">{t("eda.recalculate")}</span>
@@ -209,6 +218,15 @@ const EDADisplay = ({ projectId, datasetFilename, onEDAComplete }: EDADisplayPro
 
       {/* Correlation */}
       {numericStats.length > 1 && <EDACorrelationSection stats={numericStats} targetColumn={projectInfo.target || undefined} />}
+
+      {/* AI Insights */}
+      <EDAInsightsSection
+        numericStats={numericStats}
+        categoricalStats={categoricalStats}
+        totalRows={projectInfo.rows}
+        targetColumn={projectInfo.target || undefined}
+        projectName={projectName}
+      />
     </div>
   );
 };

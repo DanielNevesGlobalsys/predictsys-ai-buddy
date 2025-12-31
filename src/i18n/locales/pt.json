@@ -535,6 +535,26 @@
       "strong": "Forte", "moderate": "Moderada",
       "interpretation": "Interpretação",
       "interpretationText": "Correlações fortes (>0.7 ou <-0.7) indicam que as variáveis se movem juntas. Isso pode indicar redundância ou relação causal."
-    }
+    },
+    "insights": {
+      "title": "Insights de IA",
+      "description": "Observações automáticas sobre seus dados",
+      "tooltip": "A IA analisa seus dados e fornece insights em linguagem de negócios.",
+      "generating": "Gerando insights...",
+      "error": "Erro ao gerar insights",
+      "regenerate": "Regenerar",
+      "noInsights": "Clique para gerar insights automáticos sobre seus dados."
+    },
+    "exportPdf": "Exportar PDF",
+    "exportTitle": "Exportar Relatório de EDA",
+    "exportDescription": "O que você deseja incluir?",
+    "exportSummary": "Resumo e KPIs",
+    "exportNumeric": "Estatísticas numéricas",
+    "exportCategorical": "Variáveis categóricas",
+    "exportCorrelation": "Correlação de variáveis",
+    "exportMissing": "Info de valores ausentes",
+    "generating": "Gerando PDF...",
+    "pdfSuccess": "PDF exportado com sucesso!",
+    "pdfError": "Erro ao gerar PDF"
   }
 }
