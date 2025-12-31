@@ -1,8 +1,9 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useTranslateContent } from "@/hooks/useTranslateContent";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -17,6 +18,7 @@ import {
   MessageSquare,
   Edit,
   Loader2,
+  Languages,
 } from "lucide-react";
 import EDADisplay from "@/components/eda/EDADisplay";
 import ModelsTab from "@/components/project/ModelsTab";
@@ -102,6 +104,31 @@ const ProjectDetails = () => {
     setChatKey((prev) => prev + 1);
   }, []);
 
+  // Translation of project content
+  const contentToTranslate = useMemo(() => ({
+    name: project?.name || "",
+    description: project?.description || "",
+    business_objective: project?.business_objective || "",
+  }), [project?.name, project?.description, project?.business_objective]);
+
+  const { translations, isTranslating, originalLanguage } = useTranslateContent(
+    contentToTranslate,
+    !!project
+  );
+
+  const getLanguageName = (lang: string | null) => {
+    if (!lang) return "";
+    const names: Record<string, Record<string, string>> = {
+      pt: { pt: "Português", en: "Portuguese", es: "Portugués" },
+      en: { pt: "Inglês", en: "English", es: "Inglés" },
+      es: { pt: "Espanhol", en: "Spanish", es: "Español" },
+    };
+    return names[lang]?.[i18n.language.split("-")[0]] || lang;
+  };
+
+  const currentLang = i18n.language.split("-")[0];
+  const needsTranslation = originalLanguage && originalLanguage !== currentLang;
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-hero flex items-center justify-center">
@@ -185,24 +212,39 @@ const ProjectDetails = () => {
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
+            {/* Translation indicator */}
+            {needsTranslation && (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 px-3 py-2 rounded-lg">
+                <Languages className="w-4 h-4" />
+                {isTranslating ? (
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    {t("projectDetails.translating")}
+                  </span>
+                ) : (
+                  <span>{t("projectDetails.translatedFrom", { language: getLanguageName(originalLanguage) })}</span>
+                )}
+              </div>
+            )}
+
             <div className="grid md:grid-cols-2 gap-6">
               <Card className="bg-gradient-card shadow-card p-6">
                 <h3 className="font-semibold mb-4">{t("projectDetails.projectInfo")}</h3>
                 <div className="space-y-4">
                   <div>
                     <p className="text-sm text-muted-foreground">{t("projectDetails.name")}</p>
-                    <p className="font-medium">{project.name}</p>
+                    <p className="font-medium">{translations.name || project.name}</p>
                   </div>
-                  {project.description && (
+                  {(translations.description || project.description) && (
                     <div>
                       <p className="text-sm text-muted-foreground">{t("projectDetails.description")}</p>
-                      <p>{project.description}</p>
+                      <p>{translations.description || project.description}</p>
                     </div>
                   )}
-                  {project.business_objective && (
+                  {(translations.business_objective || project.business_objective) && (
                     <div>
                       <p className="text-sm text-muted-foreground">{t("projectDetails.businessObjective")}</p>
-                      <p>{project.business_objective}</p>
+                      <p>{translations.business_objective || project.business_objective}</p>
                     </div>
                   )}
                   <div>
