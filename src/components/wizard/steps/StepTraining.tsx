@@ -126,10 +126,17 @@ const StepTraining = ({
 
     } catch (err) {
       console.error("Training error:", err);
-      const message = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
-      setError(message);
-      toast.error(message);
-      await saveProject({ status: "features_selected" });
+      const errorMessage = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
+      // Show user-friendly message without technical details
+      const userMessage = errorMessage.includes("violates check constraint") 
+        ? t("stepTraining.errors.statusError")
+        : errorMessage.includes("non-2xx")
+        ? t("stepTraining.errors.serverError")
+        : errorMessage;
+      setError(userMessage);
+      toast.error(userMessage);
+      // Use valid status from constraint: eda_complete
+      await saveProject({ status: "eda_complete" });
     } finally {
       setIsTraining(false);
     }

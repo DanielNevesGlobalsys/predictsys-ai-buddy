@@ -428,7 +428,9 @@
     },
     "errors": {
       "configureTarget": "Configure a coluna alvo antes de treinar",
-      "trainingFailed": "Erro ao treinar modelos"
+      "trainingFailed": "Erro ao treinar modelos",
+      "statusError": "Ocorreu um erro de configuração do projeto. Por favor, tente novamente.",
+      "serverError": "Ocorreu um erro no servidor. Por favor, tente novamente em alguns instantes."
     }
   },
   "stepDeploy": {
@@ -543,6 +545,9 @@
       "generating": "Gerando insights...",
       "error": "Erro ao gerar insights",
       "regenerate": "Regenerar",
+      "generate": "Gerar Insights",
+      "generated": "Insights gerados com sucesso!",
+      "saveError": "Erro ao salvar insights",
       "noInsights": "Clique para gerar insights automáticos sobre seus dados."
     },
     "exportPdf": "Exportar PDF",
@@ -555,6 +560,9 @@
     "exportMissing": "Info de valores ausentes",
     "generating": "Gerando PDF...",
     "pdfSuccess": "PDF exportado com sucesso!",
-    "pdfError": "Erro ao gerar PDF"
+    "pdfError": "Erro ao gerar PDF",
+    "pdfInterpretTitle": "Como Interpretar este Relatório",
+    "pdfInterpretText": "Este relatório de EDA (Análise Exploratória de Dados) resume as principais características do seu dataset. Use-o para entender a qualidade dos dados, identificar padrões e problemas antes do treinamento do modelo. Colunas com muitos valores ausentes podem precisar de tratamento especial. Correlações fortes entre variáveis podem indicar redundância ou relação causal.",
+    "pdfPage": "Página"
   }
 }
