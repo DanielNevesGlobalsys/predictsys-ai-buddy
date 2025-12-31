@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
+import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -22,6 +23,7 @@ import ModelsTab from "@/components/project/ModelsTab";
 import APIDeployTab from "@/components/project/APIDeployTab";
 import ChatTab from "@/components/project/ChatTab";
 import SettingsTab from "@/components/project/SettingsTab";
+import Header from "@/components/layout/Header";
 
 interface Project {
   id: string;
@@ -38,23 +40,37 @@ interface Project {
   updated_at: string;
 }
 
-const STATUS_LABELS: Record<string, { label: string; color: string }> = {
-  draft: { label: "Rascunho", color: "bg-muted text-muted-foreground" },
-  configuring: { label: "Configurando", color: "bg-secondary/20 text-secondary" },
-  data_uploaded: { label: "Dados enviados", color: "bg-primary/20 text-primary" },
-  eda_complete: { label: "EDA completa", color: "bg-accent/20 text-accent" },
-  training: { label: "Treinando", color: "bg-destructive/20 text-destructive" },
-  evaluated: { label: "Avaliado", color: "bg-accent/20 text-accent" },
-  deployed: { label: "Em produção", color: "bg-accent text-accent-foreground" },
-};
-
 const ProjectDetails = () => {
   const navigate = useNavigate();
   const { projectId } = useParams();
   const { toast } = useToast();
+  const { t, i18n } = useTranslation();
   const [project, setProject] = useState<Project | null>(null);
   const [loading, setLoading] = useState(true);
   const [chatKey, setChatKey] = useState(0);
+
+  const getStatusInfo = (status: string) => {
+    const colors: Record<string, string> = {
+      draft: "bg-muted text-muted-foreground",
+      configuring: "bg-secondary/20 text-secondary",
+      data_uploaded: "bg-primary/20 text-primary",
+      eda_complete: "bg-accent/20 text-accent",
+      training: "bg-destructive/20 text-destructive",
+      evaluated: "bg-accent/20 text-accent",
+      deployed: "bg-accent text-accent-foreground",
+    };
+    return {
+      label: t(`project.status.${status}`, status),
+      color: colors[status] || colors.draft,
+    };
+  };
+
+  const getDateLocale = () => {
+    const lang = i18n.language;
+    if (lang === "en") return "en-US";
+    if (lang === "es") return "es-ES";
+    return "pt-BR";
+  };
 
   useEffect(() => {
     if (projectId) {
@@ -71,7 +87,7 @@ const ProjectDetails = () => {
 
     if (error) {
       toast({
-        title: "Erro ao carregar projeto",
+        title: t("common.error"),
         description: error.message,
         variant: "destructive",
       });
@@ -83,7 +99,6 @@ const ProjectDetails = () => {
   };
 
   const handleChatCleared = useCallback(() => {
-    // Force re-render of ChatTab by changing key
     setChatKey((prev) => prev + 1);
   }, []);
 
@@ -99,12 +114,14 @@ const ProjectDetails = () => {
     return null;
   }
 
-  const statusInfo = STATUS_LABELS[project.status] || STATUS_LABELS.draft;
+  const statusInfo = getStatusInfo(project.status);
 
   return (
     <div className="min-h-screen bg-gradient-hero">
-      {/* Header */}
-      <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
+      <Header />
+
+      {/* Sub Header */}
+      <div className="border-b border-border/40 bg-card/50 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
@@ -120,7 +137,7 @@ const ProjectDetails = () => {
                   {statusInfo.label}
                 </span>
                 <span className="text-sm text-muted-foreground">
-                  {project.problem_type === "classification" ? "Classificação" : "Regressão"}
+                  {t(`project.${project.problem_type}`)}
                 </span>
               </div>
             </div>
@@ -131,11 +148,11 @@ const ProjectDetails = () => {
               onClick={() => navigate(`/projeto/${project.id}/wizard`)}
             >
               <Edit className="w-4 h-4 mr-2" />
-              Editar
+              {t("common.edit")}
             </Button>
           </div>
         </div>
-      </header>
+      </div>
 
       {/* Main content */}
       <main className="container mx-auto px-4 py-8">
@@ -143,82 +160,82 @@ const ProjectDetails = () => {
           <TabsList className="bg-card/50 p-1">
             <TabsTrigger value="overview" className="gap-2">
               <BarChart3 className="w-4 h-4" />
-              Visão Geral
+              {t("project.tabs.overview")}
             </TabsTrigger>
             <TabsTrigger value="data" className="gap-2">
               <Database className="w-4 h-4" />
-              Dados & EDA
+              {t("project.tabs.data")}
             </TabsTrigger>
             <TabsTrigger value="models" className="gap-2">
               <Cpu className="w-4 h-4" />
-              Modelos
+              {t("project.tabs.models")}
             </TabsTrigger>
             <TabsTrigger value="deploy" className="gap-2">
               <Rocket className="w-4 h-4" />
-              API & Deploy
+              {t("project.tabs.deploy")}
             </TabsTrigger>
             <TabsTrigger value="chat" className="gap-2">
               <MessageSquare className="w-4 h-4" />
-              Assistente IA
+              {t("project.tabs.chat")}
             </TabsTrigger>
             <TabsTrigger value="settings" className="gap-2">
               <Settings className="w-4 h-4" />
-              Configurações
+              {t("project.tabs.settings")}
             </TabsTrigger>
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
             <div className="grid md:grid-cols-2 gap-6">
               <Card className="bg-gradient-card shadow-card p-6">
-                <h3 className="font-semibold mb-4">Informações do Projeto</h3>
+                <h3 className="font-semibold mb-4">{t("projectDetails.projectInfo")}</h3>
                 <div className="space-y-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Nome</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.name")}</p>
                     <p className="font-medium">{project.name}</p>
                   </div>
                   {project.description && (
                     <div>
-                      <p className="text-sm text-muted-foreground">Descrição</p>
+                      <p className="text-sm text-muted-foreground">{t("projectDetails.description")}</p>
                       <p>{project.description}</p>
                     </div>
                   )}
                   {project.business_objective && (
                     <div>
-                      <p className="text-sm text-muted-foreground">Objetivo de Negócio</p>
+                      <p className="text-sm text-muted-foreground">{t("projectDetails.businessObjective")}</p>
                       <p>{project.business_objective}</p>
                     </div>
                   )}
                   <div>
-                    <p className="text-sm text-muted-foreground">Tipo de Problema</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.problemType")}</p>
                     <p className="font-medium">
-                      {project.problem_type === "classification" ? "Classificação" : "Regressão"}
+                      {t(`project.${project.problem_type}`)}
                     </p>
                   </div>
                 </div>
               </Card>
 
               <Card className="bg-gradient-card shadow-card p-6">
-                <h3 className="font-semibold mb-4">Status do Projeto</h3>
+                <h3 className="font-semibold mb-4">{t("projectDetails.projectStatus")}</h3>
                 <div className="space-y-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Status Atual</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.currentStatus")}</p>
                     <span className={`inline-block mt-1 text-sm px-3 py-1 rounded-full ${statusInfo.color}`}>
                       {statusInfo.label}
                     </span>
                   </div>
                   {project.target_column && (
                     <div>
-                      <p className="text-sm text-muted-foreground">Variável Alvo</p>
+                      <p className="text-sm text-muted-foreground">{t("projectDetails.targetVariable")}</p>
                       <p className="font-medium">{project.target_column}</p>
                     </div>
                   )}
                   <div>
-                    <p className="text-sm text-muted-foreground">Criado em</p>
-                    <p>{new Date(project.created_at).toLocaleDateString("pt-BR")}</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.createdAt")}</p>
+                    <p>{new Date(project.created_at).toLocaleDateString(getDateLocale())}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Última atualização</p>
-                    <p>{new Date(project.updated_at).toLocaleDateString("pt-BR")}</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.updatedAt")}</p>
+                    <p>{new Date(project.updated_at).toLocaleDateString(getDateLocale())}</p>
                   </div>
                 </div>
               </Card>
@@ -231,19 +248,19 @@ const ProjectDetails = () => {
               <Card className="bg-gradient-card shadow-card p-6">
                 <h3 className="font-semibold mb-4 flex items-center gap-2">
                   <Database className="w-5 h-5 text-primary" />
-                  Informações do Dataset
+                  {t("projectDetails.datasetInfo")}
                 </h3>
                 <div className="grid sm:grid-cols-3 gap-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Arquivo</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.file")}</p>
                     <p className="font-medium truncate">{project.dataset_filename.split("/").pop()}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Linhas</p>
-                    <p className="font-medium">{project.dataset_rows?.toLocaleString("pt-BR") || "-"}</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.rows")}</p>
+                    <p className="font-medium">{project.dataset_rows?.toLocaleString(getDateLocale()) || "-"}</p>
                   </div>
                   <div>
-                    <p className="text-sm text-muted-foreground">Colunas</p>
+                    <p className="text-sm text-muted-foreground">{t("projectDetails.columns")}</p>
                     <p className="font-medium">{project.dataset_columns || "-"}</p>
                   </div>
                 </div>
@@ -256,12 +273,12 @@ const ProjectDetails = () => {
             ) : (
               <Card className="bg-gradient-card shadow-card p-8 text-center">
                 <Database className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-                <h3 className="font-semibold text-lg mb-2">Nenhum dado carregado</h3>
+                <h3 className="font-semibold text-lg mb-2">{t("projectDetails.noData")}</h3>
                 <p className="text-muted-foreground mb-4">
-                  Faça upload de um arquivo CSV para ver a análise exploratória.
+                  {t("projectDetails.noDataDesc")}
                 </p>
                 <Button onClick={() => navigate(`/projeto/${project.id}/wizard`)}>
-                  Ir para o Wizard
+                  {t("projectDetails.goToWizard")}
                 </Button>
               </Card>
             )}

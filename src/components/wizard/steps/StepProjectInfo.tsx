@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,6 +23,7 @@ interface StepProjectInfoProps {
 }
 
 const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProjectInfoProps) => {
+  const { t } = useTranslation();
   const [formData, setFormData] = useState({
     name: projectData.name,
     description: projectData.description,
@@ -33,10 +35,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
   const validate = () => {
     const newErrors: Record<string, string> = {};
     if (!formData.name.trim()) {
-      newErrors.name = "O nome do projeto é obrigatório";
+      newErrors.name = t("stepInfo.errors.nameRequired");
     }
     if (!formData.problem_type) {
-      newErrors.problem_type = "Selecione o tipo de problema";
+      newErrors.problem_type = t("stepInfo.errors.problemTypeRequired");
     }
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
@@ -56,10 +58,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             <FileText className="w-8 h-8 text-primary-foreground" />
           </div>
           <h2 className="text-2xl font-display font-bold mb-2">
-            Informações do Projeto
+            {t("stepInfo.title")}
           </h2>
           <p className="text-muted-foreground">
-            Defina as informações básicas do seu projeto de machine learning
+            {t("stepInfo.subtitle")}
           </p>
         </div>
 
@@ -67,11 +69,11 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           {/* Nome do projeto */}
           <div className="space-y-2">
             <Label htmlFor="name" className="text-base font-medium">
-              Nome do projeto *
+              {t("stepInfo.projectName")} *
             </Label>
             <Input
               id="name"
-              placeholder="Ex: Previsão de Churn de Clientes"
+              placeholder={t("stepInfo.projectNamePlaceholder")}
               value={formData.name}
               onChange={(e) =>
                 setFormData({ ...formData, name: e.target.value })
@@ -82,18 +84,18 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               <p className="text-sm text-destructive">{errors.name}</p>
             )}
             <p className="text-sm text-muted-foreground">
-              Escolha um nome que identifique facilmente o objetivo do projeto
+              {t("stepInfo.projectNameHint")}
             </p>
           </div>
 
           {/* Descrição */}
           <div className="space-y-2">
             <Label htmlFor="description" className="text-base font-medium">
-              Descrição
+              {t("stepInfo.description")}
             </Label>
             <Textarea
               id="description"
-              placeholder="Descreva brevemente o que este projeto faz..."
+              placeholder={t("stepInfo.descriptionPlaceholder")}
               value={formData.description}
               onChange={(e) =>
                 setFormData({ ...formData, description: e.target.value })
@@ -109,11 +111,11 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               className="text-base font-medium flex items-center gap-2"
             >
               <Lightbulb className="w-4 h-4 text-secondary" />
-              Objetivo de negócio
+              {t("stepInfo.businessObjective")}
             </Label>
             <Textarea
               id="business_objective"
-              placeholder="Ex: Reduzir o churn em 15% identificando clientes com maior probabilidade de cancelamento"
+              placeholder={t("stepInfo.businessObjectivePlaceholder")}
               value={formData.business_objective}
               onChange={(e) =>
                 setFormData({ ...formData, business_objective: e.target.value })
@@ -121,7 +123,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               rows={3}
             />
             <p className="text-sm text-muted-foreground">
-              Qual problema de negócio você quer resolver com este modelo?
+              {t("stepInfo.businessObjectiveHint")}
             </p>
           </div>
 
@@ -129,7 +131,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           <div className="space-y-2">
             <Label className="text-base font-medium flex items-center gap-2">
               <Target className="w-4 h-4 text-primary" />
-              Tipo de problema *
+              {t("stepInfo.problemType")} *
             </Label>
             <Select
               value={formData.problem_type}
@@ -140,22 +142,22 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               <SelectTrigger
                 className={errors.problem_type ? "border-destructive" : ""}
               >
-                <SelectValue placeholder="Selecione o tipo de problema" />
+                <SelectValue placeholder={t("stepInfo.problemTypePlaceholder")} />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="classification">
                   <div className="flex flex-col items-start">
-                    <span className="font-medium">Classificação</span>
+                    <span className="font-medium">{t("project.classification")}</span>
                     <span className="text-xs text-muted-foreground">
-                      Prever categorias (sim/não, tipo A/B/C)
+                      {t("stepInfo.classificationDesc")}
                     </span>
                   </div>
                 </SelectItem>
                 <SelectItem value="regression">
                   <div className="flex flex-col items-start">
-                    <span className="font-medium">Regressão</span>
+                    <span className="font-medium">{t("project.regression")}</span>
                     <span className="text-xs text-muted-foreground">
-                      Prever valores numéricos (preço, quantidade)
+                      {t("stepInfo.regressionDesc")}
                     </span>
                   </div>
                 </SelectItem>
@@ -168,14 +170,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             {/* Dica explicativa */}
             <div className="mt-4 p-4 bg-muted/50 rounded-lg">
               <p className="text-sm text-muted-foreground">
-                <strong>Classificação:</strong> Use quando quer prever uma
-                categoria, como "o cliente vai cancelar?" (sim/não) ou "qual
-                produto o cliente vai comprar?" (A, B ou C).
+                <strong>{t("project.classification")}:</strong> {t("stepInfo.classificationTip")}
               </p>
               <p className="text-sm text-muted-foreground mt-2">
-                <strong>Regressão:</strong> Use quando quer prever um número,
-                como "quanto o cliente vai gastar?" ou "qual será o preço de
-                venda?".
+                <strong>{t("project.regression")}:</strong> {t("stepInfo.regressionTip")}
               </p>
             </div>
           </div>
@@ -184,14 +182,14 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
           <Button variant="outline" onClick={onCancel} disabled={loading}>
-            Cancelar
+            {t("common.cancel")}
           </Button>
           <Button
             onClick={handleSubmit}
             disabled={loading}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {loading ? "Salvando..." : "Próximo"}
+            {loading ? t("common.loading") : t("stepInfo.next")}
           </Button>
         </div>
       </div>

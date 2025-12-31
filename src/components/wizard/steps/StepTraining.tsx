@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
@@ -21,16 +22,6 @@ interface StepTrainingProps {
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
 }
 
-const ALGORITHMS_CLASSIFICATION = [
-  { name: "Regressão Logística", description: "Modelo linear simples e interpretável" },
-  { name: "Random Forest", description: "Conjunto de árvores de decisão" },
-];
-
-const ALGORITHMS_REGRESSION = [
-  { name: "Regressão Linear", description: "Modelo linear para valores contínuos" },
-  { name: "Random Forest Regressor", description: "Conjunto de árvores para regressão" },
-];
-
 interface ModelResult {
   id: string;
   algorithm_name: string;
@@ -46,14 +37,21 @@ const StepTraining = ({
   loading,
   saveProject,
 }: StepTrainingProps) => {
+  const { t } = useTranslation();
   const [isTraining, setIsTraining] = useState(false);
   const [models, setModels] = useState<ModelResult[]>([]);
   const [trainingComplete, setTrainingComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const algorithms = projectData.problem_type === "classification" 
-    ? ALGORITHMS_CLASSIFICATION 
-    : ALGORITHMS_REGRESSION;
+    ? [
+        { name: t("stepTraining.algorithms.logisticRegression"), description: t("stepTraining.algorithms.logisticRegressionDesc") },
+        { name: t("stepTraining.algorithms.randomForest"), description: t("stepTraining.algorithms.randomForestDesc") },
+      ]
+    : [
+        { name: t("stepTraining.algorithms.linearRegression"), description: t("stepTraining.algorithms.linearRegressionDesc") },
+        { name: t("stepTraining.algorithms.randomForestRegressor"), description: t("stepTraining.algorithms.randomForestRegressorDesc") },
+      ];
 
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
 
@@ -70,12 +68,11 @@ const StepTraining = ({
       .eq("project_id", projectData.id);
 
     if (modelsError) {
-      console.error("Erro ao carregar modelos:", modelsError);
+      console.error("Error loading models:", modelsError);
       return;
     }
 
     if (modelsData && modelsData.length > 0) {
-      // Load metrics for each model
       const modelsWithMetrics = await Promise.all(
         modelsData.map(async (model) => {
           const { data: metrics } = await supabase
@@ -100,7 +97,7 @@ const StepTraining = ({
 
   const handleStartTraining = async () => {
     if (!projectData.id || !projectData.target_column) {
-      toast.error("Configure a coluna alvo antes de treinar");
+      toast.error(t("stepTraining.errors.configureTarget"));
       return;
     }
 
@@ -123,13 +120,13 @@ const StepTraining = ({
         throw new Error(data.error);
       }
 
-      toast.success("Treinamento concluído com sucesso!");
+      toast.success(t("stepTraining.trainingSuccess"));
       await loadExistingModels();
       setTrainingComplete(true);
 
     } catch (err) {
-      console.error("Erro no treinamento:", err);
-      const message = err instanceof Error ? err.message : "Erro ao treinar modelos";
+      console.error("Training error:", err);
+      const message = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
       setError(message);
       toast.error(message);
       await saveProject({ status: "features_selected" });
@@ -147,8 +144,6 @@ const StepTraining = ({
     return trainedModels.reduce((best, current) => {
       const bestMetric = best.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
       const currentMetric = current.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
-      
-      // For R² and AUC, higher is better
       return currentMetric > bestMetric ? current : best;
     });
   };
@@ -163,26 +158,24 @@ const StepTraining = ({
             <Cpu className="w-8 h-8 text-primary-foreground" />
           </div>
           <h2 className="text-2xl font-display font-bold mb-2">
-            Treinamento de Modelos
+            {t("stepTraining.title")}
           </h2>
           <p className="text-muted-foreground">
-            O sistema vai treinar automaticamente vários algoritmos e encontrar o melhor modelo
+            {t("stepTraining.subtitle")}
           </p>
         </div>
 
         {/* Info about AutoML */}
         <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
           <p className="text-sm text-muted-foreground">
-            <strong className="text-secondary">Como funciona?</strong> A PredictSys vai treinar 
-            automaticamente vários algoritmos de machine learning com seus dados e comparar 
-            os resultados. Você não precisa saber programar ou conhecer os detalhes técnicos!
+            <strong className="text-secondary">{t("stepTraining.howItWorks")}</strong> {t("stepTraining.howItWorksDesc")}
           </p>
         </div>
 
         {/* Algorithms that will be tested */}
         {!trainingComplete && (
           <div className="space-y-3">
-            <h3 className="font-semibold">Algoritmos que serão testados:</h3>
+            <h3 className="font-semibold">{t("stepTraining.algorithmsToTest")}</h3>
             <div className="grid gap-3">
               {algorithms.map((algo) => (
                 <div
@@ -212,9 +205,9 @@ const StepTraining = ({
                 <Clock className="w-10 h-10 text-muted-foreground" />
               </div>
               <div>
-                <p className="font-semibold text-lg">Pronto para treinar</p>
+                <p className="font-semibold text-lg">{t("stepTraining.readyToTrain")}</p>
                 <p className="text-muted-foreground">
-                  Clique no botão abaixo para iniciar o treinamento. Isso pode levar alguns segundos.
+                  {t("stepTraining.readyToTrainDesc")}
                 </p>
               </div>
               <Button
@@ -224,7 +217,7 @@ const StepTraining = ({
                 className="bg-gradient-primary hover:shadow-hover transition-all"
               >
                 <Play className="w-5 h-5 mr-2" />
-                Treinar Modelos
+                {t("stepTraining.trainButton")}
               </Button>
             </div>
           )}
@@ -235,9 +228,9 @@ const StepTraining = ({
                 <Loader2 className="w-10 h-10 text-primary animate-spin" />
               </div>
               <div>
-                <p className="font-semibold text-lg">Treinando modelos...</p>
+                <p className="font-semibold text-lg">{t("stepTraining.training")}</p>
                 <p className="text-muted-foreground">
-                  Isso pode levar alguns segundos. Por favor, aguarde.
+                  {t("stepTraining.trainingDesc")}
                 </p>
               </div>
             </div>
@@ -250,7 +243,7 @@ const StepTraining = ({
               </div>
               <div>
                 <p className="font-semibold text-lg text-destructive">
-                  Erro no treinamento
+                  {t("stepTraining.trainingError")}
                 </p>
                 <p className="text-muted-foreground">{error}</p>
               </div>
@@ -260,7 +253,7 @@ const StepTraining = ({
                 className="bg-gradient-primary hover:shadow-hover transition-all"
               >
                 <Play className="w-5 h-5 mr-2" />
-                Tentar Novamente
+                {t("stepTraining.tryAgain")}
               </Button>
             </div>
           )}
@@ -272,11 +265,10 @@ const StepTraining = ({
               </div>
               <div>
                 <p className="font-semibold text-lg text-accent">
-                  Treinamento concluído!
+                  {t("stepTraining.trainingComplete")}
                 </p>
                 <p className="text-muted-foreground">
-                  Treinamos automaticamente {models.filter(m => m.status === "trained").length} modelos para você.
-                  Veja a comparação abaixo.
+                  {t("stepTraining.trainingCompleteDesc", { count: models.filter(m => m.status === "trained").length })}
                 </p>
               </div>
             </div>
@@ -288,12 +280,11 @@ const StepTraining = ({
           <div className="space-y-4">
             <div className="flex items-center gap-2">
               <Trophy className="w-5 h-5 text-primary" />
-              <h3 className="font-semibold">Comparação de Modelos</h3>
+              <h3 className="font-semibold">{t("stepTraining.modelComparison")}</h3>
             </div>
             
             <p className="text-sm text-muted-foreground">
-              A tabela abaixo mostra as métricas de cada modelo treinado. O modelo destacado em 
-              verde é o que teve o melhor desempenho na métrica principal ({primaryMetric}).
+              {t("stepTraining.modelComparisonDesc", { metric: primaryMetric })}
             </p>
 
             <ModelResultsTable 
@@ -305,7 +296,7 @@ const StepTraining = ({
             <TooltipProvider delayDuration={200}>
               <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
                 <p className="text-sm">
-                  <strong>Melhor modelo:</strong> {bestModel?.algorithm_name} com{" "}
+                  <strong>{t("stepTraining.bestModel")}</strong> {bestModel?.algorithm_name} {t("stepTraining.with")}{" "}
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span className="inline-flex items-center gap-1 cursor-help font-semibold">
@@ -316,13 +307,13 @@ const StepTraining = ({
                     <TooltipContent side="top" className="max-w-sm text-sm">
                       <p>
                         {primaryMetric === "AUC" 
-                          ? "Por que AUC? A AUC foi escolhida como métrica principal porque funciona bem quando há desbalanceamento entre churn e não churn, não depende de um único ponto de corte e resume o quão bem o modelo separa clientes em risco dos clientes que devem permanecer."
-                          : "R² foi escolhido como métrica principal porque mostra o quanto o modelo consegue explicar a variação dos dados. Quanto mais próximo de 1, melhor o modelo representa a realidade."
+                          ? t("stepTraining.whyAUC")
+                          : t("stepTraining.whyR2")
                         }
                       </p>
                     </TooltipContent>
                   </Tooltip>
-                  {" "}de{" "}
+                  {" "}{t("stepTraining.of")}{" "}
                   <span className="font-bold text-primary">
                     {(bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0).toFixed(4)}
                   </span>
@@ -335,14 +326,14 @@ const StepTraining = ({
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
           <Button variant="outline" onClick={onBack} disabled={loading || isTraining}>
-            Voltar
+            {t("common.back")}
           </Button>
           <Button
             onClick={() => onNext()}
             disabled={loading || isTraining || !trainingComplete}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            Próximo
+            {t("stepInfo.next")}
           </Button>
         </div>
       </div>
