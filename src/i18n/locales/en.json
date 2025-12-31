@@ -397,5 +397,26 @@
       "example": "Usage example",
       "exampleDesc": "Example of how to call the prediction API"
     }
+  },
+  "projectDetails": {
+    "projectInfo": "Project Information",
+    "name": "Name",
+    "description": "Description",
+    "businessObjective": "Business Objective",
+    "problemType": "Problem Type",
+    "projectStatus": "Project Status",
+    "currentStatus": "Current Status",
+    "targetVariable": "Target Variable",
+    "createdAt": "Created at",
+    "updatedAt": "Last updated",
+    "datasetInfo": "Dataset Information",
+    "file": "File",
+    "rows": "Rows",
+    "columns": "Columns",
+    "noData": "No data loaded",
+    "noDataDesc": "Upload a CSV file to see the exploratory analysis.",
+    "goToWizard": "Go to Wizard",
+    "translating": "Translating...",
+    "translatedFrom": "Automatically translated from {{language}}"
   }
 }
