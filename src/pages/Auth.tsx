@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -9,13 +10,12 @@ import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
-
-const emailSchema = z.string().email("E-mail inválido").max(255);
-const passwordSchema = z.string().min(6, "Senha deve ter no mínimo 6 caracteres").max(100);
+import GlobalControls from "@/components/layout/GlobalControls";
 
 const Auth = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const [isLoading, setIsLoading] = useState(false);
   const [loginEmail, setLoginEmail] = useState("");
   const [loginPassword, setLoginPassword] = useState("");
@@ -23,7 +23,9 @@ const Auth = () => {
   const [signupPassword, setSignupPassword] = useState("");
   const [signupName, setSignupName] = useState("");
 
-  // Redirect if already logged in
+  const emailSchema = z.string().email(t("auth.invalidEmail")).max(255);
+  const passwordSchema = z.string().min(6, t("auth.passwordMinLength")).max(100);
+
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       if (session) {
@@ -48,20 +50,20 @@ const Auth = () => {
       if (error) throw error;
 
       toast({
-        title: "Login realizado com sucesso!",
-        description: "Bem-vindo de volta ao PredictSys AI",
+        title: t("auth.loginSuccess"),
+        description: t("auth.loginSuccessDesc"),
       });
       navigate("/dashboard");
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
-          title: "Erro de validação",
+          title: t("auth.validationError"),
           description: error.errors[0].message,
           variant: "destructive",
         });
       } else if (error instanceof Error) {
         toast({
-          title: "Erro ao fazer login",
+          title: t("auth.loginError"),
           description: error.message,
           variant: "destructive",
         });
@@ -80,7 +82,7 @@ const Auth = () => {
       passwordSchema.parse(signupPassword);
 
       if (!signupName.trim()) {
-        throw new Error("Nome é obrigatório");
+        throw new Error(t("auth.nameRequired"));
       }
 
       const { error } = await supabase.auth.signUp({
@@ -97,20 +99,20 @@ const Auth = () => {
       if (error) throw error;
 
       toast({
-        title: "Conta criada com sucesso!",
-        description: "Você já pode começar a usar o PredictSys AI",
+        title: t("auth.signupSuccess"),
+        description: t("auth.signupSuccessDesc"),
       });
       navigate("/dashboard");
     } catch (error) {
       if (error instanceof z.ZodError) {
         toast({
-          title: "Erro de validação",
+          title: t("auth.validationError"),
           description: error.errors[0].message,
           variant: "destructive",
         });
       } else if (error instanceof Error) {
         toast({
-          title: "Erro ao criar conta",
+          title: t("auth.signupError"),
           description: error.message,
           variant: "destructive",
         });
@@ -122,6 +124,9 @@ const Auth = () => {
 
   return (
     <div className="min-h-screen bg-gradient-hero flex items-center justify-center p-4">
+      <div className="absolute top-4 right-4">
+        <GlobalControls />
+      </div>
       <div className="w-full max-w-md space-y-8">
         {/* Logo */}
         <div className="text-center space-y-2">
@@ -132,7 +137,7 @@ const Auth = () => {
             PredictSys AI
           </h1>
           <p className="text-muted-foreground">
-            Machine Learning sem escrever código
+            {t("auth.tagline")}
           </p>
         </div>
 
@@ -140,19 +145,19 @@ const Auth = () => {
         <Card className="bg-gradient-card shadow-hover p-6">
           <Tabs defaultValue="login" className="w-full">
             <TabsList className="grid w-full grid-cols-2 mb-6">
-              <TabsTrigger value="login">Entrar</TabsTrigger>
-              <TabsTrigger value="signup">Criar Conta</TabsTrigger>
+              <TabsTrigger value="login">{t("auth.loginTab")}</TabsTrigger>
+              <TabsTrigger value="signup">{t("auth.signupTab")}</TabsTrigger>
             </TabsList>
 
             {/* Login Form */}
             <TabsContent value="login">
               <form onSubmit={handleLogin} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="login-email">E-mail</Label>
+                  <Label htmlFor="login-email">{t("auth.email")}</Label>
                   <Input
                     id="login-email"
                     type="email"
-                    placeholder="seu@email.com"
+                    placeholder={t("auth.emailPlaceholder")}
                     value={loginEmail}
                     onChange={(e) => setLoginEmail(e.target.value)}
                     required
@@ -160,11 +165,11 @@ const Auth = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="login-password">Senha</Label>
+                  <Label htmlFor="login-password">{t("auth.password")}</Label>
                   <Input
                     id="login-password"
                     type="password"
-                    placeholder="••••••••"
+                    placeholder={t("auth.passwordPlaceholder")}
                     value={loginPassword}
                     onChange={(e) => setLoginPassword(e.target.value)}
                     required
@@ -179,10 +184,10 @@ const Auth = () => {
                   {isLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Entrando...
+                      {t("auth.loggingIn")}
                     </>
                   ) : (
-                    "Entrar"
+                    t("auth.loginButton")
                   )}
                 </Button>
               </form>
@@ -192,11 +197,11 @@ const Auth = () => {
             <TabsContent value="signup">
               <form onSubmit={handleSignup} className="space-y-4">
                 <div className="space-y-2">
-                  <Label htmlFor="signup-name">Nome Completo</Label>
+                  <Label htmlFor="signup-name">{t("auth.fullName")}</Label>
                   <Input
                     id="signup-name"
                     type="text"
-                    placeholder="Seu Nome"
+                    placeholder={t("auth.namePlaceholder")}
                     value={signupName}
                     onChange={(e) => setSignupName(e.target.value)}
                     required
@@ -204,11 +209,11 @@ const Auth = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="signup-email">E-mail</Label>
+                  <Label htmlFor="signup-email">{t("auth.email")}</Label>
                   <Input
                     id="signup-email"
                     type="email"
-                    placeholder="seu@email.com"
+                    placeholder={t("auth.emailPlaceholder")}
                     value={signupEmail}
                     onChange={(e) => setSignupEmail(e.target.value)}
                     required
@@ -216,11 +221,11 @@ const Auth = () => {
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="signup-password">Senha</Label>
+                  <Label htmlFor="signup-password">{t("auth.password")}</Label>
                   <Input
                     id="signup-password"
                     type="password"
-                    placeholder="••••••••"
+                    placeholder={t("auth.passwordPlaceholder")}
                     value={signupPassword}
                     onChange={(e) => setSignupPassword(e.target.value)}
                     required
@@ -235,10 +240,10 @@ const Auth = () => {
                   {isLoading ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                      Criando conta...
+                      {t("auth.creatingAccount")}
                     </>
                   ) : (
-                    "Criar Conta"
+                    t("auth.signupButton")
                   )}
                 </Button>
               </form>
@@ -253,7 +258,7 @@ const Auth = () => {
             onClick={() => navigate("/")}
             className="text-muted-foreground hover:text-foreground"
           >
-            ← Voltar para home
+            ← {t("auth.backToHome")}
           </Button>
         </div>
       </div>
