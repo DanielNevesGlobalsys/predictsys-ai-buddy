@@ -56,7 +56,7 @@ function trainLinearRegression(X: number[][], y: number[]): { weights: number[];
   const weights = new Array(numFeatures).fill(0);
   let bias = 0;
   const lr = 0.01;
-  const epochs = 100;
+  const epochs = 50; // Reduced for performance
   
   for (let epoch = 0; epoch < epochs; epoch++) {
     for (let i = 0; i < n; i++) {
@@ -82,7 +82,7 @@ function trainRidgeRegression(X: number[][], y: number[], lambda = 0.1): { weigh
   const weights = new Array(numFeatures).fill(0);
   let bias = 0;
   const lr = 0.01;
-  const epochs = 100;
+  const epochs = 50; // Reduced for performance
   
   for (let epoch = 0; epoch < epochs; epoch++) {
     for (let i = 0; i < n; i++) {
@@ -108,7 +108,7 @@ function trainLogisticRegression(X: number[][], y: number[]): { weights: number[
   const weights = new Array(numFeatures).fill(0);
   let bias = 0;
   const lr = 0.1;
-  const epochs = 100;
+  const epochs = 50; // Reduced for performance
   
   for (let epoch = 0; epoch < epochs; epoch++) {
     for (let i = 0; i < n; i++) {
@@ -220,19 +220,19 @@ function predictTree(tree: any, x: number[]): number {
     : predictTree(tree.right, x);
 }
 
-// Random Forest
-function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 5): any[] {
+// Random Forest (optimized)
+function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 3): any[] {
   const trees: any[] = [];
-  const n = Math.min(X.length, 2000);
+  const sampleSize = Math.min(X.length, 500); // Reduced sample per tree
   
   for (let t = 0; t < numTrees; t++) {
     const indices: number[] = [];
-    for (let i = 0; i < n; i++) {
+    for (let i = 0; i < sampleSize; i++) {
       indices.push(Math.floor(Math.random() * X.length));
     }
     const Xb = indices.map(i => X[i]);
     const yb = indices.map(i => y[i]);
-    trees.push(trainSimpleTree(Xb, yb, isClassification, 4));
+    trees.push(trainSimpleTree(Xb, yb, isClassification, 3)); // Reduced depth
   }
   
   return trees;
@@ -245,9 +245,9 @@ function predictRandomForest(trees: any[], X: number[][], isClassification: bool
   });
 }
 
-// Gradient Boosting
-function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 5): { trees: any[]; lr: number; base: number } {
-  const sampleSize = Math.min(X.length, 3000);
+// Gradient Boosting (optimized)
+function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 3): { trees: any[]; lr: number; base: number } {
+  const sampleSize = Math.min(X.length, 500); // Reduced sample size
   const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, sampleSize);
   const Xs = sampleIndices.map(i => X[i]);
   const ys = sampleIndices.map(i => y[i]);
@@ -258,7 +258,7 @@ function trainGradientBoosting(X: number[][], y: number[], isClassification: boo
   const lr = 0.1;
   
   for (let t = 0; t < numTrees; t++) {
-    const tree = trainSimpleTree(Xs, residuals, false, 3);
+    const tree = trainSimpleTree(Xs, residuals, false, 2); // Reduced depth
     trees.push(tree);
     
     for (let i = 0; i < Xs.length; i++) {
@@ -280,8 +280,14 @@ function predictGradientBoosting(model: { trees: any[]; lr: number; base: number
   });
 }
 
-// k-Nearest Neighbors Classifier
-function trainKNN(X: number[][], y: number[], k = 5): { X: number[][]; y: number[]; k: number } {
+// k-Nearest Neighbors Classifier (optimized with sample limit)
+function trainKNN(X: number[][], y: number[], k = 3): { X: number[][]; y: number[]; k: number } {
+  // Limit training data for KNN to avoid O(n*m) complexity explosion
+  const maxSamples = 300;
+  if (X.length > maxSamples) {
+    const indices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxSamples);
+    return { X: indices.map(i => X[i]), y: indices.map(i => y[i]), k };
+  }
   return { X, y, k };
 }
 
@@ -575,8 +581,8 @@ serve(async (req) => {
     const labelMap: Map<string, number> = new Map();
     
     // Build label encoding map for categorical targets
+    const MAX_ROWS = 2000; // Reduced for performance
     if (isTargetCategorical) {
-      const MAX_ROWS = 5000;
       for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
         const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
         const targetVal = values[targetIndex]?.trim() || "";
@@ -586,8 +592,6 @@ serve(async (req) => {
       }
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
-    
-    const MAX_ROWS = 5000;
     for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
       const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
       const features = featureIndices.map(idx => {
