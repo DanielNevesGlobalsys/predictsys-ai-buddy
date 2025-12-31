@@ -516,5 +516,77 @@
     "pdfInterpretTitle": "How to Interpret this Report",
     "pdfInterpretText": "This EDA (Exploratory Data Analysis) report summarizes the main characteristics of your dataset. Use it to understand data quality, identify patterns and issues before model training. Columns with many missing values may need special treatment. Strong correlations between variables may indicate redundancy or causal relationship.",
     "pdfPage": "Page"
+  },
+  "models": {
+    "noModels": "No models trained",
+    "noModelsDesc": "You haven't trained any models for this project yet. Go back to the wizard to train your models.",
+    "goToWizard": "Go to Wizard",
+    "noModelsTrained": "No models trained yet.",
+    "selectProductionTitle": "Select production model",
+    "selectProductionDesc": "Click 'Select' next to the model you want to use for API predictions. Only one model can be in production at a time.",
+    "productionSet": "Model set as production!",
+    "productionError": "Error setting production model",
+    "summary": {
+      "bestModel": "Best Model",
+      "productionModel": "Production Model",
+      "noProductionModel": "None selected",
+      "active": "Active",
+      "selectProductionHint": "Select a model from the table to put it into production.",
+      "bestModelTooltip": "The model with best performance on the primary metric, automatically chosen by the system.",
+      "productionModelTooltip": "The model currently active for making predictions via API.",
+      "bestExplanationClassification": "Highest {{metric}} ({{value}}) among all tested models. The higher the AUC, the better the model separates classes.",
+      "bestExplanationRegression": "Highest {{metric}} ({{value}}) among all tested models. The closer to 1, the better the model explains the data."
+    },
+    "table": {
+      "model": "Model",
+      "status": "Status",
+      "action": "Action",
+      "best": "Best",
+      "production": "Production",
+      "candidate": "Candidate",
+      "active": "Active",
+      "select": "Select",
+      "tip": "Tip",
+      "tipText": "Hover over the metric name to see a simple explanation. Click 'Select' to put a model into production."
+    },
+    "metrics": {
+      "AUC": "Measures how well the model can separate classes. Ranges from 0 to 1: closer to 1 is better.",
+      "F1": "Harmonic mean between Precision and Recall. Balances positive detection with prediction accuracy.",
+      "Precision": "Precision",
+      "PrecisionDesc": "Of all predicted as positive, what percentage is actually positive.",
+      "Recall": "Recall",
+      "RecallDesc": "Of all actual positives, what percentage the model was able to identify.",
+      "Accuracy": "Accuracy",
+      "AccuracyDesc": "Total percentage of correct predictions, considering all classes.",
+      "MAE": "Mean absolute difference between predicted and actual values. Lower is better.",
+      "MSE": "Mean of squared errors. Penalizes large errors more heavily.",
+      "RMSE": "Square root of MSE. In the same unit as the target variable.",
+      "R2": "Measures how much of the target variation the model explains (0 to 1). Closer to 1 is better."
+    },
+    "insights": {
+      "title": "AI Insights on Models",
+      "description": "Automatic performance analysis and improvement suggestions",
+      "generating": "Generating...",
+      "regenerate": "Regenerate",
+      "generate": "Generate Insights",
+      "generated": "Insights generated successfully!",
+      "error": "Error generating insights",
+      "noInsights": "Click to generate automatic insights about model performance."
+    },
+    "recalibration": {
+      "button": "Recalibrate",
+      "title": "Model Recalibration",
+      "description": "Adjust the decision threshold for model {{model}}",
+      "explanation": "The threshold defines at what probability the model classifies a case as positive. By adjusting this value, you can balance between detecting more cases (Recall) or having more certainty in predictions (Precision).",
+      "threshold": "Decision Threshold",
+      "moreRecall": "← More Recall",
+      "morePrecision": "More Precision →",
+      "businessImpact": "Estimated impact",
+      "impactText": "With this threshold, approximately {{positiveRate}}% of cases will be classified as positive.",
+      "save": "Save Calibration",
+      "saved": "Calibration saved successfully!",
+      "productionCalibration": "Production model calibration",
+      "currentThreshold": "Current threshold"
+    }
   }
 }

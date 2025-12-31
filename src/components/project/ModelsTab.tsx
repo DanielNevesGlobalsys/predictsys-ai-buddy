@@ -38,6 +38,7 @@ const ModelsTab = ({ projectId, problemType, datasetRows, targetColumn }: Models
   const [productionThreshold, setProductionThreshold] = useState(0.5);
 
   const primaryMetric = problemType === "classification" ? "AUC" : "R²";
+  const lowerIsBetter = problemType === "regression"; // For RMSE/MAE lower is better, but we use R² which higher is better
 
   useEffect(() => {
     loadModels();
@@ -87,11 +88,7 @@ const ModelsTab = ({ projectId, problemType, datasetRows, targetColumn }: Models
     return trainedModels.reduce((best, current) => {
       const bestMetric = best.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
       const currentMetric = current.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
-      
-      // For RMSE/MAE, lower is better
-      if (primaryMetric === "RMSE" || primaryMetric === "MAE") {
-        return currentMetric < bestMetric ? current : best;
-      }
+      // For AUC and R², higher is better
       return currentMetric > bestMetric ? current : best;
     });
   };
