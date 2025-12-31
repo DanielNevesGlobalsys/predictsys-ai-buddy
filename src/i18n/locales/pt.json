@@ -261,5 +261,30 @@
     },
     "deleteButton": "Excluir definitivamente",
     "deleteSuccess": "Projeto excluído com sucesso."
+  },
+  "wizard": {
+    "newProject": "Novo Projeto",
+    "editProject": "Editar Projeto",
+    "configureML": "Configure seu projeto de ML",
+    "projectSaved": "Projeto salvo",
+    "projectSavedDesc": "As alterações foram salvas com sucesso.",
+    "saveError": "Erro ao salvar",
+    "loadError": "Erro ao carregar projeto",
+    "projectComplete": "Projeto concluído!",
+    "projectCompleteDesc": "Seu projeto foi configurado com sucesso.",
+    "steps": {
+      "info": "Informações",
+      "infoDesc": "Dados básicos do projeto",
+      "data": "Dados",
+      "dataDesc": "Upload do arquivo CSV",
+      "analysis": "Análise",
+      "analysisDesc": "Exploração dos dados",
+      "variables": "Variáveis",
+      "variablesDesc": "Alvo e features",
+      "training": "Treinamento",
+      "trainingDesc": "Treinar modelos",
+      "deploy": "Deploy",
+      "deployDesc": "Colocar em produção"
+    }
   }
 }

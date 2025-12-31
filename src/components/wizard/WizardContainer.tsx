@@ -1,24 +1,17 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
+import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Brain, ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import GlobalControls from "@/components/layout/GlobalControls";
 import StepProjectInfo from "./steps/StepProjectInfo";
 import StepDataUpload from "./steps/StepDataUpload";
 import StepEDA from "./steps/StepEDA";
 import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
-
-const STEPS = [
-  { id: 1, title: "Informações", description: "Dados básicos do projeto" },
-  { id: 2, title: "Dados", description: "Upload do arquivo CSV" },
-  { id: 3, title: "Análise", description: "Exploração dos dados" },
-  { id: 4, title: "Variáveis", description: "Alvo e features" },
-  { id: 5, title: "Treinamento", description: "Treinar modelos" },
-  { id: 6, title: "Deploy", description: "Colocar em produção" },
-];
 
 export interface ProjectData {
   id?: string;
@@ -37,6 +30,7 @@ const WizardContainer = () => {
   const navigate = useNavigate();
   const { projectId } = useParams();
   const { toast } = useToast();
+  const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [projectData, setProjectData] = useState<ProjectData>({
@@ -46,6 +40,15 @@ const WizardContainer = () => {
     problem_type: "classification",
     status: "draft",
   });
+
+  const STEPS = [
+    { id: 1, title: t("wizard.steps.info"), description: t("wizard.steps.infoDesc") },
+    { id: 2, title: t("wizard.steps.data"), description: t("wizard.steps.dataDesc") },
+    { id: 3, title: t("wizard.steps.analysis"), description: t("wizard.steps.analysisDesc") },
+    { id: 4, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
+    { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
+    { id: 6, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
+  ];
 
   useEffect(() => {
     if (projectId) {
@@ -63,7 +66,7 @@ const WizardContainer = () => {
 
     if (error) {
       toast({
-        title: "Erro ao carregar projeto",
+        title: t("wizard.loadError"),
         description: error.message,
         variant: "destructive",
       });
@@ -95,7 +98,7 @@ const WizardContainer = () => {
     setLoading(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error("Usuário não autenticado");
+      if (!user) throw new Error(t("common.error"));
 
       if (projectData.id) {
         // Update existing project
@@ -140,12 +143,12 @@ const WizardContainer = () => {
       if (nextStep) setCurrentStep(nextStep);
       
       toast({
-        title: "Projeto salvo",
-        description: "As alterações foram salvas com sucesso.",
+        title: t("wizard.projectSaved"),
+        description: t("wizard.projectSavedDesc"),
       });
     } catch (error: any) {
       toast({
-        title: "Erro ao salvar",
+        title: t("wizard.saveError"),
         description: error.message,
         variant: "destructive",
       });
@@ -174,8 +177,8 @@ const WizardContainer = () => {
   const handleComplete = async () => {
     await saveProject({ status: "evaluated" });
     toast({
-      title: "Projeto concluído!",
-      description: "Seu projeto foi configurado com sucesso.",
+      title: t("wizard.projectComplete"),
+      description: t("wizard.projectCompleteDesc"),
     });
     navigate("/dashboard");
   };
@@ -222,13 +225,14 @@ const WizardContainer = () => {
             </div>
             <div>
               <h1 className="text-xl font-bold">
-                {projectData.id ? "Editar Projeto" : "Novo Projeto"}
+                {projectData.id ? t("wizard.editProject") : t("wizard.newProject")}
               </h1>
               <p className="text-sm text-muted-foreground">
-                {projectData.name || "Configure seu projeto de ML"}
+                {projectData.name || t("wizard.configureML")}
               </p>
             </div>
           </div>
+          <GlobalControls />
         </div>
       </header>
 
