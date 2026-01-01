@@ -2,17 +2,24 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Tooltip,
   TooltipContent,
   TooltipProvider,
   TooltipTrigger,
 } from "@/components/ui/tooltip";
-import { Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, HelpCircle } from "lucide-react";
+import { 
+  Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, 
+  HelpCircle, AlertTriangle, Sparkles, Info 
+} from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
+import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
+import TrainingInterpretability from "@/components/training/TrainingInterpretability";
+import TrainingAIInsights from "@/components/training/TrainingAIInsights";
 
 interface StepTrainingProps {
   projectData: ProjectData;
@@ -42,22 +49,62 @@ const StepTraining = ({
   const [models, setModels] = useState<ModelResult[]>([]);
   const [trainingComplete, setTrainingComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  const algorithms = projectData.problem_type === "classification" 
-    ? [
-        { name: t("stepTraining.algorithms.logisticRegression"), description: t("stepTraining.algorithms.logisticRegressionDesc") },
-        { name: t("stepTraining.algorithms.randomForest"), description: t("stepTraining.algorithms.randomForestDesc") },
-      ]
-    : [
-        { name: t("stepTraining.algorithms.linearRegression"), description: t("stepTraining.algorithms.linearRegressionDesc") },
-        { name: t("stepTraining.algorithms.randomForestRegressor"), description: t("stepTraining.algorithms.randomForestRegressorDesc") },
-      ];
+  const [detectedProblemType, setDetectedProblemType] = useState<string | null>(null);
+  const [showTypeWarning, setShowTypeWarning] = useState(false);
 
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
 
   useEffect(() => {
     loadExistingModels();
+    detectProblemType();
   }, [projectData.id]);
+
+  const detectProblemType = async () => {
+    if (!projectData.id) return;
+
+    // Check if target column has categorical stats (few distinct values = classification)
+    const { data: catStats } = await supabase
+      .from("project_categorical_stats")
+      .select("distinct_count")
+      .eq("project_id", projectData.id)
+      .eq("column_name", projectData.target_column || "")
+      .maybeSingle();
+
+    const { data: numStats } = await supabase
+      .from("project_numeric_stats")
+      .select("min_value, max_value")
+      .eq("project_id", projectData.id)
+      .eq("column_name", projectData.target_column || "")
+      .maybeSingle();
+
+    let detected: string | null = null;
+
+    if (catStats) {
+      // If categorical stats exist, it's likely classification
+      if (catStats.distinct_count && catStats.distinct_count <= 20) {
+        detected = "classification";
+      }
+    } else if (numStats) {
+      // If only numeric stats exist with many values, it's regression
+      const range = (numStats.max_value || 0) - (numStats.min_value || 0);
+      detected = range > 10 ? "regression" : "classification";
+    }
+
+    if (detected) {
+      setDetectedProblemType(detected);
+      
+      // Update project with detected type
+      await supabase
+        .from("projects")
+        .update({ detected_problem_type: detected })
+        .eq("id", projectData.id);
+
+      // Show warning if mismatch
+      if (detected !== projectData.problem_type) {
+        setShowTypeWarning(true);
+      }
+    }
+  };
 
   const loadExistingModels = async () => {
     if (!projectData.id) return;
@@ -95,6 +142,16 @@ const StepTraining = ({
     }
   };
 
+  const handleAcceptDetectedType = async () => {
+    if (!detectedProblemType) return;
+    
+    await saveProject({ 
+      problem_type: detectedProblemType as "classification" | "regression" 
+    });
+    setShowTypeWarning(false);
+    toast.success(t("training.problemTypeUpdated"));
+  };
+
   const handleStartTraining = async () => {
     if (!projectData.id || !projectData.target_column) {
       toast.error(t("stepTraining.errors.configureTarget"));
@@ -127,15 +184,19 @@ const StepTraining = ({
     } catch (err) {
       console.error("Training error:", err);
       const errorMessage = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
-      // Show user-friendly message without technical details
-      const userMessage = errorMessage.includes("violates check constraint") 
-        ? t("stepTraining.errors.statusError")
-        : errorMessage.includes("non-2xx")
-        ? t("stepTraining.errors.serverError")
-        : errorMessage;
+      
+      // Parse different error types
+      let userMessage = errorMessage;
+      if (errorMessage.includes("violates check constraint")) {
+        userMessage = t("stepTraining.errors.statusError");
+      } else if (errorMessage.includes("non-2xx")) {
+        userMessage = t("stepTraining.errors.serverError");
+      } else if (errorMessage.includes("CPU") || errorMessage.includes("timeout") || errorMessage.includes("exceeded")) {
+        userMessage = t("training.cpuLimitError");
+      }
+      
       setError(userMessage);
       toast.error(userMessage);
-      // Use valid status from constraint: eda_complete
       await saveProject({ status: "eda_complete" });
     } finally {
       setIsTraining(false);
@@ -155,7 +216,57 @@ const StepTraining = ({
     });
   };
 
+  const getRecommendedModelInfo = () => {
+    const best = getBestModel();
+    if (!best) return null;
+
+    const metricValue = best.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
+    
+    // Generate reason and strength based on algorithm
+    let reason = "";
+    let strength = "";
+    
+    if (best.algorithm_name.includes("Random Forest")) {
+      reason = t("training.reasons.randomForest");
+      strength = t("training.strengths.randomForest");
+    } else if (best.algorithm_name.includes("Gradient Boosting")) {
+      reason = t("training.reasons.gradientBoosting");
+      strength = t("training.strengths.gradientBoosting");
+    } else if (best.algorithm_name.includes("Logística") || best.algorithm_name.includes("Logistic")) {
+      reason = t("training.reasons.logisticRegression");
+      strength = t("training.strengths.logisticRegression");
+    } else if (best.algorithm_name.includes("Linear")) {
+      reason = t("training.reasons.linearRegression");
+      strength = t("training.strengths.linearRegression");
+    } else if (best.algorithm_name.includes("k-NN") || best.algorithm_name.includes("KNN")) {
+      reason = t("training.reasons.knn");
+      strength = t("training.strengths.knn");
+    } else if (best.algorithm_name.includes("Naive Bayes")) {
+      reason = t("training.reasons.naiveBayes");
+      strength = t("training.strengths.naiveBayes");
+    } else if (best.algorithm_name.includes("Árvore") || best.algorithm_name.includes("Decision Tree")) {
+      reason = t("training.reasons.decisionTree");
+      strength = t("training.strengths.decisionTree");
+    } else if (best.algorithm_name.includes("Ridge")) {
+      reason = t("training.reasons.ridge");
+      strength = t("training.strengths.ridge");
+    } else {
+      reason = t("training.reasons.default");
+      strength = t("training.strengths.default");
+    }
+
+    return {
+      name: best.algorithm_name,
+      reason,
+      strength,
+      metric: primaryMetric,
+      metricValue,
+    };
+  };
+
   const bestModel = getBestModel();
+  const productionModel = models.find(m => m.is_production);
+  const recommendedInfo = getRecommendedModelInfo();
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -172,37 +283,47 @@ const StepTraining = ({
           </p>
         </div>
 
-        {/* Info about AutoML */}
-        <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
-          <p className="text-sm text-muted-foreground">
-            <strong className="text-secondary">{t("stepTraining.howItWorks")}</strong> {t("stepTraining.howItWorksDesc")}
-          </p>
+        {/* Problem Type Warning */}
+        {showTypeWarning && detectedProblemType && (
+          <Alert className="bg-warning/10 border-warning/30">
+            <AlertTriangle className="w-4 h-4 text-warning" />
+            <AlertDescription className="flex items-center justify-between">
+              <span>
+                {t("training.typeWarning", { 
+                  detected: t(`project.${detectedProblemType}`),
+                  selected: t(`project.${projectData.problem_type}`)
+                })}
+              </span>
+              <Button variant="outline" size="sm" onClick={handleAcceptDetectedType}>
+                {t("training.useDetectedType")}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Problem Type Display */}
+        <div className="flex items-center justify-center gap-2 p-3 bg-muted/50 rounded-lg">
+          <Info className="w-4 h-4 text-muted-foreground" />
+          <span className="text-sm text-muted-foreground">
+            {t("training.problemType")}: <strong>{t(`project.${projectData.problem_type}`)}</strong>
+            {detectedProblemType && detectedProblemType === projectData.problem_type && (
+              <span className="ml-2 text-accent">({t("training.autoDetected")})</span>
+            )}
+          </span>
         </div>
 
-        {/* Algorithms that will be tested */}
-        {!trainingComplete && (
-          <div className="space-y-3">
-            <h3 className="font-semibold">{t("stepTraining.algorithmsToTest")}</h3>
-            <div className="grid gap-3">
-              {algorithms.map((algo) => (
-                <div
-                  key={algo.name}
-                  className="flex items-center gap-4 p-4 bg-muted/30 rounded-lg"
-                >
-                  <div className="w-10 h-10 bg-primary/10 rounded-lg flex items-center justify-center">
-                    <Cpu className="w-5 h-5 text-primary" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-medium">{algo.name}</p>
-                    <p className="text-sm text-muted-foreground">
-                      {algo.description}
-                    </p>
-                  </div>
-                </div>
-              ))}
+        {/* Smart Training Info */}
+        <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
+          <div className="flex items-start gap-3">
+            <Sparkles className="w-5 h-5 text-secondary mt-0.5" />
+            <div>
+              <p className="font-medium text-secondary">{t("training.smartTrainingTitle")}</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {t("training.smartTrainingDesc")}
+              </p>
             </div>
           </div>
-        )}
+        </div>
 
         {/* Training status */}
         <div className="text-center py-8">
@@ -214,7 +335,7 @@ const StepTraining = ({
               <div>
                 <p className="font-semibold text-lg">{t("stepTraining.readyToTrain")}</p>
                 <p className="text-muted-foreground">
-                  {t("stepTraining.readyToTrainDesc")}
+                  {t("training.readyToTrainSmartDesc")}
                 </p>
               </div>
               <Button
@@ -237,7 +358,7 @@ const StepTraining = ({
               <div>
                 <p className="font-semibold text-lg">{t("stepTraining.training")}</p>
                 <p className="text-muted-foreground">
-                  {t("stepTraining.trainingDesc")}
+                  {t("training.trainingSmartDesc")}
                 </p>
               </div>
             </div>
@@ -254,6 +375,16 @@ const StepTraining = ({
                 </p>
                 <p className="text-muted-foreground">{error}</p>
               </div>
+              {error === t("training.cpuLimitError") && (
+                <div className="p-4 bg-muted/50 rounded-lg text-left max-w-md mx-auto">
+                  <p className="text-sm font-medium mb-2">{t("training.cpuLimitSuggestions")}</p>
+                  <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                    <li>{t("training.suggestion1")}</li>
+                    <li>{t("training.suggestion2")}</li>
+                    <li>{t("training.suggestion3")}</li>
+                  </ul>
+                </div>
+              )}
               <Button
                 size="lg"
                 onClick={handleStartTraining}
@@ -282,51 +413,55 @@ const StepTraining = ({
           )}
         </div>
 
-        {/* Results table */}
+        {/* Results section */}
         {trainingComplete && models.length > 0 && (
-          <div className="space-y-4">
-            <div className="flex items-center gap-2">
-              <Trophy className="w-5 h-5 text-primary" />
-              <h3 className="font-semibold">{t("stepTraining.modelComparison")}</h3>
-            </div>
-            
-            <p className="text-sm text-muted-foreground">
-              {t("stepTraining.modelComparisonDesc", { metric: primaryMetric })}
-            </p>
+          <div className="space-y-6">
+            {/* Smart Training Panel - Recommended Model */}
+            {recommendedInfo && (
+              <SmartTrainingPanel
+                recommendedModel={recommendedInfo}
+                problemType={projectData.problem_type}
+                detectedProblemType={detectedProblemType}
+                userProblemType={projectData.problem_type}
+              />
+            )}
 
-            <ModelResultsTable 
-              models={models} 
-              problemType={projectData.problem_type} 
-              bestModelId={bestModel?.id}
+            {/* Model Comparison Table */}
+            <div className="space-y-4">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-primary" />
+                <h3 className="font-semibold">{t("stepTraining.modelComparison")}</h3>
+              </div>
+              
+              <p className="text-sm text-muted-foreground">
+                {t("stepTraining.modelComparisonDesc", { metric: primaryMetric })}
+              </p>
+
+              <ModelResultsTable 
+                models={models} 
+                problemType={projectData.problem_type} 
+                bestModelId={bestModel?.id}
+              />
+            </div>
+
+            {/* Interpretability Section */}
+            <TrainingInterpretability
+              projectId={projectData.id || ""}
+              modelId={productionModel?.id || bestModel?.id}
+              modelName={productionModel?.algorithm_name || bestModel?.algorithm_name}
+              problemType={projectData.problem_type}
             />
 
-            <TooltipProvider delayDuration={200}>
-              <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
-                <p className="text-sm">
-                  <strong>{t("stepTraining.bestModel")}</strong> {bestModel?.algorithm_name} {t("stepTraining.with")}{" "}
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <span className="inline-flex items-center gap-1 cursor-help font-semibold">
-                        {primaryMetric}
-                        <HelpCircle className="w-3.5 h-3.5 text-muted-foreground" />
-                      </span>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" className="max-w-sm text-sm">
-                      <p>
-                        {primaryMetric === "AUC" 
-                          ? t("stepTraining.whyAUC")
-                          : t("stepTraining.whyR2")
-                        }
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                  {" "}{t("stepTraining.of")}{" "}
-                  <span className="font-bold text-primary">
-                    {(bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0).toFixed(4)}
-                  </span>
-                </p>
-              </div>
-            </TooltipProvider>
+            {/* AI Insights Section */}
+            <TrainingAIInsights
+              projectId={projectData.id || ""}
+              models={models}
+              problemType={projectData.problem_type}
+              bestModelId={bestModel?.id}
+              productionModelId={productionModel?.id}
+              datasetRows={projectData.dataset_rows}
+              targetColumn={projectData.target_column}
+            />
           </div>
         )}
 

@@ -433,6 +433,73 @@
       "serverError": "Ocorreu um erro no servidor. Por favor, tente novamente em alguns instantes."
     }
   },
+  "training": {
+    "recommendedModel": "Modelo Recomendado",
+    "smartSelection": "Seleção Inteligente",
+    "whyRecommended": "Por que recomendado",
+    "strength": "Ponto forte",
+    "problemType": "Tipo de problema",
+    "autoDetected": "detectado automaticamente",
+    "userSelected": "selecionado pelo usuário",
+    "smartTrainingTitle": "Treinamento Inteligente",
+    "smartTrainingDesc": "O sistema vai treinar apenas os modelos mais adequados para seus dados, otimizando tempo e recursos.",
+    "readyToTrainSmartDesc": "Clique para treinar os modelos mais adequados para seus dados.",
+    "trainingSmartDesc": "Treinando modelos selecionados inteligentemente...",
+    "typeWarning": "Parece que este é um problema de {{detected}}, mas você selecionou {{selected}}. Deseja corrigir?",
+    "useDetectedType": "Usar tipo detectado",
+    "problemTypeUpdated": "Tipo de problema atualizado!",
+    "cpuLimitError": "O treinamento foi interrompido por limite de recursos do servidor.",
+    "cpuLimitSuggestions": "Sugestões para resolver:",
+    "suggestion1": "Reduza o número de colunas do dataset",
+    "suggestion2": "Use um dataset menor (menos linhas)",
+    "suggestion3": "Remova colunas com alta cardinalidade",
+    "featureImportance": "Importância das Variáveis",
+    "model": "Modelo",
+    "noFeatureImportances": "Nenhuma importância de variável disponível",
+    "aiInsightsShap": "Insights de IA (SHAP)",
+    "regenerate": "Regenerar",
+    "generate": "Gerar",
+    "clickToGenerateShapInsights": "Clique em 'Gerar' para obter insights sobre as variáveis",
+    "selectModelForInterpretability": "Selecione um modelo para ver a interpretabilidade",
+    "aiInsights": "Insights de IA",
+    "aiInsightsDesc": "Análise automática do desempenho dos modelos e sugestões de melhoria",
+    "clickToGenerateInsights": "Clique em 'Gerar' para obter insights sobre os modelos",
+    "noModelsForInsights": "Nenhum modelo treinado para gerar insights",
+    "insightsGenerated": "Insights gerados com sucesso!",
+    "insightsError": "Erro ao gerar insights",
+    "metricExplanation": {
+      "AUC": "Mede a capacidade do modelo de separar classes. Quanto mais próximo de 1, melhor.",
+      "R2": "Mede o quanto o modelo explica a variação dos dados. Quanto mais próximo de 1, melhor."
+    },
+    "reasons": {
+      "randomForest": "Melhor equilíbrio entre precisão e generalização para este dataset",
+      "gradientBoosting": "Excelente para capturar padrões complexos nos dados",
+      "logisticRegression": "Modelo simples e altamente interpretável para este problema",
+      "linearRegression": "Modelo base eficiente para relações lineares",
+      "knn": "Bom para datasets com clusters bem definidos",
+      "naiveBayes": "Eficiente para datasets com features independentes",
+      "decisionTree": "Modelo interpretável com boas regras de decisão",
+      "ridge": "Boa regularização para evitar overfitting",
+      "default": "Melhor desempenho na métrica principal"
+    },
+    "strengths": {
+      "randomForest": "Robusto a outliers e dados desbalanceados",
+      "gradientBoosting": "Alta precisão em problemas complexos",
+      "logisticRegression": "Fácil de explicar para stakeholders",
+      "linearRegression": "Interpretação direta dos coeficientes",
+      "knn": "Não faz suposições sobre a distribuição dos dados",
+      "naiveBayes": "Rápido e eficiente com poucos dados",
+      "decisionTree": "Regras claras e visualizáveis",
+      "ridge": "Estável mesmo com multicolinearidade",
+      "default": "Bom desempenho geral"
+    }
+  },
+  "stepInfo": {
+    "autoDetect": "Detectar automaticamente",
+    "recommended": "Recomendado",
+    "autoDetectDesc": "O sistema vai analisar seus dados e determinar o tipo de problema automaticamente",
+    "autoDetectInfo": "Ao enviar o dataset, o sistema analisará a variável alvo e determinará se é classificação ou regressão"
+  },
   "stepDeploy": {
     "title": "Deploy e API",
     "subtitle": "Selecione o modelo para produção e veja como usar a API",

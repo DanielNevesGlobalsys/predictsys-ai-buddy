@@ -1,18 +1,13 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { FileText, Target, Lightbulb } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { FileText, Target, Lightbulb, Sparkles, AlertTriangle, Info } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 
 interface StepProjectInfoProps {
@@ -28,7 +23,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     name: projectData.name,
     description: projectData.description,
     business_objective: projectData.business_objective,
-    problem_type: projectData.problem_type,
+    problem_type: projectData.problem_type || "auto",
   });
   const [errors, setErrors] = useState<Record<string, string>>({});
 
@@ -46,7 +41,15 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
 
   const handleSubmit = () => {
     if (validate()) {
-      onNext(formData);
+      // If auto is selected, save as classification initially (will be detected later)
+      const effectiveProblemType = formData.problem_type === "auto" 
+        ? "classification" 
+        : formData.problem_type as "classification" | "regression";
+      
+      onNext({
+        ...formData,
+        problem_type: effectiveProblemType,
+      });
     }
   };
 
@@ -127,55 +130,91 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             </p>
           </div>
 
-          {/* Tipo de problema */}
-          <div className="space-y-2">
+          {/* Tipo de problema - Radio Group */}
+          <div className="space-y-4">
             <Label className="text-base font-medium flex items-center gap-2">
               <Target className="w-4 h-4 text-primary" />
               {t("stepInfo.problemType")} *
             </Label>
-            <Select
+            
+            <RadioGroup
               value={formData.problem_type}
-              onValueChange={(value: "classification" | "regression") =>
+              onValueChange={(value) =>
                 setFormData({ ...formData, problem_type: value })
               }
+              className="space-y-3"
             >
-              <SelectTrigger
-                className={errors.problem_type ? "border-destructive" : ""}
-              >
-                <SelectValue placeholder={t("stepInfo.problemTypePlaceholder")} />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="classification">
-                  <div className="flex flex-col items-start">
-                    <span className="font-medium">{t("project.classification")}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {t("stepInfo.classificationDesc")}
+              {/* Auto-detect option */}
+              <div className={`flex items-start gap-4 p-4 rounded-lg border-2 transition-all cursor-pointer ${
+                formData.problem_type === "auto" 
+                  ? "border-primary bg-primary/5" 
+                  : "border-border hover:border-primary/50"
+              }`}>
+                <RadioGroupItem value="auto" id="auto" className="mt-1" />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <Label htmlFor="auto" className="font-semibold cursor-pointer">
+                      {t("stepInfo.autoDetect")}
+                    </Label>
+                    <span className="px-2 py-0.5 bg-secondary/20 text-secondary text-xs rounded-full flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      {t("stepInfo.recommended")}
                     </span>
                   </div>
-                </SelectItem>
-                <SelectItem value="regression">
-                  <div className="flex flex-col items-start">
-                    <span className="font-medium">{t("project.regression")}</span>
-                    <span className="text-xs text-muted-foreground">
-                      {t("stepInfo.regressionDesc")}
-                    </span>
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t("stepInfo.autoDetectDesc")}
+                  </p>
+                </div>
+              </div>
+
+              {/* Classification option */}
+              <div className={`flex items-start gap-4 p-4 rounded-lg border-2 transition-all cursor-pointer ${
+                formData.problem_type === "classification" 
+                  ? "border-primary bg-primary/5" 
+                  : "border-border hover:border-primary/50"
+              }`}>
+                <RadioGroupItem value="classification" id="classification" className="mt-1" />
+                <div className="flex-1">
+                  <Label htmlFor="classification" className="font-semibold cursor-pointer">
+                    {t("project.classification")}
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t("stepInfo.classificationTip")}
+                  </p>
+                </div>
+              </div>
+
+              {/* Regression option */}
+              <div className={`flex items-start gap-4 p-4 rounded-lg border-2 transition-all cursor-pointer ${
+                formData.problem_type === "regression" 
+                  ? "border-primary bg-primary/5" 
+                  : "border-border hover:border-primary/50"
+              }`}>
+                <RadioGroupItem value="regression" id="regression" className="mt-1" />
+                <div className="flex-1">
+                  <Label htmlFor="regression" className="font-semibold cursor-pointer">
+                    {t("project.regression")}
+                  </Label>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    {t("stepInfo.regressionTip")}
+                  </p>
+                </div>
+              </div>
+            </RadioGroup>
+
             {errors.problem_type && (
               <p className="text-sm text-destructive">{errors.problem_type}</p>
             )}
 
-            {/* Dica explicativa */}
-            <div className="mt-4 p-4 bg-muted/50 rounded-lg">
-              <p className="text-sm text-muted-foreground">
-                <strong>{t("project.classification")}:</strong> {t("stepInfo.classificationTip")}
-              </p>
-              <p className="text-sm text-muted-foreground mt-2">
-                <strong>{t("project.regression")}:</strong> {t("stepInfo.regressionTip")}
-              </p>
-            </div>
+            {/* Info about auto-detection */}
+            {formData.problem_type === "auto" && (
+              <Alert className="bg-secondary/10 border-secondary/30">
+                <Info className="w-4 h-4 text-secondary" />
+                <AlertDescription className="text-secondary">
+                  {t("stepInfo.autoDetectInfo")}
+                </AlertDescription>
+              </Alert>
+            )}
           </div>
         </div>
 

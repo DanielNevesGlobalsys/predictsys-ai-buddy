@@ -231,6 +231,53 @@ export type Database = {
           },
         ]
       }
+      project_model_insights: {
+        Row: {
+          created_at: string
+          id: string
+          insight_type: string
+          insights: Json
+          language: string
+          model_id: string | null
+          project_id: string
+          recommendation_text: string | null
+          shap_insights: Json | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          insight_type?: string
+          insights?: Json
+          language?: string
+          model_id?: string | null
+          project_id: string
+          recommendation_text?: string | null
+          shap_insights?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          insight_type?: string
+          insights?: Json
+          language?: string
+          model_id?: string | null
+          project_id?: string
+          recommendation_text?: string | null
+          shap_insights?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_model_insights_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_model_metrics: {
         Row: {
           created_at: string
@@ -365,6 +412,7 @@ export type Database = {
           dataset_filename: string | null
           dataset_rows: number | null
           description: string | null
+          detected_problem_type: string | null
           id: string
           name: string
           problem_type: string
@@ -380,6 +428,7 @@ export type Database = {
           dataset_filename?: string | null
           dataset_rows?: number | null
           description?: string | null
+          detected_problem_type?: string | null
           id?: string
           name: string
           problem_type: string
@@ -395,6 +444,7 @@ export type Database = {
           dataset_filename?: string | null
           dataset_rows?: number | null
           description?: string | null
+          detected_problem_type?: string | null
           id?: string
           name?: string
           problem_type?: string
