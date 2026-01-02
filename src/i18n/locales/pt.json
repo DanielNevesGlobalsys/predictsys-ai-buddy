@@ -516,8 +516,11 @@
     "exampleRequest": "Exemplo de Requisição",
     "exampleResponse": "Exemplo de Resposta",
     "copy": "Copiar",
-    "copied": "Copiado!",
-    "completeProject": "Concluir Projeto"
+    "copied": "Copiado!"
+  },
+  "stepDashboard": {
+    "completeProject": "Concluir Projeto",
+    "selectModelFirst": "Selecione um modelo para produção antes de concluir o projeto."
   },
   "projectDetails": {
     "projectInfo": "Informações do Projeto",

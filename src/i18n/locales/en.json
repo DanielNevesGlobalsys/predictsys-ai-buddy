@@ -404,6 +404,24 @@
       "exampleDesc": "Example of how to call the prediction API"
     }
   },
+  "stepDeploy": {
+    "title": "Deploy & API",
+    "subtitle": "Select the model for production and see how to use the API",
+    "whatIsDeploy": "What is Deploy?",
+    "whatIsDeployDesc": "When you deploy, your model becomes available to make real-time predictions. You can integrate with your existing systems through a simple API.",
+    "selectProductionModel": "Select Model for Production",
+    "modelSelected": "Model selected",
+    "noModels": "No models trained. Go back to the previous step to train models.",
+    "apiEndpoint": "API Endpoint",
+    "exampleRequest": "Request Example",
+    "exampleResponse": "Response Example",
+    "copy": "Copy",
+    "copied": "Copied!"
+  },
+  "stepDashboard": {
+    "completeProject": "Complete Project",
+    "selectModelFirst": "Select a model for production before completing the project."
+  },
   "projectDetails": {
     "projectInfo": "Project Information",
     "name": "Name",
