@@ -210,7 +210,7 @@ const WizardContainer = () => {
       case 6:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 7:
-        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} />;
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} />;
       default:
         return null;
     }

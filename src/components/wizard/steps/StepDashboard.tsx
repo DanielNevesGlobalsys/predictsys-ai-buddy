@@ -2,18 +2,62 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, ArrowLeft } from "lucide-react";
+import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2 } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 import DashboardContent from "@/components/dashboard/DashboardContent";
+import { supabase } from "@/integrations/supabase/client";
+import { toast } from "sonner";
 
 interface StepDashboardProps {
   projectData: ProjectData;
   onBack: () => void;
   loading: boolean;
+  saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
 }
 
-const StepDashboard = ({ projectData, onBack, loading }: StepDashboardProps) => {
+const StepDashboard = ({ projectData, onBack, loading, saveProject }: StepDashboardProps) => {
   const { t } = useTranslation();
+  const [hasProductionModel, setHasProductionModel] = useState(false);
+  const [completing, setCompleting] = useState(false);
+
+  useEffect(() => {
+    if (projectData.id) {
+      checkProductionModel();
+    }
+  }, [projectData.id]);
+
+  const checkProductionModel = async () => {
+    if (!projectData.id) return;
+    
+    const { data } = await supabase
+      .from("project_models")
+      .select("id")
+      .eq("project_id", projectData.id)
+      .eq("is_production", true)
+      .maybeSingle();
+    
+    setHasProductionModel(!!data);
+  };
+
+  const handleCompleteProject = async () => {
+    if (!hasProductionModel) {
+      toast.error(t("stepDashboard.selectModelFirst"));
+      return;
+    }
+
+    setCompleting(true);
+    try {
+      await saveProject({ status: "deployed" });
+      toast.success(t("wizard.projectComplete"), {
+        description: t("wizard.projectCompleteDesc")
+      });
+    } catch (error) {
+      console.error("Error completing project:", error);
+      toast.error(t("wizard.saveError"));
+    } finally {
+      setCompleting(false);
+    }
+  };
 
   if (!projectData.id) {
     return (
@@ -53,9 +97,26 @@ const StepDashboard = ({ projectData, onBack, loading }: StepDashboardProps) => 
 
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
-          <Button variant="outline" onClick={onBack} disabled={loading}>
+          <Button variant="outline" onClick={onBack} disabled={loading || completing}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             {t("common.back")}
+          </Button>
+          <Button
+            onClick={handleCompleteProject}
+            disabled={loading || completing || !hasProductionModel}
+            className="bg-gradient-primary hover:shadow-hover transition-all"
+          >
+            {completing ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                {t("common.loading")}
+              </>
+            ) : (
+              <>
+                <CheckCircle className="w-4 h-4 mr-2" />
+                {t("stepDashboard.completeProject")}
+              </>
+            )}
           </Button>
         </div>
       </div>

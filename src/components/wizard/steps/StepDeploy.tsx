@@ -9,12 +9,14 @@ import {
   Copy, 
   CheckCircle, 
   AlertCircle,
-  Loader2 
+  Loader2,
+  ArrowLeft
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
+import PredictionScheduler from "@/components/project/PredictionScheduler";
 
 interface StepDeployProps {
   projectData: ProjectData;
@@ -136,10 +138,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
     setTimeout(() => setCopied(null), 2000);
   };
 
-  const handleComplete = async () => {
-    if (productionModel) {
-      await saveProject({ status: "deployed" });
-    }
+  const handleNext = () => {
     onComplete();
   };
 
@@ -273,20 +272,29 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
                 </pre>
               </div>
             </div>
+
+            {/* Prediction Scheduler */}
+            <div className="pt-4">
+              <PredictionScheduler 
+                projectId={projectData.id!}
+                productionModelName={productionModel.algorithm_name}
+              />
+            </div>
           </>
         )}
 
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
           <Button variant="outline" onClick={onBack} disabled={loading}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
             {t("common.back")}
           </Button>
           <Button
-            onClick={handleComplete}
+            onClick={handleNext}
             disabled={loading || !productionModel}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {loading ? t("common.loading") : t("stepDeploy.completeProject")}
+            {t("common.next")}
           </Button>
         </div>
       </div>
