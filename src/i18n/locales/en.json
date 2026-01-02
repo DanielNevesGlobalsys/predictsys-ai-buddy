@@ -75,6 +75,10 @@
       "edaDesc": "Visualize statistics, distributions, and correlations of your data.",
       "deploy": "1-Click Deploy",
       "deployDesc": "Put your model in production with a ready-to-use API.",
+      "dashboards": "Smart Dashboards",
+      "dashboardsDesc": "Visualize model results in ready-to-use panels with metrics, charts, and insights for the business team.",
+      "ingestion": "Scalable Data Ingestion",
+      "ingestionDesc": "Connect your data via files, databases, and data warehouses (SQL, Azure, AWS, Fabric, and more), ready for large volumes.",
       "security": "Secure Multi-Tenant",
       "securityDesc": "Complete data isolation between different users and projects.",
       "learning": "Continuous Learning",
@@ -402,6 +406,33 @@
       "copied": "Copied!",
       "example": "Usage example",
       "exampleDesc": "Example of how to call the prediction API"
+    }
+  },
+  "stepInfo": {
+    "title": "Project Information",
+    "subtitle": "Define the basic information for your machine learning project",
+    "projectName": "Project name",
+    "projectNamePlaceholder": "Ex: Customer Churn Prediction",
+    "projectNameHint": "Choose a name that easily identifies the project's goal",
+    "description": "Description",
+    "descriptionPlaceholder": "Briefly describe what this project does...",
+    "businessObjective": "Business objective",
+    "businessObjectivePlaceholder": "Ex: Reduce churn by 15% by identifying customers most likely to cancel",
+    "businessObjectiveHint": "What business problem do you want to solve with this model?",
+    "problemType": "Problem type",
+    "problemTypePlaceholder": "Select the problem type",
+    "classificationDesc": "Predict categories (yes/no, type A/B/C)",
+    "regressionDesc": "Predict numeric values (price, quantity)",
+    "classificationTip": "Use when you want to predict a category, such as \"will the customer cancel?\" (yes/no) or \"which product will the customer buy?\" (A, B or C).",
+    "regressionTip": "Use when you want to predict a number, such as \"how much will the customer spend?\" or \"what will be the sale price?\".",
+    "autoDetect": "Auto-detect",
+    "recommended": "Recommended",
+    "autoDetectDesc": "The system will analyze your data and automatically determine the problem type",
+    "autoDetectInfo": "When you upload the dataset, the system will analyze the target variable and determine if it's classification or regression",
+    "next": "Next",
+    "errors": {
+      "nameRequired": "Project name is required",
+      "problemTypeRequired": "Select the problem type"
     }
   },
   "stepDeploy": {

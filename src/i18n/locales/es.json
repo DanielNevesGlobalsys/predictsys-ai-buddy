@@ -75,6 +75,10 @@
       "edaDesc": "Visualiza estadísticas, distribuciones y correlaciones de tus datos.",
       "deploy": "Despliegue con 1 Clic",
       "deployDesc": "Pon tu modelo en producción con una API lista para usar.",
+      "dashboards": "Dashboards Inteligentes",
+      "dashboardsDesc": "Visualiza los resultados del modelo en paneles listos para usar, con métricas, gráficos e insights para el equipo de negocio.",
+      "ingestion": "Ingesta de Datos Escalable",
+      "ingestionDesc": "Conecta tus datos via archivos, bases de datos y data warehouses (SQL, Azure, AWS, Fabric y más), preparados para grandes volúmenes.",
       "security": "Multi-Cliente Seguro",
       "securityDesc": "Aislamiento completo de datos entre diferentes usuarios y proyectos.",
       "learning": "Aprendizaje Continuo",
@@ -402,6 +406,33 @@
       "copied": "¡Copiado!",
       "example": "Ejemplo de uso",
       "exampleDesc": "Ejemplo de cómo llamar la API de predicción"
+    }
+  },
+  "stepInfo": {
+    "title": "Información del Proyecto",
+    "subtitle": "Define la información básica de tu proyecto de machine learning",
+    "projectName": "Nombre del proyecto",
+    "projectNamePlaceholder": "Ej: Predicción de Churn de Clientes",
+    "projectNameHint": "Elige un nombre que identifique fácilmente el objetivo del proyecto",
+    "description": "Descripción",
+    "descriptionPlaceholder": "Describe brevemente qué hace este proyecto...",
+    "businessObjective": "Objetivo de negocio",
+    "businessObjectivePlaceholder": "Ej: Reducir el churn en 15% identificando clientes con mayor probabilidad de cancelación",
+    "businessObjectiveHint": "¿Qué problema de negocio quieres resolver con este modelo?",
+    "problemType": "Tipo de problema",
+    "problemTypePlaceholder": "Selecciona el tipo de problema",
+    "classificationDesc": "Predecir categorías (sí/no, tipo A/B/C)",
+    "regressionDesc": "Predecir valores numéricos (precio, cantidad)",
+    "classificationTip": "Usa cuando quieras predecir una categoría, como \"¿el cliente va a cancelar?\" (sí/no) o \"¿qué producto comprará el cliente?\" (A, B o C).",
+    "regressionTip": "Usa cuando quieras predecir un número, como \"¿cuánto gastará el cliente?\" o \"¿cuál será el precio de venta?\".",
+    "autoDetect": "Detectar automáticamente",
+    "recommended": "Recomendado",
+    "autoDetectDesc": "El sistema analizará tus datos y determinará el tipo de problema automáticamente",
+    "autoDetectInfo": "Al subir el dataset, el sistema analizará la variable objetivo y determinará si es clasificación o regresión",
+    "next": "Siguiente",
+    "errors": {
+      "nameRequired": "El nombre del proyecto es obligatorio",
+      "problemTypeRequired": "Selecciona el tipo de problema"
     }
   },
   "stepDeploy": {

@@ -75,6 +75,10 @@
       "edaDesc": "Visualize estatísticas, distribuições e correlações dos seus dados.",
       "deploy": "Deploy com 1 Clique",
       "deployDesc": "Coloque seu modelo em produção com uma API pronta para uso.",
+      "dashboards": "Dashboards Inteligentes",
+      "dashboardsDesc": "Visualize os resultados do modelo em painéis prontos para uso, com métricas, gráficos e insights para o time de negócio.",
+      "ingestion": "Ingestão de Dados Escalável",
+      "ingestionDesc": "Conecte seus dados via arquivos, bancos de dados e data warehouses (SQL, Azure, AWS, Fabric e mais), preparados para grandes volumes.",
       "security": "Multi-Cliente Seguro",
       "securityDesc": "Isolamento completo de dados entre diferentes usuários e projetos.",
       "learning": "Aprendizado Contínuo",
@@ -330,6 +334,10 @@
     "regressionDesc": "Prever valores numéricos (preço, quantidade)",
     "classificationTip": "Use quando quer prever uma categoria, como \"o cliente vai cancelar?\" (sim/não) ou \"qual produto o cliente vai comprar?\" (A, B ou C).",
     "regressionTip": "Use quando quer prever um número, como \"quanto o cliente vai gastar?\" ou \"qual será o preço de venda?\".",
+    "autoDetect": "Detectar automaticamente",
+    "recommended": "Recomendado",
+    "autoDetectDesc": "O sistema vai analisar seus dados e determinar o tipo de problema automaticamente",
+    "autoDetectInfo": "Ao enviar o dataset, o sistema analisará a variável alvo e determinará se é classificação ou regressão",
     "next": "Próximo",
     "errors": {
       "nameRequired": "O nome do projeto é obrigatório",
@@ -497,12 +505,6 @@
       "ridge": "Estável mesmo com multicolinearidade",
       "default": "Bom desempenho geral"
     }
-  },
-  "stepInfo": {
-    "autoDetect": "Detectar automaticamente",
-    "recommended": "Recomendado",
-    "autoDetectDesc": "O sistema vai analisar seus dados e determinar o tipo de problema automaticamente",
-    "autoDetectInfo": "Ao enviar o dataset, o sistema analisará a variável alvo e determinará se é classificação ou regressão"
   },
   "stepDeploy": {
     "title": "Deploy e API",
