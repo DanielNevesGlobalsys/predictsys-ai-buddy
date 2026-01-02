@@ -19,12 +19,14 @@ import {
   Edit,
   Loader2,
   Languages,
+  LayoutDashboard,
 } from "lucide-react";
 import EDADisplay from "@/components/eda/EDADisplay";
 import ModelsTab from "@/components/project/ModelsTab";
 import APIDeployTab from "@/components/project/APIDeployTab";
 import ChatTab from "@/components/project/ChatTab";
 import SettingsTab from "@/components/project/SettingsTab";
+import DashboardContent from "@/components/dashboard/DashboardContent";
 import Header from "@/components/layout/Header";
 
 interface Project {
@@ -201,6 +203,10 @@ const ProjectDetails = () => {
               <Rocket className="w-4 h-4" />
               {t("project.tabs.deploy")}
             </TabsTrigger>
+            <TabsTrigger value="dashboard" className="gap-2">
+              <LayoutDashboard className="w-4 h-4" />
+              {t("project.tabs.dashboard")}
+            </TabsTrigger>
             <TabsTrigger value="chat" className="gap-2">
               <MessageSquare className="w-4 h-4" />
               {t("project.tabs.chat")}
@@ -340,6 +346,15 @@ const ProjectDetails = () => {
               projectId={project.id} 
               problemType={project.problem_type}
               targetColumn={project.target_column}
+            />
+          </TabsContent>
+
+          <TabsContent value="dashboard">
+            <DashboardContent 
+              projectId={project.id}
+              problemType={project.problem_type}
+              targetColumn={project.target_column || undefined}
+              projectName={project.name}
             />
           </TabsContent>
 
