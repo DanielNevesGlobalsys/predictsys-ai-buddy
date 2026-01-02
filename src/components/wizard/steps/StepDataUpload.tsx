@@ -433,7 +433,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
             disabled={loading || !isUploadComplete}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {isUploadComplete ? t("stepInfo.next") : t("stepData.uploadToContinue")}
+            {isUploadComplete ? t("common.next") : t("stepData.uploadToContinue")}
           </Button>
         </div>
       </div>

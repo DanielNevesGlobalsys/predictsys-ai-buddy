@@ -65,7 +65,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             disabled={loading}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {t("stepInfo.next")}
+            {t("common.next")}
           </Button>
         </div>
       </div>

@@ -228,7 +228,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             disabled={loading}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {loading ? t("common.loading") : t("stepInfo.next")}
+            {loading ? t("common.loading") : t("common.next")}
           </Button>
         </div>
       </div>
