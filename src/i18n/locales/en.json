@@ -416,7 +416,13 @@
     "exampleRequest": "Request Example",
     "exampleResponse": "Response Example",
     "copy": "Copy",
-    "copied": "Copied!"
+    "copied": "Copied!",
+    "scheduleSummary": {
+      "title": "Active Schedule",
+      "nextRun": "Next run",
+      "frequency": "Frequency",
+      "email": "Notify"
+    }
   },
   "stepDashboard": {
     "completeProject": "Complete Project",

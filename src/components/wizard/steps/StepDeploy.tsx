@@ -10,13 +10,23 @@ import {
   CheckCircle, 
   AlertCircle,
   Loader2,
-  ArrowLeft
+  ArrowLeft,
+  CalendarClock,
+  Mail,
+  Clock
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import PredictionScheduler from "@/components/project/PredictionScheduler";
+
+interface ScheduleSummary {
+  enabled: boolean;
+  frequency: string;
+  next_run_at: string | null;
+  send_email_to: string;
+}
 
 interface StepDeployProps {
   projectData: ProjectData;
@@ -40,6 +50,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
   const [models, setModels] = useState<ModelResult[]>([]);
   const [loadingModels, setLoadingModels] = useState(true);
   const [columns, setColumns] = useState<{ column_name: string }[]>([]);
+  const [scheduleSummary, setScheduleSummary] = useState<ScheduleSummary | null>(null);
 
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   const apiEndpoint = `${supabaseUrl}/functions/v1/predict`;
@@ -49,8 +60,36 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
     if (projectData.id) {
       loadModels();
       loadColumns();
+      loadScheduleSummary();
     }
   }, [projectData.id]);
+
+  const loadScheduleSummary = async () => {
+    if (!projectData.id) return;
+    
+    const { data } = await supabase
+      .from("project_prediction_schedules")
+      .select("enabled, frequency, next_run_at, send_email_to")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    
+    if (data) {
+      setScheduleSummary(data);
+    }
+  };
+
+  const handleScheduleChange = () => {
+    loadScheduleSummary();
+  };
+
+  const getFrequencyLabel = (freq: string): string => {
+    return t(`deploy.scheduler.frequencies.${freq}`, freq);
+  };
+
+  const formatScheduleDate = (dateStr: string | null): string => {
+    if (!dateStr) return "-";
+    return new Date(dateStr).toLocaleString();
+  };
 
   const loadModels = async () => {
     if (!projectData.id) return;
@@ -156,6 +195,33 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
             {t("stepDeploy.subtitle")}
           </p>
         </div>
+
+        {/* Schedule Summary Banner */}
+        {scheduleSummary?.enabled && (
+          <div className="p-4 bg-primary/10 border border-primary/20 rounded-lg flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2 text-primary">
+              <CalendarClock className="w-5 h-5" />
+              <span className="font-medium">{t("stepDeploy.scheduleSummary.title")}</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-1.5">
+                <Clock className="w-4 h-4 text-muted-foreground" />
+                <span className="text-muted-foreground">{t("stepDeploy.scheduleSummary.nextRun")}:</span>
+                <span className="font-medium">{formatScheduleDate(scheduleSummary.next_run_at)}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <CalendarClock className="w-4 h-4 text-muted-foreground" />
+                <span className="text-muted-foreground">{t("stepDeploy.scheduleSummary.frequency")}:</span>
+                <span className="font-medium">{getFrequencyLabel(scheduleSummary.frequency)}</span>
+              </div>
+              <div className="flex items-center gap-1.5">
+                <Mail className="w-4 h-4 text-muted-foreground" />
+                <span className="text-muted-foreground">{t("stepDeploy.scheduleSummary.email")}:</span>
+                <span className="font-medium">{scheduleSummary.send_email_to}</span>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* Info about deployment */}
         <div className="p-4 bg-accent/10 border border-accent/20 rounded-lg">
@@ -278,6 +344,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
               <PredictionScheduler 
                 projectId={projectData.id!}
                 productionModelName={productionModel.algorithm_name}
+                onScheduleChange={handleScheduleChange}
               />
             </div>
           </>
