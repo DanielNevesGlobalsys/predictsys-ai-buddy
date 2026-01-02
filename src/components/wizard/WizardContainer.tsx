@@ -25,6 +25,9 @@ export interface ProjectData {
   dataset_filename?: string;
   dataset_rows?: number;
   dataset_columns?: number;
+  data_source_id?: string;
+  sample_rows?: number;
+  total_rows?: number;
 }
 
 const WizardContainer = () => {
@@ -85,6 +88,9 @@ const WizardContainer = () => {
         dataset_filename: data.dataset_filename || undefined,
         dataset_rows: data.dataset_rows || undefined,
         dataset_columns: data.dataset_columns || undefined,
+        data_source_id: data.data_source_id || undefined,
+        sample_rows: data.sample_rows || undefined,
+        total_rows: data.total_rows || undefined,
       });
       // Set step based on status
       if (data.status === "configuring") setCurrentStep(2);
@@ -105,19 +111,26 @@ const WizardContainer = () => {
 
       if (projectData.id) {
         // Update existing project
+        const updateData: Record<string, any> = {
+          name: data.name ?? projectData.name,
+          description: data.description ?? projectData.description,
+          business_objective: data.business_objective ?? projectData.business_objective,
+          problem_type: data.problem_type ?? projectData.problem_type,
+          status: data.status ?? projectData.status,
+          target_column: data.target_column ?? projectData.target_column,
+          dataset_filename: data.dataset_filename ?? projectData.dataset_filename,
+          dataset_rows: data.dataset_rows ?? projectData.dataset_rows,
+          dataset_columns: data.dataset_columns ?? projectData.dataset_columns,
+        };
+        
+        // Only include new fields if they have values
+        if (data.data_source_id !== undefined) updateData.data_source_id = data.data_source_id;
+        if (data.sample_rows !== undefined) updateData.sample_rows = data.sample_rows;
+        if (data.total_rows !== undefined) updateData.total_rows = data.total_rows;
+        
         const { error } = await supabase
           .from("projects")
-          .update({
-            name: data.name ?? projectData.name,
-            description: data.description ?? projectData.description,
-            business_objective: data.business_objective ?? projectData.business_objective,
-            problem_type: data.problem_type ?? projectData.problem_type,
-            status: data.status ?? projectData.status,
-            target_column: data.target_column ?? projectData.target_column,
-            dataset_filename: data.dataset_filename ?? projectData.dataset_filename,
-            dataset_rows: data.dataset_rows ?? projectData.dataset_rows,
-            dataset_columns: data.dataset_columns ?? projectData.dataset_columns,
-          })
+          .update(updateData)
           .eq("id", projectData.id);
 
         if (error) throw error;
