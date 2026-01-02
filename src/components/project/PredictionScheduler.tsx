@@ -32,6 +32,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 interface PredictionSchedulerProps {
   projectId: string;
   productionModelName?: string;
+  onScheduleChange?: () => void;
 }
 
 interface Schedule {
@@ -55,7 +56,7 @@ interface Schedule {
 
 type FrequencyType = "daily" | "weekly" | "biweekly" | "monthly" | "quarterly" | "semiannual" | "yearly" | "specific_date";
 
-const PredictionScheduler = ({ projectId, productionModelName }: PredictionSchedulerProps) => {
+const PredictionScheduler = ({ projectId, productionModelName, onScheduleChange }: PredictionSchedulerProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
   
@@ -238,6 +239,7 @@ const PredictionScheduler = ({ projectId, productionModelName }: PredictionSched
         title: t("deploy.scheduler.saved"),
       });
       loadSchedule();
+      onScheduleChange?.();
     }
     
     setSaving(false);

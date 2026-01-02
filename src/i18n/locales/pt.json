@@ -516,7 +516,13 @@
     "exampleRequest": "Exemplo de Requisição",
     "exampleResponse": "Exemplo de Resposta",
     "copy": "Copiar",
-    "copied": "Copiado!"
+    "copied": "Copiado!",
+    "scheduleSummary": {
+      "title": "Agendamento Ativo",
+      "nextRun": "Próxima execução",
+      "frequency": "Frequência",
+      "email": "Notificar"
+    }
   },
   "stepDashboard": {
     "completeProject": "Concluir Projeto",
