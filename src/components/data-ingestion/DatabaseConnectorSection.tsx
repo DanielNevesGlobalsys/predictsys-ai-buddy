@@ -7,11 +7,12 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp } from "lucide-react";
+import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp, Layers } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import TableSelector from "./TableSelector";
 
 interface DatabaseConnectorSectionProps {
   projectData: ProjectData;
@@ -27,6 +28,13 @@ interface DataSource {
   is_continuous: boolean;
   sync_status: string;
   last_sync_at: string | null;
+}
+
+interface TableInfo {
+  schema: string;
+  name: string;
+  type: "table" | "view";
+  rowCount?: number;
 }
 
 const DATABASE_TYPES = [
@@ -63,6 +71,12 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
   const [testStatus, setTestStatus] = useState<"idle" | "testing" | "success" | "error">("idle");
   const [testMessage, setTestMessage] = useState("");
   const [isSaving, setIsSaving] = useState(false);
+  
+  // Table selector state
+  const [showTableSelector, setShowTableSelector] = useState(false);
+  const [availableTables, setAvailableTables] = useState<TableInfo[]>([]);
+  const [isLoadingTables, setIsLoadingTables] = useState(false);
+  const [pendingConnectionId, setPendingConnectionId] = useState<string | null>(null);
 
   useEffect(() => {
     loadExistingConnections();
@@ -91,7 +105,7 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
     }
   };
 
-  const handleTestConnection = async () => {
+  const handleTestConnection = async (listTables: boolean = false) => {
     setTestStatus("testing");
     setTestMessage("");
 
@@ -101,7 +115,8 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
           connector_type: dbType,
           connection_config: useConnectionString
             ? { connection_string: connectionString }
-            : { host, port: parseInt(port), database, username, password }
+            : { host, port: parseInt(port), database, username, password },
+          list_tables: listTables
         }
       });
 
@@ -110,6 +125,18 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
       if (data.success) {
         setTestStatus("success");
         setTestMessage(t("dataIngestion.database.testSuccess"));
+        
+        // If we requested tables and got them, show the selector
+        if (listTables && data.tables && data.tables.length > 0) {
+          setAvailableTables(data.tables);
+          setShowTableSelector(true);
+        } else if (listTables) {
+          toast({
+            title: t("common.error"),
+            description: t("dataIngestion.database.noTablesFound"),
+            variant: "destructive"
+          });
+        }
       } else {
         setTestStatus("error");
         setTestMessage(data.message || t("dataIngestion.database.testFailed"));
@@ -118,6 +145,10 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
       setTestStatus("error");
       setTestMessage(error.message || t("dataIngestion.database.testFailed"));
     }
+  };
+
+  const handleTestAndListTables = async () => {
+    await handleTestConnection(true);
   };
 
   const handleSaveConnection = async () => {
@@ -248,6 +279,26 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
     setIncrementalKey("");
     setTestStatus("idle");
     setTestMessage("");
+    setShowTableSelector(false);
+    setAvailableTables([]);
+  };
+
+  const handleTableSelect = async (schema: string, tableName: string) => {
+    if (!projectData.id) return;
+    
+    const query = `SELECT * FROM "${schema}"."${tableName}"`;
+    setCustomQuery(query);
+    setShowTableSelector(false);
+    
+    toast({
+      title: t("common.success"),
+      description: t("dataIngestion.database.tableSelected", { table: `${schema}.${tableName}` })
+    });
+  };
+
+  const handleCancelTableSelector = () => {
+    setShowTableSelector(false);
+    setAvailableTables([]);
   };
 
   const dbInfo = DATABASE_TYPES.find(db => db.value === dbType);
@@ -504,7 +555,7 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
             <div className="flex gap-3 pt-2">
               <Button
                 variant="outline"
-                onClick={handleTestConnection}
+                onClick={() => handleTestConnection(false)}
                 disabled={testStatus === "testing"}
                 className="flex-1"
               >
@@ -515,6 +566,21 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
                 )}
                 {t("dataIngestion.database.testConnection")}
               </Button>
+              {testStatus === "success" && dbType === "postgresql" && (
+                <Button
+                  variant="outline"
+                  onClick={handleTestAndListTables}
+                  disabled={isLoadingTables}
+                  className="flex-1"
+                >
+                  {isLoadingTables ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <Layers className="w-4 h-4 mr-2" />
+                  )}
+                  {t("dataIngestion.database.listTables")}
+                </Button>
+              )}
               <Button
                 onClick={handleSaveConnection}
                 disabled={isSaving}
@@ -528,8 +594,18 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
         </Card>
       )}
 
+      {/* Table Selector Modal */}
+      {showTableSelector && (
+        <TableSelector
+          tables={availableTables}
+          isLoading={isLoadingTables}
+          onSelectTable={handleTableSelect}
+          onCancel={handleCancelTableSelector}
+        />
+      )}
+
       {/* Empty state */}
-      {existingConnections.length === 0 && !isCreatingNew && (
+      {existingConnections.length === 0 && !isCreatingNew && !showTableSelector && (
         <div className="text-center py-8 text-muted-foreground">
           <Database className="w-12 h-12 mx-auto mb-3 opacity-50" />
           <p>{t("dataIngestion.database.noConnections")}</p>

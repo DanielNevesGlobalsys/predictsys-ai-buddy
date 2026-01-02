@@ -895,6 +895,13 @@
     "title": "Conecte seus Dados",
     "subtitle": "Envie arquivos, conecte bancos de dados ou integre com plataformas em nuvem para começar seu projeto de Machine Learning.",
     "uploadToContinue": "Envie dados para continuar",
+    "preview": {
+      "columnStats": "Estatísticas das Colunas",
+      "nulls": "Nulos",
+      "range": "Intervalo",
+      "mean": "Média",
+      "unique": "Únicos"
+    },
     "tabs": {
       "files": "Arquivos",
       "databases": "Bancos de Dados",
@@ -968,6 +975,16 @@
       "ingestionStarted": "Ingestão de dados iniciada",
       "noConnections": "Nenhuma conexão salva",
       "selectTypeToStart": "Selecione um tipo de banco acima para criar uma nova conexão",
+      "listTables": "Listar Tabelas",
+      "loadingTables": "Carregando tabelas...",
+      "selectTable": "Selecionar Tabela ou View",
+      "tablesFound": "tabelas encontradas",
+      "searchTables": "Buscar tabelas...",
+      "view": "View",
+      "noTablesMatch": "Nenhuma tabela corresponde à sua busca",
+      "noTablesFound": "Nenhuma tabela encontrada no banco",
+      "importTable": "Importar Tabela",
+      "tableSelected": "Tabela {{table}} selecionada. Query atualizada.",
       "errors": {
         "nameRequired": "O nome da conexão é obrigatório"
       }

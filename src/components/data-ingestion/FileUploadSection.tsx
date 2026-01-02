@@ -5,8 +5,8 @@ import { Button } from "@/components/ui/button";
 import { Upload, FileSpreadsheet, CheckCircle, Info, AlertCircle, Loader2, FileJson, FileText, Table } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import Papa from "papaparse";
 import type { ProjectData } from "../wizard/WizardContainer";
+import DataPreviewSection from "./DataPreviewSection";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -158,137 +158,113 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     }
 
     setUploadStatus("processing");
-    const ext = getFileExtension(file.name);
 
-    // For now, we'll handle CSV directly. Other formats would need edge function processing
-    if (ext === ".csv") {
-      Papa.parse(file, {
-        complete: async (results) => {
-          try {
-            const data = results.data as string[][];
-            
-            if (data.length < 2) {
-              setErrorMessage(t("dataIngestion.file.errors.minRows"));
-              setUploadStatus("error");
-              return;
-            }
+    try {
+      // First, upload the file to storage
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) {
+        setErrorMessage(t("dataIngestion.file.errors.notAuthenticated"));
+        setUploadStatus("error");
+        return;
+      }
 
-            const headers = data[0];
-            const dataRows = data.slice(1).filter(row => row.some(cell => cell && cell.trim() !== ""));
-            
-            setTotalRows(dataRows.length);
-            const sampled = dataRows.length > SAMPLE_SIZE;
-            setIsSampled(sampled);
-            
-            const rowsForAnalysis = sampled ? dataRows.slice(0, SAMPLE_SIZE) : dataRows;
-            
-            const preview = [headers, ...rowsForAnalysis.slice(0, 10)];
-            setPreviewData(preview);
-            setRowCount(rowsForAnalysis.length);
+      const filePath = `${user.id}/${projectData.id}/${file.name}`;
+      
+      setUploadStatus("uploading");
+      
+      const { error: uploadError } = await supabase.storage
+        .from("datasets")
+        .upload(filePath, file, {
+          upsert: true
+        });
 
-            const columnInfos: ColumnInfo[] = headers.map((header, index) => {
-              const columnValues = rowsForAnalysis.map(row => row[index] || "");
-              return {
-                name: header,
-                inferredType: inferColumnType(columnValues),
-                index
-              };
-            });
-            setColumns(columnInfos);
+      if (uploadError) {
+        console.error("Upload error:", uploadError);
+        setErrorMessage(t("dataIngestion.file.errors.uploadFailed"));
+        setUploadStatus("error");
+        return;
+      }
 
-            setUploadStatus("uploading");
+      // Now call the parse-file edge function
+      setUploadStatus("processing");
+      
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("project_id", projectData.id);
+      formData.append("max_sample_rows", String(SAMPLE_SIZE));
 
-            const { data: { user } } = await supabase.auth.getUser();
-            if (!user) {
-              setErrorMessage(t("dataIngestion.file.errors.notAuthenticated"));
-              setUploadStatus("error");
-              return;
-            }
-
-            const filePath = `${user.id}/${projectData.id}/${file.name}`;
-
-            const { error: uploadError } = await supabase.storage
-              .from("datasets")
-              .upload(filePath, file, {
-                upsert: true,
-                contentType: "text/csv"
-              });
-
-            if (uploadError) {
-              console.error("Upload error:", uploadError);
-              setErrorMessage(t("dataIngestion.file.errors.uploadFailed"));
-              setUploadStatus("error");
-              return;
-            }
-
-            await supabase
-              .from("project_columns")
-              .delete()
-              .eq("project_id", projectData.id);
-
-            const columnsToInsert = columnInfos.map(col => ({
-              project_id: projectData.id,
-              column_name: col.name,
-              inferred_type: col.inferredType,
-              column_index: col.index
-            }));
-
-            await supabase
-              .from("project_columns")
-              .insert(columnsToInsert);
-
-            // Log the ingestion
-            await supabase
-              .from("project_data_ingestion_logs")
-              .insert({
-                project_id: projectData.id,
-                status: "success",
-                rows_read: dataRows.length,
-                rows_sampled: rowsForAnalysis.length,
-                completed_at: new Date().toISOString(),
-                metadata: { file_type: "csv", file_name: file.name }
-              });
-
-            await saveProject({
-              dataset_filename: filePath,
-              dataset_rows: rowsForAnalysis.length,
-              dataset_columns: headers.length,
-              status: "data_uploaded"
-            });
-
-            setUploadStatus("success");
-            toast({
-              title: t("dataIngestion.file.uploadSuccess"),
-              description: sampled 
-                ? t("dataIngestion.file.uploadSuccessSampled", { 
-                    filename: file.name, 
-                    sampled: rowsForAnalysis.length,
-                    total: dataRows.length 
-                  })
-                : t("dataIngestion.file.uploadSuccessDesc", { 
-                    filename: file.name, 
-                    rows: dataRows.length, 
-                    columns: headers.length 
-                  }),
-            });
-
-            onDataReady();
-          } catch (error: any) {
-            console.error("Processing error:", error);
-            setErrorMessage(t("dataIngestion.file.errors.processingFailed"));
-            setUploadStatus("error");
-          }
-        },
-        error: (error) => {
-          console.error("Parse error:", error);
-          setErrorMessage(t("dataIngestion.file.errors.parseFailed"));
-          setUploadStatus("error");
-        },
-        encoding: "UTF-8"
+      const { data, error } = await supabase.functions.invoke("parse-file", {
+        body: formData
       });
-    } else {
-      // For other formats, we'd call an edge function
-      setErrorMessage(t("dataIngestion.file.errors.formatNotYetSupported", { format: ext }));
+
+      if (error) throw error;
+
+      if (!data.success) {
+        throw new Error(data.message || "Failed to parse file");
+      }
+
+      // Update local state with results
+      const columnInfos: ColumnInfo[] = data.columns.map((col: any) => ({
+        name: col.name,
+        inferredType: col.type,
+        index: col.index
+      }));
+      
+      setColumns(columnInfos);
+      setRowCount(data.sampleRows);
+      setTotalRows(data.totalRows);
+      setIsSampled(data.totalRows > data.sampleRows);
+      
+      // Convert preview to array format for display
+      if (data.preview && data.preview.length > 0) {
+        const headers = columnInfos.map(c => c.name);
+        const previewRows = data.preview.map((row: Record<string, unknown>) => 
+          headers.map(h => row[h] !== null && row[h] !== undefined ? String(row[h]) : "")
+        );
+        setPreviewData([headers, ...previewRows]);
+      }
+
+      // Log the ingestion
+      await supabase
+        .from("project_data_ingestion_logs")
+        .insert({
+          project_id: projectData.id,
+          status: "success",
+          rows_read: data.totalRows,
+          rows_sampled: data.sampleRows,
+          completed_at: new Date().toISOString(),
+          metadata: { file_type: file.name.split('.').pop(), file_name: file.name }
+        });
+
+      await saveProject({
+        dataset_filename: filePath,
+        dataset_rows: data.sampleRows,
+        dataset_columns: columnInfos.length,
+        total_rows: data.totalRows,
+        sample_rows: data.sampleRows,
+        status: "data_uploaded"
+      });
+
+      setUploadStatus("success");
+      toast({
+        title: t("dataIngestion.file.uploadSuccess"),
+        description: data.totalRows > data.sampleRows 
+          ? t("dataIngestion.file.uploadSuccessSampled", { 
+              filename: file.name, 
+              sampled: data.sampleRows,
+              total: data.totalRows 
+            })
+          : t("dataIngestion.file.uploadSuccessDesc", { 
+              filename: file.name, 
+              rows: data.totalRows, 
+              columns: columnInfos.length 
+            }),
+      });
+
+      onDataReady();
+    } catch (error: any) {
+      console.error("Processing error:", error);
+      setErrorMessage(error.message || t("dataIngestion.file.errors.processingFailed"));
       setUploadStatus("error");
     }
   };
@@ -422,65 +398,24 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         )}
       </div>
 
-      {/* Preview table */}
-      {previewData.length > 0 && uploadStatus === "success" && (
-        <div className="space-y-3">
-          <h3 className="font-semibold">{t("dataIngestion.file.preview")}</h3>
-          <div className="bg-muted/30 rounded-lg overflow-hidden border border-border">
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-muted/50">
-                    {previewData[0]?.map((header, i) => (
-                      <th key={i} className="px-4 py-3 text-left font-medium text-foreground border-b border-border">
-                        <div>
-                          <span>{header}</span>
-                          <span className="block text-xs text-muted-foreground font-normal">
-                            {columns[i]?.inferredType}
-                          </span>
-                        </div>
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {previewData.slice(1).map((row, rowIndex) => (
-                    <tr key={rowIndex} className="hover:bg-muted/20">
-                      {row.map((cell, cellIndex) => (
-                        <td key={cellIndex} className="px-4 py-2 border-b border-border/50 text-muted-foreground">
-                          {cell || <span className="text-muted-foreground/50 italic">{t("dataIngestion.file.empty")}</span>}
-                        </td>
-                      ))}
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-            <div className="px-4 py-2 bg-muted/30 text-xs text-muted-foreground border-t border-border">
-              {t("dataIngestion.file.showingRows", { shown: Math.min(10, previewData.length - 1), total: rowCount })}
-              {isSampled && (
-                <span className="ml-2 text-primary">
-                  ({t("dataIngestion.file.sampledIndicator", { total: totalRows.toLocaleString() })})
-                </span>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Column summary */}
+      {/* Data Preview with stats */}
       {columns.length > 0 && uploadStatus === "success" && (
-        <div className="space-y-3">
-          <h3 className="font-semibold">{t("dataIngestion.file.detectedColumns")}</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-            {columns.map((col, i) => (
-              <div key={i} className="p-3 bg-muted/30 rounded-lg border border-border/50">
-                <p className="font-medium text-sm truncate" title={col.name}>{col.name}</p>
-                <p className="text-xs text-muted-foreground">{col.inferredType}</p>
-              </div>
-            ))}
-          </div>
-        </div>
+        <DataPreviewSection
+          columns={columns.map(c => ({ name: c.name, type: c.inferredType, index: c.index }))}
+          previewRows={previewData.length > 1 
+            ? previewData.slice(1).map(row => {
+                const obj: Record<string, unknown> = {};
+                columns.forEach((col, i) => {
+                  obj[col.name] = row[i] || null;
+                });
+                return obj;
+              })
+            : []
+          }
+          totalRows={totalRows}
+          sampleRows={rowCount}
+          isSampled={isSampled}
+        />
       )}
     </div>
   );
