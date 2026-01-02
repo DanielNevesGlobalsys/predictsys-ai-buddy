@@ -795,6 +795,13 @@
     "title": "Connect Your Data",
     "subtitle": "Upload files, connect to databases, or integrate with cloud platforms to start your Machine Learning project.",
     "uploadToContinue": "Upload data to continue",
+    "preview": {
+      "columnStats": "Column Statistics",
+      "nulls": "Nulls",
+      "range": "Range",
+      "mean": "Mean",
+      "unique": "Unique"
+    },
     "tabs": {
       "files": "Files",
       "databases": "Databases",
@@ -868,6 +875,16 @@
       "ingestionStarted": "Data ingestion started",
       "noConnections": "No saved connections",
       "selectTypeToStart": "Select a database type above to create a new connection",
+      "listTables": "List Tables",
+      "loadingTables": "Loading tables...",
+      "selectTable": "Select Table or View",
+      "tablesFound": "tables found",
+      "searchTables": "Search tables...",
+      "view": "View",
+      "noTablesMatch": "No tables match your search",
+      "noTablesFound": "No tables found in database",
+      "importTable": "Import Table",
+      "tableSelected": "Table {{table}} selected. Query updated.",
       "errors": { "nameRequired": "Connection name is required" }
     },
     "cloud": {

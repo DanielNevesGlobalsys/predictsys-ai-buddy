@@ -795,6 +795,13 @@
     "title": "Conecta tus Datos",
     "subtitle": "Sube archivos, conecta bases de datos o integra con plataformas en la nube para iniciar tu proyecto de Machine Learning.",
     "uploadToContinue": "Sube datos para continuar",
+    "preview": {
+      "columnStats": "Estadísticas de Columnas",
+      "nulls": "Nulos",
+      "range": "Rango",
+      "mean": "Media",
+      "unique": "Únicos"
+    },
     "tabs": {
       "files": "Archivos",
       "databases": "Bases de Datos",
@@ -868,6 +875,16 @@
       "ingestionStarted": "Ingesta de datos iniciada",
       "noConnections": "Sin conexiones guardadas",
       "selectTypeToStart": "Selecciona un tipo de base arriba para crear una nueva conexión",
+      "listTables": "Listar Tablas",
+      "loadingTables": "Cargando tablas...",
+      "selectTable": "Seleccionar Tabla o Vista",
+      "tablesFound": "tablas encontradas",
+      "searchTables": "Buscar tablas...",
+      "view": "Vista",
+      "noTablesMatch": "Ninguna tabla coincide con tu búsqueda",
+      "noTablesFound": "No se encontraron tablas en la base de datos",
+      "importTable": "Importar Tabla",
+      "tableSelected": "Tabla {{table}} seleccionada. Query actualizada.",
       "errors": { "nameRequired": "El nombre de la conexión es obligatorio" }
     },
     "cloud": {
