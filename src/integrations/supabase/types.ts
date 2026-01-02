@@ -14,6 +14,54 @@ export type Database = {
   }
   public: {
     Tables: {
+      data_sources: {
+        Row: {
+          connection_config: Json
+          connector_type: string
+          created_at: string
+          id: string
+          incremental_key: string | null
+          is_continuous: boolean
+          last_sync_at: string | null
+          name: string
+          source_type: string
+          sync_message: string | null
+          sync_status: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          connection_config?: Json
+          connector_type: string
+          created_at?: string
+          id?: string
+          incremental_key?: string | null
+          is_continuous?: boolean
+          last_sync_at?: string | null
+          name: string
+          source_type: string
+          sync_message?: string | null
+          sync_status?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          connection_config?: Json
+          connector_type?: string
+          created_at?: string
+          id?: string
+          incremental_key?: string | null
+          is_continuous?: boolean
+          last_sync_at?: string | null
+          name?: string
+          source_type?: string
+          sync_message?: string | null
+          sync_status?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
       global_chat_messages: {
         Row: {
           created_at: string
@@ -157,6 +205,60 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "project_columns_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_data_ingestion_logs: {
+        Row: {
+          completed_at: string | null
+          data_source_id: string | null
+          error_message: string | null
+          id: string
+          metadata: Json | null
+          project_id: string
+          rows_read: number | null
+          rows_sampled: number | null
+          started_at: string
+          status: string
+        }
+        Insert: {
+          completed_at?: string | null
+          data_source_id?: string | null
+          error_message?: string | null
+          id?: string
+          metadata?: Json | null
+          project_id: string
+          rows_read?: number | null
+          rows_sampled?: number | null
+          started_at?: string
+          status?: string
+        }
+        Update: {
+          completed_at?: string | null
+          data_source_id?: string | null
+          error_message?: string | null
+          id?: string
+          metadata?: Json | null
+          project_id?: string
+          rows_read?: number | null
+          rows_sampled?: number | null
+          started_at?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_data_ingestion_logs_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_data_ingestion_logs_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
@@ -489,6 +591,7 @@ export type Database = {
         Row: {
           business_objective: string | null
           created_at: string
+          data_source_id: string | null
           dataset_columns: number | null
           dataset_filename: string | null
           dataset_rows: number | null
@@ -497,14 +600,17 @@ export type Database = {
           id: string
           name: string
           problem_type: string
+          sample_rows: number | null
           status: string
           target_column: string | null
+          total_rows: number | null
           updated_at: string
           user_id: string
         }
         Insert: {
           business_objective?: string | null
           created_at?: string
+          data_source_id?: string | null
           dataset_columns?: number | null
           dataset_filename?: string | null
           dataset_rows?: number | null
@@ -513,14 +619,17 @@ export type Database = {
           id?: string
           name: string
           problem_type: string
+          sample_rows?: number | null
           status?: string
           target_column?: string | null
+          total_rows?: number | null
           updated_at?: string
           user_id: string
         }
         Update: {
           business_objective?: string | null
           created_at?: string
+          data_source_id?: string | null
           dataset_columns?: number | null
           dataset_filename?: string | null
           dataset_rows?: number | null
@@ -529,12 +638,22 @@ export type Database = {
           id?: string
           name?: string
           problem_type?: string
+          sample_rows?: number | null
           status?: string
           target_column?: string | null
+          total_rows?: number | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "projects_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+        ]
       }
     }
     Views: {

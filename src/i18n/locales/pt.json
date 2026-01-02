@@ -890,5 +890,141 @@
         "saveFailed": "Erro ao salvar agendamento"
       }
     }
+  },
+  "dataIngestion": {
+    "title": "Conecte seus Dados",
+    "subtitle": "Envie arquivos, conecte bancos de dados ou integre com plataformas em nuvem para começar seu projeto de Machine Learning.",
+    "uploadToContinue": "Envie dados para continuar",
+    "tabs": {
+      "files": "Arquivos",
+      "databases": "Bancos de Dados",
+      "cloud": "Lakes & BI"
+    },
+    "file": {
+      "supportedFormats": "Formatos suportados:",
+      "reqMaxSize": "Tamanho máximo: {{size}} MB",
+      "reqEncoding": "Codificação UTF-8 recomendada",
+      "reqHeader": "Primeira linha deve conter os nomes das colunas",
+      "samplingNote": "Datasets com mais de {{sampleSize}} linhas serão amostrados automaticamente para análise.",
+      "dragDrop": "Arraste e solte seu arquivo aqui",
+      "orClick": "ou clique para selecionar",
+      "processing": "Processando arquivo...",
+      "processingDesc": "Analisando estrutura e tipos de dados",
+      "uploading": "Enviando arquivo...",
+      "uploadingDesc": "Fazendo upload para o servidor",
+      "uploadComplete": "Arquivo enviado com sucesso!",
+      "uploadSuccess": "Arquivo processado!",
+      "uploadSuccessDesc": "{{filename}} foi processado. {{rows}} linhas e {{columns}} colunas detectadas.",
+      "uploadSuccessSampled": "{{filename}} processado. Amostra de {{sampled}} linhas de {{total}} total.",
+      "changeFile": "Trocar arquivo",
+      "rows": "linhas",
+      "columns": "colunas",
+      "sampledFrom": "amostra de {{total}}",
+      "sampledIndicator": "Amostra de {{total}} linhas totais",
+      "preview": "Pré-visualização dos dados",
+      "empty": "vazio",
+      "showingRows": "Mostrando {{shown}} de {{total}} linhas",
+      "detectedColumns": "Colunas detectadas",
+      "errors": {
+        "invalidFormat": "Formato não suportado. Use CSV, Parquet, Excel (.xlsx) ou JSON.",
+        "fileTooLarge": "O arquivo excede o limite de {{maxSize}} MB. Tamanho atual: {{size}} MB. Use um conector de banco de dados para datasets maiores.",
+        "projectNotFound": "Projeto não encontrado. Por favor, volte ao passo anterior.",
+        "minRows": "O arquivo deve ter pelo menos uma linha de cabeçalho e uma linha de dados.",
+        "notAuthenticated": "Usuário não autenticado. Por favor, faça login novamente.",
+        "uploadFailed": "Erro ao enviar arquivo. Por favor, tente novamente.",
+        "processingFailed": "Erro ao processar o arquivo. Verifique se está no formato correto.",
+        "parseFailed": "Erro ao ler o arquivo. Verifique o formato.",
+        "formatNotYetSupported": "O formato {{format}} ainda não é suportado. Por favor, use CSV."
+      }
+    },
+    "database": {
+      "title": "Conectar Banco de Dados",
+      "description": "Conecte-se diretamente ao seu banco de dados para importar dados. Suporta PostgreSQL, MySQL, SQL Server e Oracle.",
+      "existingConnections": "Conexões existentes",
+      "newConnection": "Nova conexão {{type}}",
+      "connectionName": "Nome da conexão",
+      "connectionNamePlaceholder": "Ex: Banco de produção",
+      "useConnectionString": "Usar string de conexão",
+      "connectionString": "String de conexão",
+      "host": "Host / Servidor",
+      "port": "Porta",
+      "databaseName": "Nome do banco",
+      "username": "Usuário",
+      "password": "Senha",
+      "advancedOptions": "Opções avançadas",
+      "continuousConnection": "Conexão contínua (sincronização automática)",
+      "continuous": "Contínuo",
+      "incrementalKey": "Coluna para sincronização incremental",
+      "incrementalKeyHint": "Ex: updated_at, id. Usado para buscar apenas novos registros.",
+      "customQuery": "Query SQL personalizada",
+      "customQueryHint": "Deixe em branco para usar SELECT * FROM tabela. Ou especifique sua própria query.",
+      "testConnection": "Testar Conexão",
+      "testSuccess": "Conexão testada com sucesso!",
+      "testFailed": "Falha ao testar conexão",
+      "saveAndConnect": "Salvar e Conectar",
+      "connectionSaved": "Conexão salva com sucesso!",
+      "connectionDeleted": "Conexão excluída",
+      "useConnection": "Usar",
+      "ingestionStarted": "Ingestão de dados iniciada",
+      "noConnections": "Nenhuma conexão salva",
+      "selectTypeToStart": "Selecione um tipo de banco acima para criar uma nova conexão",
+      "errors": {
+        "nameRequired": "O nome da conexão é obrigatório"
+      }
+    },
+    "cloud": {
+      "title": "Conectar Plataformas Cloud & BI",
+      "description": "Conecte-se ao Power BI, Azure, AWS e outras plataformas de dados em nuvem.",
+      "existingConnections": "Conexões existentes",
+      "newConnection": "Nova conexão {{type}}",
+      "connectionName": "Nome da conexão",
+      "connectionNamePlaceholder": "Ex: Power BI Produção",
+      "showSecrets": "Mostrar valores",
+      "continuousConnection": "Conexão contínua (sincronização automática)",
+      "continuous": "Contínuo",
+      "testConnection": "Testar Conexão",
+      "testSuccess": "Conexão testada com sucesso!",
+      "testFailed": "Falha ao testar conexão",
+      "saveAndConnect": "Salvar e Conectar",
+      "connectionSaved": "Conexão salva com sucesso!",
+      "connectionDeleted": "Conexão excluída",
+      "useConnection": "Usar",
+      "ingestionStarted": "Ingestão de dados iniciada",
+      "connectorNotYetImplemented": "Este conector ainda está em desenvolvimento",
+      "powerbi": {
+        "workspaceId": "ID do Workspace",
+        "datasetId": "ID do Dataset",
+        "clientId": "Client ID (Azure AD)",
+        "clientIdPlaceholder": "Application (client) ID",
+        "clientSecret": "Client Secret",
+        "tenantId": "Tenant ID"
+      },
+      "azure": {
+        "serverName": "Nome do servidor",
+        "database": "Banco de dados",
+        "username": "Usuário",
+        "password": "Senha",
+        "accountName": "Nome da conta de storage",
+        "containerName": "Nome do container",
+        "blobPath": "Caminho do arquivo",
+        "sasToken": "Token SAS"
+      },
+      "aws": {
+        "bucketName": "Nome do bucket",
+        "objectKey": "Caminho do objeto",
+        "region": "Região",
+        "accessKeyId": "Access Key ID",
+        "secretAccessKey": "Secret Access Key",
+        "endpoint": "Endpoint",
+        "port": "Porta",
+        "database": "Banco de dados",
+        "username": "Usuário",
+        "password": "Senha",
+        "s3OutputLocation": "Local de saída S3"
+      },
+      "errors": {
+        "nameRequired": "O nome da conexão é obrigatório"
+      }
+    }
   }
 }
