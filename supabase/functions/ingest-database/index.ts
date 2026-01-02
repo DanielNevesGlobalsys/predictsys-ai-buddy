@@ -1,13 +1,130 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import postgres from "https://deno.land/x/postgresjs@v3.4.4/mod.js";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+interface ConnectionConfig {
+  host: string;
+  port: number;
+  database: string;
+  username: string;
+  password: string;
+  ssl?: boolean;
+}
+
+interface ColumnInfo {
+  name: string;
+  type: string;
+  index: number;
+}
+
+function inferTypeFromDbType(dbType: string): string {
+  const type = dbType.toLowerCase();
+  
+  if (['int', 'integer', 'bigint', 'smallint', 'decimal', 'numeric', 'float', 'double', 'real', 'money'].some(t => type.includes(t))) {
+    return 'numérico';
+  }
+  if (['date', 'time', 'timestamp', 'datetime'].some(t => type.includes(t))) {
+    return 'data';
+  }
+  if (['bool', 'boolean', 'bit'].some(t => type.includes(t))) {
+    return 'booleano';
+  }
+  return 'texto';
+}
+
+async function queryPostgreSQL(config: ConnectionConfig, query: string, maxRows: number): Promise<{ columns: ColumnInfo[]; rows: Record<string, unknown>[]; totalRows: number }> {
+  console.log(`[ingest-database] Connecting to PostgreSQL at ${config.host}:${config.port}/${config.database}`);
+  
+  const sql = postgres({
+    host: config.host,
+    port: config.port,
+    database: config.database,
+    username: config.username,
+    password: config.password,
+    ssl: config.ssl ? 'require' : false,
+    max: 1,
+    idle_timeout: 20,
+    connect_timeout: 30,
+  });
+
+  try {
+    // Get count first
+    const countQuery = `SELECT COUNT(*) as total FROM (${query}) as subquery`;
+    const countResult = await sql.unsafe(countQuery);
+    const totalRows = parseInt(countResult[0]?.total || '0');
+    
+    // Execute with limit
+    const limitedQuery = `${query} LIMIT ${maxRows}`;
+    const result = await sql.unsafe(limitedQuery);
+    
+    if (!result || result.length === 0) {
+      await sql.end();
+      return { columns: [], rows: [], totalRows: 0 };
+    }
+
+    // Extract column info from first row
+    const columns: ColumnInfo[] = Object.keys(result[0]).map((name, index) => ({
+      name,
+      type: inferTypeFromValue(result[0][name]),
+      index
+    }));
+
+    const rows = result.map(row => ({ ...row }));
+    
+    await sql.end();
+    console.log(`[ingest-database] PostgreSQL query complete: ${columns.length} columns, ${totalRows} total rows, ${rows.length} fetched`);
+    
+    return { columns, rows, totalRows };
+  } catch (error) {
+    await sql.end();
+    throw error;
+  }
+}
+
+function inferTypeFromValue(value: unknown): string {
+  if (value === null || value === undefined) return 'texto';
+  if (typeof value === 'number') return 'numérico';
+  if (typeof value === 'boolean') return 'booleano';
+  if (value instanceof Date) return 'data';
+  if (typeof value === 'string') {
+    // Try to detect date strings
+    if (/^\d{4}-\d{2}-\d{2}/.test(value)) return 'data';
+    // Try to detect numbers
+    if (!isNaN(Number(value)) && value.trim() !== '') return 'numérico';
+  }
+  return 'texto';
+}
+
+async function queryMySQL(config: ConnectionConfig, query: string, maxRows: number): Promise<{ columns: ColumnInfo[]; rows: Record<string, unknown>[]; totalRows: number }> {
+  console.log(`[ingest-database] MySQL connection requested to ${config.host}:${config.port}/${config.database}`);
+  
+  // MySQL in Deno requires mysql2 which has compatibility issues
+  // For now, provide a helpful error message
+  throw new Error(
+    "MySQL direct connection is not yet fully supported in this environment. " +
+    "Please export your data to CSV/Excel and use the file upload feature, " +
+    "or use a PostgreSQL database which has full support."
+  );
+}
+
+async function querySQLServer(config: ConnectionConfig, query: string, maxRows: number): Promise<{ columns: ColumnInfo[]; rows: Record<string, unknown>[]; totalRows: number }> {
+  console.log(`[ingest-database] SQL Server connection requested to ${config.host}:${config.port}/${config.database}`);
+  
+  // SQL Server in Deno requires tedious which has compatibility issues
+  // For now, provide a helpful error message
+  throw new Error(
+    "SQL Server direct connection is not yet fully supported in this environment. " +
+    "Please export your data to CSV/Excel and use the file upload feature, " +
+    "or use a PostgreSQL database which has full support."
+  );
+}
+
 serve(async (req) => {
-  // Handle CORS preflight requests
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -19,7 +136,7 @@ serve(async (req) => {
 
     const { project_id, data_source_id, custom_query } = await req.json();
 
-    console.log(`Starting database ingestion for project: ${project_id}, data source: ${data_source_id}`);
+    console.log(`[ingest-database] Starting database ingestion for project: ${project_id}, data source: ${data_source_id}`);
 
     // Create ingestion log
     const { data: logData, error: logError } = await supabase
@@ -34,7 +151,7 @@ serve(async (req) => {
       .single();
 
     if (logError) {
-      console.error("Error creating ingestion log:", logError);
+      console.error("[ingest-database] Error creating ingestion log:", logError);
       throw logError;
     }
 
@@ -46,32 +163,60 @@ serve(async (req) => {
       .single();
 
     if (dsError || !dataSource) {
-      console.error("Data source not found:", dsError);
+      console.error("[ingest-database] Data source not found:", dsError);
       throw new Error("Data source not found");
     }
 
-    console.log(`Data source type: ${dataSource.connector_type}`);
+    console.log(`[ingest-database] Data source type: ${dataSource.connector_type}`);
 
-    // In a production environment, this is where you would:
-    // 1. Connect to the external database using the stored credentials
-    // 2. Execute the query (custom_query or default SELECT *)
-    // 3. Stream the results and process them
-    // 4. Store the data in an internal format for the project
-    
-    // For now, we'll simulate a successful ingestion
-    // This would be replaced with actual database connection logic
+    const config = dataSource.connection_config as ConnectionConfig;
+    const query = custom_query || 'SELECT * FROM ' + (config as unknown as { table?: string }).table || 'SELECT 1';
+    const maxSampleRows = 100000;
 
-    // Simulate some processing time and row count
-    const simulatedRowCount = Math.floor(Math.random() * 10000) + 1000;
-    const sampleSize = Math.min(simulatedRowCount, 100000);
+    let result: { columns: ColumnInfo[]; rows: Record<string, unknown>[]; totalRows: number };
+
+    switch (dataSource.connector_type) {
+      case 'postgresql':
+        result = await queryPostgreSQL(config, query, maxSampleRows);
+        break;
+      case 'mysql':
+        result = await queryMySQL(config, query, maxSampleRows);
+        break;
+      case 'sqlserver':
+        result = await querySQLServer(config, query, maxSampleRows);
+        break;
+      case 'oracle':
+        throw new Error("Oracle connections are not yet supported. Please export your data to CSV/Excel.");
+      default:
+        throw new Error(`Unsupported connector type: ${dataSource.connector_type}`);
+    }
+
+    // Store columns
+    await supabase
+      .from('project_columns')
+      .delete()
+      .eq('project_id', project_id);
+
+    if (result.columns.length > 0) {
+      const columnsToInsert = result.columns.map(col => ({
+        project_id,
+        column_name: col.name,
+        column_index: col.index,
+        inferred_type: col.type
+      }));
+
+      await supabase
+        .from('project_columns')
+        .insert(columnsToInsert);
+    }
 
     // Update ingestion log with results
     await supabase
       .from("project_data_ingestion_logs")
       .update({
         status: "success",
-        rows_read: simulatedRowCount,
-        rows_sampled: sampleSize,
+        rows_read: result.totalRows,
+        rows_sampled: result.rows.length,
         completed_at: new Date().toISOString()
       })
       .eq("id", logData.id);
@@ -82,7 +227,7 @@ serve(async (req) => {
       .update({
         last_sync_at: new Date().toISOString(),
         sync_status: "success",
-        sync_message: `Successfully ingested ${simulatedRowCount} rows`
+        sync_message: `Successfully ingested ${result.totalRows} rows`
       })
       .eq("id", data_source_id);
 
@@ -91,20 +236,23 @@ serve(async (req) => {
       .from("projects")
       .update({
         data_source_id,
-        total_rows: simulatedRowCount,
-        sample_rows: sampleSize,
-        dataset_rows: sampleSize,
+        total_rows: result.totalRows,
+        sample_rows: result.rows.length,
+        dataset_rows: result.rows.length,
+        dataset_columns: result.columns.length,
         status: "data_uploaded"
       })
       .eq("id", project_id);
 
-    console.log(`Ingestion completed: ${simulatedRowCount} rows read, ${sampleSize} sampled`);
+    console.log(`[ingest-database] Ingestion completed: ${result.totalRows} rows read, ${result.rows.length} sampled`);
 
     return new Response(
       JSON.stringify({ 
         success: true,
-        rows_read: simulatedRowCount,
-        rows_sampled: sampleSize,
+        columns: result.columns,
+        rows_read: result.totalRows,
+        rows_sampled: result.rows.length,
+        preview: result.rows.slice(0, 10),
         message: `Successfully ingested data from ${dataSource.name}`
       }),
       { 
@@ -113,7 +261,7 @@ serve(async (req) => {
       }
     );
   } catch (error: unknown) {
-    console.error("Error during database ingestion:", error);
+    console.error("[ingest-database] Error during database ingestion:", error);
     const errorMessage = error instanceof Error ? error.message : "An error occurred during data ingestion";
     
     return new Response(
