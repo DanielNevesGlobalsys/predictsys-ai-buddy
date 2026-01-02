@@ -680,5 +680,90 @@
       "success": "PDF exported successfully!",
       "error": "Error generating PDF"
     }
+  },
+  "deploy": {
+    "noModel": {
+      "title": "No production model",
+      "description": "You haven't selected a model for production yet. Go to the 'Models' tab and select a model to activate the prediction API.",
+      "goToModels": "Go to Models"
+    },
+    "productionModel": {
+      "title": "Production Model",
+      "algorithm": "Algorithm",
+      "type": "Type",
+      "trainedAt": "Trained at"
+    },
+    "endpoint": {
+      "title": "API Endpoint"
+    },
+    "howToUse": {
+      "title": "How to use?",
+      "description": "Send a POST request to the endpoint above with the project_id and features (variable values). The API will return the model's prediction. You can integrate this with your existing systems like CRM, ERP, or web applications."
+    },
+    "requiredFeatures": {
+      "title": "Required Variables",
+      "note": "All these variables must be sent in the request with numeric values."
+    },
+    "curlExample": {
+      "title": "cURL Example"
+    },
+    "jsonExample": {
+      "title": "Request Body (JSON)"
+    },
+    "responseExample": {
+      "title": "Response Example",
+      "classificationDesc": "predicted_class: The predicted class (0 or 1). probability: Prediction confidence (0 to 1).",
+      "regressionDesc": "predicted_value: The numeric value predicted by the model."
+    },
+    "copy": "Copy",
+    "copied": "Copied!",
+    "scheduler": {
+      "title": "Prediction Scheduler",
+      "description": "Configure when the platform should automatically run the model to generate new predictions.",
+      "enableToggle": "Enable scheduling",
+      "frequency": "Frequency",
+      "timeOfDay": "Time of day",
+      "dayOfWeek": "Day of week",
+      "dayOfMonth": "Day of month",
+      "specificDateTime": "Specific date and time",
+      "notificationEmail": "Notification email",
+      "scheduledActions": "Scheduled actions",
+      "saved": "Schedule saved successfully!",
+      "frequencies": {
+        "daily": "Daily",
+        "weekly": "Weekly",
+        "biweekly": "Biweekly",
+        "monthly": "Monthly",
+        "quarterly": "Quarterly",
+        "semiannual": "Semiannual",
+        "yearly": "Yearly",
+        "specificDate": "Specific date"
+      },
+      "weekDays": {
+        "sunday": "Sunday",
+        "monday": "Monday",
+        "tuesday": "Tuesday",
+        "wednesday": "Wednesday",
+        "thursday": "Thursday",
+        "friday": "Friday",
+        "saturday": "Saturday"
+      },
+      "actions": {
+        "runPredictions": "Generate new predictions with the production model",
+        "runRetraining": "Automatically retrain the model before predicting",
+        "advanced": "Advanced",
+        "retrainingTooltip": "The model will be retrained with the most recent data before generating predictions. If the new model is better, it will replace the current one."
+      },
+      "summary": {
+        "nextRun": "Next run",
+        "productionModel": "Model used",
+        "noModel": "No model selected",
+        "lastRun": "Last run"
+      },
+      "errors": {
+        "emailRequired": "Notification email is required",
+        "saveFailed": "Error saving schedule"
+      }
+    }
   }
 }

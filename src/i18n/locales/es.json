@@ -680,5 +680,90 @@
       "success": "¡PDF exportado con éxito!",
       "error": "Error al generar PDF"
     }
+  },
+  "deploy": {
+    "noModel": {
+      "title": "Sin modelo en producción",
+      "description": "Aún no has seleccionado un modelo para producción. Ve a la pestaña 'Modelos' y selecciona un modelo para activar la API de predicción.",
+      "goToModels": "Ir a Modelos"
+    },
+    "productionModel": {
+      "title": "Modelo en Producción",
+      "algorithm": "Algoritmo",
+      "type": "Tipo",
+      "trainedAt": "Entrenado el"
+    },
+    "endpoint": {
+      "title": "Endpoint de la API"
+    },
+    "howToUse": {
+      "title": "¿Cómo usar?",
+      "description": "Envía una solicitud POST al endpoint anterior con el project_id y las features (valores de las variables). La API devolverá la predicción del modelo. Puedes integrar esto con tus sistemas existentes como CRM, ERP o aplicaciones web."
+    },
+    "requiredFeatures": {
+      "title": "Variables Requeridas",
+      "note": "Todas estas variables deben enviarse en la solicitud con valores numéricos."
+    },
+    "curlExample": {
+      "title": "Ejemplo con cURL"
+    },
+    "jsonExample": {
+      "title": "Cuerpo de la Solicitud (JSON)"
+    },
+    "responseExample": {
+      "title": "Ejemplo de Respuesta",
+      "classificationDesc": "clase_predicha: La clase predicha (0 o 1). probabilidad: Confianza de la predicción (0 a 1).",
+      "regressionDesc": "valor_predicho: El valor numérico predicho por el modelo."
+    },
+    "copy": "Copiar",
+    "copied": "¡Copiado!",
+    "scheduler": {
+      "title": "Programador de Predicciones",
+      "description": "Configura cuándo la plataforma debe ejecutar automáticamente el modelo para generar nuevas predicciones.",
+      "enableToggle": "Activar programación",
+      "frequency": "Frecuencia",
+      "timeOfDay": "Hora del día",
+      "dayOfWeek": "Día de la semana",
+      "dayOfMonth": "Día del mes",
+      "specificDateTime": "Fecha y hora específica",
+      "notificationEmail": "Correo de notificación",
+      "scheduledActions": "Acciones programadas",
+      "saved": "¡Programación guardada con éxito!",
+      "frequencies": {
+        "daily": "Diario",
+        "weekly": "Semanal",
+        "biweekly": "Quincenal",
+        "monthly": "Mensual",
+        "quarterly": "Trimestral",
+        "semiannual": "Semestral",
+        "yearly": "Anual",
+        "specificDate": "Fecha específica"
+      },
+      "weekDays": {
+        "sunday": "Domingo",
+        "monday": "Lunes",
+        "tuesday": "Martes",
+        "wednesday": "Miércoles",
+        "thursday": "Jueves",
+        "friday": "Viernes",
+        "saturday": "Sábado"
+      },
+      "actions": {
+        "runPredictions": "Generar nuevas predicciones con el modelo en producción",
+        "runRetraining": "Re-entrenar el modelo automáticamente antes de predecir",
+        "advanced": "Avanzado",
+        "retrainingTooltip": "El modelo será reentrenado con los datos más recientes antes de generar las predicciones. Si el nuevo modelo es mejor, reemplazará al actual."
+      },
+      "summary": {
+        "nextRun": "Próxima ejecución",
+        "productionModel": "Modelo utilizado",
+        "noModel": "Ningún modelo seleccionado",
+        "lastRun": "Última ejecución"
+      },
+      "errors": {
+        "emailRequired": "El correo de notificación es obligatorio",
+        "saveFailed": "Error al guardar la programación"
+      }
+    }
   }
 }

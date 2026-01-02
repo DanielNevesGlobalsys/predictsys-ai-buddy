@@ -795,5 +795,90 @@
       "success": "PDF exportado com sucesso!",
       "error": "Erro ao gerar PDF"
     }
+  },
+  "deploy": {
+    "noModel": {
+      "title": "Nenhum modelo em produção",
+      "description": "Você ainda não selecionou um modelo para produção. Vá para a aba 'Modelos' e selecione um modelo para ativar a API de predição.",
+      "goToModels": "Ir para Modelos"
+    },
+    "productionModel": {
+      "title": "Modelo em Produção",
+      "algorithm": "Algoritmo",
+      "type": "Tipo",
+      "trainedAt": "Treinado em"
+    },
+    "endpoint": {
+      "title": "Endpoint da API"
+    },
+    "howToUse": {
+      "title": "Como usar?",
+      "description": "Envie uma requisição POST para o endpoint acima com o project_id e as features (valores das variáveis). A API retornará a previsão do modelo. Você pode integrar isso com seus sistemas existentes como CRM, ERP ou aplicativos web."
+    },
+    "requiredFeatures": {
+      "title": "Variáveis Necessárias",
+      "note": "Todas estas variáveis devem ser enviadas na requisição com valores numéricos."
+    },
+    "curlExample": {
+      "title": "Exemplo com cURL"
+    },
+    "jsonExample": {
+      "title": "Corpo da Requisição (JSON)"
+    },
+    "responseExample": {
+      "title": "Exemplo de Resposta",
+      "classificationDesc": "classe_prevista: A classe prevista (0 ou 1). probabilidade: Confiança da previsão (0 a 1).",
+      "regressionDesc": "valor_previsto: O valor numérico previsto pelo modelo."
+    },
+    "copy": "Copiar",
+    "copied": "Copiado!",
+    "scheduler": {
+      "title": "Agendador de Predições",
+      "description": "Configure quando a plataforma deve rodar automaticamente o modelo para gerar novas predições.",
+      "enableToggle": "Ativar agendamento",
+      "frequency": "Frequência",
+      "timeOfDay": "Horário",
+      "dayOfWeek": "Dia da semana",
+      "dayOfMonth": "Dia do mês",
+      "specificDateTime": "Data e hora específica",
+      "notificationEmail": "E-mail para notificação",
+      "scheduledActions": "Ações agendadas",
+      "saved": "Agendamento salvo com sucesso!",
+      "frequencies": {
+        "daily": "Diário",
+        "weekly": "Semanal",
+        "biweekly": "Quinzenal",
+        "monthly": "Mensal",
+        "quarterly": "Trimestral",
+        "semiannual": "Semestral",
+        "yearly": "Anual",
+        "specificDate": "Data específica"
+      },
+      "weekDays": {
+        "sunday": "Domingo",
+        "monday": "Segunda-feira",
+        "tuesday": "Terça-feira",
+        "wednesday": "Quarta-feira",
+        "thursday": "Quinta-feira",
+        "friday": "Sexta-feira",
+        "saturday": "Sábado"
+      },
+      "actions": {
+        "runPredictions": "Gerar novas predições com o modelo em produção",
+        "runRetraining": "Re-treinar o modelo automaticamente antes de prever",
+        "advanced": "Avançado",
+        "retrainingTooltip": "O modelo será retreinado com os dados mais recentes antes de gerar as predições. Se o novo modelo for melhor, ele substituirá o atual."
+      },
+      "summary": {
+        "nextRun": "Próxima execução",
+        "productionModel": "Modelo utilizado",
+        "noModel": "Nenhum modelo selecionado",
+        "lastRun": "Última execução"
+      },
+      "errors": {
+        "emailRequired": "E-mail de notificação é obrigatório",
+        "saveFailed": "Erro ao salvar agendamento"
+      }
+    }
   }
 }
