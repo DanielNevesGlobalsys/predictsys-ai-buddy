@@ -26,3 +26,18 @@ verify_jwt = false
 
 [functions.run-scheduled-predictions]
 verify_jwt = false
+
+[functions.test-db-connection]
+verify_jwt = false
+
+[functions.test-cloud-connection]
+verify_jwt = false
+
+[functions.ingest-database]
+verify_jwt = false
+
+[functions.ingest-cloud-data]
+verify_jwt = false
+
+[functions.parse-file]
+verify_jwt = false
