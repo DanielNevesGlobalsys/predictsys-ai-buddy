@@ -404,6 +404,87 @@ export type Database = {
           },
         ]
       }
+      project_prediction_schedules: {
+        Row: {
+          created_at: string
+          cron_expression: string | null
+          day_of_month: number | null
+          day_of_week: number | null
+          enabled: boolean
+          frequency: Database["public"]["Enums"]["schedule_frequency"]
+          id: string
+          last_run_at: string | null
+          last_run_message: string | null
+          last_run_status: string | null
+          model_id: string | null
+          next_run_at: string
+          project_id: string
+          run_predictions: boolean
+          run_retraining: boolean
+          send_email_to: string
+          start_at: string
+          time_of_day: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          cron_expression?: string | null
+          day_of_month?: number | null
+          day_of_week?: number | null
+          enabled?: boolean
+          frequency?: Database["public"]["Enums"]["schedule_frequency"]
+          id?: string
+          last_run_at?: string | null
+          last_run_message?: string | null
+          last_run_status?: string | null
+          model_id?: string | null
+          next_run_at?: string
+          project_id: string
+          run_predictions?: boolean
+          run_retraining?: boolean
+          send_email_to: string
+          start_at?: string
+          time_of_day?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          cron_expression?: string | null
+          day_of_month?: number | null
+          day_of_week?: number | null
+          enabled?: boolean
+          frequency?: Database["public"]["Enums"]["schedule_frequency"]
+          id?: string
+          last_run_at?: string | null
+          last_run_message?: string | null
+          last_run_status?: string | null
+          model_id?: string | null
+          next_run_at?: string
+          project_id?: string
+          run_predictions?: boolean
+          run_retraining?: boolean
+          send_email_to?: string
+          start_at?: string
+          time_of_day?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_prediction_schedules_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_prediction_schedules_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           business_objective: string | null
@@ -463,7 +544,15 @@ export type Database = {
       [_ in never]: never
     }
     Enums: {
-      [_ in never]: never
+      schedule_frequency:
+        | "daily"
+        | "weekly"
+        | "biweekly"
+        | "monthly"
+        | "quarterly"
+        | "semiannual"
+        | "yearly"
+        | "specific_date"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -590,6 +679,17 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      schedule_frequency: [
+        "daily",
+        "weekly",
+        "biweekly",
+        "monthly",
+        "quarterly",
+        "semiannual",
+        "yearly",
+        "specific_date",
+      ],
+    },
   },
 } as const

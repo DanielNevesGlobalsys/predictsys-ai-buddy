@@ -13,7 +13,8 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useNavigate } from "react-router-dom";
-
+import { useTranslation } from "react-i18next";
+import PredictionScheduler from "./PredictionScheduler";
 interface ProjectColumn {
   column_name: string;
   inferred_type: string;
@@ -34,6 +35,7 @@ interface APIDeployTabProps {
 }
 
 const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProps) => {
+  const { t } = useTranslation();
   const navigate = useNavigate();
   const [productionModel, setProductionModel] = useState<ProductionModel | null>(null);
   const [columns, setColumns] = useState<ProjectColumn[]>([]);
@@ -140,17 +142,21 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
 
   if (!productionModel) {
     return (
-      <Card className="bg-gradient-card shadow-card p-8 text-center">
-        <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
-        <h3 className="font-semibold text-lg mb-2">Nenhum modelo em produção</h3>
-        <p className="text-muted-foreground mb-4">
-          Você ainda não selecionou um modelo para produção.
-          Vá para a aba "Modelos" e selecione um modelo para ativar a API de predição.
-        </p>
-        <Button onClick={() => navigate(`/projeto/${projectId}?tab=models`)}>
-          Ir para Modelos
-        </Button>
-      </Card>
+      <div className="space-y-6">
+        <Card className="bg-gradient-card shadow-card p-8 text-center">
+          <AlertCircle className="w-12 h-12 text-muted-foreground mx-auto mb-4" />
+          <h3 className="font-semibold text-lg mb-2">{t("deploy.noModel.title")}</h3>
+          <p className="text-muted-foreground mb-4">
+            {t("deploy.noModel.description")}
+          </p>
+          <Button onClick={() => navigate(`/projeto/${projectId}?tab=models`)}>
+            {t("deploy.noModel.goToModels")}
+          </Button>
+        </Card>
+        
+        {/* Scheduler section even without model */}
+        <PredictionScheduler projectId={projectId} />
+      </div>
     );
   }
 
@@ -160,17 +166,19 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
       <Card className="bg-gradient-card shadow-card p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <Rocket className="w-5 h-5 text-accent" />
-          Modelo em Produção
+          {t("deploy.productionModel.title")}
         </h3>
         <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-4">
           <div>
-            <p className="text-sm text-muted-foreground">Algoritmo</p>
+            <p className="text-sm text-muted-foreground">{t("deploy.productionModel.algorithm")}</p>
             <p className="font-medium">{productionModel.algorithm_name}</p>
           </div>
           <div>
-            <p className="text-sm text-muted-foreground">Tipo</p>
+            <p className="text-sm text-muted-foreground">{t("deploy.productionModel.type")}</p>
             <p className="font-medium">
-              {productionModel.problem_type === "classification" ? "Classificação" : "Regressão"}
+              {productionModel.problem_type === "classification" 
+                ? t("project.classification") 
+                : t("project.regression")}
             </p>
           </div>
           <div>
@@ -180,10 +188,10 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
             </p>
           </div>
           <div>
-            <p className="text-sm text-muted-foreground">Treinado em</p>
+            <p className="text-sm text-muted-foreground">{t("deploy.productionModel.trainedAt")}</p>
             <p className="font-medium">
               {productionModel.trained_at 
-                ? new Date(productionModel.trained_at).toLocaleDateString("pt-BR")
+                ? new Date(productionModel.trained_at).toLocaleDateString()
                 : "-"}
             </p>
           </div>
@@ -194,7 +202,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
       <Card className="bg-gradient-card shadow-card p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <Globe className="w-5 h-5 text-primary" />
-          Endpoint da API
+          {t("deploy.endpoint.title")}
         </h3>
         <div className="bg-muted/30 rounded-xl p-4 flex items-center justify-between gap-4">
           <code className="text-sm text-primary break-all flex-1">
@@ -217,10 +225,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
       {/* Info box */}
       <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
         <p className="text-sm text-muted-foreground">
-          <strong className="text-secondary">Como usar?</strong> Envie uma requisição POST para o endpoint 
-          acima com o <code className="bg-muted px-1 rounded">project_id</code> e as <code className="bg-muted px-1 rounded">features</code> (valores das variáveis). 
-          A API retornará a previsão do modelo. Você pode integrar isso com seus sistemas existentes como 
-          CRM, ERP ou aplicativos web.
+          <strong className="text-secondary">{t("deploy.howToUse.title")}</strong> {t("deploy.howToUse.description")}
         </p>
       </div>
 
@@ -228,7 +233,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
       <Card className="bg-gradient-card shadow-card p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <Cpu className="w-5 h-5 text-secondary" />
-          Variáveis Necessárias
+          {t("deploy.requiredFeatures.title")}
         </h3>
         <div className="bg-muted/30 rounded-xl p-4">
           <div className="flex flex-wrap gap-2">
@@ -243,7 +248,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
           </div>
         </div>
         <p className="text-xs text-muted-foreground mt-3">
-          Todas estas variáveis devem ser enviadas na requisição com valores numéricos.
+          {t("deploy.requiredFeatures.note")}
         </p>
       </Card>
 
@@ -252,7 +257,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold flex items-center gap-2">
             <Code className="w-5 h-5 text-primary" />
-            Exemplo com cURL
+            {t("deploy.curlExample.title")}
           </h3>
           <Button 
             variant="ghost" 
@@ -262,12 +267,12 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
             {copied === "curl" ? (
               <>
                 <CheckCircle className="w-4 h-4 mr-1 text-accent" />
-                Copiado!
+                {t("deploy.copied")}
               </>
             ) : (
               <>
                 <Copy className="w-4 h-4 mr-1" />
-                Copiar
+                {t("deploy.copy")}
               </>
             )}
           </Button>
@@ -284,7 +289,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
         <div className="flex items-center justify-between mb-4">
           <h3 className="font-semibold flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-secondary" />
-            Corpo da Requisição (JSON)
+            {t("deploy.jsonExample.title")}
           </h3>
           <Button 
             variant="ghost" 
@@ -294,12 +299,12 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
             {copied === "json" ? (
               <>
                 <CheckCircle className="w-4 h-4 mr-1 text-accent" />
-                Copiado!
+                {t("deploy.copied")}
               </>
             ) : (
               <>
                 <Copy className="w-4 h-4 mr-1" />
-                Copiar
+                {t("deploy.copy")}
               </>
             )}
           </Button>
@@ -315,7 +320,7 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
       <Card className="bg-gradient-card shadow-card p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <CheckCircle className="w-5 h-5 text-accent" />
-          Exemplo de Resposta
+          {t("deploy.responseExample.title")}
         </h3>
         <div className="bg-foreground/5 rounded-xl p-4 overflow-x-auto">
           <pre className="text-sm text-muted-foreground font-mono">
@@ -324,17 +329,18 @@ const APIDeployTab = ({ projectId, problemType, targetColumn }: APIDeployTabProp
         </div>
         <div className="mt-4 text-sm text-muted-foreground">
           {problemType === "classification" ? (
-            <p>
-              <strong>classe_prevista:</strong> A classe prevista (0 ou 1).{" "}
-              <strong>probabilidade:</strong> Confiança da previsão (0 a 1).
-            </p>
+            <p>{t("deploy.responseExample.classificationDesc")}</p>
           ) : (
-            <p>
-              <strong>valor_previsto:</strong> O valor numérico previsto pelo modelo.
-            </p>
+            <p>{t("deploy.responseExample.regressionDesc")}</p>
           )}
         </div>
       </Card>
+
+      {/* Prediction Scheduler */}
+      <PredictionScheduler 
+        projectId={projectId} 
+        productionModelName={productionModel.algorithm_name}
+      />
     </div>
   );
 };
