@@ -1,5 +1,6 @@
-import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { Resend } from "https://esm.sh/resend@2.0.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -51,6 +52,167 @@ function calculateNextRunAt(
   return next;
 }
 
+interface EmailTemplateParams {
+  userName: string;
+  projectName: string;
+  problemType: string;
+  modelName: string;
+  metrics: Record<string, number>;
+  success: boolean;
+  message: string;
+  projectUrl: string;
+  language?: string;
+}
+
+function getEmailContent(params: EmailTemplateParams): { subject: string; html: string } {
+  const lang = params.language || "pt";
+  
+  const translations = {
+    pt: {
+      subject: `[PredictSys AI] Novos resultados do modelo do projeto ${params.projectName}`,
+      greeting: `Olá ${params.userName},`,
+      intro: `O agendamento de predições do seu projeto foi executado.`,
+      projectLabel: "Projeto",
+      typeLabel: "Tipo de problema",
+      modelLabel: "Modelo em produção",
+      metricsLabel: "Métricas principais",
+      statusLabel: "Status da execução",
+      success: "✅ Sucesso",
+      error: "❌ Erro",
+      messageLabel: "Detalhes",
+      viewProject: "Ver Projeto",
+      footer: "Este email foi enviado automaticamente pela PredictSys AI.",
+      classification: "Classificação",
+      regression: "Regressão",
+    },
+    en: {
+      subject: `[PredictSys AI] New model results for project ${params.projectName}`,
+      greeting: `Hello ${params.userName},`,
+      intro: `The scheduled predictions for your project have been executed.`,
+      projectLabel: "Project",
+      typeLabel: "Problem type",
+      modelLabel: "Production model",
+      metricsLabel: "Key metrics",
+      statusLabel: "Execution status",
+      success: "✅ Success",
+      error: "❌ Error",
+      messageLabel: "Details",
+      viewProject: "View Project",
+      footer: "This email was sent automatically by PredictSys AI.",
+      classification: "Classification",
+      regression: "Regression",
+    },
+    es: {
+      subject: `[PredictSys AI] Nuevos resultados del modelo del proyecto ${params.projectName}`,
+      greeting: `Hola ${params.userName},`,
+      intro: `Las predicciones programadas de tu proyecto han sido ejecutadas.`,
+      projectLabel: "Proyecto",
+      typeLabel: "Tipo de problema",
+      modelLabel: "Modelo en producción",
+      metricsLabel: "Métricas principales",
+      statusLabel: "Estado de ejecución",
+      success: "✅ Éxito",
+      error: "❌ Error",
+      messageLabel: "Detalles",
+      viewProject: "Ver Proyecto",
+      footer: "Este correo fue enviado automáticamente por PredictSys AI.",
+      classification: "Clasificación",
+      regression: "Regresión",
+    },
+  };
+
+  const t = translations[lang as keyof typeof translations] || translations.pt;
+  const problemTypeText = params.problemType === "classification" ? t.classification : t.regression;
+
+  // Build metrics HTML
+  const metricsHtml = Object.entries(params.metrics)
+    .map(([name, value]) => `<tr><td style="padding: 8px; border: 1px solid #e5e7eb;">${name}</td><td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">${value.toFixed(4)}</td></tr>`)
+    .join("");
+
+  const html = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    </head>
+    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px;">
+      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
+        <!-- Header -->
+        <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px; text-align: center;">
+          <h1 style="color: #ffffff; margin: 0; font-size: 24px;">🔮 PredictSys AI</h1>
+        </div>
+        
+        <!-- Content -->
+        <div style="padding: 32px;">
+          <p style="font-size: 16px; color: #374151; margin-bottom: 8px;">${t.greeting}</p>
+          <p style="font-size: 14px; color: #6b7280; margin-bottom: 24px;">${t.intro}</p>
+          
+          <!-- Project Info Card -->
+          <div style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
+            <table style="width: 100%; border-collapse: collapse;">
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.projectLabel}:</td>
+                <td style="padding: 8px 0; color: #111827; font-weight: 600;">${params.projectName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.typeLabel}:</td>
+                <td style="padding: 8px 0; color: #111827;">${problemTypeText}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.modelLabel}:</td>
+                <td style="padding: 8px 0; color: #111827;">${params.modelName}</td>
+              </tr>
+              <tr>
+                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.statusLabel}:</td>
+                <td style="padding: 8px 0; color: #111827;">${params.success ? t.success : t.error}</td>
+              </tr>
+            </table>
+          </div>
+          
+          <!-- Metrics Table -->
+          ${Object.keys(params.metrics).length > 0 ? `
+          <h3 style="color: #374151; font-size: 16px; margin-bottom: 12px;">${t.metricsLabel}</h3>
+          <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
+            <thead>
+              <tr style="background-color: #f3f4f6;">
+                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Metric</th>
+                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${metricsHtml}
+            </tbody>
+          </table>
+          ` : ""}
+          
+          <!-- Details -->
+          <div style="background-color: ${params.success ? "#ecfdf5" : "#fef2f2"}; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
+            <p style="margin: 0; color: ${params.success ? "#065f46" : "#991b1b"}; font-size: 14px;">
+              <strong>${t.messageLabel}:</strong> ${params.message}
+            </p>
+          </div>
+          
+          <!-- CTA Button -->
+          <div style="text-align: center; margin-top: 32px;">
+            <a href="${params.projectUrl}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: 600; font-size: 14px;">
+              ${t.viewProject}
+            </a>
+          </div>
+        </div>
+        
+        <!-- Footer -->
+        <div style="background-color: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
+          <p style="margin: 0; color: #9ca3af; font-size: 12px;">${t.footer}</p>
+        </div>
+      </div>
+    </body>
+    </html>
+  `;
+
+  return { subject: t.subject, html };
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -62,7 +224,14 @@ serve(async (req) => {
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    const resendApiKey = Deno.env.get("RESEND_API_KEY");
+    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const resend = resendApiKey ? new Resend(resendApiKey) : null;
+
+    if (!resend) {
+      console.warn("[run-scheduled-predictions] RESEND_API_KEY not configured, emails will be skipped");
+    }
 
     const now = new Date().toISOString();
 
@@ -123,6 +292,7 @@ serve(async (req) => {
       let runSuccess = true;
       let runMessage = "";
       const metricsResults: Record<string, number> = {};
+      let productionModelName = "N/A";
 
       try {
         // Get production model
@@ -136,6 +306,8 @@ serve(async (req) => {
         if (!productionModel) {
           throw new Error("No production model found");
         }
+
+        productionModelName = productionModel.algorithm_name;
 
         // Get metrics for report
         if (productionModel.project_model_metrics) {
@@ -208,29 +380,48 @@ serve(async (req) => {
         .eq("id", schedule.id);
 
       // Send email notification
-      try {
-        // Get user profile for name
-        const { data: profile } = await supabase
-          .from("profiles")
-          .select("full_name")
-          .eq("id", project.user_id)
-          .maybeSingle();
+      if (resend && schedule.send_email_to) {
+        try {
+          // Get user profile for name
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("full_name")
+            .eq("id", project.user_id)
+            .maybeSingle();
 
-        const userName = profile?.full_name || "Usuário";
-        const primaryMetric = project.problem_type === "classification" ? "AUC" : "R²";
-        const primaryMetricValue = metricsResults[primaryMetric]?.toFixed(4) || "N/A";
+          const userName = profile?.full_name || "Usuário";
+          
+          // Determine language based on stored preference or default to Portuguese
+          const language = "pt"; // Could be fetched from user preferences
 
-        console.log(`[run-scheduled-predictions] Would send email to ${schedule.send_email_to}`);
-        console.log(`  - Project: ${project.name}`);
-        console.log(`  - User: ${userName}`);
-        console.log(`  - ${primaryMetric}: ${primaryMetricValue}`);
-        console.log(`  - Status: ${runSuccess ? "success" : "error"}`);
-        
-        // Email sending would be implemented here with Resend
-        // For now, just log the intent
+          const projectUrl = `https://predictsys.ai/project/${project.id}`;
 
-      } catch (emailError) {
-        console.error(`[run-scheduled-predictions] Error sending email:`, emailError);
+          const { subject, html } = getEmailContent({
+            userName,
+            projectName: project.name,
+            problemType: project.problem_type,
+            modelName: productionModelName,
+            metrics: metricsResults,
+            success: runSuccess,
+            message: runMessage,
+            projectUrl,
+            language,
+          });
+
+          console.log(`[run-scheduled-predictions] Sending email to ${schedule.send_email_to}`);
+
+          const emailResponse = await resend.emails.send({
+            from: "PredictSys AI <noreply@resend.dev>",
+            to: [schedule.send_email_to],
+            subject,
+            html,
+          });
+
+          console.log(`[run-scheduled-predictions] Email sent successfully:`, emailResponse);
+
+        } catch (emailError) {
+          console.error(`[run-scheduled-predictions] Error sending email:`, emailError);
+        }
       }
 
       results.push({
@@ -238,6 +429,7 @@ serve(async (req) => {
         projectName: project.name,
         success: runSuccess,
         message: runMessage,
+        emailSent: !!resend && !!schedule.send_email_to,
       });
     }
 
