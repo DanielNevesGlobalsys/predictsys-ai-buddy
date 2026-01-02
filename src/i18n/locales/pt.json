@@ -112,6 +112,7 @@
       "data": "Dados & EDA",
       "models": "Modelos",
       "deploy": "API & Deploy",
+      "dashboard": "Dashboard",
       "chat": "Assistente IA",
       "settings": "Configurações"
     }
@@ -306,7 +307,9 @@
       "training": "Treinamento",
       "trainingDesc": "Treinar modelos",
       "deploy": "Deploy",
-      "deployDesc": "Colocar em produção"
+      "deployDesc": "Colocar em produção",
+      "dashboard": "Dashboard",
+      "dashboardDesc": "Resultados do modelo"
     }
   },
   "stepInfo": {
@@ -702,6 +705,95 @@
       "saved": "Calibração salva com sucesso!",
       "productionCalibration": "Calibração do modelo em produção",
       "currentThreshold": "Threshold atual"
+    }
+  },
+  "modelDashboard": {
+    "title": "Dashboard do Projeto",
+    "subtitle": "Resultados e performance do modelo em produção",
+    "completeSteps": "Complete as etapas anteriores para visualizar o dashboard",
+    "noProductionModel": "Nenhum modelo em produção. Selecione um modelo na aba de Deploy.",
+    "filters": {
+      "title": "Filtros",
+      "dataset": "Dataset",
+      "training": "Treino",
+      "validation": "Validação",
+      "test": "Teste"
+    },
+    "kpi": {
+      "AUC": { "tooltip": "Mede quão bem o modelo separa classes. Varia de 0 a 1: quanto mais perto de 1, melhor." },
+      "F1": { "tooltip": "Média harmônica entre Precisão e Recall. Equilibra a detecção de positivos com a acurácia das previsões." },
+      "Precision": { "tooltip": "De todos os previstos como positivo, qual porcentagem realmente é positiva." },
+      "Recall": { "tooltip": "De todos os positivos reais, qual porcentagem o modelo conseguiu identificar." },
+      "Accuracy": { "tooltip": "Porcentagem total de previsões corretas, considerando todas as classes." },
+      "R²": { "tooltip": "Mede quanto da variação do alvo o modelo explica (0 a 1). Mais perto de 1 é melhor." },
+      "RMSE": { "tooltip": "Raiz do erro quadrático médio. Na mesma unidade da variável alvo." },
+      "MAE": { "tooltip": "Diferença absoluta média entre valores previstos e reais. Menor é melhor." },
+      "MAPE": { "tooltip": "Erro percentual absoluto médio. Mostra o erro em termos percentuais." },
+      "predictions": { "label": "Previsões", "tooltip": "Número total de previsões realizadas." },
+      "lastTrain": { "label": "Último treino", "tooltip": "Data e hora do último treinamento do modelo." },
+      "lastPredict": { "label": "Última previsão", "tooltip": "Data e hora da última previsão realizada." }
+    },
+    "charts": {
+      "performanceOverTime": "Performance ao longo do tempo",
+      "confusionMatrix": "Matriz de Confusão",
+      "rocCurve": "Curva ROC",
+      "prCurve": "Precisão-Recall",
+      "gainsLift": "Curva de Ganhos / Lift",
+      "gainsLiftDesc": "Mostra quantos positivos o modelo captura ao priorizar as maiores probabilidades.",
+      "model": "Modelo",
+      "random": "Aleatório",
+      "predicted": "Previsto"
+    },
+    "features": {
+      "title": "Principais Fatores do Modelo",
+      "description": "Variáveis que mais influenciam as previsões deste modelo.",
+      "variable": "Variável",
+      "importance": "Importância",
+      "relative": "Relativo",
+      "interpretation": "Estas são as variáveis que mais impactam as previsões do modelo. Valores mais altos indicam maior influência na decisão do modelo."
+    },
+    "segmentation": {
+      "title": "Segmentação das Previsões",
+      "descClassification": "Distribuição de clientes por faixa de probabilidade prevista.",
+      "descRegression": "Distribuição de registros por faixa de valor previsto.",
+      "probabilityRange": "Faixa de Probabilidade",
+      "valueRange": "Faixa de Valor",
+      "records": "Registros",
+      "percentBase": "% da Base",
+      "eventRate": "Taxa de Evento",
+      "avgValue": "Valor Médio",
+      "interpretClassification": "Clientes nas faixas mais altas têm maior probabilidade de conversão ou churn. Foque ações nessas faixas para maximizar resultados.",
+      "interpretRegression": "Os quartis superiores representam os clientes com maior valor previsto. Priorize ações para esses segmentos."
+    },
+    "aiInsights": {
+      "title": "Insights de IA sobre o Modelo",
+      "summary": "Resumo",
+      "risks": "Riscos",
+      "opportunities": "Oportunidades",
+      "actions": "Ações Recomendadas",
+      "generate": "Gerar Insights",
+      "regenerate": "Atualizar Insights",
+      "generated": "Insights gerados com sucesso!",
+      "error": "Erro ao gerar insights",
+      "noInsights": "Clique para gerar insights automáticos sobre o desempenho do modelo.",
+      "summaryClassification": "O modelo de classificação apresenta boa capacidade de separação entre as classes, com AUC acima de 0.7. A precisão e recall estão balanceados.",
+      "summaryRegression": "O modelo de regressão explica uma parcela significativa da variância do target, com R² adequado para aplicações de negócio.",
+      "risksText": "Monitorar periodicamente o desempenho do modelo para detectar degradação. Dados novos podem alterar padrões aprendidos.",
+      "opportunitiesText": "Clientes nas faixas de maior probabilidade são candidatos prioritários para ações de retenção ou conversão.",
+      "actionsText": "Considere retreinar o modelo trimestralmente com dados mais recentes para manter a acurácia."
+    },
+    "pdf": {
+      "title": "Relatório do Dashboard",
+      "export": "Exportar PDF",
+      "problemType": "Tipo de problema",
+      "generatedAt": "Gerado em",
+      "productionModel": "Modelo em Produção",
+      "algorithm": "Algoritmo",
+      "metrics": "Métricas de Performance",
+      "featureImportance": "Importância das Variáveis",
+      "page": "Página",
+      "success": "PDF exportado com sucesso!",
+      "error": "Erro ao gerar PDF"
     }
   }
 }

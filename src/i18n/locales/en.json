@@ -112,6 +112,7 @@
       "data": "Data & EDA",
       "models": "Models",
       "deploy": "API & Deploy",
+      "dashboard": "Dashboard",
       "chat": "AI Assistant",
       "settings": "Settings"
     }
@@ -306,7 +307,9 @@
       "training": "Training",
       "trainingDesc": "Train models",
       "deploy": "Deploy",
-      "deployDesc": "Put in production"
+      "deployDesc": "Put in production",
+      "dashboard": "Dashboard",
+      "dashboardDesc": "Model results"
     },
     "projectInfo": {
       "title": "Project Information",
@@ -587,6 +590,95 @@
       "saved": "Calibration saved successfully!",
       "productionCalibration": "Production model calibration",
       "currentThreshold": "Current threshold"
+    }
+  },
+  "modelDashboard": {
+    "title": "Project Dashboard",
+    "subtitle": "Results and performance of the production model",
+    "completeSteps": "Complete the previous steps to view the dashboard",
+    "noProductionModel": "No production model. Select a model in the Deploy tab.",
+    "filters": {
+      "title": "Filters",
+      "dataset": "Dataset",
+      "training": "Training",
+      "validation": "Validation",
+      "test": "Test"
+    },
+    "kpi": {
+      "AUC": { "tooltip": "Measures how well the model separates classes. Ranges from 0 to 1: closer to 1 is better." },
+      "F1": { "tooltip": "Harmonic mean between Precision and Recall. Balances positive detection with prediction accuracy." },
+      "Precision": { "tooltip": "Of all predicted as positive, what percentage is actually positive." },
+      "Recall": { "tooltip": "Of all actual positives, what percentage the model was able to identify." },
+      "Accuracy": { "tooltip": "Total percentage of correct predictions, considering all classes." },
+      "R²": { "tooltip": "Measures how much of the target variation the model explains (0 to 1). Closer to 1 is better." },
+      "RMSE": { "tooltip": "Root mean squared error. In the same unit as the target variable." },
+      "MAE": { "tooltip": "Mean absolute difference between predicted and actual values. Lower is better." },
+      "MAPE": { "tooltip": "Mean absolute percentage error. Shows the error in percentage terms." },
+      "predictions": { "label": "Predictions", "tooltip": "Total number of predictions made." },
+      "lastTrain": { "label": "Last training", "tooltip": "Date and time of the last model training." },
+      "lastPredict": { "label": "Last prediction", "tooltip": "Date and time of the last prediction made." }
+    },
+    "charts": {
+      "performanceOverTime": "Performance over time",
+      "confusionMatrix": "Confusion Matrix",
+      "rocCurve": "ROC Curve",
+      "prCurve": "Precision-Recall",
+      "gainsLift": "Gains / Lift Curve",
+      "gainsLiftDesc": "Shows how many positives the model captures when prioritizing the highest probabilities.",
+      "model": "Model",
+      "random": "Random",
+      "predicted": "Predicted"
+    },
+    "features": {
+      "title": "Top Model Factors",
+      "description": "Variables that most influence this model's predictions.",
+      "variable": "Variable",
+      "importance": "Importance",
+      "relative": "Relative",
+      "interpretation": "These are the variables that most impact the model's predictions. Higher values indicate greater influence on the model's decision."
+    },
+    "segmentation": {
+      "title": "Prediction Segmentation",
+      "descClassification": "Distribution of customers by predicted probability range.",
+      "descRegression": "Distribution of records by predicted value range.",
+      "probabilityRange": "Probability Range",
+      "valueRange": "Value Range",
+      "records": "Records",
+      "percentBase": "% of Base",
+      "eventRate": "Event Rate",
+      "avgValue": "Avg Value",
+      "interpretClassification": "Customers in higher ranges have a greater probability of conversion or churn. Focus actions on these ranges to maximize results.",
+      "interpretRegression": "Upper quartiles represent customers with higher predicted value. Prioritize actions for these segments."
+    },
+    "aiInsights": {
+      "title": "AI Insights about the Model",
+      "summary": "Summary",
+      "risks": "Risks",
+      "opportunities": "Opportunities",
+      "actions": "Recommended Actions",
+      "generate": "Generate Insights",
+      "regenerate": "Update Insights",
+      "generated": "Insights generated successfully!",
+      "error": "Error generating insights",
+      "noInsights": "Click to generate automatic insights about the model performance.",
+      "summaryClassification": "The classification model shows good ability to separate classes, with AUC above 0.7. Precision and recall are balanced.",
+      "summaryRegression": "The regression model explains a significant portion of the target variance, with adequate R² for business applications.",
+      "risksText": "Periodically monitor model performance to detect degradation. New data may change learned patterns.",
+      "opportunitiesText": "Customers in higher probability ranges are priority candidates for retention or conversion actions.",
+      "actionsText": "Consider retraining the model quarterly with more recent data to maintain accuracy."
+    },
+    "pdf": {
+      "title": "Dashboard Report",
+      "export": "Export PDF",
+      "problemType": "Problem type",
+      "generatedAt": "Generated at",
+      "productionModel": "Production Model",
+      "algorithm": "Algorithm",
+      "metrics": "Performance Metrics",
+      "featureImportance": "Feature Importance",
+      "page": "Page",
+      "success": "PDF exported successfully!",
+      "error": "Error generating PDF"
     }
   }
 }

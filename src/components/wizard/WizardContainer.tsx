@@ -12,6 +12,7 @@ import StepEDA from "./steps/StepEDA";
 import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
+import StepDashboard from "./steps/StepDashboard";
 
 export interface ProjectData {
   id?: string;
@@ -48,6 +49,7 @@ const WizardContainer = () => {
     { id: 4, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
     { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
     { id: 6, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
+    { id: 7, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
   ];
 
   useEffect(() => {
@@ -90,6 +92,7 @@ const WizardContainer = () => {
       else if (data.status === "eda_complete") setCurrentStep(4);
       else if (data.status === "training") setCurrentStep(5);
       else if (data.status === "evaluated") setCurrentStep(6);
+      else if (data.status === "deployed") setCurrentStep(7);
     }
     setLoading(false);
   };
@@ -206,6 +209,8 @@ const WizardContainer = () => {
         return <StepTraining {...stepProps} />;
       case 6:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
+      case 7:
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} />;
       default:
         return null;
     }
