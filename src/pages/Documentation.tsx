@@ -144,13 +144,13 @@ const Documentation = () => {
 
                 <div className="space-y-6">
                   <div>
-                    <h3 className="font-semibold mb-3">{t("documentation.metricsSection.classification")}</h3>
+                    <h3 className="font-semibold mb-3">{t("documentation.metricsClassification")}</h3>
                     <div className="space-y-3">
                       {classificationMetrics.map((metric) => (
                         <div key={metric} className="border-l-2 border-primary/30 pl-4">
                           <h4 className="font-medium">{metric}</h4>
                           <p className="text-sm text-muted-foreground">
-                            {t(`documentation.metricsExplanations.${metric}`)}
+                            {t(`documentation.metrics.${metric}`)}
                           </p>
                         </div>
                       ))}
@@ -158,13 +158,13 @@ const Documentation = () => {
                   </div>
 
                   <div>
-                    <h3 className="font-semibold mb-3">{t("documentation.metricsSection.regression")}</h3>
+                    <h3 className="font-semibold mb-3">{t("documentation.metricsRegression")}</h3>
                     <div className="space-y-3">
                       {regressionMetrics.map((metric) => (
                         <div key={metric} className="border-l-2 border-secondary/30 pl-4">
                           <h4 className="font-medium">{metric}</h4>
                           <p className="text-sm text-muted-foreground">
-                            {t(`documentation.metricsExplanations.${metric}`)}
+                            {t(`documentation.metrics.${metric}`)}
                           </p>
                         </div>
                       ))}

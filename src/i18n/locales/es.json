@@ -1,6 +1,7 @@
 {
   "common": {
     "back": "Volver",
+    "next": "Siguiente",
     "cancel": "Cancelar",
     "save": "Guardar",
     "delete": "Eliminar",

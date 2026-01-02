@@ -475,7 +475,7 @@ const StepTraining = ({
             disabled={loading || isTraining || !trainingComplete}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {t("stepInfo.next")}
+            {t("common.next")}
           </Button>
         </div>
       </div>
