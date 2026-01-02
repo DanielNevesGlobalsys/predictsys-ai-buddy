@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp } from "lucide-react";
+import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp, LayoutDashboard, Database } from "lucide-react";
 import GlobalControls from "@/components/layout/GlobalControls";
 
 const Landing = () => {
@@ -28,6 +28,16 @@ const Landing = () => {
       icon: Zap,
       titleKey: "landing.features.deploy",
       descKey: "landing.features.deployDesc"
+    },
+    {
+      icon: LayoutDashboard,
+      titleKey: "landing.features.dashboards",
+      descKey: "landing.features.dashboardsDesc"
+    },
+    {
+      icon: Database,
+      titleKey: "landing.features.ingestion",
+      descKey: "landing.features.ingestionDesc"
     },
     {
       icon: Shield,
@@ -139,7 +149,7 @@ const Landing = () => {
           </p>
         </div>
 
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
           {features.map((feature, index) => {
             const Icon = feature.icon;
             return (
