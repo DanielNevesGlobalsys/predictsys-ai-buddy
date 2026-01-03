@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "react-router-dom";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { 
@@ -11,6 +12,7 @@ import {
   AlertCircle,
   Loader2,
   ArrowLeft,
+  ArrowRight,
   CalendarClock,
   Mail,
   Clock
@@ -20,6 +22,7 @@ import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import PredictionScheduler from "@/components/project/PredictionScheduler";
+import DeployAiInsight from "@/components/deploy/DeployAiInsight";
 
 interface ScheduleSummary {
   enabled: boolean;
@@ -339,6 +342,15 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
               </div>
             </div>
 
+            {/* AI Insights */}
+            <DeployAiInsight
+              projectId={projectData.id!}
+              productionModelId={productionModel.id}
+              productionModelName={productionModel.algorithm_name}
+              problemType={projectData.problem_type}
+              allModels={models}
+            />
+
             {/* Prediction Scheduler */}
             <div className="pt-4">
               <PredictionScheduler 
@@ -362,6 +374,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
             {t("common.next")}
+            <ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </div>
       </div>

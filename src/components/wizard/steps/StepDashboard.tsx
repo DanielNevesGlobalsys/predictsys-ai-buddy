@@ -13,9 +13,10 @@ interface StepDashboardProps {
   onBack: () => void;
   loading: boolean;
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
+  onFinalComplete: () => Promise<void>;
 }
 
-const StepDashboard = ({ projectData, onBack, loading, saveProject }: StepDashboardProps) => {
+const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalComplete }: StepDashboardProps) => {
   const { t } = useTranslation();
   const [hasProductionModel, setHasProductionModel] = useState(false);
   const [completing, setCompleting] = useState(false);
@@ -47,10 +48,7 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject }: StepDashbo
 
     setCompleting(true);
     try {
-      await saveProject({ status: "deployed" });
-      toast.success(t("wizard.projectComplete"), {
-        description: t("wizard.projectCompleteDesc")
-      });
+      await onFinalComplete();
     } catch (error) {
       console.error("Error completing project:", error);
       toast.error(t("wizard.saveError"));
