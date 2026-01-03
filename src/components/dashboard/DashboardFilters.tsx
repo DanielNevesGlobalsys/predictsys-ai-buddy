@@ -11,9 +11,10 @@ import { Filter } from "lucide-react";
 interface DashboardFiltersProps {
   selectedDataset: string;
   onDatasetChange: (value: string) => void;
+  availableSplits?: string[];
 }
 
-const DashboardFilters = ({ selectedDataset, onDatasetChange }: DashboardFiltersProps) => {
+const DashboardFilters = ({ selectedDataset, onDatasetChange, availableSplits = ["training", "validation"] }: DashboardFiltersProps) => {
   const { t } = useTranslation();
 
   return (
@@ -28,11 +29,21 @@ const DashboardFilters = ({ selectedDataset, onDatasetChange }: DashboardFilters
           <SelectValue placeholder={t("modelDashboard.filters.dataset")} />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="training">{t("modelDashboard.filters.training")}</SelectItem>
-          <SelectItem value="validation">{t("modelDashboard.filters.validation")}</SelectItem>
-          <SelectItem value="test">{t("modelDashboard.filters.test")}</SelectItem>
+          {availableSplits.includes("training") && (
+            <SelectItem value="training">{t("modelDashboard.filters.training")}</SelectItem>
+          )}
+          {availableSplits.includes("validation") && (
+            <SelectItem value="validation">{t("modelDashboard.filters.validation")}</SelectItem>
+          )}
+          {availableSplits.includes("test") && (
+            <SelectItem value="test">{t("modelDashboard.filters.test")}</SelectItem>
+          )}
         </SelectContent>
       </Select>
+      
+      <span className="text-xs text-muted-foreground">
+        {t("modelDashboard.filters.currentlyShowing", { split: t(`modelDashboard.filters.${selectedDataset}`) })}
+      </span>
     </div>
   );
 };

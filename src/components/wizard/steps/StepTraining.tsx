@@ -18,8 +18,7 @@ import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
-import TrainingInterpretability from "@/components/training/TrainingInterpretability";
-import TrainingAIInsights from "@/components/training/TrainingAIInsights";
+import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 
 interface StepTrainingProps {
   projectData: ProjectData;
@@ -444,21 +443,14 @@ const StepTraining = ({
               />
             </div>
 
-            {/* Interpretability Section */}
-            <TrainingInterpretability
+            {/* Unified AI Insights Section */}
+            <UnifiedModelInsights
               projectId={projectData.id || ""}
               modelId={productionModel?.id || bestModel?.id}
               modelName={productionModel?.algorithm_name || bestModel?.algorithm_name}
               problemType={projectData.problem_type}
-            />
-
-            {/* AI Insights Section */}
-            <TrainingAIInsights
-              projectId={projectData.id || ""}
               models={models}
-              problemType={projectData.problem_type}
               bestModelId={bestModel?.id}
-              productionModelId={productionModel?.id}
               datasetRows={projectData.dataset_rows}
               targetColumn={projectData.target_column}
             />

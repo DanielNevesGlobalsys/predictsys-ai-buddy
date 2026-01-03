@@ -476,13 +476,17 @@
     "regenerate": "Regenerar",
     "generate": "Gerar",
     "clickToGenerateShapInsights": "Clique em 'Gerar' para obter insights sobre as variáveis",
-    "selectModelForInterpretability": "Selecione um modelo para ver a interpretabilidade",
+    "selectModelForInterpretability": "Selecione um modelo para ver os insights de IA",
     "aiInsights": "Insights de IA",
     "aiInsightsDesc": "Análise automática do desempenho dos modelos e sugestões de melhoria",
-    "clickToGenerateInsights": "Clique em 'Gerar' para obter insights sobre os modelos",
+    "clickToGenerateInsights": "Clique em 'Gerar insights' para obter uma explicação do modelo.",
     "noModelsForInsights": "Nenhum modelo treinado para gerar insights",
     "insightsGenerated": "Insights gerados com sucesso!",
-    "insightsError": "Erro ao gerar insights",
+    "insightsError": "Não foi possível gerar os insights agora. Tente novamente em alguns minutos.",
+    "unifiedInsightsTitle": "Insights de IA do modelo",
+    "unifiedInsightsSubtitle": "Entenda, em linguagem simples, o que o modelo aprendeu e como melhorar seus resultados.",
+    "generateInsights": "Gerar insights",
+    "generatingInsights": "Gerando insights de IA…",
     "metricExplanation": {
       "AUC": "Mede a capacidade do modelo de separar classes. Quanto mais próximo de 1, melhor.",
       "R2": "Mede o quanto o modelo explica a variação dos dados. Quanto mais próximo de 1, melhor."
@@ -756,7 +760,8 @@
       "dataset": "Dataset",
       "training": "Treino",
       "validation": "Validação",
-      "test": "Teste"
+      "test": "Teste",
+      "currentlyShowing": "Exibindo: {{split}}"
     },
     "kpi": {
       "AUC": { "tooltip": "Mede quão bem o modelo separa classes. Varia de 0 a 1: quanto mais perto de 1, melhor." },
