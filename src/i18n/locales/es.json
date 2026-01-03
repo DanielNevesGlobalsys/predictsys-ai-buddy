@@ -549,6 +549,9 @@
     "insightsFeatureImportance": "Importancia de las variables",
     "insightsRisks": "Riesgos",
     "insightsRecommendations": "Acciones recomendadas",
+    "noInsightsAvailable": "No hay insights disponibles.",
+    "noRisksIdentified": "No se identificaron riesgos críticos.",
+    "noRecommendations": "No hay recomendaciones disponibles.",
     "reasons": {
       "randomForest": "Mejor equilibrio entre precisión y generalización para este dataset",
       "gradientBoosting": "Excelente para capturar patrones complejos en los datos",
