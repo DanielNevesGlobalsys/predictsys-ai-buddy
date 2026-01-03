@@ -7,11 +7,10 @@ import {
   BarChart3, 
   Sparkles, 
   RefreshCw, 
-  Lightbulb, 
-  AlertTriangle, 
-  CheckCircle2, 
   TrendingUp,
-  Target
+  Target,
+  AlertTriangle,
+  CheckCircle2
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -27,6 +26,13 @@ interface ModelResult {
   status: string;
   is_production: boolean;
   metrics: { metric_name: string; metric_value: number }[];
+}
+
+interface ParsedInsights {
+  summary: string;
+  featureImportance: string;
+  risks: string[];
+  recommendations: string[];
 }
 
 interface UnifiedModelInsightsProps {
@@ -52,7 +58,7 @@ const UnifiedModelInsights = ({
 }: UnifiedModelInsightsProps) => {
   const { t, i18n } = useTranslation();
   const [featureImportances, setFeatureImportances] = useState<FeatureImportance[]>([]);
-  const [insightText, setInsightText] = useState<string | null>(null);
+  const [parsedInsights, setParsedInsights] = useState<ParsedInsights | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatingInsights, setGeneratingInsights] = useState(false);
 
@@ -91,13 +97,19 @@ const UnifiedModelInsights = ({
       .eq("project_id", projectId)
       .eq("model_id", modelId)
       .eq("language", i18n.language)
-      .eq("insight_type", "unified")
+      .eq("insight_type", "unified_cards")
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
 
     if (data?.shap_insights) {
-      setInsightText(data.shap_insights as string);
+      try {
+        const parsed = JSON.parse(data.shap_insights as string);
+        setParsedInsights(parsed);
+      } catch {
+        // Fallback for old format
+        setParsedInsights(null);
+      }
     }
   };
 
@@ -110,10 +122,7 @@ const UnifiedModelInsights = ({
     setGeneratingInsights(true);
     try {
       const trainedModels = models.filter(m => m.status === "trained");
-      const bestModel = trainedModels.find(m => m.id === bestModelId);
       const currentModel = trainedModels.find(m => m.id === modelId);
-      
-      const primaryMetric = problemType === "classification" ? "AUC" : "R²";
       
       // Build metrics summary
       const currentMetrics = currentModel?.metrics || [];
@@ -139,22 +148,18 @@ const UnifiedModelInsights = ({
       
       const systemPrompt = `You are a friendly data science expert who explains ML models in simple business language.
 Respond in ${lang}.
-Be concise, use short sentences. Focus on actionable insights.
-Structure your response with these EXACT sections using markdown headers:
+You MUST return a valid JSON object with exactly this structure (no markdown, no extra text):
+{
+  "summary": "2-3 short sentences about overall model performance",
+  "featureImportance": "Short paragraph explaining the top 3-5 variables and what they mean. If any variable contains 'id', warn about overfitting risk.",
+  "risks": ["risk 1", "risk 2", "risk 3"],
+  "recommendations": ["recommendation 1", "recommendation 2", "recommendation 3"]
+}
 
-## Resumo
-(2-3 short sentences about overall model performance - is it good, medium, or needs attention?)
+Keep all text concise and business-focused. Maximum 2-3 sentences for summary and featureImportance.
+For risks and recommendations, use 2-4 short bullet items each.`;
 
-## Principais variáveis do modelo
-(For each of the top 3-5 variables, write ONE short bullet explaining what it means for predictions. If any variable contains "id" or "_id", warn that the model might be memorizing IDs instead of learning real patterns.)
-
-## O que isso significa para o negócio
-(2-3 short bullet points with business implications)
-
-## Próximos passos sugeridos
-(2-3 actionable recommendations as bullet points)`;
-
-      const prompt = `Analyze this ML model and provide insights:
+      const prompt = `Analyze this ML model and provide insights as JSON:
 
 Model: "${modelName}" (${problemType})
 Target: ${targetColumn || "not specified"}
@@ -164,9 +169,9 @@ Metrics: ${metricsText || "not available"}
 Top feature importances:
 ${featureList}
 
-${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This may indicate overfitting.` : ""}
+${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting risk.` : ""}
 
-Please provide a structured analysis following the exact format specified.`;
+Return ONLY a valid JSON object with summary, featureImportance, risks, and recommendations fields.`;
 
       const { data, error } = await supabase.functions.invoke("global-chat", {
         body: {
@@ -178,15 +183,36 @@ Please provide a structured analysis following the exact format specified.`;
       if (error) throw error;
 
       const responseText = data?.response || data?.text || "";
-      setInsightText(responseText);
+      
+      // Parse JSON from response
+      let parsed: ParsedInsights;
+      try {
+        // Try to extract JSON from the response
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          parsed = JSON.parse(jsonMatch[0]);
+        } else {
+          throw new Error("No JSON found in response");
+        }
+      } catch {
+        // Fallback structure if parsing fails
+        parsed = {
+          summary: responseText.slice(0, 200),
+          featureImportance: topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
+          risks: idColumns.length > 0 ? ["Possível overfitting devido a colunas de ID com alta importância."] : ["Sem riscos críticos identificados."],
+          recommendations: ["Testar outros algoritmos para comparação.", "Monitorar a performance em dados novos."]
+        };
+      }
 
-      // Save insights
+      setParsedInsights(parsed);
+
+      // Save insights as JSON
       await (supabase.from("project_model_insights") as any).insert({
         project_id: projectId,
         model_id: modelId,
         language: i18n.language,
-        insight_type: "unified",
-        shap_insights: responseText,
+        insight_type: "unified_cards",
+        shap_insights: JSON.stringify(parsed),
         insights: [],
       });
 
@@ -197,70 +223,6 @@ Please provide a structured analysis following the exact format specified.`;
     } finally {
       setGeneratingInsights(false);
     }
-  };
-
-  const renderFormattedInsights = (text: string) => {
-    const lines = text.split('\n');
-    const elements: JSX.Element[] = [];
-    
-    lines.forEach((line, idx) => {
-      const trimmed = line.trim();
-      if (!trimmed) return;
-
-      // Check for markdown headers
-      if (trimmed.startsWith('## ')) {
-        const headerText = trimmed.replace('## ', '');
-        let icon = <Sparkles className="w-4 h-4" />;
-        
-        if (headerText.toLowerCase().includes('resumo') || headerText.toLowerCase().includes('summary')) {
-          icon = <TrendingUp className="w-4 h-4" />;
-        } else if (headerText.toLowerCase().includes('variáv') || headerText.toLowerCase().includes('variable') || headerText.toLowerCase().includes('feature')) {
-          icon = <BarChart3 className="w-4 h-4" />;
-        } else if (headerText.toLowerCase().includes('negócio') || headerText.toLowerCase().includes('business') || headerText.toLowerCase().includes('significa')) {
-          icon = <Lightbulb className="w-4 h-4" />;
-        } else if (headerText.toLowerCase().includes('próximos') || headerText.toLowerCase().includes('next') || headerText.toLowerCase().includes('recomend') || headerText.toLowerCase().includes('sugeridos')) {
-          icon = <CheckCircle2 className="w-4 h-4" />;
-        }
-
-        elements.push(
-          <h4 key={idx} className="font-semibold text-sm text-primary flex items-center gap-2 mt-5 first:mt-0 mb-2">
-            {icon}
-            {headerText}
-          </h4>
-        );
-      } else if (trimmed.startsWith('- ') || trimmed.startsWith('• ') || trimmed.match(/^\d+\./)) {
-        const bulletText = trimmed.replace(/^[-•]\s*/, '').replace(/^\d+\.\s*/, '');
-        const hasWarning = bulletText.toLowerCase().includes('id') && 
-          (bulletText.toLowerCase().includes('overfitting') || 
-           bulletText.toLowerCase().includes('memoriz') ||
-           bulletText.toLowerCase().includes('risco'));
-        
-        elements.push(
-          <div key={idx} className={`flex items-start gap-2 text-sm pl-2 py-1 ${hasWarning ? 'bg-destructive/5 rounded-md p-2 border-l-2 border-destructive' : ''}`}>
-            {hasWarning ? (
-              <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-            ) : (
-              <span className="text-primary mt-0.5">•</span>
-            )}
-            <span className={hasWarning ? 'text-destructive-foreground' : 'text-muted-foreground'}>{bulletText}</span>
-          </div>
-        );
-      } else if (trimmed.startsWith('**') && trimmed.endsWith('**')) {
-        elements.push(
-          <p key={idx} className="text-sm font-medium text-foreground">
-            {trimmed.replace(/\*\*/g, '')}
-          </p>
-        );
-      } else {
-        elements.push(
-          <p key={idx} className="text-sm text-muted-foreground leading-relaxed">
-            {trimmed}
-          </p>
-        );
-      }
-    });
-
-    return <div className="space-y-1">{elements}</div>;
   };
 
   const maxImportance = featureImportances.length > 0 
@@ -279,80 +241,39 @@ Please provide a structured analysis following the exact format specified.`;
   }
 
   return (
-    <Card className="p-6">
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-secondary/10 rounded-lg flex items-center justify-center">
-              <Sparkles className="w-5 h-5 text-secondary" />
-            </div>
-            <div>
-              <h3 className="font-semibold">{t("training.unifiedInsightsTitle")}</h3>
-              <p className="text-sm text-muted-foreground">
-                {t("training.unifiedInsightsSubtitle")}
-              </p>
-            </div>
+    <div className="space-y-6">
+      {/* Header Section */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-secondary/10 rounded-lg flex items-center justify-center">
+            <Sparkles className="w-5 h-5 text-secondary" />
           </div>
+          <div>
+            <h3 className="font-semibold text-lg">{t("training.unifiedInsightsTitle")}</h3>
+            <p className="text-sm text-muted-foreground">
+              {t("training.unifiedInsightsSubtitle")}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-3">
           {modelName && (
-            <span className="text-sm text-muted-foreground bg-muted px-3 py-1 rounded-full">
+            <span className="text-sm text-muted-foreground bg-muted px-3 py-1.5 rounded-full font-medium">
               {modelName}
             </span>
           )}
-        </div>
-
-        {/* Feature Importance Bars */}
-        {loading ? (
-          <div className="flex items-center justify-center py-8">
-            <Loader2 className="w-6 h-6 animate-spin text-primary" />
-          </div>
-        ) : featureImportances.length > 0 && (
-          <div className="space-y-3">
-            <div className="flex items-center gap-2 text-sm font-medium">
-              <BarChart3 className="w-4 h-4 text-primary" />
-              {t("training.featureImportance")}
-            </div>
-            <div className="grid gap-2">
-              {featureImportances.slice(0, 5).map((feature, index) => {
-                const isIdColumn = feature.feature_name.toLowerCase().includes("id");
-                return (
-                  <div key={feature.feature_name} className="space-y-1">
-                    <div className="flex items-center justify-between text-sm">
-                      <span className={`font-medium truncate max-w-[200px] flex items-center gap-1 ${isIdColumn ? 'text-destructive' : ''}`}>
-                        {index + 1}. {feature.feature_name}
-                        {isIdColumn && <AlertTriangle className="w-3 h-3" />}
-                      </span>
-                      <span className="text-muted-foreground">
-                        {(feature.importance_value * 100).toFixed(1)}%
-                      </span>
-                    </div>
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
-                      <div 
-                        className={`h-full rounded-full transition-all ${isIdColumn ? 'bg-destructive/60' : 'bg-gradient-to-r from-primary to-primary/60'}`}
-                        style={{ width: `${(feature.importance_value / maxImportance) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Generate/Regenerate Button */}
-        <div className="flex justify-center pt-2">
           <Button
-            variant={insightText ? "outline" : "default"}
+            variant={parsedInsights ? "outline" : "default"}
+            size="sm"
             onClick={generateInsights}
             disabled={generatingInsights || featureImportances.length === 0}
-            className={!insightText ? "bg-gradient-primary hover:shadow-hover" : ""}
+            className={!parsedInsights ? "bg-gradient-primary hover:shadow-hover" : ""}
           >
             {generatingInsights ? (
               <>
                 <Loader2 className="w-4 h-4 animate-spin mr-2" />
                 {t("training.generatingInsights")}
               </>
-            ) : insightText ? (
+            ) : parsedInsights ? (
               <>
                 <RefreshCw className="w-4 h-4 mr-2" />
                 {t("training.regenerate")}
@@ -365,29 +286,154 @@ Please provide a structured analysis following the exact format specified.`;
             )}
           </Button>
         </div>
+      </div>
 
-        {/* Insights Content */}
-        {insightText ? (
-          <div className="p-4 bg-secondary/5 border border-secondary/20 rounded-lg">
-            {renderFormattedInsights(insightText)}
+      {/* Feature Importance Chart */}
+      <Card className="p-5">
+        <div className="flex items-center gap-2 text-sm font-medium mb-4">
+          <BarChart3 className="w-4 h-4 text-primary" />
+          {t("training.featureImportance")}
+        </div>
+        {loading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 className="w-6 h-6 animate-spin text-primary" />
           </div>
-        ) : !generatingInsights && (
-          <div className="text-center py-6 bg-muted/30 rounded-lg border border-dashed border-border">
-            <Sparkles className="w-8 h-8 text-muted-foreground mx-auto mb-2" />
-            <p className="text-sm text-muted-foreground">
-              {t("training.clickToGenerateInsights")}
-            </p>
+        ) : featureImportances.length > 0 ? (
+          <div className="grid gap-2.5">
+            {featureImportances.slice(0, 5).map((feature, index) => {
+              const isIdColumn = feature.feature_name.toLowerCase().includes("id");
+              return (
+                <div key={feature.feature_name} className="space-y-1">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className={`font-medium truncate max-w-[200px] flex items-center gap-1.5 ${isIdColumn ? 'text-destructive' : ''}`}>
+                      {index + 1}. {feature.feature_name}
+                      {isIdColumn && <AlertTriangle className="w-3 h-3" />}
+                    </span>
+                    <span className="text-muted-foreground">
+                      {(feature.importance_value * 100).toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="h-2 bg-muted rounded-full overflow-hidden">
+                    <div 
+                      className={`h-full rounded-full transition-all ${isIdColumn ? 'bg-destructive/60' : 'bg-gradient-to-r from-primary to-primary/60'}`}
+                      style={{ width: `${(feature.importance_value / maxImportance) * 100}%` }}
+                    />
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        )}
-
-        {/* Error State */}
-        {!loading && featureImportances.length === 0 && (
+        ) : (
           <div className="text-center py-4 text-muted-foreground">
             <p className="text-sm">{t("training.noFeatureImportances")}</p>
           </div>
         )}
-      </div>
-    </Card>
+      </Card>
+
+      {/* Insights Cards Grid */}
+      {parsedInsights ? (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {/* Card 1 - Summary */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-chart-1/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <TrendingUp className="w-4 h-4 text-chart-1" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsSummary")}</h4>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {parsedInsights.summary}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Card 2 - Feature Importance Explanation */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-chart-2/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <BarChart3 className="w-4 h-4 text-chart-2" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsFeatureImportance")}</h4>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {parsedInsights.featureImportance}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Card 3 - Risks */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-destructive/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <AlertTriangle className="w-4 h-4 text-destructive" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsRisks")}</h4>
+                <ul className="space-y-1.5">
+                  {parsedInsights.risks.map((risk, idx) => (
+                    <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                      <span className="text-destructive mt-1.5 flex-shrink-0">•</span>
+                      <span>{risk}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Card>
+
+          {/* Card 4 - Recommendations */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-chart-3/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="w-4 h-4 text-chart-3" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsRecommendations")}</h4>
+                <ul className="space-y-1.5">
+                  {parsedInsights.recommendations.map((rec, idx) => (
+                    <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                      <span className="text-chart-3 mt-1.5 flex-shrink-0">•</span>
+                      <span>{rec}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        </div>
+      ) : !generatingInsights && (
+        <Card className="p-8">
+          <div className="text-center">
+            <Sparkles className="w-10 h-10 text-muted-foreground mx-auto mb-3 opacity-50" />
+            <p className="text-sm text-muted-foreground mb-4">
+              {t("training.clickToGenerateInsights")}
+            </p>
+            <Button
+              onClick={generateInsights}
+              disabled={featureImportances.length === 0}
+              className="bg-gradient-primary hover:shadow-hover"
+            >
+              <Sparkles className="w-4 h-4 mr-2" />
+              {t("training.generateInsights")}
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {/* Loading State */}
+      {generatingInsights && (
+        <Card className="p-8">
+          <div className="text-center">
+            <Loader2 className="w-10 h-10 text-primary mx-auto mb-3 animate-spin" />
+            <p className="text-sm text-muted-foreground">
+              {t("training.generatingInsights")}...
+            </p>
+          </div>
+        </Card>
+      )}
+    </div>
   );
 };
 

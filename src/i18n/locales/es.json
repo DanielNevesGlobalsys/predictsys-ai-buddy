@@ -545,6 +545,10 @@
     "unifiedInsightsSubtitle": "Entiende, en lenguaje simple, qué aprendió el modelo y cómo mejorar tus resultados.",
     "generateInsights": "Generar insights",
     "generatingInsights": "Generando insights de IA...",
+    "insightsSummary": "Resumen",
+    "insightsFeatureImportance": "Importancia de las variables",
+    "insightsRisks": "Riesgos",
+    "insightsRecommendations": "Acciones recomendadas",
     "reasons": {
       "randomForest": "Mejor equilibrio entre precisión y generalización para este dataset",
       "gradientBoosting": "Excelente para capturar patrones complejos en los datos",

@@ -487,6 +487,10 @@
     "unifiedInsightsSubtitle": "Entenda, em linguagem simples, o que o modelo aprendeu e como melhorar seus resultados.",
     "generateInsights": "Gerar insights",
     "generatingInsights": "Gerando insights de IA…",
+    "insightsSummary": "Resumo",
+    "insightsFeatureImportance": "Importância das variáveis",
+    "insightsRisks": "Riscos",
+    "insightsRecommendations": "Ações recomendadas",
     "metricExplanation": {
       "AUC": "Mede a capacidade do modelo de separar classes. Quanto mais próximo de 1, melhor.",
       "R2": "Mede o quanto o modelo explica a variação dos dados. Quanto mais próximo de 1, melhor."
