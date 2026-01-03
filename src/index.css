@@ -38,6 +38,15 @@ All colors MUST be HSL.
 
     --radius: 0.75rem;
 
+    /* Chart color palette - Modern blues, teals and purples */
+    --chart-1: 215 90% 55%;
+    --chart-2: 189 85% 48%;
+    --chart-3: 166 76% 46%;
+    --chart-4: 262 60% 58%;
+    --chart-5: 199 89% 48%;
+    --chart-6: 215 70% 65%;
+    --chart-7: 189 65% 60%;
+
     --gradient-primary: linear-gradient(135deg, hsl(215 90% 48%), hsl(189 85% 52%));
     --gradient-hero: linear-gradient(180deg, hsl(220 30% 98%), hsl(220 40% 96%));
     --gradient-card: linear-gradient(145deg, hsl(0 0% 100%), hsl(220 25% 99%));
@@ -77,6 +86,15 @@ All colors MUST be HSL.
     --border: 222 40% 18%;
     --input: 222 40% 18%;
     --ring: 215 90% 55%;
+
+    /* Chart color palette - Brighter for dark mode */
+    --chart-1: 215 90% 65%;
+    --chart-2: 189 85% 58%;
+    --chart-3: 166 76% 56%;
+    --chart-4: 262 60% 68%;
+    --chart-5: 199 89% 58%;
+    --chart-6: 215 70% 72%;
+    --chart-7: 189 65% 68%;
 
     --gradient-primary: linear-gradient(135deg, hsl(215 90% 35%), hsl(189 85% 35%));
     --gradient-hero: linear-gradient(180deg, hsl(222 47% 8%), hsl(222 47% 11%));

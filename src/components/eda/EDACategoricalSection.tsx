@@ -56,8 +56,11 @@ const CHART_COLORS = [
   "hsl(var(--chart-3))",
   "hsl(var(--chart-4))",
   "hsl(var(--chart-5))",
+  "hsl(var(--chart-6))",
+  "hsl(var(--chart-7))",
   "hsl(var(--primary))",
   "hsl(var(--secondary))",
+  "hsl(var(--accent))",
 ];
 
 const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps) => {
@@ -239,30 +242,55 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
                   layout="vertical"
                   margin={{ top: 5, right: 30, left: 120, bottom: 5 }}
                 >
-                  <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                  <XAxis type="number" className="text-muted-foreground" tick={{ fontSize: 12 }} />
+                  <CartesianGrid 
+                    strokeDasharray="3 3" 
+                    stroke="hsl(var(--border))" 
+                    strokeOpacity={0.5}
+                  />
+                  <XAxis 
+                    type="number" 
+                    tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                    axisLine={{ stroke: "hsl(var(--border))" }}
+                    tickLine={{ stroke: "hsl(var(--border))" }}
+                  />
                   <YAxis
                     dataKey="category"
                     type="category"
-                    className="text-muted-foreground"
                     width={110}
-                    tick={{ fontSize: 11 }}
+                    tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                    axisLine={{ stroke: "hsl(var(--border))" }}
+                    tickLine={{ stroke: "hsl(var(--border))" }}
                   />
                   <Tooltip
+                    cursor={{ fill: "hsl(var(--muted) / 0.3)" }}
                     contentStyle={{
                       backgroundColor: "hsl(var(--card))",
                       border: "1px solid hsl(var(--border))",
                       borderRadius: "8px",
+                      boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
                     }}
+                    labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
                     formatter={(value: number, name: string, props: any) => [
                       `${value.toLocaleString()} (${props.payload.percentage}%)`,
                       t("eda.categorical.count"),
                     ]}
                     labelFormatter={(label) => chartData.find(d => d.category === label)?.fullCategory || label}
                   />
-                  <Bar dataKey="count" radius={[0, 4, 4, 0]}>
+                  <Bar 
+                    dataKey="count" 
+                    radius={[0, 6, 6, 0]}
+                    animationBegin={0}
+                    animationDuration={800}
+                    animationEasing="ease-out"
+                  >
                     {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                      <Cell 
+                        key={`cell-${index}`} 
+                        fill={entry.fill}
+                        style={{ filter: "brightness(1)", transition: "filter 0.2s ease" }}
+                        onMouseEnter={(e: any) => e.target && (e.target.style.filter = "brightness(1.15)")}
+                        onMouseLeave={(e: any) => e.target && (e.target.style.filter = "brightness(1)")}
+                      />
                     ))}
                   </Bar>
                 </BarChart>
@@ -274,12 +302,25 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
                     nameKey="category"
                     cx="50%"
                     cy="50%"
-                    outerRadius={100}
+                    outerRadius={110}
+                    innerRadius={40}
+                    paddingAngle={2}
+                    animationBegin={0}
+                    animationDuration={800}
+                    animationEasing="ease-out"
                     label={({ category, percentage }) => `${category}: ${percentage}%`}
-                    labelLine
+                    labelLine={{ stroke: "hsl(var(--muted-foreground))", strokeWidth: 1 }}
                   >
                     {chartData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={entry.fill} />
+                      <Cell 
+                        key={`cell-${index}`} 
+                        fill={entry.fill}
+                        stroke="hsl(var(--background))"
+                        strokeWidth={2}
+                        style={{ filter: "brightness(1)", transition: "filter 0.2s ease" }}
+                        onMouseEnter={(e: any) => e.target && (e.target.style.filter = "brightness(1.15)")}
+                        onMouseLeave={(e: any) => e.target && (e.target.style.filter = "brightness(1)")}
+                      />
                     ))}
                   </Pie>
                   <Tooltip
@@ -287,7 +328,9 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
                       backgroundColor: "hsl(var(--card))",
                       border: "1px solid hsl(var(--border))",
                       borderRadius: "8px",
+                      boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
                     }}
+                    labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
                     formatter={(value: number, name: string, props: any) => [
                       `${value.toLocaleString()} (${props.payload.percentage}%)`,
                       props.payload.fullCategory,

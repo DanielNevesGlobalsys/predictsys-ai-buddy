@@ -85,7 +85,7 @@ const EDAMissingSection = ({ numericStats, categoricalStats, totalRows }: EDAMis
   const chartData = missingData
     .filter((d) => d.nullCount > 0)
     .slice(0, 15)
-    .map((d) => ({
+    .map((d, index) => ({
       column: d.column.length > 15 ? d.column.slice(0, 12) + "..." : d.column,
       fullColumn: d.column,
       percentage: parseFloat(d.percentage.toFixed(1)),
@@ -94,9 +94,9 @@ const EDAMissingSection = ({ numericStats, categoricalStats, totalRows }: EDAMis
         d.percentage > 50
           ? "hsl(var(--destructive))"
           : d.percentage > 20
-          ? "hsl(346 84% 61%)"
+          ? "hsl(var(--chart-4))"
           : d.percentage > 5
-          ? "hsl(38 92% 50%)"
+          ? "hsl(var(--chart-2))"
           : "hsl(var(--chart-3))",
     }));
 
@@ -175,35 +175,56 @@ const EDAMissingSection = ({ numericStats, categoricalStats, totalRows }: EDAMis
                 layout="vertical"
                 margin={{ top: 5, right: 30, left: 100, bottom: 5 }}
               >
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
+                <CartesianGrid 
+                  strokeDasharray="3 3" 
+                  stroke="hsl(var(--border))" 
+                  strokeOpacity={0.5}
+                />
                 <XAxis
                   type="number"
                   domain={[0, 100]}
                   tickFormatter={(v) => `${v}%`}
-                  className="text-muted-foreground"
-                  tick={{ fontSize: 12 }}
+                  tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={{ stroke: "hsl(var(--border))" }}
+                  tickLine={{ stroke: "hsl(var(--border))" }}
                 />
                 <YAxis
                   dataKey="column"
                   type="category"
-                  className="text-muted-foreground"
                   width={95}
-                  tick={{ fontSize: 11 }}
+                  tick={{ fontSize: 11, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={{ stroke: "hsl(var(--border))" }}
+                  tickLine={{ stroke: "hsl(var(--border))" }}
                 />
                 <Tooltip
+                  cursor={{ fill: "hsl(var(--muted) / 0.3)" }}
                   contentStyle={{
                     backgroundColor: "hsl(var(--card))",
                     border: "1px solid hsl(var(--border))",
                     borderRadius: "8px",
+                    boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
                   }}
+                  labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
                   formatter={(value: number, name: string, props: any) => [
                     `${value}% (${props.payload.count.toLocaleString()} ${t("eda.missing.values")})`,
                     props.payload.fullColumn,
                   ]}
                 />
-                <Bar dataKey="percentage" radius={[0, 4, 4, 0]}>
+                <Bar 
+                  dataKey="percentage" 
+                  radius={[0, 6, 6, 0]}
+                  animationBegin={0}
+                  animationDuration={800}
+                  animationEasing="ease-out"
+                >
                   {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
+                    <Cell 
+                      key={`cell-${index}`} 
+                      fill={entry.color}
+                      style={{ filter: "brightness(1)", transition: "filter 0.2s ease" }}
+                      onMouseEnter={(e: any) => e.target && (e.target.style.filter = "brightness(1.15)")}
+                      onMouseLeave={(e: any) => e.target && (e.target.style.filter = "brightness(1)")}
+                    />
                   ))}
                 </Bar>
               </BarChart>
