@@ -38,10 +38,11 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
   const [loading, setLoading] = useState(true);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
   const [selectedDataset, setSelectedDataset] = useState<string>("validation");
+  const [availableSplits, setAvailableSplits] = useState<string[]>(["training", "validation"]);
 
   useEffect(() => {
     loadDashboardData();
-  }, [projectId]);
+  }, [projectId, selectedDataset]);
 
   const loadDashboardData = async () => {
     setLoading(true);
@@ -93,6 +94,21 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
         }
       }
 
+      // Check if test set exists (we'll check based on dataset_rows vs sample_rows ratio)
+      // For now, we assume validation is always available, test may or may not be
+      // In a real implementation, this would come from the training output
+      const { data: project } = await supabase
+        .from("projects")
+        .select("sample_rows, total_rows")
+        .eq("id", projectId)
+        .single();
+      
+      // If sample size is significantly less than total, assume we have a test set
+      const hasTestSet = project?.sample_rows && project?.total_rows && 
+        project.sample_rows < project.total_rows * 0.9;
+      
+      setAvailableSplits(hasTestSet ? ["training", "validation", "test"] : ["training", "validation"]);
+
       setDashboardData({
         models,
         productionModel,
@@ -129,6 +145,7 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
         <DashboardFilters
           selectedDataset={selectedDataset}
           onDatasetChange={setSelectedDataset}
+          availableSplits={availableSplits}
         />
         <DashboardExportPDF
           projectId={projectId}
