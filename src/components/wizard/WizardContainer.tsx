@@ -191,7 +191,12 @@ const WizardContainer = () => {
   };
 
   const handleComplete = async () => {
-    await saveProject({ status: "evaluated" });
+    // Move to Dashboard step (step 7) instead of navigating away
+    await saveProject({ status: "deployed" }, 7);
+  };
+  
+  const handleFinalComplete = async () => {
+    await saveProject({ status: "deployed" });
     toast({
       title: t("wizard.projectComplete"),
       description: t("wizard.projectCompleteDesc"),
@@ -223,7 +228,7 @@ const WizardContainer = () => {
       case 6:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 7:
-        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} />;
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
       default:
         return null;
     }
