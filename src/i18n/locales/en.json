@@ -190,27 +190,31 @@
     "steps": {
       "1": {
         "title": "Create a new project",
-        "content": "Click \"New Project\" and fill in:\n• Project name (e.g., \"Customer churn prediction\")\n• Description of what you want to predict\n• Business objective in simple language\n• Problem type: Classification (0/1) or Regression (numeric value)"
+        "content": "Click \"New Project\" and fill in:\n• Project name (e.g., \"Customer churn prediction\")\n• Simple description of the business problem\n• Objective (e.g., \"predict customer churn in 90 days\")"
       },
       "2": {
-        "title": "Upload your data (CSV)",
-        "content": "In the \"Data\" step, upload a CSV file with your information.\nPredictSys will automatically detect numeric and categorical columns and show a preview of the first rows."
+        "title": "Connect and upload your data",
+        "content": "In the \"Data\" step, upload a CSV file or connect to your data sources (database, data lake, etc.).\n\nPredictSys automatically detects numeric and categorical columns and shows a preview of the first rows."
       },
       "3": {
-        "title": "Understand your dataset (EDA)",
-        "content": "In the \"Analysis (EDA)\" step, click \"Calculate EDA\".\nYou'll see statistics and charts that help understand your data: value distribution, most frequent categorical variables, missing data, etc."
+        "title": "Explore your data (Automatic EDA)",
+        "content": "In the \"Analysis\" step, click \"Calculate EDA now\".\n\nSee statistics, charts, data quality, and AI-generated insights (including alerts like high cardinality, missing values, etc.)."
       },
       "4": {
-        "title": "Choose target variable and features",
-        "content": "In the \"Variables\" step, select the column you want to predict (target variable) and which columns will be used as model input (features).\nIf in doubt, the AI Assistant can explain each metric and concept."
+        "title": "Configure variables and target",
+        "content": "In the \"Variables\" step, choose the target column (classification or regression) and select which variables will be used in the model.\n\nThe platform helps by suggesting the most appropriate problem type."
       },
       "5": {
-        "title": "Train the model",
-        "content": "In the \"Training\" step, click \"Train models\".\nPredictSys automatically tests different algorithms and presents a table comparing AUC, F1, Precision, Recall, and Accuracy (for classification) or MAE/RMSE/R² (for regression)."
+        "title": "Train with Smart Training",
+        "content": "In the \"Training\" step, use Smart Training to test different algorithms and receive a recommended model.\n\nSee the main metrics (AUC, F1, Precision, Recall, etc.) and AI Insights (SHAP) about the most important variables."
       },
       "6": {
-        "title": "Deploy the model to production",
-        "content": "Choose the best model and publish to production with 1 click.\nIn \"API & Deploy\" you'll find the prediction endpoint and examples of how to integrate your system."
+        "title": "Deploy and configure scheduling",
+        "content": "In \"API & Deploy\", select the best model and publish to production with 1 click.\n\nActivate the scheduler to generate new predictions or reprocess the pipeline automatically (e.g., biweekly, monthly, quarterly) and receive email notifications."
+      },
+      "7": {
+        "title": "Track everything in the Project Dashboard",
+        "content": "In the \"Dashboard\" tab, visualize the main model metrics and the most recent results in an interactive panel, ready for presentation to the business team."
       }
     }
   },

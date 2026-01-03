@@ -190,27 +190,31 @@
     "steps": {
       "1": {
         "title": "Crea un nuevo proyecto",
-        "content": "Haz clic en \"Nuevo Proyecto\" y completa:\n• Nombre del proyecto (ej.: \"Predicción de churn de clientes\")\n• Descripción de lo que quieres predecir\n• Objetivo de negocio en lenguaje simple\n• Tipo de problema: Clasificación (0/1) o Regresión (valor numérico)"
+        "content": "Haz clic en \"Nuevo Proyecto\" y completa:\n• Nombre del proyecto (ej.: \"Predicción de churn de clientes\")\n• Descripción simple del problema de negocio\n• Objetivo (ej.: \"predecir churn de clientes en 90 días\")"
       },
       "2": {
-        "title": "Sube tus datos (CSV)",
-        "content": "En el paso \"Datos\", sube un archivo CSV con tu información.\nPredictSys detectará automáticamente columnas numéricas y categóricas y mostrará una vista previa de las primeras filas."
+        "title": "Conecta y sube tus datos",
+        "content": "En el paso \"Datos\", sube un archivo CSV o conéctate a tus fuentes de datos (base de datos, data lake, etc.).\n\nPredictSys detecta automáticamente columnas numéricas y categóricas y muestra una vista previa de las primeras filas."
       },
       "3": {
-        "title": "Entiende tu dataset (EDA)",
-        "content": "En el paso \"Análisis (EDA)\", haz clic en \"Calcular EDA\".\nVerás estadísticas y gráficos que ayudan a entender tus datos: distribución de valores, variables categóricas más frecuentes, datos faltantes, etc."
+        "title": "Explora tus datos (EDA automático)",
+        "content": "En el paso \"Análisis\", haz clic en \"Calcular EDA ahora\".\n\nVe estadísticas, gráficos, calidad de datos e insights generados por IA (incluyendo alertas como alta cardinalidad, valores faltantes, etc.)."
       },
       "4": {
-        "title": "Elige la variable objetivo y features",
-        "content": "En el paso \"Variables\", selecciona la columna que quieres predecir (variable objetivo) y qué columnas se usarán como entrada del modelo (features).\nSi tienes dudas, el Asistente IA puede explicar cada métrica y concepto."
+        "title": "Configura variables y objetivo",
+        "content": "En el paso \"Variables\", elige la columna objetivo (clasificación o regresión) y selecciona qué variables se usarán en el modelo.\n\nLa plataforma ayuda sugiriendo el tipo de problema más adecuado."
       },
       "5": {
-        "title": "Entrena el modelo",
-        "content": "En el paso \"Entrenamiento\", haz clic en \"Entrenar modelos\".\nPredictSys prueba automáticamente diferentes algoritmos y presenta una tabla comparando AUC, F1, Precisión, Recall y Exactitud (para clasificación) o MAE/RMSE/R² (para regresión)."
+        "title": "Entrena con el Entrenamiento Inteligente",
+        "content": "En el paso \"Entrenamiento\", usa el Entrenamiento Inteligente para probar diferentes algoritmos y recibir un modelo recomendado.\n\nVe las métricas principales (AUC, F1, Precisión, Recall, etc.) y los Insights de IA (SHAP) sobre las variables más importantes."
       },
       "6": {
-        "title": "Pon el modelo en producción",
-        "content": "Elige el mejor modelo y publica en producción con 1 clic.\nEn \"API & Deploy\" encontrarás el endpoint de predicción y ejemplos de cómo integrar tu sistema."
+        "title": "Despliega y configura el agendamiento",
+        "content": "En \"API & Deploy\", selecciona el mejor modelo y publica en producción con 1 clic.\n\nActiva el agendador para generar nuevas predicciones o reprocesar el pipeline automáticamente (ej.: quincenal, mensual, trimestral) y recibir notificaciones por correo."
+      },
+      "7": {
+        "title": "Monitorea todo en el Dashboard del Proyecto",
+        "content": "En la pestaña \"Dashboard\", visualiza las principales métricas del modelo y los resultados más recientes en un panel interactivo, listo para presentación al equipo de negocio."
       }
     }
   },
