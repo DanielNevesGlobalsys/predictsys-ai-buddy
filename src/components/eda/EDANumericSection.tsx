@@ -222,20 +222,48 @@ const EDANumericSection = ({ stats, totalRows }: EDANumericSectionProps) => {
                 data={chartData}
                 margin={{ top: 20, right: 30, left: 20, bottom: 5 }}
               >
-                <CartesianGrid strokeDasharray="3 3" className="stroke-border" />
-                <XAxis dataKey="name" className="text-muted-foreground" tick={{ fontSize: 12 }} />
-                <YAxis className="text-muted-foreground" tick={{ fontSize: 12 }} />
+                <CartesianGrid 
+                  strokeDasharray="3 3" 
+                  stroke="hsl(var(--border))" 
+                  strokeOpacity={0.5}
+                />
+                <XAxis 
+                  dataKey="name" 
+                  tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={{ stroke: "hsl(var(--border))" }}
+                  tickLine={{ stroke: "hsl(var(--border))" }}
+                />
+                <YAxis 
+                  tick={{ fontSize: 12, fill: "hsl(var(--muted-foreground))" }}
+                  axisLine={{ stroke: "hsl(var(--border))" }}
+                  tickLine={{ stroke: "hsl(var(--border))" }}
+                />
                 <Tooltip
+                  cursor={{ fill: "hsl(var(--muted) / 0.3)" }}
                   contentStyle={{
                     backgroundColor: "hsl(var(--card))",
                     border: "1px solid hsl(var(--border))",
                     borderRadius: "8px",
+                    boxShadow: "0 4px 12px hsl(var(--foreground) / 0.1)",
                   }}
+                  labelStyle={{ color: "hsl(var(--foreground))", fontWeight: 600 }}
                   formatter={(value: number) => [formatNumber(value), t("eda.numeric.value")]}
                 />
-                <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                <Bar 
+                  dataKey="value" 
+                  radius={[6, 6, 0, 0]}
+                  animationBegin={0}
+                  animationDuration={800}
+                  animationEasing="ease-out"
+                >
                   {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={entry.color} />
+                    <Cell 
+                      key={`cell-${index}`} 
+                      fill={entry.color}
+                      style={{ filter: "brightness(1)", transition: "filter 0.2s ease" }}
+                      onMouseEnter={(e: any) => e.target && (e.target.style.filter = "brightness(1.15)")}
+                      onMouseLeave={(e: any) => e.target && (e.target.style.filter = "brightness(1)")}
+                    />
                   ))}
                 </Bar>
               </BarChart>
