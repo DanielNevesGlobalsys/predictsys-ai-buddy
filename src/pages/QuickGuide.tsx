@@ -12,6 +12,7 @@ import {
   Rocket,
   MessageSquare,
   Lightbulb,
+  LayoutDashboard,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 
@@ -26,6 +27,7 @@ const QuickGuide = () => {
     { number: 4, icon: Target },
     { number: 5, icon: Cpu },
     { number: 6, icon: Rocket },
+    { number: 7, icon: LayoutDashboard },
   ];
 
   return (

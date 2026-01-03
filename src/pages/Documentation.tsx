@@ -183,15 +183,15 @@ const Documentation = () => {
                 </h2>
                 <div className="space-y-4">
                   <div className="border-l-2 border-primary/30 pl-4">
-                    <h4 className="font-semibold">{t("documentation.assistantSection.projectAssistant")}</h4>
+                    <h4 className="font-semibold">{t("documentation.assistantProject.title")}</h4>
                     <p className="text-sm text-muted-foreground">
-                      {t("documentation.assistantSection.projectAssistantDesc")}
+                      {t("documentation.assistantProject.desc")}
                     </p>
                   </div>
                   <div className="border-l-2 border-secondary/30 pl-4">
-                    <h4 className="font-semibold">{t("documentation.assistantSection.globalChatbot")}</h4>
+                    <h4 className="font-semibold">{t("documentation.assistantGlobal.title")}</h4>
                     <p className="text-sm text-muted-foreground">
-                      {t("documentation.assistantSection.globalChatbotDesc")}
+                      {t("documentation.assistantGlobal.desc")}
                     </p>
                   </div>
                 </div>
