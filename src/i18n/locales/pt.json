@@ -491,6 +491,9 @@
     "insightsFeatureImportance": "Importância das variáveis",
     "insightsRisks": "Riscos",
     "insightsRecommendations": "Ações recomendadas",
+    "noInsightsAvailable": "Nenhum insight disponível.",
+    "noRisksIdentified": "Nenhum risco crítico identificado.",
+    "noRecommendations": "Nenhuma recomendação disponível.",
     "metricExplanation": {
       "AUC": "Mede a capacidade do modelo de separar classes. Quanto mais próximo de 1, melhor.",
       "R2": "Mede o quanto o modelo explica a variação dos dados. Quanto mais próximo de 1, melhor."

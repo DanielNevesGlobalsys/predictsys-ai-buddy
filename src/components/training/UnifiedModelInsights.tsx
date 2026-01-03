@@ -104,10 +104,20 @@ const UnifiedModelInsights = ({
 
     if (data?.shap_insights) {
       try {
-        const parsed = JSON.parse(data.shap_insights as string);
+        const rawInsights = typeof data.shap_insights === 'string' 
+          ? JSON.parse(data.shap_insights) 
+          : data.shap_insights;
+        
+        // Ensure all fields exist with proper defaults
+        const parsed: ParsedInsights = {
+          summary: rawInsights?.summary || "",
+          featureImportance: rawInsights?.featureImportance || "",
+          risks: Array.isArray(rawInsights?.risks) ? rawInsights.risks : [],
+          recommendations: Array.isArray(rawInsights?.recommendations) ? rawInsights.recommendations : [],
+        };
         setParsedInsights(parsed);
-      } catch {
-        // Fallback for old format
+      } catch (e) {
+        console.error("Error parsing saved insights:", e);
         setParsedInsights(null);
       }
     }
@@ -342,7 +352,7 @@ Return ONLY a valid JSON object with summary, featureImportance, risks, and reco
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsSummary")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.summary}
+                  {parsedInsights.summary || t("training.noInsightsAvailable")}
                 </p>
               </div>
             </div>
@@ -357,7 +367,7 @@ Return ONLY a valid JSON object with summary, featureImportance, risks, and reco
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsFeatureImportance")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.featureImportance}
+                  {parsedInsights.featureImportance || t("training.noInsightsAvailable")}
                 </p>
               </div>
             </div>
@@ -372,12 +382,16 @@ Return ONLY a valid JSON object with summary, featureImportance, risks, and reco
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsRisks")}</h4>
                 <ul className="space-y-1.5">
-                  {parsedInsights.risks.map((risk, idx) => (
-                    <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                      <span className="text-destructive mt-1.5 flex-shrink-0">•</span>
-                      <span>{risk}</span>
-                    </li>
-                  ))}
+                  {Array.isArray(parsedInsights.risks) && parsedInsights.risks.length > 0 ? (
+                    parsedInsights.risks.map((risk, idx) => (
+                      <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                        <span className="text-destructive mt-1.5 flex-shrink-0">•</span>
+                        <span>{risk}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">{t("training.noRisksIdentified")}</li>
+                  )}
                 </ul>
               </div>
             </div>
@@ -392,12 +406,16 @@ Return ONLY a valid JSON object with summary, featureImportance, risks, and reco
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsRecommendations")}</h4>
                 <ul className="space-y-1.5">
-                  {parsedInsights.recommendations.map((rec, idx) => (
-                    <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
-                      <span className="text-chart-3 mt-1.5 flex-shrink-0">•</span>
-                      <span>{rec}</span>
-                    </li>
-                  ))}
+                  {Array.isArray(parsedInsights.recommendations) && parsedInsights.recommendations.length > 0 ? (
+                    parsedInsights.recommendations.map((rec, idx) => (
+                      <li key={idx} className="text-sm text-muted-foreground flex items-start gap-2">
+                        <span className="text-chart-3 mt-1.5 flex-shrink-0">•</span>
+                        <span>{rec}</span>
+                      </li>
+                    ))
+                  ) : (
+                    <li className="text-sm text-muted-foreground">{t("training.noRecommendations")}</li>
+                  )}
                 </ul>
               </div>
             </div>
