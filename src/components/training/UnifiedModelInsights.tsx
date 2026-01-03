@@ -91,45 +91,69 @@ const UnifiedModelInsights = ({
   const loadSavedInsights = async () => {
     if (!modelId) return;
 
-    const { data } = await supabase
-      .from("project_model_insights")
-      .select("shap_insights")
-      .eq("project_id", projectId)
-      .eq("model_id", modelId)
-      .eq("language", i18n.language)
-      .eq("insight_type", "unified_cards")
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    try {
+      const { data, error } = await supabase
+        .from("project_model_insights")
+        .select("shap_insights")
+        .eq("project_id", projectId)
+        .eq("model_id", modelId)
+        .eq("language", i18n.language)
+        .eq("insight_type", "unified_cards")
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
 
-    if (data?.shap_insights) {
-      try {
-        const rawInsights = typeof data.shap_insights === 'string' 
-          ? JSON.parse(data.shap_insights) 
-          : data.shap_insights;
-        
-        // Ensure all fields exist with proper defaults
-        const parsed: ParsedInsights = {
-          summary: rawInsights?.summary || "",
-          featureImportance: rawInsights?.featureImportance || "",
-          risks: Array.isArray(rawInsights?.risks) ? rawInsights.risks : [],
-          recommendations: Array.isArray(rawInsights?.recommendations) ? rawInsights.recommendations : [],
-        };
-        setParsedInsights(parsed);
-      } catch (e) {
-        console.error("Error parsing saved insights:", e);
-        setParsedInsights(null);
+      if (error) {
+        console.error("Error loading saved insights:", error);
+        return;
       }
+
+      if (data?.shap_insights) {
+        try {
+          const rawInsights = typeof data.shap_insights === 'string' 
+            ? JSON.parse(data.shap_insights) 
+            : data.shap_insights;
+          
+          // Normalize and ensure all fields exist with proper defaults
+          // Handle both string values and nested objects
+          const parsed: ParsedInsights = {
+            summary: typeof rawInsights?.summary === 'string' 
+              ? rawInsights.summary 
+              : (rawInsights?.summary?.text || rawInsights?.summary?.overview || ""),
+            featureImportance: typeof rawInsights?.featureImportance === 'string'
+              ? rawInsights.featureImportance
+              : (rawInsights?.featureImportance?.text || rawInsights?.featureImportance?.description || ""),
+            risks: Array.isArray(rawInsights?.risks) 
+              ? rawInsights.risks.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+              : [],
+            recommendations: Array.isArray(rawInsights?.recommendations)
+              ? rawInsights.recommendations.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+              : [],
+          };
+          setParsedInsights(parsed);
+        } catch (e) {
+          console.error("Error parsing saved insights:", e);
+          setParsedInsights(null);
+        }
+      }
+    } catch (e) {
+      console.error("Error in loadSavedInsights:", e);
     }
   };
 
   const generateInsights = async () => {
-    if (!modelId || featureImportances.length === 0) {
+    if (!modelId) {
+      toast.error(t("training.selectModelFirst"));
+      return;
+    }
+    
+    if (featureImportances.length === 0) {
       toast.error(t("training.noFeatureImportances"));
       return;
     }
 
     setGeneratingInsights(true);
+    
     try {
       const trainedModels = models.filter(m => m.status === "trained");
       const currentModel = trainedModels.find(m => m.id === modelId);
@@ -158,16 +182,17 @@ const UnifiedModelInsights = ({
       
       const systemPrompt = `You are a friendly data science expert who explains ML models in simple business language.
 Respond in ${lang}.
-You MUST return a valid JSON object with exactly this structure (no markdown, no extra text):
+CRITICAL: Return ONLY a valid JSON object with NO markdown formatting, NO code blocks, NO backticks.
+The JSON must have exactly this structure:
 {
-  "summary": "2-3 short sentences about overall model performance",
-  "featureImportance": "Short paragraph explaining the top 3-5 variables and what they mean. If any variable contains 'id', warn about overfitting risk.",
-  "risks": ["risk 1", "risk 2", "risk 3"],
-  "recommendations": ["recommendation 1", "recommendation 2", "recommendation 3"]
+  "summary": "2-3 short sentences about overall model performance (STRING only)",
+  "featureImportance": "Short paragraph explaining the top 3-5 variables (STRING only)",
+  "risks": ["risk 1 as string", "risk 2 as string"],
+  "recommendations": ["recommendation 1 as string", "recommendation 2 as string"]
 }
 
-Keep all text concise and business-focused. Maximum 2-3 sentences for summary and featureImportance.
-For risks and recommendations, use 2-4 short bullet items each.`;
+ALL values must be plain strings. "summary" and "featureImportance" are strings, NOT objects.
+"risks" and "recommendations" are arrays of strings.`;
 
       const prompt = `Analyze this ML model and provide insights as JSON:
 
@@ -181,7 +206,7 @@ ${featureList}
 
 ${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting risk.` : ""}
 
-Return ONLY a valid JSON object with summary, featureImportance, risks, and recommendations fields.`;
+Return ONLY a valid JSON object (no markdown, no code blocks) with summary, featureImportance, risks, and recommendations fields.`;
 
       const { data, error } = await supabase.functions.invoke("global-chat", {
         body: {
@@ -190,46 +215,86 @@ Return ONLY a valid JSON object with summary, featureImportance, risks, and reco
         },
       });
 
-      if (error) throw error;
+      if (error) {
+        console.error("Edge function error:", error);
+        throw new Error(error.message || t("training.insightsError"));
+      }
 
       const responseText = data?.response || data?.text || "";
       
-      // Parse JSON from response
+      // Parse JSON from response - handle both clean JSON and markdown-wrapped JSON
       let parsed: ParsedInsights;
       try {
-        // Try to extract JSON from the response
-        const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+        // Remove markdown code blocks if present
+        let cleanedResponse = responseText
+          .replace(/```json\s*/gi, '')
+          .replace(/```\s*/g, '')
+          .trim();
+        
+        // Try to extract JSON from the cleaned response
+        const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
         if (jsonMatch) {
-          parsed = JSON.parse(jsonMatch[0]);
+          const rawParsed = JSON.parse(jsonMatch[0]);
+          
+          // Normalize the parsed data - handle nested objects
+          parsed = {
+            summary: typeof rawParsed.summary === 'string' 
+              ? rawParsed.summary 
+              : (rawParsed.summary?.text || rawParsed.summary?.overview || JSON.stringify(rawParsed.summary) || ""),
+            featureImportance: typeof rawParsed.featureImportance === 'string'
+              ? rawParsed.featureImportance
+              : (rawParsed.featureImportance?.text || rawParsed.featureImportance?.description || JSON.stringify(rawParsed.featureImportance) || ""),
+            risks: Array.isArray(rawParsed.risks) 
+              ? rawParsed.risks.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+              : [],
+            recommendations: Array.isArray(rawParsed.recommendations)
+              ? rawParsed.recommendations.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+              : []
+          };
         } else {
-          throw new Error("No JSON found in response");
+          throw new Error("No valid JSON found in response");
         }
-      } catch {
+      } catch (parseError) {
+        console.error("JSON parsing error:", parseError);
         // Fallback structure if parsing fails
         parsed = {
-          summary: responseText.slice(0, 200),
+          summary: t("training.fallbackSummary"),
           featureImportance: topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
-          risks: idColumns.length > 0 ? ["Possível overfitting devido a colunas de ID com alta importância."] : ["Sem riscos críticos identificados."],
-          recommendations: ["Testar outros algoritmos para comparação.", "Monitorar a performance em dados novos."]
+          risks: idColumns.length > 0 
+            ? [t("training.fallbackRiskIds")] 
+            : [t("training.noRisksIdentified")],
+          recommendations: [t("training.fallbackRecommendation1"), t("training.fallbackRecommendation2")]
         };
       }
 
       setParsedInsights(parsed);
 
       // Save insights as JSON
-      await (supabase.from("project_model_insights") as any).insert({
-        project_id: projectId,
-        model_id: modelId,
-        language: i18n.language,
-        insight_type: "unified_cards",
-        shap_insights: JSON.stringify(parsed),
-        insights: [],
-      });
+      try {
+        await (supabase.from("project_model_insights") as any).insert({
+          project_id: projectId,
+          model_id: modelId,
+          language: i18n.language,
+          insight_type: "unified_cards",
+          shap_insights: JSON.stringify(parsed),
+          insights: [],
+        });
+      } catch (saveError) {
+        console.error("Error saving insights:", saveError);
+        // Don't throw - insights were generated successfully
+      }
 
       toast.success(t("training.insightsGenerated"));
     } catch (error) {
       console.error("Error generating insights:", error);
       toast.error(t("training.insightsError"));
+      // Set a fallback state so the UI doesn't break
+      setParsedInsights({
+        summary: t("training.insightsErrorMessage"),
+        featureImportance: "",
+        risks: [],
+        recommendations: [t("training.tryAgainLater")]
+      });
     } finally {
       setGeneratingInsights(false);
     }

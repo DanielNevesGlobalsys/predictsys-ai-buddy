@@ -552,6 +552,13 @@
     "noInsightsAvailable": "No hay insights disponibles.",
     "noRisksIdentified": "No se identificaron riesgos críticos.",
     "noRecommendations": "No hay recomendaciones disponibles.",
+    "selectModelFirst": "Selecciona un modelo para generar insights.",
+    "fallbackSummary": "No se pudo analizar el modelo completamente. Intenta de nuevo.",
+    "fallbackRiskIds": "Posible overfitting debido a columnas de ID con alta importancia.",
+    "fallbackRecommendation1": "Probar otros algoritmos para comparación.",
+    "fallbackRecommendation2": "Monitorear el rendimiento con datos nuevos.",
+    "insightsErrorMessage": "Ocurrió un error al generar los insights.",
+    "tryAgainLater": "Por favor intenta de nuevo en unos momentos.",
     "reasons": {
       "randomForest": "Mejor equilibrio entre precisión y generalización para este dataset",
       "gradientBoosting": "Excelente para capturar patrones complejos en los datos",

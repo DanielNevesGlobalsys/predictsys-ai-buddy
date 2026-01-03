@@ -494,6 +494,13 @@
     "noInsightsAvailable": "Nenhum insight disponível.",
     "noRisksIdentified": "Nenhum risco crítico identificado.",
     "noRecommendations": "Nenhuma recomendação disponível.",
+    "selectModelFirst": "Selecione um modelo para gerar insights.",
+    "fallbackSummary": "Não foi possível analisar o modelo completamente. Tente novamente.",
+    "fallbackRiskIds": "Possível overfitting devido a colunas de ID com alta importância.",
+    "fallbackRecommendation1": "Testar outros algoritmos para comparação.",
+    "fallbackRecommendation2": "Monitorar a performance em dados novos.",
+    "insightsErrorMessage": "Ocorreu um erro ao gerar os insights.",
+    "tryAgainLater": "Tente novamente em alguns instantes.",
     "metricExplanation": {
       "AUC": "Mede a capacidade do modelo de separar classes. Quanto mais próximo de 1, melhor.",
       "R2": "Mede o quanto o modelo explica a variação dos dados. Quanto mais próximo de 1, melhor."
