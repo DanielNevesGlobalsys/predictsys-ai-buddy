@@ -26,6 +26,8 @@ interface StepTrainingProps {
   onBack: () => void;
   loading: boolean;
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
+  needsRetrain?: boolean;
+  onTrainingComplete?: () => void;
 }
 
 interface ModelResult {
@@ -42,6 +44,8 @@ const StepTraining = ({
   onBack,
   loading,
   saveProject,
+  needsRetrain = false,
+  onTrainingComplete,
 }: StepTrainingProps) => {
   const { t } = useTranslation();
   const [isTraining, setIsTraining] = useState(false);
@@ -179,6 +183,7 @@ const StepTraining = ({
       toast.success(t("stepTraining.trainingSuccess"));
       await loadExistingModels();
       setTrainingComplete(true);
+      onTrainingComplete?.();
 
     } catch (err) {
       console.error("Training error:", err);
@@ -324,6 +329,21 @@ const StepTraining = ({
           </div>
         </div>
 
+        {/* Needs Retrain Warning */}
+        {needsRetrain && (
+          <Alert className="bg-warning/10 border-warning/30">
+            <AlertTriangle className="w-4 h-4 text-warning" />
+            <AlertDescription>
+              <p className="font-medium text-warning">
+                {t("training.configChangedTitle")}
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                {t("training.configChangedDesc")}
+              </p>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Training status */}
         <div className="text-center py-8">
           {!isTraining && !trainingComplete && !error && (
@@ -463,8 +483,14 @@ const StepTraining = ({
             {t("common.back")}
           </Button>
           <Button
-            onClick={() => onNext()}
-            disabled={loading || isTraining || !trainingComplete}
+            onClick={() => {
+              if (needsRetrain) {
+                toast.error(t("training.mustRetrainFirst"));
+                return;
+              }
+              onNext();
+            }}
+            disabled={loading || isTraining || !trainingComplete || needsRetrain}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
             {t("common.next")}

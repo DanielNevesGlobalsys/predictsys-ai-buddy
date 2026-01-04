@@ -37,6 +37,7 @@ const WizardContainer = () => {
   const { t } = useTranslation();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
+  const [needsRetrain, setNeedsRetrain] = useState(false);
   const [projectData, setProjectData] = useState<ProjectData>({
     name: "",
     description: "",
@@ -204,6 +205,59 @@ const WizardContainer = () => {
     navigate("/dashboard");
   };
 
+  const handleConfigChange = async () => {
+    if (!projectData.id) return;
+    
+    setNeedsRetrain(true);
+    
+    // Clear existing models, metrics, and insights from database
+    const { data: existingModels } = await supabase
+      .from("project_models")
+      .select("id")
+      .eq("project_id", projectData.id);
+    
+    if (existingModels && existingModels.length > 0) {
+      const modelIds = existingModels.map(m => m.id);
+      
+      // Delete metrics
+      await supabase
+        .from("project_model_metrics")
+        .delete()
+        .in("project_model_id", modelIds);
+      
+      // Delete feature importances
+      await supabase
+        .from("project_feature_importances")
+        .delete()
+        .in("project_model_id", modelIds);
+      
+      // Delete models
+      await supabase
+        .from("project_models")
+        .delete()
+        .eq("project_id", projectData.id);
+    }
+    
+    // Delete training insights
+    await supabase
+      .from("project_model_insights")
+      .delete()
+      .eq("project_id", projectData.id)
+      .eq("insight_type", "unified_cards");
+    
+    // Update project status back to eda_complete
+    await supabase
+      .from("projects")
+      .update({ status: "eda_complete" })
+      .eq("id", projectData.id);
+    
+    setProjectData(prev => ({ ...prev, status: "eda_complete" }));
+  };
+
+  const handleTrainingComplete = () => {
+    setNeedsRetrain(false);
+  };
+
   const renderStep = () => {
     const stepProps = {
       projectData,
@@ -222,9 +276,9 @@ const WizardContainer = () => {
       case 3:
         return <StepEDA {...stepProps} />;
       case 4:
-        return <StepTargetFeatures {...stepProps} />;
+        return <StepTargetFeatures {...stepProps} onConfigChange={handleConfigChange} />;
       case 5:
-        return <StepTraining {...stepProps} />;
+        return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} />;
       case 6:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 7:
