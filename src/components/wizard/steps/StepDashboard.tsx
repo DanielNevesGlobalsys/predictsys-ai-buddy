@@ -4,7 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2 } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
-import DashboardContent from "@/components/dashboard/DashboardContent";
+import { BusinessDashboard } from "@/components/business-dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 
@@ -86,12 +86,7 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
           </p>
         </div>
 
-        <DashboardContent 
-          projectId={projectData.id}
-          problemType={projectData.problem_type}
-          targetColumn={projectData.target_column}
-          projectName={projectData.name}
-        />
+        <BusinessDashboard projectId={projectData.id} />
 
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
