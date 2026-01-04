@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2 } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
@@ -13,6 +13,9 @@ import { ActionableList } from './ActionableList';
 import { CohortComparison } from './CohortComparison';
 import { WhatIfSimulation } from './WhatIfSimulation';
 import { BusinessAIInsights } from './BusinessAIInsights';
+import { Button } from '@/components/ui/button';
+import { Card } from '@/components/ui/card';
+import { toast } from 'sonner';
 
 interface BusinessDashboardProps {
   projectId: string;
@@ -23,23 +26,33 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const [projectInfo, setProjectInfo] = useState<{
     problem_type: string;
     problem_context: string | null;
+    target_column: string | null;
   } | null>(null);
   
-  const { data, filters, updateFilters, loading, error } = useBusinessDashboard(projectId);
+  const { 
+    data, 
+    filters, 
+    updateFilters, 
+    loading, 
+    error,
+    productionModel,
+    runBatchPredictions,
+    runningBatch 
+  } = useBusinessDashboard(projectId);
   
   useEffect(() => {
     async function fetchProjectInfo() {
       const { data: project } = await supabase
         .from('projects')
-        .select('problem_type, detected_problem_type')
+        .select('problem_type, detected_problem_type, target_column, business_objective')
         .eq('id', projectId)
         .maybeSingle();
       
       if (project) {
-        // Try to infer problem context from project metadata
         setProjectInfo({
           problem_type: project.problem_type,
-          problem_context: project.detected_problem_type || null
+          problem_context: project.business_objective || project.detected_problem_type || null,
+          target_column: project.target_column
         });
       }
     }
@@ -52,6 +65,15 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   
   const problemContext = projectInfo?.problem_context || 
     (data.predictions.length > 0 ? data.predictions[0].problem_context : null);
+
+  const handleRunPredictions = async () => {
+    try {
+      await runBatchPredictions();
+      toast.success(t('businessDashboard.predictionsGenerated'));
+    } catch (err) {
+      toast.error(t('businessDashboard.predictionsError'));
+    }
+  };
 
   if (loading && data.predictions.length === 0) {
     return (
@@ -69,6 +91,70 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     );
   }
 
+  // Show empty state with CTA if no predictions
+  if (data.predictions.length === 0) {
+    return (
+      <div className="space-y-6">
+        <BusinessDashboardHero 
+          problemContext={problemContext}
+          problemType={problemType}
+          horizonDays={filters.horizon}
+        />
+        
+        <Card className="p-8">
+          <div className="text-center space-y-6">
+            <div className="w-16 h-16 mx-auto rounded-full bg-muted flex items-center justify-center">
+              <AlertCircle className="w-8 h-8 text-muted-foreground" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-xl font-semibold">
+                {t('businessDashboard.noPredictions')}
+              </h3>
+              <p className="text-muted-foreground max-w-md mx-auto">
+                {productionModel 
+                  ? t('businessDashboard.noPredictionsDesc')
+                  : t('businessDashboard.noProductionModel')
+                }
+              </p>
+            </div>
+            
+            {productionModel ? (
+              <Button 
+                size="lg" 
+                onClick={handleRunPredictions}
+                disabled={runningBatch}
+                className="gap-2"
+              >
+                {runningBatch ? (
+                  <>
+                    <Loader2 className="w-5 h-5 animate-spin" />
+                    {t('businessDashboard.generatingPredictions')}
+                  </>
+                ) : (
+                  <>
+                    <PlayCircle className="w-5 h-5" />
+                    {t('businessDashboard.runPredictionsNow')}
+                  </>
+                )}
+              </Button>
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                {t('businessDashboard.selectProductionModelFirst')}
+              </p>
+            )}
+            
+            {productionModel && (
+              <p className="text-sm text-muted-foreground">
+                {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
+              </p>
+            )}
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-6">
       {/* Hero */}
@@ -77,6 +163,34 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         problemType={problemType}
         horizonDays={filters.horizon}
       />
+      
+      {/* Run predictions button */}
+      {productionModel && (
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
+          </p>
+          <Button 
+            variant="outline"
+            size="sm"
+            onClick={handleRunPredictions}
+            disabled={runningBatch}
+            className="gap-2"
+          >
+            {runningBatch ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                {t('businessDashboard.generatingPredictions')}
+              </>
+            ) : (
+              <>
+                <PlayCircle className="w-4 h-4" />
+                {t('businessDashboard.refreshPredictions')}
+              </>
+            )}
+          </Button>
+        </div>
+      )}
       
       {/* Filters */}
       <BusinessDashboardFilters 

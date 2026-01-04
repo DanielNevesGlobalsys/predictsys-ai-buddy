@@ -112,6 +112,16 @@
   },
   "businessDashboard": {
     "error": "Erro ao carregar dados",
+    "noPredictions": "Nenhuma previsão disponível",
+    "noPredictionsDesc": "Clique no botão abaixo para gerar previsões com o modelo em produção.",
+    "noProductionModel": "Nenhum modelo em produção selecionado. Vá para a aba 'API & Deploy' e selecione um modelo para produção.",
+    "selectProductionModelFirst": "Selecione um modelo para produção na aba 'API & Deploy' para gerar previsões.",
+    "runPredictionsNow": "Rodar previsões agora",
+    "refreshPredictions": "Atualizar previsões",
+    "generatingPredictions": "Gerando previsões...",
+    "predictionsGenerated": "Previsões geradas com sucesso!",
+    "predictionsError": "Erro ao gerar previsões",
+    "usingModel": "Modelo em produção",
     "hero": {
       "title": "Dashboard de Negócio",
       "defaultTitle": "Análise Preditiva",

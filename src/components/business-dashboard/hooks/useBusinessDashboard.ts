@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import type { 
   Prediction, 
@@ -12,10 +12,17 @@ import type {
 
 const HIGH_PROBABILITY_THRESHOLD = 0.7;
 
+interface ProductionModelInfo {
+  id: string;
+  algorithm_name: string;
+}
+
 export function useBusinessDashboard(projectId: string) {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [productionModel, setProductionModel] = useState<ProductionModelInfo | null>(null);
+  const [runningBatch, setRunningBatch] = useState(false);
   
   const [filters, setFilters] = useState<DashboardFilters>({
     dataset: 'latest',
@@ -26,51 +33,104 @@ export function useBusinessDashboard(projectId: string) {
     viewMode: 'risk'
   });
 
-  // Fetch predictions
+  // Fetch production model
   useEffect(() => {
-    async function fetchPredictions() {
-      setLoading(true);
-      setError(null);
+    async function fetchProductionModel() {
+      const { data: model } = await supabase
+        .from('project_models')
+        .select('id, algorithm_name')
+        .eq('project_id', projectId)
+        .eq('is_production', true)
+        .eq('status', 'trained')
+        .maybeSingle();
       
-      try {
-        let query = supabase
-          .from('predictions')
-          .select('*')
-          .eq('project_id', projectId);
-        
-        if (filters.dataset === 'latest') {
-          query = query.eq('is_latest', true);
-        }
-        
-        if (filters.dateRange.from) {
-          query = query.gte('reference_date', filters.dateRange.from.toISOString());
-        }
-        
-        if (filters.dateRange.to) {
-          query = query.lte('reference_date', filters.dateRange.to.toISOString());
-        }
-        
-        if (filters.segmentField && filters.segmentValue) {
-          query = query.eq(filters.segmentField as keyof Prediction, filters.segmentValue);
-        }
-        
-        const { data, error: fetchError } = await query;
-        
-        if (fetchError) throw fetchError;
-        
-        setPredictions((data as Prediction[]) || []);
-      } catch (err) {
-        console.error('Error fetching predictions:', err);
-        setError(err instanceof Error ? err.message : 'Unknown error');
-      } finally {
-        setLoading(false);
-      }
+      setProductionModel(model);
     }
     
     if (projectId) {
-      fetchPredictions();
+      fetchProductionModel();
     }
-  }, [projectId, filters.dataset, filters.dateRange, filters.segmentField, filters.segmentValue]);
+  }, [projectId]);
+
+  // Fetch predictions filtered by production model
+  const fetchPredictions = useCallback(async () => {
+    if (!projectId) return;
+    
+    setLoading(true);
+    setError(null);
+    
+    try {
+      let query = supabase
+        .from('predictions')
+        .select('*')
+        .eq('project_id', projectId);
+      
+      // Filter by production model if available
+      if (productionModel?.id) {
+        query = query.contains('metadata', { model_id: productionModel.id });
+      }
+      
+      if (filters.dataset === 'latest') {
+        query = query.eq('is_latest', true);
+      }
+      
+      if (filters.dateRange.from) {
+        query = query.gte('reference_date', filters.dateRange.from.toISOString());
+      }
+      
+      if (filters.dateRange.to) {
+        query = query.lte('reference_date', filters.dateRange.to.toISOString());
+      }
+      
+      if (filters.segmentField && filters.segmentValue) {
+        query = query.eq(filters.segmentField as keyof Prediction, filters.segmentValue);
+      }
+      
+      const { data, error: fetchError } = await query;
+      
+      if (fetchError) throw fetchError;
+      
+      setPredictions((data as Prediction[]) || []);
+    } catch (err) {
+      console.error('Error fetching predictions:', err);
+      setError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setLoading(false);
+    }
+  }, [projectId, productionModel?.id, filters.dataset, filters.dateRange, filters.segmentField, filters.segmentValue]);
+
+  useEffect(() => {
+    fetchPredictions();
+  }, [fetchPredictions]);
+
+  // Run batch predictions
+  const runBatchPredictions = useCallback(async () => {
+    if (!projectId) return;
+    
+    setRunningBatch(true);
+    setError(null);
+    
+    try {
+      const { data, error: invokeError } = await supabase.functions.invoke('run-batch-predictions', {
+        body: { project_id: projectId, horizon_days: filters.horizon }
+      });
+      
+      if (invokeError) throw invokeError;
+      
+      console.log('Batch predictions result:', data);
+      
+      // Refetch predictions after batch is done
+      await fetchPredictions();
+      
+      return data;
+    } catch (err) {
+      console.error('Error running batch predictions:', err);
+      setError(err instanceof Error ? err.message : 'Erro ao gerar previsões');
+      throw err;
+    } finally {
+      setRunningBatch(false);
+    }
+  }, [projectId, filters.horizon, fetchPredictions]);
 
   // Calculate KPIs
   const kpis = useMemo<KPIData>(() => {
@@ -315,6 +375,10 @@ export function useBusinessDashboard(projectId: string) {
     filters,
     updateFilters,
     loading,
-    error
+    error,
+    productionModel,
+    runBatchPredictions,
+    runningBatch,
+    refetch: fetchPredictions
   };
 }
