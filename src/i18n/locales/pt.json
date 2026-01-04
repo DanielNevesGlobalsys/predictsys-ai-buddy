@@ -88,6 +88,9 @@
   "dashboard": {
     "title": "Meus Projetos",
     "subtitle": "Gerencie seus projetos de machine learning",
+    "myProjects": "Meus Projetos",
+    "manageProjects": "Gerencie seus projetos de machine learning",
+    "viewProject": "Ver projeto",
     "businessTitle": "Dashboard de Negócio",
     "businessSubtitle": "Visão completa baseada em previsões",
     "projectsView": "Projetos",
