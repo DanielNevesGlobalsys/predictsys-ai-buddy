@@ -13,7 +13,8 @@
     "clear": "Limpar",
     "export": "Exportar",
     "close": "Fechar",
-    "confirm": "Confirmar"
+    "confirm": "Confirmar",
+    "retry": "Tentar novamente"
   },
   "auth": {
     "login": "Entrar",
@@ -119,6 +120,7 @@
     "runPredictionsNow": "Rodar previsões agora",
     "refreshPredictions": "Atualizar previsões",
     "generatingPredictions": "Gerando previsões...",
+    "pleaseWait": "Isso pode levar alguns segundos dependendo do tamanho da base.",
     "predictionsGenerated": "Previsões geradas com sucesso!",
     "predictionsError": "Erro ao gerar previsões",
     "usingModel": "Modelo em produção",
