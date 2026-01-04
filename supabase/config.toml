@@ -41,3 +41,6 @@ verify_jwt = false
 
 [functions.parse-file]
 verify_jwt = false
+
+[functions.run-batch-predictions]
+verify_jwt = false
