@@ -26,7 +26,7 @@ import ModelsTab from "@/components/project/ModelsTab";
 import APIDeployTab from "@/components/project/APIDeployTab";
 import ChatTab from "@/components/project/ChatTab";
 import SettingsTab from "@/components/project/SettingsTab";
-import DashboardContent from "@/components/dashboard/DashboardContent";
+import { BusinessDashboard } from "@/components/business-dashboard";
 import Header from "@/components/layout/Header";
 
 interface Project {
@@ -350,12 +350,7 @@ const ProjectDetails = () => {
           </TabsContent>
 
           <TabsContent value="dashboard">
-            <DashboardContent 
-              projectId={project.id}
-              problemType={project.problem_type}
-              targetColumn={project.target_column || undefined}
-              projectName={project.name}
-            />
+            <BusinessDashboard projectId={project.id} />
           </TabsContent>
 
           <TabsContent value="chat">
