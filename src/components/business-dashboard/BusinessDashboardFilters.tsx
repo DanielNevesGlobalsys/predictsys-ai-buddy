@@ -119,14 +119,14 @@ export function BusinessDashboardFilters({ filters, onFilterChange, availableSeg
       {/* Segment Field */}
       {availableSegmentFields.length > 0 && (
         <Select 
-          value={filters.segmentField || ''} 
-          onValueChange={(value) => onFilterChange({ segmentField: value || null, segmentValue: null })}
+          value={filters.segmentField || '__all__'} 
+          onValueChange={(value) => onFilterChange({ segmentField: value === '__all__' ? null : value, segmentValue: null })}
         >
           <SelectTrigger className="w-[160px]">
             <SelectValue placeholder={t('businessDashboard.filters.filterBy')} />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="">{t('businessDashboard.filters.allSegments')}</SelectItem>
+            <SelectItem value="__all__">{t('businessDashboard.filters.allSegments')}</SelectItem>
             {availableSegmentFields.map(field => (
               <SelectItem key={field} value={field}>
                 {segmentFieldLabels[field] || field}
