@@ -86,6 +86,113 @@ export type Database = {
         }
         Relationships: []
       }
+      predictions: {
+        Row: {
+          age_group: string | null
+          average_ticket: number | null
+          batch_id: string | null
+          campaign: string | null
+          channel: string | null
+          city: string | null
+          cohort: string | null
+          created_at: string
+          entity_id: string
+          entity_type: string | null
+          horizon_days: number | null
+          id: string
+          is_latest: boolean | null
+          lifetime_value: number | null
+          metadata: Json | null
+          potential_value: number | null
+          predicted_class: string | null
+          predicted_value: number | null
+          prediction_date: string
+          probability_event: number | null
+          problem_context: string | null
+          problem_type: string
+          product_category: string | null
+          project_id: string
+          reference_date: string
+          region: string | null
+          segment: string | null
+          state: string | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          age_group?: string | null
+          average_ticket?: number | null
+          batch_id?: string | null
+          campaign?: string | null
+          channel?: string | null
+          city?: string | null
+          cohort?: string | null
+          created_at?: string
+          entity_id: string
+          entity_type?: string | null
+          horizon_days?: number | null
+          id?: string
+          is_latest?: boolean | null
+          lifetime_value?: number | null
+          metadata?: Json | null
+          potential_value?: number | null
+          predicted_class?: string | null
+          predicted_value?: number | null
+          prediction_date?: string
+          probability_event?: number | null
+          problem_context?: string | null
+          problem_type?: string
+          product_category?: string | null
+          project_id: string
+          reference_date?: string
+          region?: string | null
+          segment?: string | null
+          state?: string | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          age_group?: string | null
+          average_ticket?: number | null
+          batch_id?: string | null
+          campaign?: string | null
+          channel?: string | null
+          city?: string | null
+          cohort?: string | null
+          created_at?: string
+          entity_id?: string
+          entity_type?: string | null
+          horizon_days?: number | null
+          id?: string
+          is_latest?: boolean | null
+          lifetime_value?: number | null
+          metadata?: Json | null
+          potential_value?: number | null
+          predicted_class?: string | null
+          predicted_value?: number | null
+          prediction_date?: string
+          probability_event?: number | null
+          problem_context?: string | null
+          problem_type?: string
+          product_category?: string | null
+          project_id?: string
+          reference_date?: string
+          region?: string | null
+          segment?: string | null
+          state?: string | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "predictions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       profiles: {
         Row: {
           created_at: string
