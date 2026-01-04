@@ -604,7 +604,10 @@
       "decisionTree": "Reglas claras y visualizables",
       "ridge": "Estable incluso con multicolinealidad",
       "default": "Buen rendimiento general"
-    }
+    },
+    "configChangedTitle": "¡Configuración cambiada!",
+    "configChangedDesc": "Cambiaste la variable objetivo o las features. Los resultados anteriores ya no son válidos. Haz clic en 'Entrenar modelos' para generar nuevos modelos para esta configuración.",
+    "mustRetrainFirst": "Antes de continuar al Deploy, entrena nuevamente los modelos con la nueva configuración de objetivo y features."
   },
   "eda": {
     "title": "Análisis Exploratorio",

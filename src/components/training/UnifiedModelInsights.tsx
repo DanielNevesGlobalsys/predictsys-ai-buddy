@@ -182,19 +182,31 @@ const UnifiedModelInsights = ({
       
       const systemPrompt = `You are a friendly data science expert who explains ML models in simple business language.
 Respond in ${lang}.
-CRITICAL: Return ONLY a valid JSON object with NO markdown formatting, NO code blocks, NO backticks.
-The JSON must have exactly this structure:
-{
-  "summary": "2-3 short sentences about overall model performance (STRING only)",
-  "featureImportance": "Short paragraph explaining the top 3-5 variables (STRING only)",
-  "risks": ["risk 1 as string", "risk 2 as string"],
-  "recommendations": ["recommendation 1 as string", "recommendation 2 as string"]
-}
 
-ALL values must be plain strings. "summary" and "featureImportance" are strings, NOT objects.
-"risks" and "recommendations" are arrays of strings.`;
+CRITICAL RULES:
+- DO NOT return JSON, no curly braces {}, no field names like "title" or "overallAssessment"
+- Respond in plain text with paragraphs and bullet points
+- Use clear, conversational language for business users
 
-      const prompt = `Analyze this ML model and provide insights as JSON:
+Structure your response exactly like this (use these exact section headers):
+
+===RESUMO===
+Write 2-3 sentences about overall model performance and what it means for the business.
+
+===IMPORTÂNCIA DAS VARIÁVEIS===
+Explain in a paragraph why the top 3-5 variables are important for predictions. Be specific about each variable.
+
+===RISCOS===
+• Risk 1
+• Risk 2
+• Risk 3
+
+===AÇÕES RECOMENDADAS===
+• Action 1
+• Action 2
+• Action 3`;
+
+      const prompt = `Analyze this ML model:
 
 Model: "${modelName}" (${problemType})
 Target: ${targetColumn || "not specified"}
@@ -204,9 +216,9 @@ Metrics: ${metricsText || "not available"}
 Top feature importances:
 ${featureList}
 
-${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting risk.` : ""}
+${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting - the model may be memorizing IDs instead of learning patterns.` : ""}
 
-Return ONLY a valid JSON object (no markdown, no code blocks) with summary, featureImportance, risks, and recommendations fields.`;
+Provide your analysis following the exact section structure from the system prompt. Use plain text with bullet points, NOT JSON.`;
 
       const { data, error } = await supabase.functions.invoke("global-chat", {
         body: {
@@ -222,41 +234,54 @@ Return ONLY a valid JSON object (no markdown, no code blocks) with summary, feat
 
       const responseText = data?.response || data?.text || "";
       
-      // Parse JSON from response - handle both clean JSON and markdown-wrapped JSON
+      // Parse the plain text response by sections
       let parsed: ParsedInsights;
       try {
-        // Remove markdown code blocks if present
-        let cleanedResponse = responseText
-          .replace(/```json\s*/gi, '')
-          .replace(/```\s*/g, '')
-          .trim();
+        // Extract sections from plain text
+        const summaryMatch = responseText.match(/===RESUMO===\s*([\s\S]*?)(?=\n===|$)/i);
+        const featureMatch = responseText.match(/===IMPORTÂNCIA DAS VARIÁVEIS===\s*([\s\S]*?)(?=\n===|$)/i);
+        const risksMatch = responseText.match(/===RISCOS===\s*([\s\S]*?)(?=\n===|$)/i);
+        const actionsMatch = responseText.match(/===AÇÕES RECOMENDADAS===\s*([\s\S]*?)(?=\n===|$)/i);
         
-        // Try to extract JSON from the cleaned response
-        const jsonMatch = cleanedResponse.match(/\{[\s\S]*\}/);
-        if (jsonMatch) {
-          const rawParsed = JSON.parse(jsonMatch[0]);
-          
-          // Normalize the parsed data - handle nested objects
-          parsed = {
-            summary: typeof rawParsed.summary === 'string' 
-              ? rawParsed.summary 
-              : (rawParsed.summary?.text || rawParsed.summary?.overview || JSON.stringify(rawParsed.summary) || ""),
-            featureImportance: typeof rawParsed.featureImportance === 'string'
-              ? rawParsed.featureImportance
-              : (rawParsed.featureImportance?.text || rawParsed.featureImportance?.description || JSON.stringify(rawParsed.featureImportance) || ""),
-            risks: Array.isArray(rawParsed.risks) 
-              ? rawParsed.risks.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
-              : [],
-            recommendations: Array.isArray(rawParsed.recommendations)
-              ? rawParsed.recommendations.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
-              : []
-          };
-        } else {
-          throw new Error("No valid JSON found in response");
+        // Parse bullet points into arrays
+        const parseRisks = (text: string): string[] => {
+          if (!text) return [];
+          return text.split(/\n/)
+            .map(line => line.replace(/^[\s•\-*]+/, '').trim())
+            .filter(line => line.length > 0);
+        };
+        
+        parsed = {
+          summary: summaryMatch?.[1]?.trim() || t("training.fallbackSummary"),
+          featureImportance: featureMatch?.[1]?.trim() || topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
+          risks: risksMatch ? parseRisks(risksMatch[1]) : (idColumns.length > 0 ? [t("training.fallbackRiskIds")] : [t("training.noRisksIdentified")]),
+          recommendations: actionsMatch ? parseRisks(actionsMatch[1]) : [t("training.fallbackRecommendation1"), t("training.fallbackRecommendation2")]
+        };
+        
+        // If parsing failed (no sections found), try to handle as JSON fallback
+        if (!summaryMatch && !featureMatch) {
+          // Check if it's actually JSON (legacy format)
+          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            const rawParsed = JSON.parse(jsonMatch[0]);
+            parsed = {
+              summary: typeof rawParsed.summary === 'string' 
+                ? rawParsed.summary 
+                : (rawParsed.summary?.text || JSON.stringify(rawParsed.summary) || ""),
+              featureImportance: typeof rawParsed.featureImportance === 'string'
+                ? rawParsed.featureImportance
+                : (rawParsed.featureImportance?.text || JSON.stringify(rawParsed.featureImportance) || ""),
+              risks: Array.isArray(rawParsed.risks) 
+                ? rawParsed.risks.map((r: unknown) => typeof r === 'string' ? r : String(r))
+                : [],
+              recommendations: Array.isArray(rawParsed.recommendations)
+                ? rawParsed.recommendations.map((r: unknown) => typeof r === 'string' ? r : String(r))
+                : []
+            };
+          }
         }
       } catch (parseError) {
-        console.error("JSON parsing error:", parseError);
-        // Fallback structure if parsing fails
+        console.error("Parsing error:", parseError);
         parsed = {
           summary: t("training.fallbackSummary"),
           featureImportance: topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),

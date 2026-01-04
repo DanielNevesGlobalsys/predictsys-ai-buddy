@@ -720,7 +720,10 @@
       "decisionTree": "Regras claras e visualizáveis",
       "ridge": "Estável mesmo com multicolinearidade",
       "default": "Bom desempenho geral"
-    }
+    },
+    "configChangedTitle": "Configuração alterada!",
+    "configChangedDesc": "Você alterou a variável alvo ou as features. Os resultados anteriores não são mais válidos. Clique em 'Treinar modelos' para gerar novos modelos para essa configuração.",
+    "mustRetrainFirst": "Antes de seguir para o Deploy, treine novamente os modelos com a nova configuração de alvo e features."
   },
   "stepDeploy": {
     "title": "Deploy e API",

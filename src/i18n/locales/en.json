@@ -604,7 +604,10 @@
       "decisionTree": "Clear and visualizable rules",
       "ridge": "Stable even with multicollinearity",
       "default": "Good overall performance"
-    }
+    },
+    "configChangedTitle": "Configuration changed!",
+    "configChangedDesc": "You changed the target variable or features. Previous results are no longer valid. Click 'Train models' to generate new models for this configuration.",
+    "mustRetrainFirst": "Before proceeding to Deploy, please retrain the models with the new target and features configuration."
   },
   "eda": {
     "title": "Exploratory Analysis",

@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ interface StepTargetFeaturesProps {
   onBack: () => void;
   loading: boolean;
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
+  onConfigChange?: () => void;
 }
 
 interface ColumnInfo {
@@ -34,18 +35,28 @@ const StepTargetFeatures = ({
   onBack,
   loading,
   saveProject,
+  onConfigChange,
 }: StepTargetFeaturesProps) => {
   const { t } = useTranslation();
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loadingColumns, setLoadingColumns] = useState(true);
   const [targetColumn, setTargetColumn] = useState(projectData.target_column || "");
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  const initialTargetRef = useRef<string | null>(null);
+  const hasChangedConfig = useRef(false);
 
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
     }
   }, [projectData.id]);
+
+  // Store initial target on mount
+  useEffect(() => {
+    if (projectData.target_column && initialTargetRef.current === null) {
+      initialTargetRef.current = projectData.target_column;
+    }
+  }, [projectData.target_column]);
 
   useEffect(() => {
     if (columns.length > 0 && selectedFeatures.length === 0) {
@@ -88,6 +99,11 @@ const StepTargetFeatures = ({
   };
 
   const handleTargetChange = (value: string) => {
+    // Check if target changed from initial
+    if (initialTargetRef.current && value !== initialTargetRef.current && !hasChangedConfig.current) {
+      hasChangedConfig.current = true;
+      onConfigChange?.();
+    }
     setTargetColumn(value);
     setSelectedFeatures((prev) => {
       const newFeatures = prev.filter((f) => f !== value);
