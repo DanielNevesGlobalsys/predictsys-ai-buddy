@@ -96,13 +96,19 @@ serve(async (req) => {
     }
 
     // Get numeric and categorical feature columns (excluding target)
+    // Handle both accented and non-accented type names
+    const numericTypes = ["numerico", "numérico", "numeric"];
+    const categoricalTypes = ["categorico", "categórico", "categorical", "texto", "text"];
+    
     const numericFeatures = columns.filter(c => 
-      c.inferred_type === "numerico" && c.column_name !== project.target_column
+      numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
     );
     const categoricalFeatures = columns.filter(c => 
-      c.inferred_type === "categorico" && c.column_name !== project.target_column
+      categoricalTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
     );
     const featureNames = numericFeatures.map(c => c.column_name);
+
+    console.log(`Found ${numericFeatures.length} numeric features and ${categoricalFeatures.length} categorical features`);
 
     if (featureNames.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada no projeto" }), {
