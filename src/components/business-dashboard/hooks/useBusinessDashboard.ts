@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useCallback } from 'react';
+import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import type { 
   Prediction, 
@@ -23,6 +23,8 @@ export function useBusinessDashboard(projectId: string) {
   const [error, setError] = useState<string | null>(null);
   const [productionModel, setProductionModel] = useState<ProductionModelInfo | null>(null);
   const [runningBatch, setRunningBatch] = useState(false);
+  const [initialLoadComplete, setInitialLoadComplete] = useState(false);
+  const autoRunTriggered = useRef(false);
   
   const [filters, setFilters] = useState<DashboardFilters>({
     dataset: 'latest',
@@ -36,15 +38,19 @@ export function useBusinessDashboard(projectId: string) {
   // Fetch production model
   useEffect(() => {
     async function fetchProductionModel() {
-      const { data: model } = await supabase
-        .from('project_models')
-        .select('id, algorithm_name')
-        .eq('project_id', projectId)
-        .eq('is_production', true)
-        .eq('status', 'trained')
-        .maybeSingle();
-      
-      setProductionModel(model);
+      try {
+        const { data: model } = await supabase
+          .from('project_models')
+          .select('id, algorithm_name')
+          .eq('project_id', projectId)
+          .eq('is_production', true)
+          .eq('status', 'trained')
+          .maybeSingle();
+        
+        setProductionModel(model);
+      } catch (err) {
+        console.error('Error fetching production model:', err);
+      }
     }
     
     if (projectId) {
@@ -52,23 +58,17 @@ export function useBusinessDashboard(projectId: string) {
     }
   }, [projectId]);
 
-  // Fetch predictions filtered by production model
+  // Fetch predictions - simplified filter without metadata contains
   const fetchPredictions = useCallback(async () => {
     if (!projectId) return;
     
     setLoading(true);
-    setError(null);
     
     try {
       let query = supabase
         .from('predictions')
         .select('*')
         .eq('project_id', projectId);
-      
-      // Filter by production model if available
-      if (productionModel?.id) {
-        query = query.contains('metadata', { model_id: productionModel.id });
-      }
       
       if (filters.dataset === 'latest') {
         query = query.eq('is_latest', true);
@@ -86,26 +86,38 @@ export function useBusinessDashboard(projectId: string) {
         query = query.eq(filters.segmentField as keyof Prediction, filters.segmentValue);
       }
       
+      // Limit query to avoid performance issues
+      query = query.limit(10000);
+      
       const { data, error: fetchError } = await query;
       
-      if (fetchError) throw fetchError;
-      
-      setPredictions((data as Prediction[]) || []);
+      if (fetchError) {
+        console.error('Error fetching predictions:', fetchError);
+        setError(fetchError.message);
+        setPredictions([]);
+      } else {
+        setPredictions((data as Prediction[]) || []);
+        setError(null);
+      }
     } catch (err) {
       console.error('Error fetching predictions:', err);
       setError(err instanceof Error ? err.message : 'Unknown error');
+      setPredictions([]);
     } finally {
       setLoading(false);
+      setInitialLoadComplete(true);
     }
-  }, [projectId, productionModel?.id, filters.dataset, filters.dateRange, filters.segmentField, filters.segmentValue]);
+  }, [projectId, filters.dataset, filters.dateRange, filters.segmentField, filters.segmentValue]);
 
   useEffect(() => {
     fetchPredictions();
   }, [fetchPredictions]);
 
-  // Run batch predictions
-  const runBatchPredictions = useCallback(async () => {
-    if (!projectId) return;
+  // Run batch predictions with error handling that doesn't throw
+  const runBatchPredictions = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
+    if (!projectId || !productionModel) {
+      return { success: false, error: 'Nenhum modelo em produção' };
+    }
     
     setRunningBatch(true);
     setError(null);
@@ -115,22 +127,51 @@ export function useBusinessDashboard(projectId: string) {
         body: { project_id: projectId, horizon_days: filters.horizon }
       });
       
-      if (invokeError) throw invokeError;
+      if (invokeError) {
+        console.error('Error invoking batch predictions:', invokeError);
+        const errorMsg = invokeError.message || 'Erro ao gerar previsões';
+        setError(errorMsg);
+        return { success: false, error: errorMsg };
+      }
+      
+      // Check if the response indicates an error
+      if (data?.error) {
+        console.error('Batch predictions error:', data.error);
+        setError(data.error);
+        return { success: false, error: data.error };
+      }
       
       console.log('Batch predictions result:', data);
       
       // Refetch predictions after batch is done
       await fetchPredictions();
       
-      return data;
+      return { success: true };
     } catch (err) {
       console.error('Error running batch predictions:', err);
-      setError(err instanceof Error ? err.message : 'Erro ao gerar previsões');
-      throw err;
+      const errorMsg = err instanceof Error ? err.message : 'Erro ao gerar previsões';
+      setError(errorMsg);
+      return { success: false, error: errorMsg };
     } finally {
       setRunningBatch(false);
     }
-  }, [projectId, filters.horizon, fetchPredictions]);
+  }, [projectId, productionModel, filters.horizon, fetchPredictions]);
+
+  // Auto-run predictions when entering dashboard with no predictions
+  useEffect(() => {
+    if (
+      initialLoadComplete && 
+      !autoRunTriggered.current && 
+      predictions.length === 0 && 
+      productionModel && 
+      !runningBatch && 
+      !loading
+    ) {
+      console.log('Auto-triggering batch predictions...');
+      autoRunTriggered.current = true;
+      runBatchPredictions();
+    }
+  }, [initialLoadComplete, predictions.length, productionModel, runningBatch, loading, runBatchPredictions]);
 
   // Calculate KPIs
   const kpis = useMemo<KPIData>(() => {

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PlayCircle, AlertCircle } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle, RefreshCw } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
@@ -42,18 +42,22 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   
   useEffect(() => {
     async function fetchProjectInfo() {
-      const { data: project } = await supabase
-        .from('projects')
-        .select('problem_type, detected_problem_type, target_column, business_objective')
-        .eq('id', projectId)
-        .maybeSingle();
-      
-      if (project) {
-        setProjectInfo({
-          problem_type: project.problem_type,
-          problem_context: project.business_objective || project.detected_problem_type || null,
-          target_column: project.target_column
-        });
+      try {
+        const { data: project } = await supabase
+          .from('projects')
+          .select('problem_type, detected_problem_type, target_column, business_objective')
+          .eq('id', projectId)
+          .maybeSingle();
+        
+        if (project) {
+          setProjectInfo({
+            problem_type: project.problem_type,
+            problem_context: project.business_objective || project.detected_problem_type || null,
+            target_column: project.target_column
+          });
+        }
+      } catch (err) {
+        console.error('Error fetching project info:', err);
       }
     }
     
@@ -67,13 +71,39 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     (data.predictions.length > 0 ? data.predictions[0].problem_context : null);
 
   const handleRunPredictions = async () => {
-    try {
-      await runBatchPredictions();
+    const result = await runBatchPredictions();
+    if (result.success) {
       toast.success(t('businessDashboard.predictionsGenerated'));
-    } catch (err) {
-      toast.error(t('businessDashboard.predictionsError'));
+    } else {
+      toast.error(result.error || t('businessDashboard.predictionsError'));
     }
   };
+
+  // Show loading state while batch is running or initial load
+  if (runningBatch) {
+    return (
+      <div className="space-y-6">
+        <BusinessDashboardHero 
+          problemContext={problemContext}
+          problemType={problemType}
+          horizonDays={filters.horizon}
+        />
+        <Card className="p-8">
+          <div className="text-center space-y-4">
+            <Loader2 className="w-12 h-12 animate-spin text-primary mx-auto" />
+            <div>
+              <h3 className="text-xl font-semibold">
+                {t('businessDashboard.generatingPredictions')}
+              </h3>
+              <p className="text-muted-foreground mt-2">
+                {t('businessDashboard.pleaseWait')}
+              </p>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
 
   if (loading && data.predictions.length === 0) {
     return (
@@ -83,16 +113,11 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     );
   }
 
-  if (error) {
-    return (
-      <div className="text-center py-20">
-        <p className="text-destructive">{t('businessDashboard.error')}: {error}</p>
-      </div>
-    );
-  }
+  // Show error state but keep dashboard functional
+  const showError = error && !runningBatch;
 
-  // Show empty state with CTA if no predictions
-  if (data.predictions.length === 0) {
+  // Show empty state with CTA if no predictions and no production model
+  if (data.predictions.length === 0 && !productionModel) {
     return (
       <div className="space-y-6">
         <BusinessDashboardHero 
@@ -112,43 +137,78 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
                 {t('businessDashboard.noPredictions')}
               </h3>
               <p className="text-muted-foreground max-w-md mx-auto">
-                {productionModel 
-                  ? t('businessDashboard.noPredictionsDesc')
-                  : t('businessDashboard.noProductionModel')
-                }
+                {t('businessDashboard.noProductionModel')}
               </p>
             </div>
             
-            {productionModel ? (
+            <p className="text-sm text-muted-foreground">
+              {t('businessDashboard.selectProductionModelFirst')}
+            </p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // Show empty state with CTA if no predictions but has production model
+  if (data.predictions.length === 0 && productionModel) {
+    return (
+      <div className="space-y-6">
+        <BusinessDashboardHero 
+          problemContext={problemContext}
+          problemType={problemType}
+          horizonDays={filters.horizon}
+        />
+        
+        {showError && (
+          <Card className="p-4 border-destructive bg-destructive/10">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0" />
+              <div>
+                <p className="text-sm font-medium text-destructive">{t('businessDashboard.error')}</p>
+                <p className="text-sm text-destructive/80">{error}</p>
+              </div>
               <Button 
-                size="lg" 
+                variant="outline" 
+                size="sm" 
                 onClick={handleRunPredictions}
-                disabled={runningBatch}
-                className="gap-2"
+                className="ml-auto"
               >
-                {runningBatch ? (
-                  <>
-                    <Loader2 className="w-5 h-5 animate-spin" />
-                    {t('businessDashboard.generatingPredictions')}
-                  </>
-                ) : (
-                  <>
-                    <PlayCircle className="w-5 h-5" />
-                    {t('businessDashboard.runPredictionsNow')}
-                  </>
-                )}
+                <RefreshCw className="w-4 h-4 mr-2" />
+                {t('common.retry')}
               </Button>
-            ) : (
-              <p className="text-sm text-muted-foreground">
-                {t('businessDashboard.selectProductionModelFirst')}
-              </p>
-            )}
+            </div>
+          </Card>
+        )}
+        
+        <Card className="p-8">
+          <div className="text-center space-y-6">
+            <div className="w-16 h-16 mx-auto rounded-full bg-muted flex items-center justify-center">
+              <AlertCircle className="w-8 h-8 text-muted-foreground" />
+            </div>
             
-            {productionModel && (
-              <p className="text-sm text-muted-foreground">
-                {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
+            <div className="space-y-2">
+              <h3 className="text-xl font-semibold">
+                {t('businessDashboard.noPredictions')}
+              </h3>
+              <p className="text-muted-foreground max-w-md mx-auto">
+                {t('businessDashboard.noPredictionsDesc')}
               </p>
-            )}
+            </div>
+            
+            <Button 
+              size="lg" 
+              onClick={handleRunPredictions}
+              disabled={runningBatch}
+              className="gap-2"
+            >
+              <PlayCircle className="w-5 h-5" />
+              {t('businessDashboard.runPredictionsNow')}
+            </Button>
+            
+            <p className="text-sm text-muted-foreground">
+              {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
+            </p>
           </div>
         </Card>
       </div>

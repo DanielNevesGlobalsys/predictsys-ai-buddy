@@ -13,7 +13,8 @@
     "clear": "Clear",
     "export": "Export",
     "close": "Close",
-    "confirm": "Confirm"
+    "confirm": "Confirm",
+    "retry": "Retry"
   },
   "auth": {
     "login": "Log In",
@@ -119,6 +120,7 @@
     "runPredictionsNow": "Run predictions now",
     "refreshPredictions": "Refresh predictions",
     "generatingPredictions": "Generating predictions...",
+    "pleaseWait": "This may take a few seconds depending on the dataset size.",
     "predictionsGenerated": "Predictions generated successfully!",
     "predictionsError": "Error generating predictions",
     "usingModel": "Production model",
