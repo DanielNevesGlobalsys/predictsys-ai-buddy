@@ -340,8 +340,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             ))}
           </div>
           <ul className="text-muted-foreground space-y-1">
-            <li>• Tamanho máximo (upload direto): {MAX_FILE_SIZE / 1024 / 1024} MB</li>
-            <li>• Para arquivos CSV maiores, use "{t("dataIngestion.import.largeImportTitle")}" (até {(MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)} GB).</li>
+            <li>• Tamanho máximo do arquivo: {(MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)} GB</li>
             <li>• {t("dataIngestion.file.reqEncoding")}</li>
             <li>• {t("dataIngestion.file.reqHeader")}</li>
             <li>• Datasets com mais de {SAMPLE_SIZE.toLocaleString()} linhas serão amostrados automaticamente para análise.</li>
