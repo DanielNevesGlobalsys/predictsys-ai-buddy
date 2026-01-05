@@ -14,7 +14,8 @@
     "export": "Export",
     "close": "Close",
     "confirm": "Confirm",
-    "retry": "Retry"
+    "retry": "Retry",
+    "refresh": "Refresh"
   },
   "auth": {
     "login": "Log In",
@@ -1083,6 +1084,48 @@
       "azure": { "serverName": "Server name", "database": "Database", "username": "Username", "password": "Password", "accountName": "Storage account name", "containerName": "Container name", "blobPath": "File path", "sasToken": "SAS Token" },
       "aws": { "bucketName": "Bucket name", "objectKey": "Object path", "region": "Region", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Port", "database": "Database", "username": "Username", "password": "Password", "s3OutputLocation": "S3 output location" },
       "errors": { "nameRequired": "Connection name is required" }
+    },
+    "import": {
+      "largeImportTitle": "Import Large CSV (beta)",
+      "largeImportDesc": "The file will be processed in the background. You'll receive a notification when processing is complete.",
+      "processingWarning": "Large files may take several minutes to process.",
+      "datasetName": "Dataset name",
+      "datasetNamePlaceholder": "Enter a name for the dataset",
+      "delimiter": "Delimiter",
+      "delimiterComma": "Comma (,)",
+      "delimiterSemicolon": "Semicolon (;)",
+      "delimiterTab": "Tab (\\t)",
+      "delimiterPipe": "Pipe (|)",
+      "encoding": "Encoding",
+      "uploading": "Uploading...",
+      "startImport": "Start Import",
+      "importStarted": "Import started!",
+      "importStartedDesc": "You can track progress in the 'CSV Imports' section.",
+      "jobsTitle": "CSV Imports",
+      "jobsDesc": "Track your large file imports.",
+      "noJobs": "No imports found",
+      "rows": "rows",
+      "retry": "Retry",
+      "retryStarted": "Retrying...",
+      "retryStartedDesc": "Processing will resume.",
+      "createdAt": "Started",
+      "finishedAt": "Finished",
+      "statusPending": "Pending",
+      "statusProcessing": "Processing",
+      "statusCompleted": "Completed",
+      "statusFailed": "Failed",
+      "viewImports": "View imports",
+      "largeFileDetected": "Large file detected",
+      "largeFileMessage": "This file is {{size}} and will be processed in the background.",
+      "fileTooLargeMax": "This file exceeds the maximum limit of {{maxSize}} GB. Split the file into smaller parts or use a database connector.",
+      "errors": {
+        "notAuthenticated": "User not authenticated. Please log in again.",
+        "uploadFailed": "Error uploading file. Please try again.",
+        "jobCreationFailed": "Error creating import job.",
+        "unexpected": "An unexpected error occurred.",
+        "fetchJobsFailed": "Error loading imports.",
+        "retryFailed": "Error retrying."
+      }
     }
   },
   "export": {

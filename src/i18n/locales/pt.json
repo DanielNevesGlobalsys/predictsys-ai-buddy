@@ -14,7 +14,8 @@
     "export": "Exportar",
     "close": "Fechar",
     "confirm": "Confirmar",
-    "retry": "Tentar novamente"
+    "retry": "Tentar novamente",
+    "refresh": "Atualizar"
   },
   "auth": {
     "login": "Entrar",
@@ -1298,6 +1299,48 @@
       },
       "errors": {
         "nameRequired": "O nome da conexão é obrigatório"
+      }
+    },
+    "import": {
+      "largeImportTitle": "Importar CSV grande (beta)",
+      "largeImportDesc": "O arquivo será processado em background. Você receberá uma notificação quando o processo for concluído.",
+      "processingWarning": "Arquivos grandes podem levar vários minutos para serem processados.",
+      "datasetName": "Nome do dataset",
+      "datasetNamePlaceholder": "Digite um nome para o dataset",
+      "delimiter": "Delimitador",
+      "delimiterComma": "Vírgula (,)",
+      "delimiterSemicolon": "Ponto e vírgula (;)",
+      "delimiterTab": "Tab (\\t)",
+      "delimiterPipe": "Pipe (|)",
+      "encoding": "Codificação",
+      "uploading": "Enviando...",
+      "startImport": "Iniciar importação",
+      "importStarted": "Importação iniciada!",
+      "importStartedDesc": "Você pode acompanhar o progresso na seção 'Importações de CSV'.",
+      "jobsTitle": "Importações de CSV",
+      "jobsDesc": "Acompanhe suas importações de arquivos grandes.",
+      "noJobs": "Nenhuma importação encontrada",
+      "rows": "linhas",
+      "retry": "Tentar novamente",
+      "retryStarted": "Tentando novamente...",
+      "retryStartedDesc": "O processamento será retomado.",
+      "createdAt": "Iniciado",
+      "finishedAt": "Concluído",
+      "statusPending": "Aguardando",
+      "statusProcessing": "Processando",
+      "statusCompleted": "Concluído",
+      "statusFailed": "Falhou",
+      "viewImports": "Ver importações",
+      "largeFileDetected": "Arquivo grande detectado",
+      "largeFileMessage": "Este arquivo tem {{size}} e será processado em background.",
+      "fileTooLargeMax": "Este arquivo excede o limite máximo de {{maxSize}} GB. Divida o arquivo em partes menores ou use um conector de banco de dados.",
+      "errors": {
+        "notAuthenticated": "Usuário não autenticado. Por favor, faça login novamente.",
+        "uploadFailed": "Erro ao enviar arquivo. Por favor, tente novamente.",
+        "jobCreationFailed": "Erro ao criar job de importação.",
+        "unexpected": "Ocorreu um erro inesperado.",
+        "fetchJobsFailed": "Erro ao carregar importações.",
+        "retryFailed": "Erro ao tentar novamente."
       }
     }
   },
