@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, BarChart3, Calculator } from "lucide-react";
+import { Loader2, RefreshCw, BarChart3, Calculator, Download, FileSpreadsheet } from "lucide-react";
 import EDAKPICards from "./EDAKPICards";
 import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
@@ -11,6 +11,7 @@ import EDAMissingSection from "./EDAMissingSection";
 import EDACorrelationSection from "./EDACorrelationSection";
 import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
+import { ExportCSVModal, ExportJobsModal } from "@/components/export";
 
 interface NumericStat {
   id: string;
@@ -50,6 +51,8 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
     rows: 0, columns: 0, target: null
   });
   const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
 
   useEffect(() => {
     checkProjectDataset();
@@ -192,6 +195,22 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
           <p className="text-muted-foreground text-sm">{t("eda.subtitle")}</p>
         </div>
         <div className="flex gap-2">
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setExportJobsModalOpen(true)}
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            <span className="ml-2">{t("export.jobsTitle")}</span>
+          </Button>
+          <Button 
+            variant="outline" 
+            size="sm" 
+            onClick={() => setExportModalOpen(true)}
+          >
+            <Download className="w-4 h-4" />
+            <span className="ml-2">{t("common.export")} CSV</span>
+          </Button>
           <EDAExportPDF
             projectName={projectName}
             kpiData={kpiData}
@@ -230,6 +249,21 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
         targetColumn={projectInfo.target || undefined}
         projectName={projectName}
         onInsightsChange={setAiInsights}
+      />
+      
+      {/* Export Modals */}
+      <ExportCSVModal
+        open={exportModalOpen}
+        onOpenChange={setExportModalOpen}
+        projectId={projectId}
+        exportContext="eda"
+        onExportStarted={() => setExportJobsModalOpen(true)}
+      />
+      
+      <ExportJobsModal
+        open={exportJobsModalOpen}
+        onOpenChange={setExportJobsModalOpen}
+        projectId={projectId}
       />
     </div>
   );

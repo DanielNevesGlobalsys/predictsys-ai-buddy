@@ -1300,5 +1300,36 @@
         "nameRequired": "O nome da conexão é obrigatório"
       }
     }
+  },
+  "export": {
+    "title": "Exportar CSV",
+    "description": "Configure a exportação de dados para CSV.",
+    "whatToExport": "O que exportar",
+    "filters": "Filtros",
+    "applyCurrentFilters": "Aplicar filtros atuais do dashboard",
+    "allPredictions": "Todas as previsões (sem filtros)",
+    "backgroundInfo": "A exportação será processada em background. Você receberá o link quando estiver pronto.",
+    "startExport": "Iniciar Exportação",
+    "starting": "Iniciando...",
+    "started": "Exportação iniciada!",
+    "startedDescription": "Você poderá acompanhar o progresso e baixar o arquivo em 'Exportações'.",
+    "error": "Erro ao iniciar exportação",
+    "jobsTitle": "Exportações",
+    "jobsDescription": "Acompanhe suas exportações de dados.",
+    "noJobs": "Nenhuma exportação encontrada",
+    "download": "Baixar",
+    "processing": "Processando...",
+    "rows": "linhas",
+    "types": {
+      "predictions": "Previsões do Dashboard",
+      "eda_results": "Resultados da Análise Exploratória",
+      "dataset": "Dados do Projeto"
+    },
+    "status": {
+      "pending": "Aguardando",
+      "running": "Em andamento",
+      "completed": "Concluído",
+      "failed": "Falhou"
+    }
   }
 }
