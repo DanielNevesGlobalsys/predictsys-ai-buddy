@@ -1167,7 +1167,7 @@
     },
     "file": {
       "supportedFormats": "Formatos suportados:",
-      "reqMaxSize": "Tamanho máximo: {{size}} MB",
+      "reqMaxSize": "Tamanho máximo do arquivo: {{size}} GB",
       "reqEncoding": "Codificação UTF-8 recomendada",
       "reqHeader": "Primeira linha deve conter os nomes das colunas",
       "samplingNote": "Datasets com mais de {{sampleSize}} linhas serão amostrados automaticamente para análise.",
