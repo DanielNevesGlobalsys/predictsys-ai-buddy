@@ -142,6 +142,68 @@ export type Database = {
         }
         Relationships: []
       }
+      import_jobs: {
+        Row: {
+          created_at: string
+          delimiter: string
+          encoding: string
+          error_message: string | null
+          file_name: string
+          file_size_bytes: number
+          finished_at: string | null
+          id: string
+          progress: number | null
+          project_id: string
+          rows_processed: number | null
+          status: string
+          storage_path: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          delimiter?: string
+          encoding?: string
+          error_message?: string | null
+          file_name: string
+          file_size_bytes: number
+          finished_at?: string | null
+          id?: string
+          progress?: number | null
+          project_id: string
+          rows_processed?: number | null
+          status?: string
+          storage_path: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          delimiter?: string
+          encoding?: string
+          error_message?: string | null
+          file_name?: string
+          file_size_bytes?: number
+          finished_at?: string | null
+          id?: string
+          progress?: number | null
+          project_id?: string
+          rows_processed?: number | null
+          status?: string
+          storage_path?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_jobs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       predictions: {
         Row: {
           age_group: string | null

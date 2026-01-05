@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.process-export]
 verify_jwt = false
+
+[functions.process-import]
+verify_jwt = false

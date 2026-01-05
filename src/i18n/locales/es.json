@@ -14,7 +14,8 @@
     "export": "Exportar",
     "close": "Cerrar",
     "confirm": "Confirmar",
-    "retry": "Reintentar"
+    "retry": "Reintentar",
+    "refresh": "Actualizar"
   },
   "auth": {
     "login": "Iniciar Sesión",
@@ -1083,6 +1084,48 @@
       "azure": { "serverName": "Nombre del servidor", "database": "Base de datos", "username": "Usuario", "password": "Contraseña", "accountName": "Nombre de cuenta de storage", "containerName": "Nombre del container", "blobPath": "Ruta del archivo", "sasToken": "Token SAS" },
       "aws": { "bucketName": "Nombre del bucket", "objectKey": "Ruta del objeto", "region": "Región", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Puerto", "database": "Base de datos", "username": "Usuario", "password": "Contraseña", "s3OutputLocation": "Ubicación de salida S3" },
       "errors": { "nameRequired": "El nombre de la conexión es obligatorio" }
+    },
+    "import": {
+      "largeImportTitle": "Importar CSV grande (beta)",
+      "largeImportDesc": "El archivo se procesará en segundo plano. Recibirás una notificación cuando el proceso esté completo.",
+      "processingWarning": "Los archivos grandes pueden tardar varios minutos en procesarse.",
+      "datasetName": "Nombre del dataset",
+      "datasetNamePlaceholder": "Ingresa un nombre para el dataset",
+      "delimiter": "Delimitador",
+      "delimiterComma": "Coma (,)",
+      "delimiterSemicolon": "Punto y coma (;)",
+      "delimiterTab": "Tab (\\t)",
+      "delimiterPipe": "Pipe (|)",
+      "encoding": "Codificación",
+      "uploading": "Subiendo...",
+      "startImport": "Iniciar importación",
+      "importStarted": "¡Importación iniciada!",
+      "importStartedDesc": "Puedes seguir el progreso en la sección 'Importaciones de CSV'.",
+      "jobsTitle": "Importaciones de CSV",
+      "jobsDesc": "Sigue tus importaciones de archivos grandes.",
+      "noJobs": "No se encontraron importaciones",
+      "rows": "filas",
+      "retry": "Reintentar",
+      "retryStarted": "Reintentando...",
+      "retryStartedDesc": "El procesamiento se reanudará.",
+      "createdAt": "Iniciado",
+      "finishedAt": "Completado",
+      "statusPending": "Pendiente",
+      "statusProcessing": "Procesando",
+      "statusCompleted": "Completado",
+      "statusFailed": "Falló",
+      "viewImports": "Ver importaciones",
+      "largeFileDetected": "Archivo grande detectado",
+      "largeFileMessage": "Este archivo tiene {{size}} y se procesará en segundo plano.",
+      "fileTooLargeMax": "Este archivo excede el límite máximo de {{maxSize}} GB. Divide el archivo en partes más pequeñas o usa un conector de base de datos.",
+      "errors": {
+        "notAuthenticated": "Usuario no autenticado. Por favor, inicia sesión nuevamente.",
+        "uploadFailed": "Error al subir archivo. Por favor, intenta de nuevo.",
+        "jobCreationFailed": "Error al crear trabajo de importación.",
+        "unexpected": "Ocurrió un error inesperado.",
+        "fetchJobsFailed": "Error al cargar importaciones.",
+        "retryFailed": "Error al reintentar."
+      }
     }
   },
   "export": {

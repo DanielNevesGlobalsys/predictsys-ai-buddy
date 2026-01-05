@@ -2,11 +2,12 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Upload, FileSpreadsheet, CheckCircle, Info, AlertCircle, Loader2, FileJson, FileText, Table } from "lucide-react";
+import { Upload, FileSpreadsheet, CheckCircle, Info, AlertCircle, Loader2, FileJson, FileText, Table, History } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
+import { LargeImportModal, ImportJobsModal } from "@/components/import";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -20,7 +21,8 @@ interface ColumnInfo {
   index: number;
 }
 
-const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB
+const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB for direct upload
+const MAX_LARGE_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10 GB for async import
 const SAMPLE_SIZE = 100000; // Max rows for EDA sampling
 
 const SUPPORTED_FORMATS = [
@@ -65,6 +67,11 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
   const [rowCount, setRowCount] = useState(0);
   const [totalRows, setTotalRows] = useState(0);
   const [isSampled, setIsSampled] = useState(false);
+  
+  // Large import modal states
+  const [showLargeImportModal, setShowLargeImportModal] = useState(false);
+  const [showImportJobsModal, setShowImportJobsModal] = useState(false);
+  const [largeFile, setLargeFile] = useState<File | null>(null);
 
   useEffect(() => {
     if (projectData.dataset_filename) {
@@ -137,17 +144,51 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
       return;
     }
     
-    if (file.size > MAX_FILE_SIZE) {
-      setErrorMessage(t("dataIngestion.file.errors.fileTooLarge", { 
-        size: (file.size / 1024 / 1024).toFixed(2),
-        maxSize: MAX_FILE_SIZE / 1024 / 1024 
+    // Check file size and route to appropriate flow
+    if (file.size > MAX_LARGE_FILE_SIZE) {
+      // File too large even for async import
+      setErrorMessage(t("dataIngestion.import.fileTooLargeMax", { 
+        maxSize: (MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)
       }));
       setUploadStatus("error");
       return;
     }
     
+    if (file.size > MAX_FILE_SIZE) {
+      // Large file - use async import flow
+      // Only CSV is supported for large imports
+      const ext = getFileExtension(file.name);
+      if (ext !== '.csv') {
+        setErrorMessage(t("dataIngestion.file.errors.formatNotYetSupported", { format: ext.toUpperCase() }));
+        setUploadStatus("error");
+        return;
+      }
+      
+      setLargeFile(file);
+      setShowLargeImportModal(true);
+      return;
+    }
+    
+    // Normal upload flow
     setSelectedFile(file);
     parseAndUploadFile(file);
+  };
+
+  const handleImportStarted = () => {
+    toast({
+      title: t("dataIngestion.import.importStarted"),
+      description: t("dataIngestion.import.importStartedDesc"),
+    });
+    setShowImportJobsModal(true);
+  };
+
+  const handleJobCompleted = () => {
+    // Refresh project data when import completes
+    onDataReady();
+    toast({
+      title: t("dataIngestion.import.statusCompleted"),
+      description: t("dataIngestion.file.uploadSuccess"),
+    });
   };
 
   const parseAndUploadFile = async (file: File) => {
@@ -299,7 +340,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             ))}
           </div>
           <ul className="text-muted-foreground space-y-1">
-            <li>• {t("dataIngestion.file.reqMaxSize", { size: MAX_FILE_SIZE / 1024 / 1024 })}</li>
+            <li>• {t("dataIngestion.file.reqMaxSize", { size: MAX_FILE_SIZE / 1024 / 1024 })} ({t("dataIngestion.import.largeImportTitle")} {t("common.next")} {(MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)} GB)</li>
             <li>• {t("dataIngestion.file.reqEncoding")}</li>
             <li>• {t("dataIngestion.file.reqHeader")}</li>
           </ul>
@@ -307,6 +348,18 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             {t("dataIngestion.file.samplingNote", { sampleSize: SAMPLE_SIZE.toLocaleString() })}
           </p>
         </div>
+      </div>
+
+      {/* View Imports Button */}
+      <div className="flex justify-end">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => setShowImportJobsModal(true)}
+        >
+          <History className="w-4 h-4 mr-2" />
+          {t("dataIngestion.import.viewImports")}
+        </Button>
       </div>
 
       {/* Error message */}
@@ -415,6 +468,27 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
           totalRows={totalRows}
           sampleRows={rowCount}
           isSampled={isSampled}
+        />
+      )}
+
+      {/* Large Import Modal */}
+      {largeFile && projectData.id && (
+        <LargeImportModal
+          open={showLargeImportModal}
+          onOpenChange={setShowLargeImportModal}
+          file={largeFile}
+          projectId={projectData.id}
+          onImportStarted={handleImportStarted}
+        />
+      )}
+
+      {/* Import Jobs Modal */}
+      {projectData.id && (
+        <ImportJobsModal
+          open={showImportJobsModal}
+          onOpenChange={setShowImportJobsModal}
+          projectId={projectData.id}
+          onJobCompleted={handleJobCompleted}
         />
       )}
     </div>
