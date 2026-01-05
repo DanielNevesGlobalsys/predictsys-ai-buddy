@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PlayCircle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
@@ -13,6 +13,7 @@ import { ActionableList } from './ActionableList';
 import { CohortComparison } from './CohortComparison';
 import { WhatIfSimulation } from './WhatIfSimulation';
 import { BusinessAIInsights } from './BusinessAIInsights';
+import { ExportCSVModal, ExportJobsModal } from '@/components/export';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { toast } from 'sonner';
@@ -28,6 +29,9 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     problem_context: string | null;
     target_column: string | null;
   } | null>(null);
+  
+  const [exportModalOpen, setExportModalOpen] = useState(false);
+  const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
   
   const { 
     data, 
@@ -224,31 +228,51 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         horizonDays={filters.horizon}
       />
       
-      {/* Run predictions button */}
+      {/* Run predictions button + Export */}
       {productionModel && (
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between flex-wrap gap-3">
           <p className="text-sm text-muted-foreground">
             {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
           </p>
-          <Button 
-            variant="outline"
-            size="sm"
-            onClick={handleRunPredictions}
-            disabled={runningBatch}
-            className="gap-2"
-          >
-            {runningBatch ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                {t('businessDashboard.generatingPredictions')}
-              </>
-            ) : (
-              <>
-                <PlayCircle className="w-4 h-4" />
-                {t('businessDashboard.refreshPredictions')}
-              </>
-            )}
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button 
+              variant="outline"
+              size="sm"
+              onClick={() => setExportJobsModalOpen(true)}
+              className="gap-2"
+            >
+              <FileSpreadsheet className="w-4 h-4" />
+              {t('export.jobsTitle')}
+            </Button>
+            <Button 
+              variant="outline"
+              size="sm"
+              onClick={() => setExportModalOpen(true)}
+              className="gap-2"
+            >
+              <Download className="w-4 h-4" />
+              {t('common.export')}
+            </Button>
+            <Button 
+              variant="outline"
+              size="sm"
+              onClick={handleRunPredictions}
+              disabled={runningBatch}
+              className="gap-2"
+            >
+              {runningBatch ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  {t('businessDashboard.generatingPredictions')}
+                </>
+              ) : (
+                <>
+                  <PlayCircle className="w-4 h-4" />
+                  {t('businessDashboard.refreshPredictions')}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       )}
       
@@ -321,6 +345,26 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         segmentationBands={data.segmentationBands}
         groupSegmentation={data.groupSegmentation}
         viewMode={filters.viewMode}
+      />
+      
+      {/* Export Modals */}
+      <ExportCSVModal
+        open={exportModalOpen}
+        onOpenChange={setExportModalOpen}
+        projectId={projectId}
+        exportContext="dashboard"
+        currentFilters={{
+          horizon: filters.horizon,
+          segmentField: filters.segmentField,
+          segmentValue: filters.segmentValue,
+        }}
+        onExportStarted={() => setExportJobsModalOpen(true)}
+      />
+      
+      <ExportJobsModal
+        open={exportJobsModalOpen}
+        onOpenChange={setExportJobsModalOpen}
+        projectId={projectId}
       />
     </div>
   );

@@ -1084,5 +1084,36 @@
       "aws": { "bucketName": "Bucket name", "objectKey": "Object path", "region": "Region", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Port", "database": "Database", "username": "Username", "password": "Password", "s3OutputLocation": "S3 output location" },
       "errors": { "nameRequired": "Connection name is required" }
     }
+  },
+  "export": {
+    "title": "Export CSV",
+    "description": "Configure data export to CSV.",
+    "whatToExport": "What to export",
+    "filters": "Filters",
+    "applyCurrentFilters": "Apply current dashboard filters",
+    "allPredictions": "All predictions (no filters)",
+    "backgroundInfo": "The export will be processed in the background. You'll receive the link when it's ready.",
+    "startExport": "Start Export",
+    "starting": "Starting...",
+    "started": "Export started!",
+    "startedDescription": "You can track progress and download the file in 'Exports'.",
+    "error": "Error starting export",
+    "jobsTitle": "Exports",
+    "jobsDescription": "Track your data exports.",
+    "noJobs": "No exports found",
+    "download": "Download",
+    "processing": "Processing...",
+    "rows": "rows",
+    "types": {
+      "predictions": "Dashboard Predictions",
+      "eda_results": "Exploratory Analysis Results",
+      "dataset": "Project Data"
+    },
+    "status": {
+      "pending": "Pending",
+      "running": "In Progress",
+      "completed": "Completed",
+      "failed": "Failed"
+    }
   }
 }
