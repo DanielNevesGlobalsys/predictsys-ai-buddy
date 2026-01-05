@@ -1302,8 +1302,9 @@
       }
     },
     "import": {
-      "largeImportTitle": "Importar CSV grande (beta)",
+      "largeImportTitle": "Importar CSV grande",
       "largeImportDesc": "O arquivo será processado em background. Você receberá uma notificação quando o processo for concluído.",
+      "maxFileSize": "Tamanho máximo do arquivo: 10 GB.",
       "processingWarning": "Arquivos grandes podem levar vários minutos para serem processados.",
       "datasetName": "Nome do dataset",
       "datasetNamePlaceholder": "Digite um nome para o dataset",

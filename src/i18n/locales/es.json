@@ -1086,8 +1086,9 @@
       "errors": { "nameRequired": "El nombre de la conexión es obligatorio" }
     },
     "import": {
-      "largeImportTitle": "Importar CSV grande (beta)",
+      "largeImportTitle": "Importar CSV grande",
       "largeImportDesc": "El archivo se procesará en segundo plano. Recibirás una notificación cuando el proceso esté completo.",
+      "maxFileSize": "Tamaño máximo del archivo: 10 GB.",
       "processingWarning": "Los archivos grandes pueden tardar varios minutos en procesarse.",
       "datasetName": "Nombre del dataset",
       "datasetNamePlaceholder": "Ingresa un nombre para el dataset",

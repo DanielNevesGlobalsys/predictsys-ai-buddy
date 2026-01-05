@@ -156,8 +156,9 @@ const LargeImportModal = ({
             <Upload className="w-5 h-5" />
             {t("dataIngestion.import.largeImportTitle")}
           </DialogTitle>
-          <DialogDescription>
-            {t("dataIngestion.import.largeImportDesc")}
+          <DialogDescription className="space-y-1">
+            <span>{t("dataIngestion.import.largeImportDesc")}</span>
+            <span className="block font-medium text-foreground">{t("dataIngestion.import.maxFileSize")}</span>
           </DialogDescription>
         </DialogHeader>
 
