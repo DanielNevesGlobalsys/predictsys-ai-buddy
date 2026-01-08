@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -34,6 +34,8 @@ interface ImportJob {
   error_message: string | null;
   created_at: string;
   finished_at: string | null;
+  batch_id: string | null;
+  batch_sequence: number | null;
 }
 
 interface ImportJobsModalProps {
@@ -42,6 +44,8 @@ interface ImportJobsModalProps {
   projectId: string;
   onJobCompleted?: () => void;
 }
+
+const POLLING_INTERVAL = 5000; // 5 seconds
 
 const ImportJobsModal = ({
   open,
@@ -52,7 +56,10 @@ const ImportJobsModal = ({
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
   const [jobs, setJobs] = useState<ImportJob[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const previousJobsRef = useRef<ImportJob[]>([]);
 
   const getDateLocale = () => {
     switch (i18n.language) {
@@ -62,26 +69,35 @@ const ImportJobsModal = ({
     }
   };
 
-  const fetchJobs = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from("import_jobs")
-      .select("*")
-      .eq("project_id", projectId)
-      .order("created_at", { ascending: false })
-      .limit(20);
+  const fetchJobs = useCallback(async (showLoading = false) => {
+    if (showLoading) setLoading(true);
+    setIsRefreshing(true);
+    
+    try {
+      const { data, error } = await supabase
+        .from("import_jobs")
+        .select("*")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false })
+        .limit(50);
 
-    if (error) {
-      console.error("Error fetching import jobs:", error);
-      toast({
-        title: t("common.error"),
-        description: t("dataIngestion.import.errors.fetchJobsFailed"),
-        variant: "destructive",
-      });
-    } else {
-      // Check if any job completed that wasn't completed before
-      const previouslyProcessing = jobs.filter(j => j.status === 'processing');
-      const nowCompleted = (data || []).filter(j => 
+      if (error) {
+        console.error("Error fetching import jobs:", error);
+        toast({
+          title: t("common.error"),
+          description: t("dataIngestion.import.errors.fetchJobsFailed"),
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const newJobs = data || [];
+      
+      // Check if any job completed that was previously processing
+      const previouslyProcessing = previousJobsRef.current.filter(
+        j => j.status === 'processing' || j.status === 'pending'
+      );
+      const nowCompleted = newJobs.filter(j => 
         j.status === 'completed' && 
         previouslyProcessing.some(p => p.id === j.id)
       );
@@ -90,34 +106,82 @@ const ImportJobsModal = ({
         onJobCompleted();
       }
       
-      setJobs(data || []);
+      previousJobsRef.current = newJobs;
+      setJobs(newJobs);
+    } finally {
+      setLoading(false);
+      setIsRefreshing(false);
     }
-    setLoading(false);
-  };
+  }, [projectId, onJobCompleted, t, toast]);
 
+  // Stop polling
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  // Start polling if there are active jobs
+  const startPolling = useCallback(() => {
+    stopPolling();
+    
+    pollingRef.current = setInterval(() => {
+      // Check current jobs state using ref to avoid stale closure
+      const hasActiveJobs = previousJobsRef.current.some(
+        j => j.status === 'pending' || j.status === 'processing'
+      );
+      
+      if (hasActiveJobs) {
+        fetchJobs(false);
+      } else {
+        stopPolling();
+      }
+    }, POLLING_INTERVAL);
+  }, [fetchJobs, stopPolling]);
+
+  // Initial fetch when modal opens
   useEffect(() => {
-    if (open) {
-      fetchJobs();
-      // Poll for updates every 3 seconds when there are processing jobs
-      const interval = setInterval(() => {
-        if (jobs.some(j => j.status === 'pending' || j.status === 'processing')) {
-          fetchJobs();
-        }
-      }, 3000);
-      return () => clearInterval(interval);
+    if (open && projectId) {
+      fetchJobs(true).then(() => {
+        startPolling();
+      });
+    } else {
+      stopPolling();
+      setJobs([]);
+      previousJobsRef.current = [];
     }
-  }, [open, projectId]);
 
-  // Also poll when there are active jobs
+    return () => {
+      stopPolling();
+    };
+  }, [open, projectId, fetchJobs, startPolling, stopPolling]);
+
+  // Restart polling when jobs change and there are active ones
   useEffect(() => {
     if (!open) return;
     
-    const hasActiveJobs = jobs.some(j => j.status === 'pending' || j.status === 'processing');
-    if (!hasActiveJobs) return;
+    const hasActiveJobs = jobs.some(
+      j => j.status === 'pending' || j.status === 'processing'
+    );
+    
+    if (hasActiveJobs && !pollingRef.current) {
+      startPolling();
+    } else if (!hasActiveJobs) {
+      stopPolling();
+    }
+  }, [jobs, open, startPolling, stopPolling]);
 
-    const interval = setInterval(fetchJobs, 3000);
-    return () => clearInterval(interval);
-  }, [jobs, open]);
+  const handleManualRefresh = () => {
+    fetchJobs(false);
+    // Restart polling after manual refresh
+    const hasActiveJobs = jobs.some(
+      j => j.status === 'pending' || j.status === 'processing'
+    );
+    if (hasActiveJobs) {
+      startPolling();
+    }
+  };
 
   const formatFileSize = (bytes: number) => {
     if (bytes >= 1024 * 1024 * 1024) {
@@ -205,10 +269,10 @@ const ImportJobsModal = ({
           <Button
             variant="ghost"
             size="sm"
-            onClick={fetchJobs}
-            disabled={loading}
+            onClick={handleManualRefresh}
+            disabled={loading || isRefreshing}
           >
-            <RefreshCw className={`w-4 h-4 mr-1 ${loading ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
             {t("common.refresh")}
           </Button>
         </div>
