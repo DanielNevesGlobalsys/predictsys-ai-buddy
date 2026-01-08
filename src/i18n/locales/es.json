@@ -1127,6 +1127,24 @@
         "fetchJobsFailed": "Error al cargar importaciones.",
         "retryFailed": "Error al reintentar."
       }
+    },
+    "batchImport": {
+      "title": "Importar CSV grande",
+      "description": "Sube múltiples archivos CSV para formar un único dataset concatenado.",
+      "infoTitle": "Importación por lotes",
+      "infoDesc": "Todos los archivos de este lote se concatenarán verticalmente en un único dataset. Asegúrate de que tengan la misma estructura de columnas.",
+      "files": "Archivos",
+      "total": "total",
+      "addMoreFiles": "Agregar más archivos",
+      "onlyCsv": "Solo archivos CSV son soportados para importación por lotes.",
+      "uploading": "Subiendo archivos...",
+      "uploadedCount": "{{count}} de {{total}} archivos subidos",
+      "startImport": "Iniciar importación",
+      "file": "archivo",
+      "filesPlural": "archivos",
+      "error": "Error",
+      "importStarted": "¡Importación por lotes iniciada!",
+      "importStartedDesc": "{{count}} archivo(s) serán procesados. Recibirás una notificación cuando termine."
     }
   },
   "export": {

@@ -1127,6 +1127,24 @@
         "fetchJobsFailed": "Error loading imports.",
         "retryFailed": "Error retrying."
       }
+    },
+    "batchImport": {
+      "title": "Import Large CSV",
+      "description": "Upload multiple CSV files to create a single concatenated dataset.",
+      "infoTitle": "Batch import",
+      "infoDesc": "All files in this batch will be vertically concatenated into a single dataset. Make sure they have the same column structure.",
+      "files": "Files",
+      "total": "total",
+      "addMoreFiles": "Add more files",
+      "onlyCsv": "Only CSV files are supported for batch import.",
+      "uploading": "Uploading files...",
+      "uploadedCount": "{{count}} of {{total}} files uploaded",
+      "startImport": "Start import",
+      "file": "file",
+      "filesPlural": "files",
+      "error": "Error",
+      "importStarted": "Batch import started!",
+      "importStartedDesc": "{{count}} file(s) will be processed. You'll be notified when complete."
     }
   },
   "export": {
