@@ -7,7 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
-import { LargeImportModal, ImportJobsModal } from "@/components/import";
+import { BatchImportModal, ImportJobsModal } from "@/components/import";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -71,7 +71,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
   // Large import modal states
   const [showLargeImportModal, setShowLargeImportModal] = useState(false);
   const [showImportJobsModal, setShowImportJobsModal] = useState(false);
-  const [largeFile, setLargeFile] = useState<File | null>(null);
+  const [largeFiles, setLargeFiles] = useState<File[]>([]);
 
   useEffect(() => {
     if (projectData.dataset_filename) {
@@ -164,7 +164,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         return;
       }
       
-      setLargeFile(file);
+      setLargeFiles([file]);
       setShowLargeImportModal(true);
       return;
     }
@@ -469,12 +469,12 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         />
       )}
 
-      {/* Large Import Modal */}
-      {largeFile && projectData.id && (
-        <LargeImportModal
+      {/* Batch Import Modal */}
+      {largeFiles.length > 0 && projectData.id && (
+        <BatchImportModal
           open={showLargeImportModal}
           onOpenChange={setShowLargeImportModal}
-          file={largeFile}
+          initialFiles={largeFiles}
           projectId={projectData.id}
           onImportStarted={handleImportStarted}
         />

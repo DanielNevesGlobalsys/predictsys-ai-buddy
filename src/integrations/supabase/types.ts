@@ -144,6 +144,8 @@ export type Database = {
       }
       import_jobs: {
         Row: {
+          batch_id: string | null
+          batch_sequence: number | null
           created_at: string
           delimiter: string
           encoding: string
@@ -151,7 +153,10 @@ export type Database = {
           file_name: string
           file_size_bytes: number
           finished_at: string | null
+          headers_hash: string | null
+          headers_json: Json | null
           id: string
+          is_batch_primary: boolean | null
           progress: number | null
           project_id: string
           rows_processed: number | null
@@ -161,6 +166,8 @@ export type Database = {
           user_id: string
         }
         Insert: {
+          batch_id?: string | null
+          batch_sequence?: number | null
           created_at?: string
           delimiter?: string
           encoding?: string
@@ -168,7 +175,10 @@ export type Database = {
           file_name: string
           file_size_bytes: number
           finished_at?: string | null
+          headers_hash?: string | null
+          headers_json?: Json | null
           id?: string
+          is_batch_primary?: boolean | null
           progress?: number | null
           project_id: string
           rows_processed?: number | null
@@ -178,6 +188,8 @@ export type Database = {
           user_id: string
         }
         Update: {
+          batch_id?: string | null
+          batch_sequence?: number | null
           created_at?: string
           delimiter?: string
           encoding?: string
@@ -185,7 +197,10 @@ export type Database = {
           file_name?: string
           file_size_bytes?: number
           finished_at?: string | null
+          headers_hash?: string | null
+          headers_json?: Json | null
           id?: string
+          is_batch_primary?: boolean | null
           progress?: number | null
           project_id?: string
           rows_processed?: number | null
