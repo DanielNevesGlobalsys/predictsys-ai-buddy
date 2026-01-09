@@ -1129,8 +1129,8 @@
       }
     },
     "batchImport": {
-      "title": "Importar CSV grande",
-      "description": "Sube múltiples archivos CSV para formar un único dataset concatenado.",
+      "title": "Importar archivo grande",
+      "description": "Sube archivos grandes para formar un único dataset concatenado.",
       "infoTitle": "Importación por lotes",
       "infoDesc": "Todos los archivos de este lote se concatenarán verticalmente en un único dataset. Asegúrate de que tengan la misma estructura de columnas.",
       "files": "Archivos",
@@ -1143,8 +1143,10 @@
       "file": "archivo",
       "filesPlural": "archivos",
       "error": "Error",
-      "importStarted": "¡Importación por lotes iniciada!",
-      "importStartedDesc": "{{count}} archivo(s) serán procesados. Recibirás una notificación cuando termine."
+      "importStarted": "¡Importación iniciada!",
+      "importStartedDesc": "{{count}} archivo(s) serán procesados. Recibirás una notificación cuando termine.",
+      "processingServer": "Procesando en el servidor...",
+      "processingServerDesc": "Subida completada. Los archivos están siendo procesados."
     }
   },
   "export": {

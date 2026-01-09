@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -48,6 +48,13 @@ interface BatchImportModalProps {
   onImportStarted: () => void;
 }
 
+interface UploadProgress {
+  bytesUploaded: number;
+  totalBytes: number;
+  speed: number; // bytes per second
+  eta: number; // seconds remaining
+}
+
 const MAX_LARGE_IMPORT_GB = 10;
 
 const BatchImportModal = ({
@@ -68,9 +75,16 @@ const BatchImportModal = ({
   const [encoding, setEncoding] = useState("UTF-8");
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadStats, setUploadStats] = useState<UploadProgress | null>(null);
+  const [uploadPhase, setUploadPhase] = useState<"uploading" | "processing" | "done">("uploading");
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>(
     initialFiles.map(f => ({ file: f, status: "pending" }))
   );
+
+  // Refs for speed calculation
+  const lastBytesRef = useRef(0);
+  const lastTimeRef = useRef(Date.now());
+  const speedHistoryRef = useRef<number[]>([]);
 
   const totalSizeBytes = batchFiles.reduce((sum, bf) => sum + bf.file.size, 0);
   const totalSizeGB = (totalSizeBytes / 1024 / 1024 / 1024).toFixed(2);
@@ -81,6 +95,26 @@ const BatchImportModal = ({
       return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
     }
     return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+  };
+
+  const formatSpeed = (bytesPerSecond: number) => {
+    if (bytesPerSecond >= 1024 * 1024) {
+      return `${(bytesPerSecond / 1024 / 1024).toFixed(1)} MB/s`;
+    }
+    return `${(bytesPerSecond / 1024).toFixed(1)} KB/s`;
+  };
+
+  const formatETA = (seconds: number) => {
+    if (seconds < 60) {
+      return `~${Math.ceil(seconds)}s`;
+    } else if (seconds < 3600) {
+      const mins = Math.ceil(seconds / 60);
+      return `~${mins} min`;
+    } else {
+      const hours = Math.floor(seconds / 3600);
+      const mins = Math.ceil((seconds % 3600) / 60);
+      return `~${hours}h ${mins}min`;
+    }
   };
 
   const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -106,11 +140,69 @@ const BatchImportModal = ({
     setBatchFiles(prev => prev.filter((_, i) => i !== index));
   };
 
+  // Upload file with XMLHttpRequest for real progress tracking
+  const uploadFileWithProgress = useCallback(async (
+    file: File, 
+    storagePath: string,
+    onProgress: (loaded: number, total: number) => void
+  ): Promise<{ error: Error | null }> => {
+    return new Promise(async (resolve) => {
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!session) {
+          resolve({ error: new Error("Not authenticated") });
+          return;
+        }
+
+        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+        const url = `${supabaseUrl}/storage/v1/object/big_imports/${storagePath}`;
+
+        const xhr = new XMLHttpRequest();
+        
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable) {
+            onProgress(event.loaded, event.total);
+          }
+        };
+
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            resolve({ error: null });
+          } else {
+            resolve({ error: new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`) });
+          }
+        };
+
+        xhr.onerror = () => {
+          resolve({ error: new Error("Network error during upload") });
+        };
+
+        xhr.ontimeout = () => {
+          resolve({ error: new Error("Upload timed out") });
+        };
+
+        xhr.open("POST", url, true);
+        xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+        xhr.setRequestHeader("x-upsert", "true");
+        xhr.timeout = 0; // No timeout for large files
+        
+        xhr.send(file);
+      } catch (err) {
+        resolve({ error: err instanceof Error ? err : new Error("Unknown error") });
+      }
+    });
+  }, []);
+
   const handleStartImport = async () => {
     if (batchFiles.length === 0) return;
     
     setIsUploading(true);
     setUploadProgress(0);
+    setUploadPhase("uploading");
+    setUploadStats(null);
+    lastBytesRef.current = 0;
+    lastTimeRef.current = Date.now();
+    speedHistoryRef.current = [];
 
     try {
       const { data: { user } } = await supabase.auth.getUser();
@@ -120,15 +212,23 @@ const BatchImportModal = ({
           description: t("dataIngestion.import.errors.notAuthenticated"),
           variant: "destructive",
         });
+        setIsUploading(false);
         return;
       }
 
       // Generate batch ID
       const batchId = crypto.randomUUID();
-      const progressPerFile = 70 / batchFiles.length;
-      let currentProgress = 0;
+      
+      // Track total progress across all files
+      let totalUploaded = 0;
+      const fileOffsets: number[] = [];
+      let runningOffset = 0;
+      for (const bf of batchFiles) {
+        fileOffsets.push(runningOffset);
+        runningOffset += bf.file.size;
+      }
 
-      // Upload each file
+      // Upload each file with real progress
       for (let i = 0; i < batchFiles.length; i++) {
         const bf = batchFiles[i];
         
@@ -140,9 +240,45 @@ const BatchImportModal = ({
 
         const storagePath = `${user.id}/${projectId}/${batchId}/${bf.file.name}`;
         
-        const { error: uploadError } = await supabase.storage
-          .from("big_imports")
-          .upload(storagePath, bf.file, { upsert: true });
+        const { error: uploadError } = await uploadFileWithProgress(
+          bf.file,
+          storagePath,
+          (loaded, total) => {
+            const currentTotalUploaded = fileOffsets[i] + loaded;
+            totalUploaded = currentTotalUploaded;
+            
+            const now = Date.now();
+            const timeDelta = (now - lastTimeRef.current) / 1000;
+            
+            if (timeDelta >= 0.5) { // Update speed every 500ms
+              const bytesDelta = currentTotalUploaded - lastBytesRef.current;
+              const instantSpeed = bytesDelta / timeDelta;
+              
+              // Keep last 5 speed measurements for smoothing
+              speedHistoryRef.current.push(instantSpeed);
+              if (speedHistoryRef.current.length > 5) {
+                speedHistoryRef.current.shift();
+              }
+              
+              const avgSpeed = speedHistoryRef.current.reduce((a, b) => a + b, 0) / speedHistoryRef.current.length;
+              const bytesRemaining = totalSizeBytes - currentTotalUploaded;
+              const eta = avgSpeed > 0 ? bytesRemaining / avgSpeed : 0;
+              
+              setUploadStats({
+                bytesUploaded: currentTotalUploaded,
+                totalBytes: totalSizeBytes,
+                speed: avgSpeed,
+                eta,
+              });
+              
+              lastBytesRef.current = currentTotalUploaded;
+              lastTimeRef.current = now;
+            }
+            
+            const overallProgress = Math.floor((currentTotalUploaded / totalSizeBytes) * 70);
+            setUploadProgress(overallProgress);
+          }
+        );
 
         if (uploadError) {
           console.error(`Upload error for ${bf.file.name}:`, uploadError);
@@ -160,7 +296,7 @@ const BatchImportModal = ({
           .insert({
             project_id: projectId,
             user_id: user.id,
-            file_name: i === 0 ? datasetName : `${datasetName}_${i + 1}`,
+            file_name: i === 0 ? datasetName : `${datasetName}_part${i + 1}`,
             file_size_bytes: bf.file.size,
             storage_path: storagePath,
             delimiter,
@@ -188,12 +324,11 @@ const BatchImportModal = ({
             idx === i ? { ...item, status: "uploaded", storagePathfile: storagePath } : item
           )
         );
-
-        currentProgress += progressPerFile;
-        setUploadProgress(Math.floor(currentProgress));
       }
 
       setUploadProgress(80);
+      setUploadPhase("processing");
+      setUploadStats(null);
 
       // Trigger batch processing (process primary file first, it will chain others)
       const { data: primaryJob } = await supabase
@@ -204,12 +339,22 @@ const BatchImportModal = ({
         .single();
 
       if (primaryJob) {
-        await supabase.functions.invoke("process-import", {
+        const { error: fnError } = await supabase.functions.invoke("process-import", {
           body: { job_id: primaryJob.id, batch_id: batchId },
         });
+        
+        if (fnError) {
+          console.error("Process-import error:", fnError);
+          toast({
+            title: t("common.error"),
+            description: fnError.message || t("dataIngestion.import.errors.unexpected"),
+            variant: "destructive",
+          });
+        }
       }
 
       setUploadProgress(100);
+      setUploadPhase("done");
 
       toast({
         title: t("dataIngestion.batchImport.importStarted"),
@@ -228,6 +373,7 @@ const BatchImportModal = ({
     } finally {
       setIsUploading(false);
       setUploadProgress(0);
+      setUploadStats(null);
     }
   };
 
@@ -377,11 +523,16 @@ const BatchImportModal = ({
             </div>
           </div>
 
-          {/* Upload progress */}
+          {/* Upload progress with speed and ETA */}
           {isUploading && (
             <div className="space-y-2">
               <div className="flex items-center justify-between text-sm">
-                <span>{t("dataIngestion.batchImport.uploading")}</span>
+                <span>
+                  {uploadPhase === "processing" 
+                    ? t("dataIngestion.batchImport.processingServer")
+                    : t("dataIngestion.batchImport.uploading")
+                  }
+                </span>
                 <span>{uploadProgress}%</span>
               </div>
               <div className="w-full bg-muted rounded-full h-2">
@@ -390,6 +541,25 @@ const BatchImportModal = ({
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
+              
+              {/* Speed and ETA */}
+              {uploadPhase === "uploading" && uploadStats && uploadStats.speed > 0 && (
+                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                  <span>
+                    {formatFileSize(uploadStats.bytesUploaded)} / {formatFileSize(uploadStats.totalBytes)}
+                  </span>
+                  <span>
+                    {formatSpeed(uploadStats.speed)} • {formatETA(uploadStats.eta)}
+                  </span>
+                </div>
+              )}
+              
+              {uploadPhase === "processing" && (
+                <p className="text-xs text-muted-foreground">
+                  {t("dataIngestion.batchImport.processingServerDesc")}
+                </p>
+              )}
+              
               {successCount > 0 && (
                 <p className="text-xs text-muted-foreground">
                   {t("dataIngestion.batchImport.uploadedCount", { count: successCount, total: batchFiles.length })}
@@ -414,7 +584,10 @@ const BatchImportModal = ({
             {isUploading ? (
               <>
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                {t("dataIngestion.batchImport.uploading")}
+                {uploadPhase === "processing" 
+                  ? t("dataIngestion.batchImport.processingServer")
+                  : t("dataIngestion.batchImport.uploading")
+                }
               </>
             ) : (
               <>
