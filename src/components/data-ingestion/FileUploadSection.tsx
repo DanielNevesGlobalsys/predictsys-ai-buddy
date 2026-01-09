@@ -156,14 +156,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     
     if (file.size > MAX_FILE_SIZE) {
       // Large file - use async import flow
-      // Only CSV is supported for large imports
-      const ext = getFileExtension(file.name);
-      if (ext !== '.csv') {
-        setErrorMessage(t("dataIngestion.file.errors.formatNotYetSupported", { format: ext.toUpperCase() }));
-        setUploadStatus("error");
-        return;
-      }
-      
+      // All supported formats can use large import
       setLargeFiles([file]);
       setShowLargeImportModal(true);
       return;

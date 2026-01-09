@@ -1129,8 +1129,8 @@
       }
     },
     "batchImport": {
-      "title": "Import Large CSV",
-      "description": "Upload multiple CSV files to create a single concatenated dataset.",
+      "title": "Import Large File",
+      "description": "Upload large files to create a single concatenated dataset.",
       "infoTitle": "Batch import",
       "infoDesc": "All files in this batch will be vertically concatenated into a single dataset. Make sure they have the same column structure.",
       "files": "Files",
@@ -1143,8 +1143,10 @@
       "file": "file",
       "filesPlural": "files",
       "error": "Error",
-      "importStarted": "Batch import started!",
-      "importStartedDesc": "{{count}} file(s) will be processed. You'll be notified when complete."
+      "importStarted": "Import started!",
+      "importStartedDesc": "{{count}} file(s) will be processed. You'll be notified when complete.",
+      "processingServer": "Processing on server...",
+      "processingServerDesc": "Upload complete. Files are being processed."
     }
   },
   "export": {
