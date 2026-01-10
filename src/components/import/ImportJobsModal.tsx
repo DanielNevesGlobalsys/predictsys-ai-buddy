@@ -57,7 +57,7 @@ interface ImportJobsModalProps {
   onJobCompleted?: () => void;
 }
 
-const POLLING_INTERVAL = 5000; // 5 seconds
+const POLLING_INTERVAL = 3000; // 3 seconds for faster updates
 
 const ImportJobsModal = ({
   open,
@@ -277,7 +277,7 @@ const ImportJobsModal = ({
         return (
           <Badge variant="default" className="bg-accent text-accent-foreground">
             <CheckCircle className="w-3 h-3 mr-1" />
-            {t("dataIngestion.import.statusCompleted")}
+            {t("dataIngestion.import.statusCompleted")} ✓
           </Badge>
         );
       case 'processing':

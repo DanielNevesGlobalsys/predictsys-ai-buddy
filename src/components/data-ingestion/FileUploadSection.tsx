@@ -22,7 +22,7 @@ interface ColumnInfo {
 }
 
 const MAX_FILE_SIZE = 500 * 1024 * 1024; // 500 MB for direct upload
-const MAX_LARGE_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10 GB for async import
+const MAX_LARGE_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10 GB for async import (all formats)
 const SAMPLE_SIZE = 100000; // Max rows for EDA sampling
 
 const SUPPORTED_FORMATS = [
