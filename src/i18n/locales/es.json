@@ -1119,6 +1119,8 @@
       "largeFileDetected": "Archivo grande detectado",
       "largeFileMessage": "Este archivo tiene {{size}} y se procesará en segundo plano.",
       "fileTooLargeMax": "Este archivo excede el límite máximo de {{maxSize}} GB. Divide el archivo en partes más pequeñas o usa un conector de base de datos.",
+      "batchTooLargeTitle": "Lote muy grande",
+      "batchTooLarge": "El tamaño total de los archivos excede el límite de {{maxSize}} GB. Elimina algunos archivos para continuar.",
       "errors": {
         "notAuthenticated": "Usuario no autenticado. Por favor, inicia sesión nuevamente.",
         "uploadFailed": "Error al subir archivo. Por favor, intenta de nuevo.",

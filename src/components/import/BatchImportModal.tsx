@@ -56,6 +56,7 @@ interface UploadProgress {
 }
 
 const MAX_LARGE_IMPORT_GB = 10;
+const MAX_LARGE_IMPORT_BYTES = MAX_LARGE_IMPORT_GB * 1024 * 1024 * 1024;
 
 const BatchImportModal = ({
   open,
@@ -195,6 +196,16 @@ const BatchImportModal = ({
 
   const handleStartImport = async () => {
     if (batchFiles.length === 0) return;
+    
+    // Validate total size before starting
+    if (totalSizeBytes > MAX_LARGE_IMPORT_BYTES) {
+      toast({
+        title: t("common.error"),
+        description: t("dataIngestion.import.batchTooLarge", { maxSize: MAX_LARGE_IMPORT_GB }),
+        variant: "destructive",
+      });
+      return;
+    }
     
     setIsUploading(true);
     setUploadProgress(0);
@@ -379,7 +390,8 @@ const BatchImportModal = ({
 
   const successCount = batchFiles.filter(bf => bf.status === "uploaded").length;
   const errorCount = batchFiles.filter(bf => bf.status === "error").length;
-  const canStart = batchFiles.length > 0 && !isUploading && datasetName.trim();
+  const isTooLarge = totalSizeBytes > MAX_LARGE_IMPORT_BYTES;
+  const canStart = batchFiles.length > 0 && !isUploading && datasetName.trim() && !isTooLarge;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -407,12 +419,24 @@ const BatchImportModal = ({
             </div>
           </div>
 
+          {/* Size warning if too large */}
+          {isTooLarge && (
+            <div className="flex items-start gap-3 p-3 bg-destructive/10 border border-destructive/30 rounded-lg">
+              <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-destructive">
+                <p className="font-medium">{t("dataIngestion.import.batchTooLargeTitle")}</p>
+                <p>{t("dataIngestion.import.batchTooLarge", { maxSize: MAX_LARGE_IMPORT_GB })}</p>
+              </div>
+            </div>
+          )}
+
           {/* Files list */}
           <div className="space-y-2">
             <div className="flex items-center justify-between">
               <Label>{t("dataIngestion.batchImport.files")} ({batchFiles.length})</Label>
-              <span className="text-sm text-muted-foreground">
+              <span className={`text-sm ${isTooLarge ? 'text-destructive font-medium' : 'text-muted-foreground'}`}>
                 {Number(totalSizeGB) >= 1 ? `${totalSizeGB} GB` : `${totalSizeMB} MB`} {t("dataIngestion.batchImport.total")}
+                {isTooLarge && ` (máx: ${MAX_LARGE_IMPORT_GB} GB)`}
               </span>
             </div>
             
