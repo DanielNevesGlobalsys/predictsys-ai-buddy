@@ -6,10 +6,10 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Configuration
+// Configuration - optimized for large files up to 10GB
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
-const SAMPLE_SIZE = 10000;
-const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024; // Read up to 50MB for sampling (fast)
+const SAMPLE_SIZE = 10000; // Max rows to sample for type inference
+const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024; // 50MB for sampling (fast partial read)
 
 interface ImportJob {
   id: string;
@@ -93,9 +93,15 @@ serve(async (req) => {
 
 async function updateJobProgress(supabase: any, jobId: string, progress: number, rowsProcessed: number): Promise<void> {
   try {
+    // Clamp progress between 0-100
+    const clampedProgress = Math.min(100, Math.max(0, Math.round(progress)));
     await supabase
       .from("import_jobs")
-      .update({ progress, rows_processed: rowsProcessed, updated_at: new Date().toISOString() })
+      .update({ 
+        progress: clampedProgress, 
+        rows_processed: rowsProcessed, 
+        updated_at: new Date().toISOString() 
+      })
       .eq("id", jobId);
   } catch (e) {
     console.warn(`[process-import] Failed to update progress for job ${jobId}:`, e);
@@ -107,8 +113,22 @@ async function updateJobError(supabase: any, jobId: string, errorMessage: string
     .from("import_jobs")
     .update({
       status: "failed",
+      progress: 0,
       error_message: errorMessage,
       finished_at: new Date().toISOString(),
+    })
+    .eq("id", jobId);
+}
+
+async function completeJob(supabase: any, jobId: string, rowsProcessed: number, datasetId: string | null): Promise<void> {
+  await supabase
+    .from("import_jobs")
+    .update({
+      status: "completed",
+      progress: 100,
+      rows_processed: rowsProcessed,
+      finished_at: new Date().toISOString(),
+      dataset_id: datasetId,
     })
     .eq("id", jobId);
 }
@@ -127,6 +147,13 @@ async function createDatasetRecord(
   sourceMetadata: Record<string, unknown>,
 ): Promise<string | null> {
   try {
+    // Deactivate any existing active datasets for this project
+    await supabase
+      .from("project_datasets")
+      .update({ is_active: false })
+      .eq("project_id", projectId)
+      .eq("is_active", true);
+
     const { data, error } = await supabase
       .from("project_datasets")
       .insert({
@@ -158,16 +185,15 @@ async function createDatasetRecord(
 }
 
 function makeTextDecoder(encoding: string): TextDecoder {
-  return new TextDecoder(
-    encoding === "ISO-8859-1" ? "iso-8859-1" : encoding === "Windows-1252" ? "windows-1252" : "utf-8",
-  );
+  const encodingMap: Record<string, string> = {
+    "ISO-8859-1": "iso-8859-1",
+    "Windows-1252": "windows-1252",
+    "UTF-8": "utf-8",
+  };
+  return new TextDecoder(encodingMap[encoding] || "utf-8");
 }
 
-/**
- * Sanitize filename for storage path - remove or replace invalid characters
- */
 function sanitizeFileName(fileName: string): string {
-  // Replace spaces, special chars with underscores, keep only safe chars
   return fileName
     .replace(/[^a-zA-Z0-9._-]/g, "_")
     .replace(/_+/g, "_")
@@ -175,15 +201,16 @@ function sanitizeFileName(fileName: string): string {
 }
 
 /**
- * OPTIMIZED: Only reads up to SAMPLE_BYTES_LIMIT to collect headers + sample rows.
- * Estimates total row count from (file_size / avg_bytes_per_row).
- * This avoids CPU timeout on very large files.
+ * Efficient file sampling using Range requests.
+ * Only reads up to SAMPLE_BYTES_LIMIT to get headers + sample rows.
+ * Estimates total row count from average bytes per row.
  */
 async function processFileSampling(
   supabase: any,
   job: ImportJob,
   isFirstInBatch: boolean,
   primaryHeaders: string[] | null,
+  onProgress?: (progress: number, rowsRead: number) => Promise<void>,
 ): Promise<{
   success: boolean;
   headers: string[];
@@ -240,7 +267,6 @@ async function processFileSampling(
     `[process-import] Sampling file: ${job.file_name}, size: ${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB, delimiter: "${job.delimiter}"`,
   );
 
-  // IMPORTANT: Use the delimiter from the job
   const delimiter = job.delimiter || ",";
   const encoding = job.encoding || "UTF-8";
   const decoder = makeTextDecoder(encoding);
@@ -250,7 +276,8 @@ async function processFileSampling(
   const sampleRows: Record<string, unknown>[] = [];
   let isHeaderLine = true;
   let totalBytesRead = 0;
-  let bytesForRows = 0; // bytes used for data rows (excluding header)
+  let bytesForRows = 0;
+  let lastProgressUpdate = Date.now();
 
   const reader = res.body.getReader();
   let leftover = "";
@@ -297,7 +324,7 @@ async function processFileSampling(
         }
 
         rowCount++;
-        bytesForRows += rawLine.length + 1; // +1 for newline
+        bytesForRows += rawLine.length + 1;
 
         if (sampleRows.length < SAMPLE_SIZE) {
           const values = parseCSVLine(line, delimiter);
@@ -309,13 +336,19 @@ async function processFileSampling(
           sampleRows.push(row);
         }
 
-        // We have enough samples, can stop early
+        // Report progress periodically
+        if (onProgress && Date.now() - lastProgressUpdate > 500) {
+          const progress = Math.round((totalBytesRead / job.file_size_bytes) * 100);
+          await onProgress(Math.min(progress, 90), rowCount);
+          lastProgressUpdate = Date.now();
+        }
+
+        // Stop if we have enough samples
         if (sampleRows.length >= SAMPLE_SIZE && rowCount >= SAMPLE_SIZE) {
           break;
         }
       }
 
-      // Stop if we've collected enough
       if (sampleRows.length >= SAMPLE_SIZE) {
         break;
       }
@@ -343,13 +376,10 @@ async function processFileSampling(
     // Calculate average bytes per row and estimate total
     const avgBytesPerRow = rowCount > 0 ? bytesForRows / rowCount : 100;
     
-    // For files larger than what we sampled, estimate total rows
     let estimatedRowCount: number;
     if (job.file_size_bytes <= totalBytesRead) {
-      // We read the whole file, actual count is accurate
       estimatedRowCount = rowCount;
     } else {
-      // Estimate: header bytes + (data bytes / avg bytes per row)
       const headerBytes = totalBytesRead - bytesForRows;
       const dataBytesTotal = job.file_size_bytes - headerBytes;
       estimatedRowCount = Math.round(dataBytesTotal / avgBytesPerRow);
@@ -371,13 +401,16 @@ async function processFileSampling(
     const errorMessage = e instanceof Error ? e.message : "Erro ao processar arquivo";
     return { success: false, headers: [], estimatedRowCount: 0, sampleRows: [], bytesPerRow: 0, error: errorMessage };
   } finally {
-    reader.releaseLock();
+    try {
+      reader.releaseLock();
+    } catch { /* ignore */ }
   }
 }
 
 async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise<Response> {
   console.log(`[process-import] Processing batch: ${primaryJob.batch_id}`);
 
+  // Fetch all jobs in batch, ordered by sequence
   const { data: batchJobs, error: batchError } = await supabase
     .from("import_jobs")
     .select("*")
@@ -393,6 +426,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     });
   }
 
+  // Validate total batch size
   const totalBatchSize = batchJobs.reduce((sum: number, j: ImportJob) => sum + j.file_size_bytes, 0);
   if (totalBatchSize > MAX_FILE_SIZE_BYTES) {
     const maxGB = (MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
@@ -417,21 +451,35 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
 
-  // Always represent batch datasets as a folder (even if it contains only 1 file)
+  // Batch datasets stored in a folder: user_id/project_id/batch_id/
   const batchFolder = `${primaryJob.user_id}/${primaryJob.project_id}/${primaryJob.batch_id}`;
 
-  // For visibility/debugging only
-  let primaryFilePath: string | null = null;
+  // Calculate samples per file proportionally based on file size
+  const fileSizes = batchJobs.map((j: ImportJob) => j.file_size_bytes);
+  const totalSize = fileSizes.reduce((a: number, b: number) => a + b, 0);
+  const samplesPerFile = batchJobs.map((j: ImportJob) => 
+    Math.max(100, Math.ceil((j.file_size_bytes / totalSize) * SAMPLE_SIZE))
+  );
 
   for (let i = 0; i < batchJobs.length; i++) {
     const job = batchJobs[i] as ImportJob;
+    const isFirst = i === 0;
+
     console.log(`[process-import] Processing file ${i + 1}/${batchJobs.length}: ${job.file_name}`);
 
-    await supabase.from("import_jobs").update({ status: "processing", progress: 0 }).eq("id", job.id);
+    // Mark job as processing with 0%
+    await supabase.from("import_jobs").update({ 
+      status: "processing", 
+      progress: 0,
+      updated_at: new Date().toISOString()
+    }).eq("id", job.id);
 
-    const isFirst = i === 0 || job.is_batch_primary;
+    // Progress callback for this job
+    const progressCallback = async (progress: number, rows: number) => {
+      await updateJobProgress(supabase, job.id, progress, rows);
+    };
 
-    const result = await processFileSampling(supabase, job, isFirst, primaryHeaders);
+    const result = await processFileSampling(supabase, job, isFirst, primaryHeaders, progressCallback);
 
     if (!result.success) {
       console.error(`[process-import] Error processing file ${job.file_name}:`, result.error);
@@ -447,14 +495,14 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     totalRowsEstimated += result.estimatedRowCount;
 
-    // Collect sample rows proportionally
-    const samplesPerFile = Math.ceil(SAMPLE_SIZE / batchJobs.length);
-    const samplesToAdd = result.sampleRows.slice(0, samplesPerFile);
+    // Collect samples proportionally from each file
+    const maxSamplesFromThisFile = samplesPerFile[i];
+    const samplesToAdd = result.sampleRows.slice(0, maxSamplesFromThisFile);
     if (allSampleRows.length < SAMPLE_SIZE) {
       allSampleRows = allSampleRows.concat(samplesToAdd.slice(0, SAMPLE_SIZE - allSampleRows.length));
     }
 
-    // Copy file to datasets bucket under the batch folder (server-side copy, no download)
+    // Copy file to datasets bucket
     const sanitizedFileName = sanitizeFileName(job.file_name);
     const destPath = `${batchFolder}/${sanitizedFileName}`;
 
@@ -464,15 +512,15 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
         .copy(job.storage_path, destPath, { destinationBucket: "datasets" });
 
       if (copyError) {
-        throw copyError;
+        // Try to handle "already exists" gracefully
+        if (!copyError.message?.includes("already exists")) {
+          throw copyError;
+        }
+        console.log(`[process-import] File already exists in datasets: ${destPath}`);
       }
 
       processedFilePaths.push(destPath);
       totalFileSizeBytes += job.file_size_bytes;
-
-      if (isFirst) {
-        primaryFilePath = destPath;
-      }
 
       console.log(`[process-import] Copied ${job.file_name} to datasets: ${destPath}`);
     } catch (copyErr: any) {
@@ -485,95 +533,111 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     processedJobIds.push(job.id);
 
-    await supabase
-      .from("import_jobs")
-      .update({
-        status: "completed",
-        progress: 100,
-        rows_processed: result.estimatedRowCount,
-        finished_at: new Date().toISOString(),
-      })
-      .eq("id", job.id);
+    // Mark this job as completed with 100%
+    await completeJob(supabase, job.id, result.estimatedRowCount, null);
 
     console.log(
       `[process-import] File ${job.file_name} completed: ~${result.estimatedRowCount.toLocaleString()} rows (estimated)`,
     );
   }
 
-  // Finalize batch
-  if (processedJobIds.length > 0 && primaryHeaders) {
-    const columnTypes = inferColumnTypes(primaryHeaders, allSampleRows);
-
-    await supabase.from("project_columns").delete().eq("project_id", primaryJob.project_id);
-
-    const columnInserts = primaryHeaders.map((name, index) => ({
-      project_id: primaryJob.project_id,
-      column_name: name,
-      column_index: index,
-      inferred_type: columnTypes[name] || "texto",
-    }));
-
-    await supabase.from("project_columns").insert(columnInserts);
-
-    // IMPORTANT: represent the batch dataset as a folder path that contains the batch files
-    const datasetPath = batchFolder;
-
-    const datasetId = await createDatasetRecord(
-      supabase,
-      primaryJob.project_id,
-      primaryJob.user_id,
-      primaryJob.file_name,
-      datasetPath,
-      totalFileSizeBytes,
-      totalRowsEstimated,
-      Math.min(allSampleRows.length, SAMPLE_SIZE),
-      primaryHeaders.length,
-      batchJobs.length === 1 ? "upload" : "batch_import",
-      {
-        batch_id: primaryJob.batch_id,
-        files_count: batchJobs.length,
-        files_processed: processedJobIds.length,
-        files_failed: failedJobs.length,
-        file_paths: processedFilePaths,
-        rows_estimated: true,
-        primary_file_path: primaryFilePath,
-      },
-    );
-
-    if (datasetId) {
-      await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("batch_id", primaryJob.batch_id);
-    }
-
-    await supabase
-      .from("projects")
-      .update({
-        dataset_filename: datasetPath,
-        dataset_rows: Math.min(allSampleRows.length, SAMPLE_SIZE),
-        dataset_columns: primaryHeaders.length,
-        total_rows: totalRowsEstimated,
-        sample_rows: Math.min(allSampleRows.length, SAMPLE_SIZE),
-        status: "data_uploaded",
-      })
-      .eq("id", primaryJob.project_id);
-
-    await supabase.from("project_data_ingestion_logs").insert({
-      project_id: primaryJob.project_id,
-      status: failedJobs.length > 0 ? "partial" : "success",
-      rows_read: totalRowsEstimated,
-      rows_sampled: Math.min(allSampleRows.length, SAMPLE_SIZE),
-      completed_at: new Date().toISOString(),
-      metadata: {
-        batch_id: primaryJob.batch_id,
-        files_processed: processedJobIds.length,
-        files_failed: failedJobs.length,
-        failed_files: failedJobs.map((f) => ({ name: f.fileName, error: f.error })),
-        dataset_path: datasetPath,
-        dataset_id: datasetId,
-        file_paths: processedFilePaths,
-        rows_estimated: true,
-      },
+  // If no files processed successfully, fail
+  if (processedJobIds.length === 0 || !primaryHeaders) {
+    const errMsg = failedJobs.length > 0 
+      ? `Todos os arquivos falharam: ${failedJobs[0].error}` 
+      : "Nenhum arquivo processado com sucesso";
+    
+    await updateJobError(supabase, primaryJob.id, errMsg);
+    return new Response(JSON.stringify({ 
+      success: false, 
+      message: errMsg,
+      failed_files: failedJobs 
+    }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
+
+  // Finalize batch: infer column types and update project
+  const columnTypes = inferColumnTypes(primaryHeaders, allSampleRows);
+
+  // Clear existing columns and insert new ones
+  await supabase.from("project_columns").delete().eq("project_id", primaryJob.project_id);
+
+  const columnInserts = primaryHeaders.map((name, index) => ({
+    project_id: primaryJob.project_id,
+    column_name: name,
+    column_index: index,
+    inferred_type: columnTypes[name] || "texto",
+  }));
+
+  await supabase.from("project_columns").insert(columnInserts);
+
+  // Create dataset record with batch folder as storage_path
+  const datasetPath = batchFolder;
+  const sampleRowsCount = Math.min(allSampleRows.length, SAMPLE_SIZE);
+
+  const datasetId = await createDatasetRecord(
+    supabase,
+    primaryJob.project_id,
+    primaryJob.user_id,
+    primaryJob.file_name,
+    datasetPath,
+    totalFileSizeBytes,
+    totalRowsEstimated,
+    sampleRowsCount,
+    primaryHeaders.length,
+    processedJobIds.length > 1 ? "batch_import" : "upload",
+    {
+      batch_id: primaryJob.batch_id,
+      files_count: batchJobs.length,
+      files_processed: processedJobIds.length,
+      files_failed: failedJobs.length,
+      file_paths: processedFilePaths,
+      file_names: batchJobs.map((j: ImportJob) => j.file_name),
+      rows_estimated: true,
+      delimiter: primaryJob.delimiter,
+      encoding: primaryJob.encoding,
+    },
+  );
+
+  // Link dataset to all jobs
+  if (datasetId) {
+    await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("batch_id", primaryJob.batch_id);
+  }
+
+  // Update project with consolidated info
+  await supabase
+    .from("projects")
+    .update({
+      dataset_filename: datasetPath,
+      dataset_rows: sampleRowsCount,
+      dataset_columns: primaryHeaders.length,
+      total_rows: totalRowsEstimated,
+      sample_rows: sampleRowsCount,
+      status: "data_uploaded",
+    })
+    .eq("id", primaryJob.project_id);
+
+  // Log ingestion
+  await supabase.from("project_data_ingestion_logs").insert({
+    project_id: primaryJob.project_id,
+    status: failedJobs.length > 0 ? "partial" : "success",
+    rows_read: totalRowsEstimated,
+    rows_sampled: sampleRowsCount,
+    completed_at: new Date().toISOString(),
+    metadata: {
+      batch_id: primaryJob.batch_id,
+      files_processed: processedJobIds.length,
+      files_failed: failedJobs.length,
+      failed_files: failedJobs.map((f) => ({ name: f.fileName, error: f.error })),
+      dataset_path: datasetPath,
+      dataset_id: datasetId,
+      file_paths: processedFilePaths,
+      total_rows: totalRowsEstimated,
+      rows_estimated: true,
+    },
+  });
 
   const responseMessage =
     failedJobs.length > 0
@@ -591,6 +655,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       files_failed: failedJobs.length,
       failed_files: failedJobs,
       rows_estimated: true,
+      dataset_id: datasetId,
     }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } },
   );
@@ -599,12 +664,21 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 async function processSingleImport(supabase: any, job: ImportJob): Promise<Response> {
   const job_id = job.id;
 
-  await supabase.from("import_jobs").update({ status: "processing", progress: 0 }).eq("id", job_id);
+  await supabase.from("import_jobs").update({ 
+    status: "processing", 
+    progress: 0,
+    updated_at: new Date().toISOString()
+  }).eq("id", job_id);
 
   console.log(`[process-import] Job ${job_id} set to processing`);
 
   try {
-    const result = await processFileSampling(supabase, job, true, null);
+    // Progress callback
+    const progressCallback = async (progress: number, rows: number) => {
+      await updateJobProgress(supabase, job_id, progress, rows);
+    };
+
+    const result = await processFileSampling(supabase, job, true, null, progressCallback);
 
     if (!result.success) {
       await updateJobError(supabase, job_id, result.error || "Erro ao processar arquivo");
@@ -641,7 +715,7 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 
     await supabase.from("project_columns").insert(columnInserts);
 
-    // Copy file to datasets bucket (server-side copy)
+    // Copy file to datasets bucket
     const sanitizedFileName = sanitizeFileName(job.file_name);
     const datasetPath = `${job.user_id}/${job.project_id}/${sanitizedFileName}`;
 
@@ -651,11 +725,13 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       .from("big_imports")
       .copy(job.storage_path, datasetPath, { destinationBucket: "datasets" });
 
-    if (copyError) {
+    if (copyError && !copyError.message?.includes("already exists")) {
       console.error("[process-import] Error copying to datasets:", copyError);
     } else {
       console.log("[process-import] File copied to datasets bucket");
     }
+
+    const sampleRowsCount = Math.min(sampleRows.length, SAMPLE_SIZE);
 
     const datasetId = await createDatasetRecord(
       supabase,
@@ -665,33 +741,36 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       datasetPath,
       job.file_size_bytes,
       estimatedRowCount,
-      Math.min(sampleRows.length, SAMPLE_SIZE),
+      sampleRowsCount,
       headers.length,
       "upload",
-      { original_path: job.storage_path, rows_estimated: true },
+      { 
+        original_path: job.storage_path, 
+        rows_estimated: true,
+        delimiter: job.delimiter,
+        encoding: job.encoding,
+      },
     );
 
-    if (datasetId) {
-      await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("id", job_id);
-    }
-
+    // Update project
     await supabase
       .from("projects")
       .update({
         dataset_filename: datasetPath,
-        dataset_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
+        dataset_rows: sampleRowsCount,
         dataset_columns: headers.length,
         total_rows: estimatedRowCount,
-        sample_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
+        sample_rows: sampleRowsCount,
         status: "data_uploaded",
       })
       .eq("id", job.project_id);
 
+    // Log ingestion
     await supabase.from("project_data_ingestion_logs").insert({
       project_id: job.project_id,
       status: "success",
       rows_read: estimatedRowCount,
-      rows_sampled: Math.min(sampleRows.length, SAMPLE_SIZE),
+      rows_sampled: sampleRowsCount,
       completed_at: new Date().toISOString(),
       metadata: {
         file_name: job.file_name,
@@ -702,16 +781,8 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       },
     });
 
-    await supabase
-      .from("import_jobs")
-      .update({
-        status: "completed",
-        progress: 100,
-        rows_processed: estimatedRowCount,
-        finished_at: new Date().toISOString(),
-        dataset_id: datasetId,
-      })
-      .eq("id", job_id);
+    // Complete job with 100%
+    await completeJob(supabase, job_id, estimatedRowCount, datasetId);
 
     console.log(`[process-import] Job ${job_id} completed successfully`);
 

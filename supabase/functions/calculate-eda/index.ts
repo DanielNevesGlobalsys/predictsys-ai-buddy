@@ -24,11 +24,12 @@ interface CategoricalStats {
 }
 
 // Conservative limits to avoid WORKER_LIMIT in serverless runtime
-const MAX_ROWS_TO_PROCESS = 10000; // Global max across all files
-const MAX_BYTES_TO_READ = 10 * 1024 * 1024; // 10MB total across all files
-const BYTES_PER_FILE = 5 * 1024 * 1024; // 5MB per individual file
-const MEDIAN_SAMPLE_SIZE = 2000;
-const MAX_DISTINCT_CATEGORIES = 500;
+// These are tuned to work reliably with 10GB datasets
+const MAX_ROWS_TO_PROCESS = 50000; // Global max across all files - enough for good stats
+const MAX_BYTES_TO_READ = 25 * 1024 * 1024; // 25MB total - safe limit for edge function
+const BYTES_PER_FILE = 15 * 1024 * 1024; // 15MB per individual file
+const MEDIAN_SAMPLE_SIZE = 5000; // Reservoir sample size for median calculation
+const MAX_DISTINCT_CATEGORIES = 500; // Limit distinct values tracked for categories
 
 function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
@@ -80,6 +81,7 @@ function calculateMedianFromSample(values: number[]): number | null {
   return sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+// Welford's online algorithm for streaming mean and variance
 type NumericAccumulator = {
   nullCount: number;
   count: number;
@@ -104,6 +106,7 @@ function createNumericAccumulator(): NumericAccumulator {
   };
 }
 
+// Reservoir sampling for median estimation
 function addToReservoirSample(acc: NumericAccumulator, value: number) {
   acc.seen += 1;
   if (acc.sample.length < MEDIAN_SAMPLE_SIZE) {
@@ -116,6 +119,8 @@ function addToReservoirSample(acc: NumericAccumulator, value: number) {
 
 function addNumericValue(acc: NumericAccumulator, value: number) {
   acc.count += 1;
+  
+  // Welford's algorithm for online mean/variance
   const delta = value - acc.mean;
   acc.mean += delta / acc.count;
   const delta2 = value - acc.mean;
@@ -165,8 +170,10 @@ function addCategoricalValue(acc: CategoricalAccumulator, raw: string | null | u
 async function resolveDatasetFilePaths(
   supabase: any,
   project: any,
-): Promise<string[]> {
+): Promise<{ paths: string[]; delimiter: string; encoding: string }> {
   const projectId = project.id;
+  let delimiter = ",";
+  let encoding = "UTF-8";
 
   // First, try to get from project_datasets (source of truth for new imports)
   const { data: datasets } = await supabase
@@ -181,6 +188,10 @@ async function resolveDatasetFilePaths(
     const dataset = datasets[0];
     const metadata = dataset.source_metadata as Record<string, any> | null;
 
+    // Extract delimiter and encoding from metadata if available
+    if (metadata?.delimiter) delimiter = metadata.delimiter;
+    if (metadata?.encoding) encoding = metadata.encoding;
+
     // Check if it's a batch with explicit file paths in metadata
     if (
       metadata?.file_paths &&
@@ -188,7 +199,7 @@ async function resolveDatasetFilePaths(
       metadata.file_paths.length > 0
     ) {
       console.log(`[calculate-eda] Found ${metadata.file_paths.length} file paths in metadata`);
-      return metadata.file_paths;
+      return { paths: metadata.file_paths, delimiter, encoding };
     }
 
     // storage_path might be a folder (batch) or a single file
@@ -211,14 +222,14 @@ async function resolveDatasetFilePaths(
 
           if (csvFiles.length > 0) {
             console.log(`[calculate-eda] Listed ${csvFiles.length} CSV files in folder: ${storagePath}`);
-            return csvFiles;
+            return { paths: csvFiles, delimiter, encoding };
           }
         }
       }
 
       // Treat as single file
       console.log(`[calculate-eda] Using single file: ${storagePath}`);
-      return [storagePath];
+      return { paths: [storagePath], delimiter, encoding };
     }
   }
 
@@ -242,16 +253,16 @@ async function resolveDatasetFilePaths(
 
         if (csvFiles.length > 0) {
           console.log(`[calculate-eda] Listed ${csvFiles.length} CSV files from project.dataset_filename folder`);
-          return csvFiles;
+          return { paths: csvFiles, delimiter, encoding };
         }
       }
     }
 
     console.log(`[calculate-eda] Using project.dataset_filename as single file: ${filename}`);
-    return [filename];
+    return { paths: [filename], delimiter, encoding };
   }
 
-  return [];
+  return { paths: [], delimiter, encoding };
 }
 
 async function createSignedDatasetUrl(supabase: any, storagePath: string): Promise<string | null> {
@@ -267,6 +278,31 @@ async function createSignedDatasetUrl(supabase: any, storagePath: string): Promi
   return signedData.signedUrl;
 }
 
+function makeTextDecoder(encoding: string): TextDecoder {
+  const encodingMap: Record<string, string> = {
+    "ISO-8859-1": "iso-8859-1",
+    "Windows-1252": "windows-1252",
+    "UTF-8": "utf-8",
+  };
+  return new TextDecoder(encodingMap[encoding] || "utf-8");
+}
+
+/**
+ * Check if a line looks like a header (for subsequent files in batch)
+ */
+function isHeaderLine(line: string, headerIndex: Map<string, number>, delimiter: string): boolean {
+  const values = parseCSVLine(line, delimiter);
+  if (values.length === 0) return false;
+  
+  let matches = 0;
+  for (const val of values) {
+    if (headerIndex.has(val)) matches++;
+  }
+  
+  // If more than 60% of values match header names, it's likely a header
+  return matches > values.length * 0.6;
+}
+
 /**
  * Process a single file with streaming, respecting global limits
  */
@@ -277,6 +313,7 @@ async function processFileStreaming(
     bytesRead: number;
     rowsProcessed: number;
     delimiter: string;
+    encoding: string;
     headerParsed: boolean;
     headerIndex: Map<string, number>;
     numericIndices: Array<{ idx: number; name: string }>;
@@ -317,9 +354,10 @@ async function processFileStreaming(
     }
 
     const reader = res.body.getReader();
-    const decoder = new TextDecoder("utf-8");
+    const decoder = makeTextDecoder(globalState.encoding);
     let buffer = "";
     let fileBytesRead = 0;
+    let isFirstLineOfFile = !globalState.headerParsed;
 
     const numericColumns = columnsToProcess.filter((c) => c.inferred_type === "numérico");
     const categoricalColumns = columnsToProcess.filter((c) => c.inferred_type !== "numérico");
@@ -345,8 +383,13 @@ async function processFileStreaming(
         const line = rawLine.replace(/\r$/, "").trim();
         if (!line) continue;
 
+        // Parse header from first file
         if (!globalState.headerParsed) {
-          globalState.delimiter = detectDelimiter(line);
+          // Auto-detect delimiter if not set
+          if (!globalState.delimiter || globalState.delimiter === ",") {
+            globalState.delimiter = detectDelimiter(line);
+          }
+          
           const headers = parseCSVLine(line, globalState.delimiter);
           globalState.headerIndex = new Map(headers.map((h, i) => [h, i]));
 
@@ -362,7 +405,7 @@ async function processFileStreaming(
             if (idx !== undefined) globalState.categoricalIndices.push({ idx, name: c.column_name });
           }
 
-          // Initialize accumulators
+          // Initialize accumulators for ALL columns
           for (const c of numericColumns) {
             if (!globalState.numericAccByName.has(c.column_name)) {
               globalState.numericAccByName.set(c.column_name, createNumericAccumulator());
@@ -375,48 +418,61 @@ async function processFileStreaming(
           }
 
           console.log(
-            `[calculate-eda] File ${filePath}: delimiter="${globalState.delimiter}" headers=${headers.length}`,
+            `[calculate-eda] File ${filePath}: delimiter="${globalState.delimiter}" headers=${headers.length} ` +
+            `numericCols=${globalState.numericIndices.length} catCols=${globalState.categoricalIndices.length}`,
           );
 
           globalState.headerParsed = true;
+          isFirstLineOfFile = false;
           continue;
         }
 
-        // Skip header line in subsequent files (they should have same headers)
-        // We detect if this line looks like a header by checking if it matches known header names
-        if (globalState.rowsProcessed === 0 || isHeaderLine(line, globalState)) {
-          // For the very first file, we already parsed header above
-          // For subsequent files, skip their header lines
-          continue;
+        // For subsequent files in batch, skip their header lines
+        if (isFirstLineOfFile) {
+          if (isHeaderLine(line, globalState.headerIndex, globalState.delimiter)) {
+            console.log(`[calculate-eda] Skipping header line in subsequent file: ${filePath}`);
+            isFirstLineOfFile = false;
+            continue;
+          }
+          isFirstLineOfFile = false;
         }
 
-        // Data line
+        // Data line - parse and accumulate stats
         const values = parseCSVLine(line, globalState.delimiter);
 
+        // Process numeric columns
         for (const { idx, name } of globalState.numericIndices) {
           const raw = values[idx];
-          const acc = globalState.numericAccByName.get(name)!;
+          const acc = globalState.numericAccByName.get(name);
+          if (!acc) continue;
 
-          if (!raw) {
+          if (!raw || raw.trim() === "") {
             acc.nullCount += 1;
             continue;
           }
 
-          const lowered = raw.toLowerCase();
-          if (lowered === "nan" || lowered === "null" || lowered === "") {
+          const lowered = raw.toLowerCase().trim();
+          if (lowered === "nan" || lowered === "null" || lowered === "na" || lowered === "-") {
             acc.nullCount += 1;
             continue;
           }
 
+          // Parse number, handling comma as decimal separator
           const num = parseFloat(raw.replace(",", "."));
-          if (Number.isFinite(num)) addNumericValue(acc, num);
-          else acc.nullCount += 1;
+          if (Number.isFinite(num)) {
+            addNumericValue(acc, num);
+          } else {
+            acc.nullCount += 1;
+          }
         }
 
+        // Process categorical columns
         for (const { idx, name } of globalState.categoricalIndices) {
           const raw = values[idx];
-          const acc = globalState.catAccByName.get(name)!;
-          addCategoricalValue(acc, raw);
+          const acc = globalState.catAccByName.get(name);
+          if (acc) {
+            addCategoricalValue(acc, raw);
+          }
         }
 
         globalState.rowsProcessed += 1;
@@ -430,9 +486,7 @@ async function processFileStreaming(
 
     try {
       await reader.cancel();
-    } catch {
-      // ignore
-    }
+    } catch { /* ignore */ }
 
     decoder.decode(); // flush
 
@@ -444,23 +498,6 @@ async function processFileStreaming(
 }
 
 /**
- * Check if a line looks like a header (for subsequent files in batch)
- */
-function isHeaderLine(line: string, globalState: { headerIndex: Map<string, number>; delimiter: string }): boolean {
-  const values = parseCSVLine(line, globalState.delimiter);
-  if (values.length === 0) return false;
-  
-  // Count how many values match known header names
-  let matches = 0;
-  for (const val of values) {
-    if (globalState.headerIndex.has(val)) matches++;
-  }
-  
-  // If more than 50% of values match header names, it's likely a header
-  return matches > values.length * 0.5;
-}
-
-/**
  * Compute EDA from multiple files with global limits
  */
 async function computeEDAFromFiles(
@@ -468,6 +505,8 @@ async function computeEDAFromFiles(
   projectId: string,
   filePaths: string[],
   columnsToProcess: Array<{ column_name: string; inferred_type: string }>,
+  delimiter: string,
+  encoding: string,
 ): Promise<{
   delimiter: string;
   rowsProcessed: number;
@@ -485,7 +524,8 @@ async function computeEDAFromFiles(
   const globalState = {
     bytesRead: 0,
     rowsProcessed: 0,
-    delimiter: ",",
+    delimiter: delimiter,
+    encoding: encoding,
     headerParsed: false,
     headerIndex: new Map<string, number>(),
     numericIndices: [] as Array<{ idx: number; name: string }>,
@@ -523,12 +563,13 @@ async function computeEDAFromFiles(
     `[calculate-eda] Completed: rows=${globalState.rowsProcessed}, bytes=${globalState.bytesRead}, files=${filesProcessed}`,
   );
 
-  // Build final stats
+  // Build final numeric stats
   const numericStats: NumericStats[] = [];
   for (const c of numericColumns) {
     const acc = globalState.numericAccByName.get(c.column_name);
 
     if (!acc || acc.count === 0) {
+      // No valid numeric values found - still record the column with nulls
       numericStats.push({
         project_id: projectId,
         column_name: c.column_name,
@@ -537,26 +578,29 @@ async function computeEDAFromFiles(
         mean_value: null,
         median_value: null,
         std_value: null,
-        null_count: globalState.rowsProcessed,
+        null_count: acc?.nullCount ?? globalState.rowsProcessed,
       });
       continue;
     }
 
     const mean = acc.mean;
-    const std = acc.count >= 2 ? Math.sqrt(acc.M2 / (acc.count - 1)) : null;
+    const variance = acc.count >= 2 ? acc.M2 / (acc.count - 1) : 0;
+    const std = variance > 0 ? Math.sqrt(variance) : null;
+    const median = calculateMedianFromSample(acc.sample);
 
     numericStats.push({
       project_id: projectId,
       column_name: c.column_name,
-      min_value: Number.isFinite(acc.min) ? acc.min : null,
-      max_value: Number.isFinite(acc.max) ? acc.max : null,
-      mean_value: Math.round(mean * 1000) / 1000,
-      median_value: calculateMedianFromSample(acc.sample),
-      std_value: std === null ? null : Math.round(std * 1000) / 1000,
+      min_value: Number.isFinite(acc.min) ? Math.round(acc.min * 10000) / 10000 : null,
+      max_value: Number.isFinite(acc.max) ? Math.round(acc.max * 10000) / 10000 : null,
+      mean_value: Number.isFinite(mean) ? Math.round(mean * 10000) / 10000 : null,
+      median_value: median !== null ? Math.round(median * 10000) / 10000 : null,
+      std_value: std !== null && Number.isFinite(std) ? Math.round(std * 10000) / 10000 : null,
       null_count: acc.nullCount,
     });
   }
 
+  // Build final categorical stats
   const categoricalStats: CategoricalStats[] = [];
   for (const c of categoricalColumns) {
     const acc = globalState.catAccByName.get(c.column_name);
@@ -628,7 +672,8 @@ Deno.serve(async (req) => {
       });
     }
 
-    const filePaths = await resolveDatasetFilePaths(supabase, project);
+    const { paths: filePaths, delimiter, encoding } = await resolveDatasetFilePaths(supabase, project);
+    
     if (filePaths.length === 0) {
       console.error("[calculate-eda] Nenhum arquivo de dataset encontrado");
       return new Response(
@@ -640,9 +685,9 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[calculate-eda] Found ${filePaths.length} file(s) to process`);
+    console.log(`[calculate-eda] Found ${filePaths.length} file(s) to process, delimiter="${delimiter}", encoding="${encoding}"`);
 
-    // Get column metadata
+    // Get column metadata from project_columns (populated by process-import)
     const { data: columns, error: columnsError } = await supabase
       .from("project_columns")
       .select("column_name,inferred_type,column_index")
@@ -668,7 +713,11 @@ Deno.serve(async (req) => {
       );
     }
 
-    const eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess);
+    console.log(`[calculate-eda] Processing ${columnsToProcess.length} columns: ` +
+      `${columnsToProcess.filter((c: any) => c.inferred_type === "numérico").length} numeric, ` +
+      `${columnsToProcess.filter((c: any) => c.inferred_type !== "numérico").length} categorical`);
+
+    const eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess, delimiter, encoding);
 
     if (!eda) {
       console.error(`[calculate-eda] Falha ao processar arquivos do dataset`);
@@ -680,11 +729,17 @@ Deno.serve(async (req) => {
       );
     }
 
-    const { numericStats, categoricalStats, rowsProcessed, delimiter, filesProcessed } = eda;
+    const { numericStats, categoricalStats, rowsProcessed, filesProcessed } = eda;
 
     console.log(
       `[calculate-eda] Computed stats => rows=${rowsProcessed} numeric=${numericStats.length} categorical=${categoricalStats.length} files=${filesProcessed}`,
     );
+
+    // Log sample of numeric stats for debugging
+    const sampleNumeric = numericStats.slice(0, 3).map(s => 
+      `${s.column_name}: min=${s.min_value}, max=${s.max_value}, mean=${s.mean_value}, nulls=${s.null_count}`
+    );
+    console.log(`[calculate-eda] Sample numeric stats: ${sampleNumeric.join(" | ")}`);
 
     // Delete existing stats and insert new ones
     await supabase.from("project_numeric_stats").delete().eq("project_id", project_id);
@@ -694,6 +749,8 @@ Deno.serve(async (req) => {
       const { error: insertNumericError } = await supabase.from("project_numeric_stats").insert(numericStats);
       if (insertNumericError) {
         console.error("[calculate-eda] Erro ao inserir estatísticas numéricas:", insertNumericError);
+      } else {
+        console.log(`[calculate-eda] Inserted ${numericStats.length} numeric stats`);
       }
     }
 
@@ -703,6 +760,8 @@ Deno.serve(async (req) => {
         .insert(categoricalStats);
       if (insertCategoricalError) {
         console.error("[calculate-eda] Erro ao inserir estatísticas categóricas:", insertCategoricalError);
+      } else {
+        console.log(`[calculate-eda] Inserted ${categoricalStats.length} categorical stats`);
       }
     }
 
@@ -716,7 +775,9 @@ Deno.serve(async (req) => {
         files_processed: filesProcessed,
         numeric_columns: numericStats.length,
         categorical_columns: categoricalStats.length,
-        delimiter_used: delimiter,
+        delimiter_used: eda.delimiter,
+        sampled: rowsProcessed < (project.total_rows || 0),
+        total_rows: project.total_rows || rowsProcessed,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
