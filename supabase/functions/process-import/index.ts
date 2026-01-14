@@ -416,8 +416,11 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const failedJobs: { id: string; fileName: string; error: string }[] = [];
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
-  
-  // For single-file batch, we'll use the actual file path as dataset path
+
+  // Always represent batch datasets as a folder (even if it contains only 1 file)
+  const batchFolder = `${primaryJob.user_id}/${primaryJob.project_id}/${primaryJob.batch_id}`;
+
+  // For visibility/debugging only
   let primaryFilePath: string | null = null;
 
   for (let i = 0; i < batchJobs.length; i++) {
@@ -426,7 +429,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     await supabase.from("import_jobs").update({ status: "processing", progress: 0 }).eq("id", job.id);
 
-    const isFirst = job.is_batch_primary;
+    const isFirst = i === 0 || job.is_batch_primary;
 
     const result = await processFileSampling(supabase, job, isFirst, primaryHeaders);
 
@@ -451,30 +454,33 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       allSampleRows = allSampleRows.concat(samplesToAdd.slice(0, SAMPLE_SIZE - allSampleRows.length));
     }
 
-    // Copy file to datasets bucket (server-side copy, no download)
-    // Use sanitized filename to avoid storage errors
+    // Copy file to datasets bucket under the batch folder (server-side copy, no download)
     const sanitizedFileName = sanitizeFileName(job.file_name);
-    const destPath = `${job.user_id}/${job.project_id}/${sanitizedFileName}`;
+    const destPath = `${batchFolder}/${sanitizedFileName}`;
 
     try {
       const { error: copyError } = await supabase.storage
         .from("big_imports")
         .copy(job.storage_path, destPath, { destinationBucket: "datasets" });
 
-      if (!copyError) {
-        processedFilePaths.push(destPath);
-        totalFileSizeBytes += job.file_size_bytes;
-        
-        // Keep track of the primary file path for single-file datasets
-        if (isFirst) {
-          primaryFilePath = destPath;
-        }
-        console.log(`[process-import] Copied ${job.file_name} to datasets: ${destPath}`);
-      } else {
-        console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, copyError);
+      if (copyError) {
+        throw copyError;
       }
-    } catch (copyErr) {
-      console.warn("[process-import] Error copying file to datasets:", copyErr);
+
+      processedFilePaths.push(destPath);
+      totalFileSizeBytes += job.file_size_bytes;
+
+      if (isFirst) {
+        primaryFilePath = destPath;
+      }
+
+      console.log(`[process-import] Copied ${job.file_name} to datasets: ${destPath}`);
+    } catch (copyErr: any) {
+      const errMsg = copyErr?.message || "Falha ao copiar arquivo para o storage do dataset.";
+      console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, copyErr);
+      failedJobs.push({ id: job.id, fileName: job.file_name, error: errMsg });
+      await updateJobError(supabase, job.id, errMsg);
+      continue;
     }
 
     processedJobIds.push(job.id);
@@ -489,7 +495,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       })
       .eq("id", job.id);
 
-    console.log(`[process-import] File ${job.file_name} completed: ~${result.estimatedRowCount.toLocaleString()} rows (estimated)`);
+    console.log(
+      `[process-import] File ${job.file_name} completed: ~${result.estimatedRowCount.toLocaleString()} rows (estimated)`,
+    );
   }
 
   // Finalize batch
@@ -507,11 +515,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     await supabase.from("project_columns").insert(columnInserts);
 
-    // IMPORTANT: For the dataset path, use the actual file path for single-file batches
-    // For multi-file batches, use the first file's path as the primary dataset
-    const datasetPath = batchJobs.length === 1 && primaryFilePath 
-      ? primaryFilePath 
-      : processedFilePaths[0] || `${primaryJob.user_id}/${primaryJob.project_id}/${sanitizeFileName(primaryJob.file_name)}`;
+    // IMPORTANT: represent the batch dataset as a folder path that contains the batch files
+    const datasetPath = batchFolder;
 
     const datasetId = await createDatasetRecord(
       supabase,
@@ -531,6 +536,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
         files_failed: failedJobs.length,
         file_paths: processedFilePaths,
         rows_estimated: true,
+        primary_file_path: primaryFilePath,
       },
     );
 
