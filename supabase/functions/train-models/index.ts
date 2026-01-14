@@ -95,16 +95,16 @@ function selectBestModelStrategy(
         reason: `Dataset grande (${nRows.toLocaleString()} linhas) ou alta dimensionalidade (${nFeatures} features). Modelo linear é mais eficiente e generaliza bem.`,
       };
     } else {
-      // For smaller datasets, use Gradient Boosting with conservative params
+      // For smaller datasets, use Gradient Boosting with VERY conservative params for Edge Function limits
       return {
         id: "gradient_boosting_classifier",
         name: "Gradient Boosting Classifier",
         type: "classification",
         algorithm: "gradient_boosting",
         params: {
-          nEstimators: 50,
-          maxDepth: 6,
-          learningRate: 0.1,
+          nEstimators: 15, // Reduced from 50 for CPU limits
+          maxDepth: 4,     // Reduced from 6 for CPU limits
+          learningRate: 0.15,
         },
         reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting oferece excelente performance e interpretabilidade.`,
       };
@@ -130,9 +130,9 @@ function selectBestModelStrategy(
         type: "regression",
         algorithm: "gradient_boosting",
         params: {
-          nEstimators: 50,
-          maxDepth: 6,
-          learningRate: 0.1,
+          nEstimators: 15, // Reduced from 50 for CPU limits
+          maxDepth: 4,     // Reduced from 6 for CPU limits
+          learningRate: 0.15,
         },
         reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting captura padrões não-lineares mantendo bom desempenho.`,
       };
@@ -630,26 +630,26 @@ serve(async (req) => {
       filePaths = [project.dataset_filename];
     }
 
-    // SAMPLING STRATEGY:
-    // - Small datasets (≤ 100k): Use 100% of data
-    // - Medium datasets (100k-300k): Sample up to 50k
-    // - Large datasets (> 300k): Sample up to 30k with early stop
+    // SAMPLING STRATEGY - Conservative limits for Edge Function CPU constraints:
+    // - Small datasets (≤ 30k): Use 100% of data
+    // - Medium datasets (30k-100k): Sample up to 15k
+    // - Large datasets (> 100k): Sample up to 12k with early stop
     let MAX_SAMPLE_SIZE: number;
     let MAX_LINES_TO_READ: number;
     let useFullDataset = false;
 
-    if (totalDatasetRows <= 100_000) {
-      MAX_SAMPLE_SIZE = 100_000;
-      MAX_LINES_TO_READ = 150_000;
+    if (totalDatasetRows <= 30_000) {
+      MAX_SAMPLE_SIZE = 30_000;
+      MAX_LINES_TO_READ = 50_000;
       useFullDataset = true;
       console.log(`[AutoML] Dataset pequeno (${totalDatasetRows} linhas) - usando 100% dos dados`);
-    } else if (totalDatasetRows <= 300_000) {
-      MAX_SAMPLE_SIZE = 50_000;
-      MAX_LINES_TO_READ = 150_000;
+    } else if (totalDatasetRows <= 100_000) {
+      MAX_SAMPLE_SIZE = 15_000;
+      MAX_LINES_TO_READ = 50_000;
       console.log(`[AutoML] Dataset médio (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas`);
     } else {
-      MAX_SAMPLE_SIZE = 30_000;
-      MAX_LINES_TO_READ = 90_000;
+      MAX_SAMPLE_SIZE = 12_000;
+      MAX_LINES_TO_READ = 40_000;
       console.log(`[AutoML] Dataset grande (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas com early stop`);
     }
 
