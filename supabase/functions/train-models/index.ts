@@ -579,9 +579,10 @@ serve(async (req) => {
 
     // Stream data from files using STRATIFIED SAMPLING with EARLY STOP
     // For large datasets, we sample efficiently without reading the entire file
-    const MAX_SAMPLE_SIZE = 30000; // Maximum lines to keep in memory (30k)
-    const SAMPLING_MULTIPLIER = 3; // Read 3x target to get good distribution
-    const MAX_LINES_TO_READ = MAX_SAMPLE_SIZE * SAMPLING_MULTIPLIER; // Stop after 90k lines
+    // Reduced sample size for faster training within Edge Function CPU limits
+    const MAX_SAMPLE_SIZE = 15000; // Maximum lines to keep in memory (15k for CPU limit)
+    const SAMPLING_MULTIPLIER = 4; // Read 4x target to get good distribution
+    const MAX_LINES_TO_READ = MAX_SAMPLE_SIZE * SAMPLING_MULTIPLIER; // Stop after 60k lines
     let sampledLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
@@ -887,30 +888,23 @@ serve(async (req) => {
       {
         name: "Random Forest",
         type: "rf",
-        train: (X, y) => trainRandomForest(X, y, true, 5),
+        train: (X, y) => trainRandomForest(X, y, true, 3), // Reduced to 3 trees
         predict: (model, X) => predictRandomForest(model, X, true),
         getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
       },
       {
         name: "Gradient Boosting",
         type: "gb",
-        train: (X, y) => trainGradientBoosting(X, y, true, 5),
+        train: (X, y) => trainGradientBoosting(X, y, true, 3), // Reduced to 3 trees
         predict: (model, X) => predictGradientBoosting(model, X, true),
         getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
       },
       {
         name: "Árvore de Decisão",
         type: "dt",
-        train: (X, y) => trainSimpleTree(X, y, true, 5),
+        train: (X, y) => trainSimpleTree(X, y, true, 4), // Reduced depth
         predict: (model, X) => X.map(x => predictTree(model, x)),
         getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 300)
-      },
-      {
-        name: "k-NN Classifier",
-        type: "knn",
-        train: (X, y) => trainKNN(X, y, 5),
-        predict: (model, X) => predictKNN(model, X, true),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 400)
       },
       {
         name: "Naive Bayes",
@@ -939,14 +933,14 @@ serve(async (req) => {
       {
         name: "Random Forest Regressor",
         type: "rf_reg",
-        train: (X, y) => trainRandomForest(X, y, false, 5),
+        train: (X, y) => trainRandomForest(X, y, false, 3), // Reduced to 3 trees
         predict: (model, X) => predictRandomForest(model, X, false),
         getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
       },
       {
         name: "Gradient Boosting Regressor",
         type: "gb_reg",
-        train: (X, y) => trainGradientBoosting(X, y, false, 5),
+        train: (X, y) => trainGradientBoosting(X, y, false, 3), // Reduced to 3 trees
         predict: (model, X) => predictGradientBoosting(model, X, false),
         getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
       },
