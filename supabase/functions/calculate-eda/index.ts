@@ -24,9 +24,10 @@ interface CategoricalStats {
 }
 
 // Maximum rows to process for EDA (sample for large files)
-const MAX_ROWS_TO_PROCESS = 50000;
-// Maximum bytes to download for sampling (50 MB)
-const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024;
+// NOTE: Keep this conservative to avoid CPU limits in serverless runtime.
+const MAX_ROWS_TO_PROCESS = 10000;
+// Maximum bytes to download for sampling (10 MB)
+const SAMPLE_BYTES_LIMIT = 10 * 1024 * 1024;
 
 function calculateMedian(sortedValues: number[]): number | null {
   if (sortedValues.length === 0) return null;
