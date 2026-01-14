@@ -583,27 +583,52 @@ serve(async (req) => {
       });
     }
 
-    // Get active dataset from project_datasets
+    // Get active dataset from project_datasets (use maybeSingle to handle no results)
     const { data: activeDataset, error: datasetError } = await supabase
       .from("project_datasets")
       .select("*")
       .eq("project_id", project_id)
       .eq("is_active", true)
-      .single();
+      .maybeSingle();
 
-    if (datasetError || !activeDataset) {
-      console.error("Erro ao buscar dataset ativo:", datasetError);
-      return new Response(JSON.stringify({ error: "Dataset ativo não encontrado" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // Determine dataset info - fallback to project.dataset_filename if no active dataset
+    let totalDatasetRows: number;
+    let sourceMetadata: Record<string, any>;
+    let delimiter: string;
+    let isBatchImport: boolean;
+    let filePaths: string[] = [];
+
+    if (activeDataset) {
+      // Use project_datasets info
+      totalDatasetRows = activeDataset.total_rows || project.total_rows || project.dataset_rows || 0;
+      sourceMetadata = activeDataset.source_metadata as Record<string, any> || {};
+      delimiter = sourceMetadata.delimiter || ",";
+      isBatchImport = activeDataset.source_type === "batch_import";
+      
+      if (isBatchImport && sourceMetadata.file_paths) {
+        filePaths = sourceMetadata.file_paths as string[];
+      } else {
+        filePaths = [activeDataset.storage_path];
+      }
+      
+      console.log(`[AutoML] Usando dataset ativo: ${activeDataset.name}`);
+    } else {
+      // Fallback: use project.dataset_filename directly
+      console.log(`[AutoML] Sem dataset ativo, usando project.dataset_filename`);
+      
+      if (!project.dataset_filename) {
+        return new Response(JSON.stringify({ error: "Nenhum dataset encontrado para o projeto" }), {
+          status: 404,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      
+      totalDatasetRows = project.total_rows || project.dataset_rows || 0;
+      sourceMetadata = {};
+      delimiter = ","; // Default delimiter
+      isBatchImport = false;
+      filePaths = [project.dataset_filename];
     }
-
-    // Determine sampling strategy based on dataset size
-    const totalDatasetRows = activeDataset.total_rows || 0;
-    const sourceMetadata = activeDataset.source_metadata as Record<string, any> || {};
-    const delimiter = sourceMetadata.delimiter || ";";
-    const isBatchImport = activeDataset.source_type === "batch_import";
 
     // SAMPLING STRATEGY:
     // - Small datasets (≤ 100k): Use 100% of data
@@ -628,16 +653,7 @@ serve(async (req) => {
       console.log(`[AutoML] Dataset grande (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas com early stop`);
     }
 
-    console.log(`Dataset: ${activeDataset.storage_path}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
-
-    // Collect all file paths to download
-    let filePaths: string[] = [];
-    
-    if (isBatchImport && sourceMetadata.file_paths) {
-      filePaths = sourceMetadata.file_paths as string[];
-    } else {
-      filePaths = [activeDataset.storage_path];
-    }
+    console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
 
     if (filePaths.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
