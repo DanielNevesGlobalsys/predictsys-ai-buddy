@@ -74,15 +74,29 @@ function selectBestModelStrategy(
   nRows: number,
   nFeatures: number
 ): ModelStrategy {
-  const isLargeDataset = nRows > 200_000;
-  const hasHighDimensionality = nFeatures > 100;
-  const shouldUseLinearModel = isLargeDataset || hasHighDimensionality;
-
+  // CRITICAL: In Edge Functions, Gradient Boosting is too CPU-intensive
+  // Only use it for VERY small datasets (< 3k rows)
+  // For everything else, use linear models which are much faster
+  const useGradientBoosting = nRows <= 3_000 && nFeatures <= 30;
+  
   console.log(`[AutoML] Dataset: ${nRows} linhas, ${nFeatures} features`);
-  console.log(`[AutoML] Tipo: ${problemType}, Grande: ${isLargeDataset}, Alta dim: ${hasHighDimensionality}`);
+  console.log(`[AutoML] Usar Gradient Boosting: ${useGradientBoosting}`);
 
   if (problemType === "classification") {
-    if (shouldUseLinearModel) {
+    if (useGradientBoosting) {
+      return {
+        id: "gradient_boosting_classifier",
+        name: "Gradient Boosting Classifier",
+        type: "classification",
+        algorithm: "gradient_boosting",
+        params: {
+          nEstimators: 8,
+          maxDepth: 3,
+          learningRate: 0.2,
+        },
+        reason: `Dataset pequeno (${nRows.toLocaleString()} linhas). Gradient Boosting com parâmetros ultra-conservadores.`,
+      };
+    } else {
       return {
         id: "logistic_regression",
         name: "Regressão Logística Regularizada",
@@ -92,26 +106,25 @@ function selectBestModelStrategy(
           epochs: 100,
           lambda: 0.1,
         },
-        reason: `Dataset grande (${nRows.toLocaleString()} linhas) ou alta dimensionalidade (${nFeatures} features). Modelo linear é mais eficiente e generaliza bem.`,
-      };
-    } else {
-      // For smaller datasets, use Gradient Boosting with VERY conservative params for Edge Function limits
-      return {
-        id: "gradient_boosting_classifier",
-        name: "Gradient Boosting Classifier",
-        type: "classification",
-        algorithm: "gradient_boosting",
-        params: {
-          nEstimators: 15, // Reduced from 50 for CPU limits
-          maxDepth: 4,     // Reduced from 6 for CPU limits
-          learningRate: 0.15,
-        },
-        reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting oferece excelente performance e interpretabilidade.`,
+        reason: `Dataset de ${nRows.toLocaleString()} linhas. Regressão Logística é eficiente para Edge Functions e oferece probabilidades calibradas.`,
       };
     }
   } else {
     // Regression
-    if (shouldUseLinearModel) {
+    if (useGradientBoosting) {
+      return {
+        id: "gradient_boosting_regressor",
+        name: "Gradient Boosting Regressor",
+        type: "regression",
+        algorithm: "gradient_boosting",
+        params: {
+          nEstimators: 8,
+          maxDepth: 3,
+          learningRate: 0.2,
+        },
+        reason: `Dataset pequeno (${nRows.toLocaleString()} linhas). Gradient Boosting com parâmetros ultra-conservadores.`,
+      };
+    } else {
       return {
         id: "linear_regression",
         name: "Regressão Linear Regularizada (Ridge)",
@@ -121,20 +134,7 @@ function selectBestModelStrategy(
           epochs: 100,
           lambda: 0.1,
         },
-        reason: `Dataset grande (${nRows.toLocaleString()} linhas) ou alta dimensionalidade (${nFeatures} features). Modelo linear regularizado é robusto e escalável.`,
-      };
-    } else {
-      return {
-        id: "gradient_boosting_regressor",
-        name: "Gradient Boosting Regressor",
-        type: "regression",
-        algorithm: "gradient_boosting",
-        params: {
-          nEstimators: 15, // Reduced from 50 for CPU limits
-          maxDepth: 4,     // Reduced from 6 for CPU limits
-          learningRate: 0.15,
-        },
-        reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting captura padrões não-lineares mantendo bom desempenho.`,
+        reason: `Dataset de ${nRows.toLocaleString()} linhas. Regressão Linear é eficiente e interpretável para Edge Functions.`,
       };
     }
   }
