@@ -577,19 +577,20 @@ serve(async (req) => {
       return result;
     }
 
-    // Stream ALL data from files - NO BYTE LIMITS for training
-    // Use mini-batches to manage memory while processing the entire dataset
-    let allLines: string[] = [];
+    // Stream ALL data from files using RESERVOIR SAMPLING to fit in memory
+    // This ensures a statistically representative sample of the entire dataset
+    const MAX_SAMPLE_SIZE = 100000; // Maximum lines to keep in memory (100k)
+    let sampledLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
     let totalBytesRead = 0;
-    let totalLinesRead = 0;
+    let totalLinesProcessed = 0; // Total lines seen across all files (for reservoir sampling)
 
-    console.log(`Iniciando leitura completa do dataset (sem limite de bytes)...`);
+    console.log(`Iniciando leitura com amostragem (reservoir sampling, máx ${MAX_SAMPLE_SIZE} linhas)...`);
 
     for (let fileIndex = 0; fileIndex < filePaths.length; fileIndex++) {
       const filePath = filePaths[fileIndex];
-      console.log(`[${fileIndex + 1}/${filePaths.length}] Baixando (streaming completo): ${filePath}`);
+      console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
       
       try {
         // Create signed URL with longer expiration for large files
@@ -602,7 +603,7 @@ serve(async (req) => {
           continue;
         }
 
-        // Fetch with streaming - read ENTIRE file (no byte limit)
+        // Fetch with streaming - read ENTIRE file
         const response = await fetch(signedUrlData.signedUrl);
         if (!response.ok || !response.body) {
           console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
@@ -616,8 +617,9 @@ serve(async (req) => {
         let buffer = "";
         let fileLinesCount = 0;
         let isFirstLineOfFile = true;
+        let lastProgressLog = 0;
 
-        // Stream the ENTIRE file to EOF
+        // Stream the ENTIRE file to EOF with reservoir sampling
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -643,19 +645,39 @@ serve(async (req) => {
             } else if (!isFirstFile && isFirstLineOfFile) {
               // First line of subsequent files - check if it's a header
               const possibleHeaders = parseCSVLine(line, delimiter);
-              const isHeader = possibleHeaders.length === headers.length && 
-                               possibleHeaders.every((h, idx) => h === headers[idx] || !isNaN(parseFloat(h.replace(",", "."))) === false);
+              const matchesHeaders = possibleHeaders.length === headers.length && 
+                possibleHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
               
-              if (isHeader || possibleHeaders.length === headers.length) {
-                // Skip header line
+              if (matchesHeaders) {
+                // Skip header line in subsequent files
                 isFirstLineOfFile = false;
                 continue;
               }
               isFirstLineOfFile = false;
-              allLines.push(line);
+              
+              // Apply reservoir sampling for this data line
+              totalLinesProcessed++;
+              if (sampledLines.length < MAX_SAMPLE_SIZE) {
+                sampledLines.push(line);
+              } else {
+                // Reservoir sampling: replace with probability MAX_SAMPLE_SIZE / totalLinesProcessed
+                const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
+                if (replaceIdx < MAX_SAMPLE_SIZE) {
+                  sampledLines[replaceIdx] = line;
+                }
+              }
             } else {
-              // Data line - add to collection
-              allLines.push(line);
+              // Data line - apply reservoir sampling
+              totalLinesProcessed++;
+              if (sampledLines.length < MAX_SAMPLE_SIZE) {
+                sampledLines.push(line);
+              } else {
+                // Reservoir sampling: replace with probability MAX_SAMPLE_SIZE / totalLinesProcessed
+                const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
+                if (replaceIdx < MAX_SAMPLE_SIZE) {
+                  sampledLines[replaceIdx] = line;
+                }
+              }
             }
           }
           
@@ -663,29 +685,33 @@ serve(async (req) => {
           buffer = lineBreaks[lineBreaks.length - 1];
           
           // Log progress every 100MB
-          if (bytesRead > 0 && bytesRead % (100 * 1024 * 1024) < 65536) {
-            console.log(`  Progresso: ${(bytesRead / (1024 * 1024)).toFixed(1)} MB lidos, ${allLines.length} linhas acumuladas`);
+          const mbRead = bytesRead / (1024 * 1024);
+          if (mbRead - lastProgressLog >= 100) {
+            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesProcessed} linhas lidas, ${sampledLines.length} amostradas`);
+            lastProgressLog = mbRead;
           }
         }
 
         // Process any remaining content in buffer after EOF
         if (buffer.trim()) {
           const line = buffer.trim();
-          if (isFirstLineOfFile) {
-            if (isFirstFile) {
-              headers = parseCSVLine(line, delimiter);
+          if (!isFirstLineOfFile) {
+            totalLinesProcessed++;
+            if (sampledLines.length < MAX_SAMPLE_SIZE) {
+              sampledLines.push(line);
+            } else {
+              const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
+              if (replaceIdx < MAX_SAMPLE_SIZE) {
+                sampledLines[replaceIdx] = line;
+              }
             }
-          } else {
-            allLines.push(line);
           }
         }
 
         isFirstFile = false;
         totalBytesRead += bytesRead;
-        totalLinesRead += fileLinesCount;
 
         console.log(`  Arquivo concluído: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
-        console.log(`  Total acumulado: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB, ${allLines.length} linhas de dados`);
 
       } catch (err) {
         console.error(`Erro processando ${filePath}:`, err);
@@ -696,8 +722,12 @@ serve(async (req) => {
     console.log(`=== Leitura completa ===`);
     console.log(`Total de arquivos: ${filePaths.length}`);
     console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
-    console.log(`Total de linhas de dados: ${allLines.length}`);
-    console.log(`Headers: ${headers.length} colunas`)
+    console.log(`Total de linhas processadas: ${totalLinesProcessed}`);
+    console.log(`Linhas amostradas para treino: ${sampledLines.length}`);
+    console.log(`Headers: ${headers.length} colunas`);
+    
+    // Use sampledLines as allLines for the rest of the processing
+    const allLines = sampledLines;
 
     if (headers.length === 0 || allLines.length === 0) {
       return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
