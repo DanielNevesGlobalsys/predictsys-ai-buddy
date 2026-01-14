@@ -15,7 +15,9 @@
     "close": "Close",
     "confirm": "Confirm",
     "retry": "Retry",
-    "refresh": "Refresh"
+    "refresh": "Refresh",
+    "rows": "rows",
+    "columns": "columns"
   },
   "auth": {
     "login": "Log In",
@@ -538,6 +540,8 @@
     "file": "File",
     "rows": "Rows",
     "columns": "Columns",
+    "batchImport": "Batch import",
+    "batchImportFiles": "Batch import ({{count}} files)",
     "noData": "No data loaded",
     "noDataDesc": "Upload a CSV file to see the exploratory analysis.",
     "goToWizard": "Go to Wizard",
