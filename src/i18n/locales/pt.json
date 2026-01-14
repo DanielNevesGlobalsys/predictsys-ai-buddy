@@ -1365,6 +1365,22 @@
       "importStartedDesc": "{{count}} arquivo(s) serão processados. Você receberá uma notificação quando concluir.",
       "processingServer": "Processando no servidor...",
       "processingServerDesc": "Upload concluído. Os arquivos estão sendo processados."
+    },
+    "datasets": {
+      "title": "Histórico de Datasets",
+      "active": "Ativo",
+      "activate": "Ativar",
+      "activated": "Dataset ativado!",
+      "activatedDesc": "O dataset \"{{name}}\" agora está ativo para análise.",
+      "deleted": "Dataset removido",
+      "deletedDesc": "O dataset \"{{name}}\" foi removido.",
+      "deleteTitle": "Excluir dataset?",
+      "deleteDesc": "O dataset \"{{name}}\" será removido permanentemente. Esta ação não pode ser desfeita.",
+      "cantDeleteActive": "Não é possível excluir o dataset ativo. Ative outro antes.",
+      "sourceUpload": "Upload",
+      "sourceBatch": "Lote",
+      "sourceDatabase": "Banco de dados",
+      "sourceCloud": "Cloud"
     }
   },
   "export": {

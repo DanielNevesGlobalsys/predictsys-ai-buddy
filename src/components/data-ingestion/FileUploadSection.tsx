@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
+import DatasetSelector from "./DatasetSelector";
 import { BatchImportModal, ImportJobsModal } from "@/components/import";
 
 interface FileUploadSectionProps {
@@ -480,6 +481,14 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
           onOpenChange={setShowImportJobsModal}
           projectId={projectData.id}
           onJobCompleted={handleJobCompleted}
+        />
+      )}
+
+      {/* Dataset History Selector */}
+      {projectData.id && (
+        <DatasetSelector
+          projectId={projectData.id}
+          onDatasetChange={onDataReady}
         />
       )}
     </div>

@@ -5,7 +5,7 @@ import { Calendar } from '@/components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { CalendarIcon, Filter, RotateCcw } from 'lucide-react';
 import { format } from 'date-fns';
-import { ptBR, enUS, es } from 'date-fns/locale';
+import { ptBR, es } from 'date-fns/locale';
 import { cn } from '@/lib/utils';
 import type { DashboardFilters } from './types';
 
@@ -20,7 +20,6 @@ export function BusinessDashboardFilters({ filters, onFilterChange, availableSeg
   
   const getLocale = () => {
     switch (i18n.language) {
-      case 'en': return enUS;
       case 'es': return es;
       default: return ptBR;
     }

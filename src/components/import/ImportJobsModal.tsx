@@ -22,7 +22,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
-import { ptBR, enUS, es } from "date-fns/locale";
+import { ptBR, es } from "date-fns/locale";
 import { useToast } from "@/hooks/use-toast";
 
 interface ImportJob {
@@ -57,7 +57,7 @@ interface ImportJobsModalProps {
   onJobCompleted?: () => void;
 }
 
-const POLLING_INTERVAL = 3000; // 3 seconds for faster updates
+const POLLING_INTERVAL = 2000; // 2 seconds for faster updates
 
 const ImportJobsModal = ({
   open,
@@ -77,7 +77,7 @@ const ImportJobsModal = ({
     switch (i18n.language) {
       case 'pt': return ptBR;
       case 'es': return es;
-      default: return enUS;
+      default: return undefined;
     }
   };
 
