@@ -577,8 +577,9 @@ serve(async (req) => {
       return result;
     }
 
-    // Download and combine data from all files with sampling
+    // Stream data from files with strict byte limits to avoid memory issues
     const MAX_ROWS = 3000; // Limit for training
+    const MAX_BYTES_PER_FILE = 5 * 1024 * 1024; // 5MB per file max
     let allLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
@@ -586,41 +587,79 @@ serve(async (req) => {
     for (const filePath of filePaths) {
       if (allLines.length >= MAX_ROWS) break;
 
-      console.log(`Baixando: ${filePath}`);
+      console.log(`Baixando (streaming): ${filePath}`);
       
-      const { data: fileData, error: downloadError } = await supabase.storage
-        .from("datasets")
-        .download(filePath);
+      try {
+        // Use createSignedUrl + fetch with streaming to limit bytes read
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+          .from("datasets")
+          .createSignedUrl(filePath, 300);
 
-      if (downloadError || !fileData) {
-        console.error(`Erro ao baixar ${filePath}:`, downloadError);
+        if (signedUrlError || !signedUrlData?.signedUrl) {
+          console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
+          continue;
+        }
+
+        // Fetch with streaming - read limited bytes
+        const response = await fetch(signedUrlData.signedUrl);
+        if (!response.ok || !response.body) {
+          console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
+          continue;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let bytesRead = 0;
+        let buffer = "";
+        let fileLines: string[] = [];
+
+        while (bytesRead < MAX_BYTES_PER_FILE && fileLines.length < MAX_ROWS + 10) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          bytesRead += value?.length || 0;
+          buffer += decoder.decode(value, { stream: true });
+
+          // Extract complete lines
+          const lineBreaks = buffer.split(/\r?\n/);
+          for (let i = 0; i < lineBreaks.length - 1; i++) {
+            const line = lineBreaks[i].trim();
+            if (line) fileLines.push(line);
+          }
+          buffer = lineBreaks[lineBreaks.length - 1];
+        }
+
+        // Cancel the stream to release resources
+        try { await reader.cancel(); } catch (_) {}
+
+        console.log(`Bytes lidos: ${bytesRead}, Linhas: ${fileLines.length}`);
+
+        if (fileLines.length === 0) continue;
+
+        if (isFirstFile) {
+          // First file - get headers
+          headers = parseCSVLine(fileLines[0], delimiter);
+          console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+          isFirstFile = false;
+          
+          // Add data lines (skip header)
+          const remaining = MAX_ROWS - allLines.length;
+          allLines.push(...fileLines.slice(1, 1 + remaining));
+        } else {
+          // Subsequent files - skip header if it matches
+          const fileHeaders = parseCSVLine(fileLines[0], delimiter);
+          const startLine = fileHeaders.length === headers.length ? 1 : 0;
+          
+          const remaining = MAX_ROWS - allLines.length;
+          allLines.push(...fileLines.slice(startLine, startLine + remaining));
+        }
+
+        console.log(`Linhas acumuladas: ${allLines.length}`);
+
+      } catch (err) {
+        console.error(`Erro processando ${filePath}:`, err);
         continue;
       }
-
-      const text = await fileData.text();
-      const lines = text.split(/\r?\n/).filter(line => line.trim());
-
-      if (lines.length === 0) continue;
-
-      if (isFirstFile) {
-        // First file - get headers
-        headers = parseCSVLine(lines[0], delimiter);
-        console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
-        isFirstFile = false;
-        
-        // Add data lines (skip header)
-        const remaining = MAX_ROWS - allLines.length;
-        allLines.push(...lines.slice(1, 1 + remaining));
-      } else {
-        // Subsequent files - skip header if it matches
-        const fileHeaders = parseCSVLine(lines[0], delimiter);
-        const startLine = fileHeaders.length === headers.length ? 1 : 0;
-        
-        const remaining = MAX_ROWS - allLines.length;
-        allLines.push(...lines.slice(startLine, startLine + remaining));
-      }
-
-      console.log(`Linhas acumuladas: ${allLines.length}`);
     }
 
     if (headers.length === 0 || allLines.length === 0) {
