@@ -47,7 +47,7 @@
     "namePlaceholder": "Tu Nombre"
   },
   "header": {
-    "openChatbot": "Abrir Chatbot IA (ayuda)",
+    "openChatbot": "Abrir Lys (ayuda)",
     "toggleTheme": "Cambiar tema (claro/oscuro)"
   },
   "landing": {
@@ -59,7 +59,7 @@
     "predictiveAI": "IA Predictiva",
     "secure": "100% Seguro",
     "instantDeploy": "Despliegue Instantáneo",
-    "aiChatbot": "Chatbot IA",
+    "aiChatbot": "Lys",
     "allYouNeed": "Todo lo que necesitas para ",
     "predictFuture": "predecir el futuro",
     "autoMLDescription": "Plataforma completa de AutoML con las mejores prácticas del mercado",
@@ -71,8 +71,8 @@
     "features": {
       "automl": "AutoML Simplificado",
       "automlDesc": "Entrena modelos de clasificación y regresión automáticamente, sin código.",
-      "chatbot": "Chatbot Inteligente",
-      "chatbotDesc": "Asistente de IA para ayudar en el análisis e interpretación de modelos.",
+      "chatbot": "Lys - Asistente IA",
+      "chatbotDesc": "Asistente virtual para ayudar en el análisis e interpretación de modelos.",
       "eda": "Análisis Exploratorio Automático",
       "edaDesc": "Visualiza estadísticas, distribuciones y correlaciones de tus datos.",
       "deploy": "Despliegue con 1 Clic",
@@ -107,8 +107,8 @@
     "errorLoading": "Error al cargar proyectos",
     "quickGuide": "Guía Rápida",
     "quickGuideDesc": "Aprende a crear tu primer modelo en 5 minutos",
-    "chatbot": "Chatbot IA",
-    "chatbotDesc": "Conversa sobre tus proyectos y obtén insights",
+    "chatbot": "Lys",
+    "chatbotDesc": "Conversa con Lys sobre tus proyectos y obtén insights",
     "documentation": "Documentación",
     "documentationDesc": "Accede a ejemplos y mejores prácticas"
   },
@@ -160,15 +160,15 @@
     }
   },
   "chat": {
-    "title": "Asistente IA",
-    "globalTitle": "Chatbot IA",
-    "globalSubtitle": "Asistente de PredictSys AI",
+    "title": "Lys",
+    "globalTitle": "Lys",
+    "globalSubtitle": "Asistente Virtual de PredictSys AI",
     "placeholder": "Escribe tu pregunta...",
     "enterToSend": "Presiona Enter para enviar o Shift+Enter para nueva línea",
     "askAboutProject": "Haz preguntas sobre el proyecto",
     "askAboutPlatform": "Haz preguntas sobre la plataforma, conceptos de modelos predictivos y mejores prácticas.",
-    "howCanIHelp": "¡Hola! ¿Cómo puedo ayudarte?",
-    "iAmAssistant": "Soy el asistente IA de este proyecto. Puedo responder preguntas sobre los datos, modelos entrenados, métricas y más.",
+    "howCanIHelp": "¡Hola! Soy Lys, ¿cómo puedo ayudarte?",
+    "iAmAssistant": "Soy Lys, la asistente virtual de este proyecto. Puedo responder preguntas sobre los datos, modelos entrenados, métricas y más.",
     "suggestions": "Sugerencias:",
     "clearHistory": "Limpiar historial",
     "historyCleared": "Historial limpiado",
@@ -196,11 +196,11 @@
     }
   },
   "globalChat": {
-    "title": "Chatbot IA",
-    "subtitle": "Asistente de PredictSys AI",
+    "title": "Lys",
+    "subtitle": "Asistente Virtual de PredictSys AI",
     "placeholder": "Escribe tu pregunta...",
     "infoBanner": "Haz preguntas sobre la plataforma, conceptos de modelos predictivos y mejores prácticas.",
-    "howCanIHelp": "¡Hola! ¿Cómo puedo ayudarte?",
+    "howCanIHelp": "¡Hola! Soy Lys, ¿cómo puedo ayudarte?",
     "askAboutPlatform": "Haz preguntas sobre la plataforma, conceptos de modelos predictivos y mejores prácticas.",
     "suggestions": "Sugerencias:",
     "clear": "Limpiar",

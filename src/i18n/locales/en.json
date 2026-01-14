@@ -47,7 +47,7 @@
     "namePlaceholder": "Your Name"
   },
   "header": {
-    "openChatbot": "Open AI Chatbot (help)",
+    "openChatbot": "Open Lys (help)",
     "toggleTheme": "Toggle theme (light/dark)"
   },
   "landing": {
@@ -59,7 +59,7 @@
     "predictiveAI": "Predictive AI",
     "secure": "100% Secure",
     "instantDeploy": "Instant Deploy",
-    "aiChatbot": "AI Chatbot",
+    "aiChatbot": "Lys",
     "allYouNeed": "Everything you need to ",
     "predictFuture": "predict the future",
     "autoMLDescription": "Complete AutoML platform with industry best practices",
@@ -71,8 +71,8 @@
     "features": {
       "automl": "Simplified AutoML",
       "automlDesc": "Train classification and regression models automatically, without code.",
-      "chatbot": "Intelligent Chatbot",
-      "chatbotDesc": "AI assistant to help with analysis and model interpretation.",
+      "chatbot": "Lys - AI Assistant",
+      "chatbotDesc": "Virtual assistant to help with analysis and model interpretation.",
       "eda": "Automatic Exploratory Analysis",
       "edaDesc": "Visualize statistics, distributions, and correlations of your data.",
       "deploy": "1-Click Deploy",
@@ -107,8 +107,8 @@
     "errorLoading": "Error loading projects",
     "quickGuide": "Quick Guide",
     "quickGuideDesc": "Learn to create your first model in 5 minutes",
-    "chatbot": "AI Chatbot",
-    "chatbotDesc": "Chat about your projects and get insights",
+    "chatbot": "Lys",
+    "chatbotDesc": "Chat with Lys about your projects and get insights",
     "documentation": "Documentation",
     "documentationDesc": "Access examples and best practices"
   },
@@ -160,15 +160,15 @@
     }
   },
   "chat": {
-    "title": "AI Assistant",
-    "globalTitle": "AI Chatbot",
-    "globalSubtitle": "PredictSys AI Assistant",
+    "title": "Lys",
+    "globalTitle": "Lys",
+    "globalSubtitle": "PredictSys AI Virtual Assistant",
     "placeholder": "Type your question...",
     "enterToSend": "Press Enter to send or Shift+Enter for new line",
     "askAboutProject": "Ask questions about the project",
     "askAboutPlatform": "Ask questions about the platform, predictive model concepts, and best practices.",
-    "howCanIHelp": "Hello! How can I help?",
-    "iAmAssistant": "I'm this project's AI assistant. I can answer questions about the data, trained models, metrics, and more.",
+    "howCanIHelp": "Hello! I'm Lys, how can I help?",
+    "iAmAssistant": "I'm Lys, this project's virtual assistant. I can answer questions about the data, trained models, metrics, and more.",
     "suggestions": "Suggestions:",
     "clearHistory": "Clear history",
     "historyCleared": "History cleared",
@@ -196,11 +196,11 @@
     }
   },
   "globalChat": {
-    "title": "AI Chatbot",
-    "subtitle": "PredictSys AI Assistant",
+    "title": "Lys",
+    "subtitle": "PredictSys AI Virtual Assistant",
     "placeholder": "Type your question...",
     "infoBanner": "Ask questions about the platform, predictive model concepts, and best practices.",
-    "howCanIHelp": "Hello! How can I help?",
+    "howCanIHelp": "Hello! I'm Lys, how can I help?",
     "askAboutPlatform": "Ask questions about the platform, predictive model concepts, and best practices.",
     "suggestions": "Suggestions:",
     "clear": "Clear",
