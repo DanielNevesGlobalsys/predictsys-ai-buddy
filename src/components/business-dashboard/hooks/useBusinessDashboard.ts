@@ -1,10 +1,9 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { useDashboardMetrics } from './useDashboardMetrics';
 import type { 
   Prediction, 
   DashboardFilters, 
-  KPIData, 
-  SegmentationBand, 
   GroupSegmentation,
   TimeProjection,
   BusinessDashboardData 
@@ -17,6 +16,18 @@ interface ProductionModelInfo {
   algorithm_name: string;
 }
 
+/**
+ * Hook principal do Business Dashboard
+ * 
+ * Usa a Edge Function calculate-dashboard-metrics para obter:
+ * - KPIs agregados (entities, high_risk, expected_events, financial_impact, coverage)
+ * - Segmentação por probabilidade (buckets 0-20%, 20-40%, etc.)
+ * 
+ * Mantém lógica local para:
+ * - Buscar previsões para componentes que precisam de dados individuais (ActionableList, etc.)
+ * - Cálculos de projeção temporal
+ * - Segmentação por grupo
+ */
 export function useBusinessDashboard(projectId: string) {
   const [predictions, setPredictions] = useState<Prediction[]>([]);
   const [loading, setLoading] = useState(true);
@@ -34,6 +45,19 @@ export function useBusinessDashboard(projectId: string) {
     segmentValue: null,
     viewMode: 'risk'
   });
+
+  // =====================================================
+  // Hook de métricas agregadas via Edge Function
+  // =====================================================
+  const {
+    kpis,
+    segmentationBands,
+    availableSegmentFields: metricsSegmentFields,
+    problemType: metricsProblemType,
+    loading: metricsLoading,
+    error: metricsError,
+    refetch: refetchMetrics
+  } = useDashboardMetrics(projectId, filters);
 
   // Fetch production model
   useEffect(() => {
@@ -58,7 +82,8 @@ export function useBusinessDashboard(projectId: string) {
     }
   }, [projectId]);
 
-  // Fetch predictions - simplified filter without metadata contains
+  // Fetch predictions - para componentes que precisam de dados individuais
+  // Limite de 1000 para ActionableList, CohortComparison, etc.
   const fetchPredictions = useCallback(async () => {
     if (!projectId) return;
     
@@ -68,26 +93,16 @@ export function useBusinessDashboard(projectId: string) {
       let query = supabase
         .from('predictions')
         .select('*')
-        .eq('project_id', projectId);
-      
-      if (filters.dataset === 'latest') {
-        query = query.eq('is_latest', true);
-      }
-      
-      if (filters.dateRange.from) {
-        query = query.gte('reference_date', filters.dateRange.from.toISOString());
-      }
-      
-      if (filters.dateRange.to) {
-        query = query.lte('reference_date', filters.dateRange.to.toISOString());
-      }
+        .eq('project_id', projectId)
+        .eq('is_latest', true)
+        .lte('horizon_days', filters.horizon);
       
       if (filters.segmentField && filters.segmentValue) {
         query = query.eq(filters.segmentField as keyof Prediction, filters.segmentValue);
       }
       
-      // Limit query to avoid performance issues
-      query = query.limit(10000);
+      // Limite para componentes que precisam de dados individuais
+      query = query.limit(1000);
       
       const { data, error: fetchError } = await query;
       
@@ -107,7 +122,7 @@ export function useBusinessDashboard(projectId: string) {
       setLoading(false);
       setInitialLoadComplete(true);
     }
-  }, [projectId, filters.dataset, filters.dateRange, filters.segmentField, filters.segmentValue]);
+  }, [projectId, filters.horizon, filters.segmentField, filters.segmentValue]);
 
   useEffect(() => {
     fetchPredictions();
@@ -143,8 +158,8 @@ export function useBusinessDashboard(projectId: string) {
       
       console.log('Batch predictions result:', data);
       
-      // Refetch predictions after batch is done
-      await fetchPredictions();
+      // Refetch predictions and metrics after batch is done
+      await Promise.all([fetchPredictions(), refetchMetrics()]);
       
       return { success: true };
     } catch (err) {
@@ -155,7 +170,7 @@ export function useBusinessDashboard(projectId: string) {
     } finally {
       setRunningBatch(false);
     }
-  }, [projectId, productionModel, filters.horizon, fetchPredictions]);
+  }, [projectId, productionModel, filters.horizon, fetchPredictions, refetchMetrics]);
 
   // Auto-run predictions when entering dashboard with no predictions
   useEffect(() => {
@@ -163,147 +178,19 @@ export function useBusinessDashboard(projectId: string) {
       initialLoadComplete && 
       !autoRunTriggered.current && 
       predictions.length === 0 && 
+      kpis.totalEntities === 0 &&
       productionModel && 
       !runningBatch && 
-      !loading
+      !loading &&
+      !metricsLoading
     ) {
       console.log('Auto-triggering batch predictions...');
       autoRunTriggered.current = true;
       runBatchPredictions();
     }
-  }, [initialLoadComplete, predictions.length, productionModel, runningBatch, loading, runBatchPredictions]);
+  }, [initialLoadComplete, predictions.length, kpis.totalEntities, productionModel, runningBatch, loading, metricsLoading, runBatchPredictions]);
 
-  // Calculate KPIs
-  const kpis = useMemo<KPIData>(() => {
-    if (predictions.length === 0) {
-      return {
-        totalEntities: 0,
-        highProbabilityCount: 0,
-        highProbabilityPercent: 0,
-        expectedEvents: 0,
-        expectedEventsPercent: 0,
-        financialImpact: 0,
-        coveragePercent: 100,
-        lastUpdateDate: null,
-        daysSinceUpdate: null
-      };
-    }
-
-    const isClassification = predictions[0]?.problem_type === 'classification';
-    
-    const totalEntities = predictions.length;
-    
-    let highProbabilityCount = 0;
-    let expectedEvents = 0;
-    let financialImpact = 0;
-    let lastUpdateDate: string | null = null;
-    
-    predictions.forEach(p => {
-      if (isClassification && p.probability_event !== null) {
-        if (p.probability_event >= HIGH_PROBABILITY_THRESHOLD) {
-          highProbabilityCount++;
-        }
-        expectedEvents += p.probability_event;
-        
-        if (p.potential_value) {
-          financialImpact += p.probability_event * p.potential_value;
-        }
-      } else if (!isClassification && p.predicted_value !== null) {
-        expectedEvents += p.predicted_value;
-        financialImpact += p.predicted_value;
-      }
-      
-      if (!lastUpdateDate || p.prediction_date > lastUpdateDate) {
-        lastUpdateDate = p.prediction_date;
-      }
-    });
-    
-    const daysSinceUpdate = lastUpdateDate 
-      ? Math.floor((Date.now() - new Date(lastUpdateDate).getTime()) / (1000 * 60 * 60 * 24))
-      : null;
-    
-    return {
-      totalEntities,
-      highProbabilityCount,
-      highProbabilityPercent: totalEntities > 0 ? (highProbabilityCount / totalEntities) * 100 : 0,
-      expectedEvents: Math.round(expectedEvents),
-      expectedEventsPercent: totalEntities > 0 ? (expectedEvents / totalEntities) * 100 : 0,
-      financialImpact,
-      coveragePercent: 100,
-      lastUpdateDate,
-      daysSinceUpdate
-    };
-  }, [predictions]);
-
-  // Calculate segmentation bands
-  const segmentationBands = useMemo<SegmentationBand[]>(() => {
-    const isClassification = predictions[0]?.problem_type === 'classification';
-    
-    if (isClassification) {
-      const bands: SegmentationBand[] = [
-        { range: '0-20%', min: 0, max: 0.2, count: 0, percent: 0, avgPotentialValue: null },
-        { range: '20-40%', min: 0.2, max: 0.4, count: 0, percent: 0, avgPotentialValue: null },
-        { range: '40-60%', min: 0.4, max: 0.6, count: 0, percent: 0, avgPotentialValue: null },
-        { range: '60-80%', min: 0.6, max: 0.8, count: 0, percent: 0, avgPotentialValue: null },
-        { range: '80-100%', min: 0.8, max: 1.0, count: 0, percent: 0, avgPotentialValue: null }
-      ];
-      
-      const potentialValues: number[][] = [[], [], [], [], []];
-      
-      predictions.forEach(p => {
-        if (p.probability_event === null) return;
-        
-        let bandIndex = Math.min(Math.floor(p.probability_event * 5), 4);
-        bands[bandIndex].count++;
-        
-        if (p.potential_value) {
-          potentialValues[bandIndex].push(p.potential_value);
-        }
-      });
-      
-      const total = predictions.length;
-      bands.forEach((band, i) => {
-        band.percent = total > 0 ? (band.count / total) * 100 : 0;
-        if (potentialValues[i].length > 0) {
-          band.avgPotentialValue = potentialValues[i].reduce((a, b) => a + b, 0) / potentialValues[i].length;
-        }
-      });
-      
-      return bands;
-    } else {
-      // For regression, use quintiles
-      const values = predictions
-        .map(p => p.predicted_value)
-        .filter((v): v is number => v !== null)
-        .sort((a, b) => a - b);
-      
-      if (values.length === 0) return [];
-      
-      const quintileSize = Math.ceil(values.length / 5);
-      const bands: SegmentationBand[] = [];
-      
-      for (let i = 0; i < 5; i++) {
-        const start = i * quintileSize;
-        const end = Math.min((i + 1) * quintileSize, values.length);
-        const quintileValues = values.slice(start, end);
-        
-        if (quintileValues.length > 0) {
-          bands.push({
-            range: `Q${i + 1}`,
-            min: quintileValues[0],
-            max: quintileValues[quintileValues.length - 1],
-            count: quintileValues.length,
-            percent: (quintileValues.length / values.length) * 100,
-            avgPotentialValue: null
-          });
-        }
-      }
-      
-      return bands;
-    }
-  }, [predictions]);
-
-  // Calculate group segmentation
+  // Calculate group segmentation - local calculation from sampled predictions
   const groupSegmentation = useMemo<GroupSegmentation[]>(() => {
     const groupField = filters.segmentField || 'segment';
     const groups = new Map<string, { count: number; probabilities: number[]; values: number[]; highProbCount: number }>();
@@ -344,9 +231,8 @@ export function useBusinessDashboard(projectId: string) {
     })).sort((a, b) => (b.avgProbability || 0) - (a.avgProbability || 0));
   }, [predictions, filters.segmentField]);
 
-  // Calculate time projections
+  // Calculate time projections - based on aggregated metrics
   const timeProjections = useMemo<TimeProjection[]>(() => {
-    const isClassification = predictions[0]?.problem_type === 'classification';
     const horizonDays = filters.horizon;
     
     // Generate periods based on horizon
@@ -369,38 +255,39 @@ export function useBusinessDashboard(projectId: string) {
       }
     }
     
-    // Distribute predictions across periods (simplified linear distribution)
-    const totalExpected = predictions.reduce((sum, p) => {
-      if (isClassification) return sum + (p.probability_event || 0);
-      return sum + (p.predicted_value || 0);
-    }, 0);
-    
-    const totalFinancial = predictions.reduce((sum, p) => {
-      if (isClassification && p.probability_event && p.potential_value) {
-        return sum + (p.probability_event * p.potential_value);
-      }
-      return sum + (p.predicted_value || 0);
-    }, 0);
+    // Use KPIs agregados da Edge Function
+    const totalExpected = kpis.expectedEvents;
+    const totalFinancial = kpis.financialImpact;
     
     return periods.map((period, i) => ({
       period: period.label,
       expectedEvents: Math.round((totalExpected / periods.length) * (i + 1)),
       financialImpact: (totalFinancial / periods.length) * (i + 1)
     }));
-  }, [predictions, filters.horizon]);
+  }, [filters.horizon, kpis.expectedEvents, kpis.financialImpact]);
 
-  // Available segment fields
+  // Combine available segment fields from metrics and local predictions
   const availableSegmentFields = useMemo(() => {
-    const fields: (keyof Prediction)[] = ['segment', 'age_group', 'region', 'state', 'city', 'product_category', 'channel', 'campaign', 'cohort'];
+    const fields = new Set<string>(metricsSegmentFields);
     
-    return fields.filter(field => 
-      predictions.some(p => p[field] !== null)
-    );
-  }, [predictions]);
+    // Também verificar previsões locais
+    const localFields: (keyof Prediction)[] = ['segment', 'age_group', 'region', 'state', 'city', 'product_category', 'channel', 'campaign', 'cohort'];
+    localFields.forEach(field => {
+      if (predictions.some(p => p[field] !== null)) {
+        fields.add(field);
+      }
+    });
+    
+    return Array.from(fields);
+  }, [metricsSegmentFields, predictions]);
 
   const updateFilters = (newFilters: Partial<DashboardFilters>) => {
     setFilters(prev => ({ ...prev, ...newFilters }));
   };
+
+  // Combinar erros
+  const combinedError = error || metricsError;
+  const combinedLoading = loading || metricsLoading;
 
   const data: BusinessDashboardData = {
     predictions,
@@ -415,11 +302,13 @@ export function useBusinessDashboard(projectId: string) {
     data,
     filters,
     updateFilters,
-    loading,
-    error,
+    loading: combinedLoading,
+    error: combinedError,
     productionModel,
     runBatchPredictions,
     runningBatch,
-    refetch: fetchPredictions
+    refetch: async () => {
+      await Promise.all([fetchPredictions(), refetchMetrics()]);
+    }
   };
 }

@@ -50,3 +50,6 @@ verify_jwt = false
 
 [functions.process-import]
 verify_jwt = false
+
+[functions.calculate-dashboard-metrics]
+verify_jwt = false
