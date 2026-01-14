@@ -21,6 +21,8 @@ import {
 import { Upload, Loader2, FileWarning } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { buildSafeObjectName } from "@/lib/storageObjectName";
+
 
 interface LargeImportModalProps {
   open: boolean;
@@ -177,7 +179,8 @@ const LargeImportModal = ({
         return;
       }
 
-      const storagePath = `${user.id}/${projectId}/${file.name}`;
+      const storageObjectName = buildSafeObjectName(file.name);
+      const storagePath = `${user.id}/${projectId}/${storageObjectName}`;
 
       // Create job first so it NEVER disappears even if upload fails.
       const { data: createdJob, error: jobCreateError } = await supabase
