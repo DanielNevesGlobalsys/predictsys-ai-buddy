@@ -142,57 +142,79 @@ const BatchImportModal = ({
   };
 
   // Upload file with XMLHttpRequest for real progress tracking
-  const uploadFileWithProgress = useCallback(async (
-    file: File, 
-    storagePath: string,
-    onProgress: (loaded: number, total: number) => void
-  ): Promise<{ error: Error | null }> => {
-    return new Promise(async (resolve) => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          resolve({ error: new Error("Not authenticated") });
-          return;
+  const uploadFileWithProgress = useCallback(
+    async (
+      file: File,
+      storagePath: string,
+      onProgress: (loaded: number, total: number) => void
+    ): Promise<{ error: Error | null }> => {
+      return new Promise(async (resolve) => {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) {
+            resolve({ error: new Error("Not authenticated") });
+            return;
+          }
+
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          const apiKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+          // IMPORTANT: URL-encode each segment, preserving "/".
+          const encodedPath = storagePath
+            .split("/")
+            .map((seg) => encodeURIComponent(seg))
+            .join("/");
+
+          const url = `${supabaseUrl}/storage/v1/object/big_imports/${encodedPath}`;
+
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              onProgress(event.loaded, event.total);
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve({ error: null });
+            } else {
+              let errorMsg = `Upload failed: ${xhr.status}`;
+              try {
+                const resp = JSON.parse(xhr.responseText);
+                if (resp.message) errorMsg = resp.message;
+                if (resp.error) errorMsg = resp.error;
+              } catch {
+                // keep default
+              }
+              resolve({ error: new Error(errorMsg) });
+            }
+          };
+
+          xhr.onerror = () => {
+            resolve({ error: new Error("Network error during upload") });
+          };
+
+          xhr.ontimeout = () => {
+            resolve({ error: new Error("Upload timed out") });
+          };
+
+          xhr.open("POST", url, true);
+          xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+          xhr.setRequestHeader("apikey", apiKey);
+          xhr.setRequestHeader("x-upsert", "true");
+          xhr.timeout = 0; // No timeout for large files
+
+          xhr.send(file);
+        } catch (err) {
+          resolve({ error: err instanceof Error ? err : new Error("Unknown error") });
         }
-
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const url = `${supabaseUrl}/storage/v1/object/big_imports/${storagePath}`;
-
-        const xhr = new XMLHttpRequest();
-        
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            onProgress(event.loaded, event.total);
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve({ error: null });
-          } else {
-            resolve({ error: new Error(`Upload failed: ${xhr.status} ${xhr.statusText}`) });
-          }
-        };
-
-        xhr.onerror = () => {
-          resolve({ error: new Error("Network error during upload") });
-        };
-
-        xhr.ontimeout = () => {
-          resolve({ error: new Error("Upload timed out") });
-        };
-
-        xhr.open("POST", url, true);
-        xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
-        xhr.setRequestHeader("x-upsert", "true");
-        xhr.timeout = 0; // No timeout for large files
-        
-        xhr.send(file);
-      } catch (err) {
-        resolve({ error: err instanceof Error ? err : new Error("Unknown error") });
-      }
-    });
-  }, []);
+      });
+    },
+    []
+  );
 
   const handleStartImport = async () => {
     if (batchFiles.length === 0) return;
@@ -240,137 +262,165 @@ const BatchImportModal = ({
       }
 
       // Upload each file with real progress
+      let primaryJobId: string | null = null;
+      let anyUploadFailed = false;
+
       for (let i = 0; i < batchFiles.length; i++) {
         const bf = batchFiles[i];
-        
-        setBatchFiles(prev => 
-          prev.map((item, idx) => 
-            idx === i ? { ...item, status: "uploading" } : item
-          )
+
+        setBatchFiles((prev) =>
+          prev.map((item, idx) => (idx === i ? { ...item, status: "uploading" } : item))
         );
 
         const storagePath = `${user.id}/${projectId}/${batchId}/${bf.file.name}`;
-        
-        const { error: uploadError } = await uploadFileWithProgress(
-          bf.file,
-          storagePath,
-          (loaded, total) => {
-            const currentTotalUploaded = fileOffsets[i] + loaded;
-            totalUploaded = currentTotalUploaded;
-            
-            const now = Date.now();
-            const timeDelta = (now - lastTimeRef.current) / 1000;
-            
-            if (timeDelta >= 0.5) { // Update speed every 500ms
-              const bytesDelta = currentTotalUploaded - lastBytesRef.current;
-              const instantSpeed = bytesDelta / timeDelta;
-              
-              // Keep last 5 speed measurements for smoothing
-              speedHistoryRef.current.push(instantSpeed);
-              if (speedHistoryRef.current.length > 5) {
-                speedHistoryRef.current.shift();
-              }
-              
-              const avgSpeed = speedHistoryRef.current.reduce((a, b) => a + b, 0) / speedHistoryRef.current.length;
-              const bytesRemaining = totalSizeBytes - currentTotalUploaded;
-              const eta = avgSpeed > 0 ? bytesRemaining / avgSpeed : 0;
-              
-              setUploadStats({
-                bytesUploaded: currentTotalUploaded,
-                totalBytes: totalSizeBytes,
-                speed: avgSpeed,
-                eta,
-              });
-              
-              lastBytesRef.current = currentTotalUploaded;
-              lastTimeRef.current = now;
-            }
-            
-            const overallProgress = Math.floor((currentTotalUploaded / totalSizeBytes) * 70);
-            setUploadProgress(overallProgress);
-          }
-        );
+        const jobFileName = i === 0 ? datasetName : `${datasetName}_part${i + 1}`;
 
-        if (uploadError) {
-          console.error(`Upload error for ${bf.file.name}:`, uploadError);
-          setBatchFiles(prev => 
-            prev.map((item, idx) => 
-              idx === i ? { ...item, status: "error", error: t("dataIngestion.import.errors.uploadFailed") } : item
-            )
-          );
-          continue;
-        }
-
-        // Create import job for this file
-        const { data: job, error: jobError } = await supabase
+        // Create job BEFORE upload so it never disappears.
+        const { data: createdJob, error: jobError } = await supabase
           .from("import_jobs")
           .insert({
             project_id: projectId,
             user_id: user.id,
-            file_name: i === 0 ? datasetName : `${datasetName}_part${i + 1}`,
+            file_name: jobFileName,
             file_size_bytes: bf.file.size,
             storage_path: storagePath,
             delimiter,
             encoding,
-            status: "pending",
+            status: "uploading",
+            progress: 0,
             batch_id: batchId,
             batch_sequence: i + 1,
             is_batch_primary: i === 0,
           })
-          .select()
+          .select("id")
           .single();
 
-        if (jobError) {
+        if (jobError || !createdJob) {
           console.error(`Job creation error for ${bf.file.name}:`, jobError);
-          setBatchFiles(prev => 
-            prev.map((item, idx) => 
-              idx === i ? { ...item, status: "error", error: t("dataIngestion.import.errors.jobCreationFailed") } : item
+          anyUploadFailed = true;
+          setBatchFiles((prev) =>
+            prev.map((item, idx) =>
+              idx === i
+                ? { ...item, status: "error", error: t("dataIngestion.import.errors.jobCreationFailed") }
+                : item
             )
           );
           continue;
         }
 
-        setBatchFiles(prev => 
-          prev.map((item, idx) => 
+        if (i === 0) primaryJobId = createdJob.id;
+
+        const { error: uploadError } = await uploadFileWithProgress(bf.file, storagePath, (loaded, total) => {
+          const currentTotalUploaded = fileOffsets[i] + loaded;
+          totalUploaded = currentTotalUploaded;
+
+          const now = Date.now();
+          const timeDelta = (now - lastTimeRef.current) / 1000;
+
+          if (timeDelta >= 0.5) {
+            const bytesDelta = currentTotalUploaded - lastBytesRef.current;
+            const instantSpeed = bytesDelta / timeDelta;
+
+            speedHistoryRef.current.push(instantSpeed);
+            if (speedHistoryRef.current.length > 5) {
+              speedHistoryRef.current.shift();
+            }
+
+            const avgSpeed =
+              speedHistoryRef.current.reduce((a, b) => a + b, 0) / speedHistoryRef.current.length;
+            const bytesRemaining = totalSizeBytes - currentTotalUploaded;
+            const eta = avgSpeed > 0 ? bytesRemaining / avgSpeed : 0;
+
+            setUploadStats({
+              bytesUploaded: currentTotalUploaded,
+              totalBytes: totalSizeBytes,
+              speed: avgSpeed,
+              eta,
+            });
+
+            lastBytesRef.current = currentTotalUploaded;
+            lastTimeRef.current = now;
+          }
+
+          const overallProgress = Math.floor((currentTotalUploaded / totalSizeBytes) * 70);
+          setUploadProgress(overallProgress);
+        });
+
+        if (uploadError) {
+          console.error(`Upload error for ${bf.file.name}:`, uploadError);
+          anyUploadFailed = true;
+
+          await supabase
+            .from("import_jobs")
+            .update({
+              status: "failed",
+              error_message: uploadError.message,
+              finished_at: new Date().toISOString(),
+            })
+            .eq("id", createdJob.id);
+
+          setBatchFiles((prev) =>
+            prev.map((item, idx) =>
+              idx === i
+                ? { ...item, status: "error", error: t("dataIngestion.import.errors.uploadFailed") }
+                : item
+            )
+          );
+          continue;
+        }
+
+        // Mark job ready for backend processing
+        await supabase
+          .from("import_jobs")
+          .update({ status: "pending", progress: 0, error_message: null })
+          .eq("id", createdJob.id);
+
+        setBatchFiles((prev) =>
+          prev.map((item, idx) =>
             idx === i ? { ...item, status: "uploaded", storagePathfile: storagePath } : item
           )
         );
+      }
+
+      if (anyUploadFailed || !primaryJobId) {
+        // Ensure no "pending" jobs remain stuck when the batch upload is incomplete.
+        await supabase
+          .from("import_jobs")
+          .update({
+            status: "failed",
+            error_message: "Upload do lote não foi concluído. Reenvie o lote.",
+            finished_at: new Date().toISOString(),
+          })
+          .eq("batch_id", batchId)
+          .neq("status", "failed");
+
+        toast({
+          title: t("common.error"),
+          description: t("dataIngestion.import.errors.uploadFailed"),
+          variant: "destructive",
+        });
+
+        // Keep modal open so the user can see which files failed.
+        return;
       }
 
       setUploadProgress(80);
       setUploadPhase("processing");
       setUploadStats(null);
 
-      // Trigger batch processing using the first job we just created
-      // Wait a moment for the jobs to be committed
-      await new Promise(resolve => setTimeout(resolve, 500));
+      console.log("Invoking process-import for batch primary job:", primaryJobId);
+      const { error: fnError } = await supabase.functions.invoke("process-import", {
+        body: { job_id: primaryJobId, batch_id: batchId },
+      });
 
-      // Find the primary job we just created
-      const { data: primaryJob, error: primaryJobError } = await supabase
-        .from("import_jobs")
-        .select("id")
-        .eq("batch_id", batchId)
-        .eq("is_batch_primary", true)
-        .maybeSingle();
-
-      if (primaryJobError) {
-        console.error("Error fetching primary job:", primaryJobError);
-      }
-
-      if (primaryJob) {
-        console.log("Invoking process-import for job:", primaryJob.id);
-        const { error: fnError } = await supabase.functions.invoke("process-import", {
-          body: { job_id: primaryJob.id, batch_id: batchId },
-        });
-        
-        if (fnError) {
-          console.error("Process-import error:", fnError);
-          // Don't show error toast here - the job was created and will be processed
-          // The error might be a timeout which doesn't mean failure
-          console.log("Note: Edge function may continue processing in background");
-        }
-      } else {
-        console.warn("Primary job not found after creation");
+      if (fnError) {
+        console.error("Process-import error:", fnError);
+        // Do not flip to failed here (function might have started). Store the error message for visibility.
+        await supabase
+          .from("import_jobs")
+          .update({ error_message: `Falha ao acionar processamento: ${fnError.message}` })
+          .eq("batch_id", batchId)
+          .eq("status", "pending");
       }
 
       setUploadProgress(100);
