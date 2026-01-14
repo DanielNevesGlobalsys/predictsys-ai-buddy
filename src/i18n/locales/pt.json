@@ -47,7 +47,7 @@
     "namePlaceholder": "Seu Nome"
   },
   "header": {
-    "openChatbot": "Abrir Chatbot IA (ajuda)",
+    "openChatbot": "Abrir Lys (ajuda)",
     "toggleTheme": "Alternar tema (claro/escuro)"
   },
   "landing": {
@@ -59,7 +59,7 @@
     "predictiveAI": "IA Preditiva",
     "secure": "100% Seguro",
     "instantDeploy": "Deploy Instantâneo",
-    "aiChatbot": "Chatbot IA",
+    "aiChatbot": "Lys",
     "allYouNeed": "Tudo que você precisa para ",
     "predictFuture": "prever o futuro",
     "autoMLDescription": "Plataforma completa de AutoML com as melhores práticas do mercado",
@@ -71,8 +71,8 @@
     "features": {
       "automl": "AutoML Simplificado",
       "automlDesc": "Treine modelos de classificação e regressão automaticamente, sem código.",
-      "chatbot": "Chatbot Inteligente",
-      "chatbotDesc": "Assistente de IA para ajudar na análise e interpretação dos modelos.",
+      "chatbot": "Lys - Assistente IA",
+      "chatbotDesc": "Assistente virtual para ajudar na análise e interpretação dos modelos.",
       "eda": "Análise Exploratória Automática",
       "edaDesc": "Visualize estatísticas, distribuições e correlações dos seus dados.",
       "deploy": "Deploy com 1 Clique",
@@ -107,8 +107,8 @@
     "errorLoading": "Erro ao carregar projetos",
     "quickGuide": "Guia Rápido",
     "quickGuideDesc": "Aprenda a criar seu primeiro modelo em 5 minutos",
-    "chatbot": "Chatbot IA",
-    "chatbotDesc": "Converse sobre seus projetos e obtenha insights",
+    "chatbot": "Lys",
+    "chatbotDesc": "Converse com a Lys sobre seus projetos e obtenha insights",
     "documentation": "Documentação",
     "documentationDesc": "Acesse exemplos e melhores práticas"
   },
@@ -330,15 +330,15 @@
     }
   },
   "chat": {
-    "title": "Assistente IA",
-    "globalTitle": "Chatbot IA",
-    "globalSubtitle": "Assistente da PredictSys AI",
+    "title": "Lys",
+    "globalTitle": "Lys",
+    "globalSubtitle": "Assistente Virtual da PredictSys AI",
     "placeholder": "Digite sua pergunta...",
     "enterToSend": "Pressione Enter para enviar ou Shift+Enter para nova linha",
     "askAboutProject": "Tire dúvidas sobre o projeto",
     "askAboutPlatform": "Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.",
-    "howCanIHelp": "Olá! Como posso ajudar?",
-    "iAmAssistant": "Sou o assistente IA deste projeto. Posso responder perguntas sobre os dados, modelos treinados, métricas e muito mais.",
+    "howCanIHelp": "Olá! Eu sou a Lys, como posso ajudar?",
+    "iAmAssistant": "Sou a Lys, assistente virtual deste projeto. Posso responder perguntas sobre os dados, modelos treinados, métricas e muito mais.",
     "suggestions": "Sugestões:",
     "clearHistory": "Limpar histórico",
     "historyCleared": "Histórico limpo",
@@ -366,11 +366,11 @@
     }
   },
   "globalChat": {
-    "title": "Chatbot IA",
-    "subtitle": "Assistente da PredictSys AI",
+    "title": "Lys",
+    "subtitle": "Assistente Virtual da PredictSys AI",
     "placeholder": "Digite sua pergunta...",
     "infoBanner": "Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.",
-    "howCanIHelp": "Olá! Como posso ajudar?",
+    "howCanIHelp": "Olá! Eu sou a Lys, como posso ajudar?",
     "askAboutPlatform": "Faça perguntas sobre a plataforma, conceitos de modelos preditivos e boas práticas.",
     "suggestions": "Sugestões:",
     "clear": "Limpar",
@@ -466,12 +466,12 @@
       "R2": "Mede o quanto o modelo explica da variação do alvo (de 0 a 1). Quanto mais próximo de 1, mais o modelo explica o comportamento da variável."
     },
     "assistantProject": {
-      "title": "Assistente IA do projeto",
-      "desc": "Responde sobre dados, modelos e métricas daquele projeto específico. Tem acesso ao contexto completo do projeto: dataset, EDA, modelos treinados e feature importance."
+      "title": "Lys - Assistente do projeto",
+      "desc": "A Lys responde sobre dados, modelos e métricas daquele projeto específico. Tem acesso ao contexto completo do projeto: dataset, EDA, modelos treinados e feature importance."
     },
     "assistantGlobal": {
-      "title": "Chatbot IA global",
-      "desc": "Responde sobre uso da plataforma e conceitos gerais de machine learning. Ideal para tirar dúvidas sobre como usar a PredictSys ou entender métricas e termos técnicos."
+      "title": "Lys - Assistente global",
+      "desc": "A Lys responde sobre uso da plataforma e conceitos gerais de machine learning. Ideal para tirar dúvidas sobre como usar a PredictSys ou entender métricas e termos técnicos."
     },
     "faq": {
       "q1": { "question": "Preciso saber programar para usar a PredictSys?", "answer": "Não! A PredictSys AI foi criada para ser 100% no-code. Todas as etapas são feitas por meio de botões, formulários e seleções visuais. Você não precisa escrever nenhuma linha de código." },
