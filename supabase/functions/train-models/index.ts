@@ -6,6 +6,16 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ==================== SAMPLING CONSTANTS ====================
+// Minimum absolute rows required for reliable training
+const MIN_ROWS_FOR_TRAIN = 5_000;
+// Target sample size for train+val+test (healthy model size)
+const TARGET_SAMPLE_SIZE = 30_000;
+// Maximum rows to read with early stop (for large datasets)
+const MAX_ROWS_TO_READ = 90_000;
+// Minimum samples per class to avoid warning
+const MIN_CLASS_SAMPLES = 50;
+
 // ==================== UTILITY FUNCTIONS ====================
 
 function mean(arr: number[]): number {
@@ -553,12 +563,6 @@ serve(async (req) => {
       });
     }
 
-    // Update project status to training
-    await supabase
-      .from("projects")
-      .update({ status: "training" })
-      .eq("id", project_id);
-
     const { target_column, problem_type } = project;
 
     if (!target_column) {
@@ -630,28 +634,62 @@ serve(async (req) => {
       filePaths = [project.dataset_filename];
     }
 
-    // SAMPLING STRATEGY - Conservative limits for Edge Function CPU constraints:
-    // - Small datasets (≤ 30k): Use 100% of data
-    // - Medium datasets (30k-100k): Sample up to 15k
-    // - Large datasets (> 100k): Sample up to 12k with early stop
-    let MAX_SAMPLE_SIZE: number;
-    let MAX_LINES_TO_READ: number;
-    let useFullDataset = false;
+    // ==================== VALIDATE MINIMUM ROWS ====================
+    console.log(`\n=== Validação de tamanho do dataset ===`);
+    console.log(`Total de linhas no dataset: ${totalDatasetRows.toLocaleString()}`);
+    console.log(`Mínimo requerido: ${MIN_ROWS_FOR_TRAIN.toLocaleString()}`);
+    console.log(`Target sample size: ${TARGET_SAMPLE_SIZE.toLocaleString()}`);
+    console.log(`Max linhas para leitura: ${MAX_ROWS_TO_READ.toLocaleString()}`);
 
-    if (totalDatasetRows <= 30_000) {
-      MAX_SAMPLE_SIZE = 30_000;
-      MAX_LINES_TO_READ = 50_000;
-      useFullDataset = true;
-      console.log(`[AutoML] Dataset pequeno (${totalDatasetRows} linhas) - usando 100% dos dados`);
-    } else if (totalDatasetRows <= 100_000) {
-      MAX_SAMPLE_SIZE = 15_000;
-      MAX_LINES_TO_READ = 50_000;
-      console.log(`[AutoML] Dataset médio (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas`);
-    } else {
-      MAX_SAMPLE_SIZE = 12_000;
-      MAX_LINES_TO_READ = 40_000;
-      console.log(`[AutoML] Dataset grande (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas com early stop`);
+    if (totalDatasetRows < MIN_ROWS_FOR_TRAIN) {
+      console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${MIN_ROWS_FOR_TRAIN})`);
+      
+      // Update project status to not_enough_data
+      await supabase
+        .from("projects")
+        .update({ 
+          status: "not_enough_data"
+        })
+        .eq("id", project_id);
+
+      return new Response(JSON.stringify({ 
+        error: `Dados insuficientes para treinamento`,
+        details: `O dataset possui ${totalDatasetRows.toLocaleString()} linhas, mas são necessárias pelo menos ${MIN_ROWS_FOR_TRAIN.toLocaleString()} linhas para um modelo confiável.`,
+        status: "not_enough_data",
+        total_rows: totalDatasetRows,
+        min_required: MIN_ROWS_FOR_TRAIN
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
+
+    // ==================== DETERMINE SAMPLING STRATEGY ====================
+    let useFullDataset = false;
+    let effectiveMaxRowsToRead: number;
+    let effectiveTargetSampleSize: number;
+
+    if (totalDatasetRows <= TARGET_SAMPLE_SIZE) {
+      // Case 2: Small/medium dataset - use 100% of data
+      useFullDataset = true;
+      effectiveMaxRowsToRead = totalDatasetRows + 1000; // Read everything
+      effectiveTargetSampleSize = totalDatasetRows;
+      console.log(`[AutoML] Caso 2: Dataset pequeno/médio (${totalDatasetRows.toLocaleString()} linhas)`);
+      console.log(`[AutoML] Estratégia: Usar 100% dos dados (sem amostragem)`);
+    } else {
+      // Case 3: Large dataset - use early stop + sampling
+      useFullDataset = false;
+      effectiveMaxRowsToRead = MAX_ROWS_TO_READ;
+      effectiveTargetSampleSize = TARGET_SAMPLE_SIZE;
+      console.log(`[AutoML] Caso 3: Dataset grande (${totalDatasetRows.toLocaleString()} linhas)`);
+      console.log(`[AutoML] Estratégia: Early stop em ${MAX_ROWS_TO_READ.toLocaleString()} linhas, amostra final de ${TARGET_SAMPLE_SIZE.toLocaleString()} linhas`);
+    }
+
+    // Update project status to training
+    await supabase
+      .from("projects")
+      .update({ status: "training" })
+      .eq("id", project_id);
 
     console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
 
@@ -669,12 +707,12 @@ serve(async (req) => {
     let headers: string[] = [];
     let isFirstFile = true;
     let totalBytesRead = 0;
-    let totalLinesProcessed = 0;
-    let reachedSampleLimit = false;
+    let totalLinesRead = 0;
+    let reachedReadLimit = false;
 
-    console.log(`[AutoML] Iniciando leitura (máx ${MAX_SAMPLE_SIZE} linhas, early stop após ${MAX_LINES_TO_READ})...`);
+    console.log(`[AutoML] Iniciando leitura...`);
 
-    for (let fileIndex = 0; fileIndex < filePaths.length && !reachedSampleLimit; fileIndex++) {
+    for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
       const filePath = filePaths[fileIndex];
       console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
       
@@ -734,32 +772,18 @@ serve(async (req) => {
               }
               isFirstLineOfFile = false;
               
-              totalLinesProcessed++;
-              if (sampledLines.length < MAX_SAMPLE_SIZE) {
-                sampledLines.push(line);
-              } else if (!useFullDataset) {
-                // Reservoir sampling for diversity
-                const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
-                if (Math.random() < 0.1) {
-                  sampledLines[replaceIdx] = line;
-                }
-              }
+              totalLinesRead++;
+              sampledLines.push(line);
             } else {
-              totalLinesProcessed++;
-              if (sampledLines.length < MAX_SAMPLE_SIZE) {
-                sampledLines.push(line);
-              } else if (!useFullDataset) {
-                const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
-                if (Math.random() < 0.1) {
-                  sampledLines[replaceIdx] = line;
-                }
-              }
+              totalLinesRead++;
+              sampledLines.push(line);
             }
             
-            if (totalLinesProcessed >= MAX_LINES_TO_READ) {
+            // Check early stop for large datasets
+            if (!useFullDataset && totalLinesRead >= effectiveMaxRowsToRead) {
               shouldStopReading = true;
-              reachedSampleLimit = true;
-              console.log(`  Early stop: lidas ${totalLinesProcessed} linhas, amostra de ${sampledLines.length} linhas`);
+              reachedReadLimit = true;
+              console.log(`  Early stop: lidas ${totalLinesRead.toLocaleString()} linhas`);
               break;
             }
           }
@@ -768,7 +792,7 @@ serve(async (req) => {
           
           const mbRead = bytesRead / (1024 * 1024);
           if (mbRead - lastProgressLog >= 50) {
-            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesProcessed} linhas lidas`);
+            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesRead.toLocaleString()} linhas lidas`);
             lastProgressLog = mbRead;
           }
         }
@@ -788,15 +812,27 @@ serve(async (req) => {
       }
     }
 
-    console.log(`\n=== Leitura completa ===`);
+    // ==================== APPLY FINAL SAMPLING IF NEEDED ====================
+    let finalSampledLines: string[];
+    
+    if (useFullDataset || sampledLines.length <= effectiveTargetSampleSize) {
+      // Use all lines read
+      finalSampledLines = sampledLines;
+      console.log(`\n[AutoML] Usando todas as ${sampledLines.length.toLocaleString()} linhas lidas`);
+    } else {
+      // Random sample down to TARGET_SAMPLE_SIZE
+      console.log(`\n[AutoML] Amostrando de ${sampledLines.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
+      const shuffledLines = shuffle(sampledLines);
+      finalSampledLines = shuffledLines.slice(0, effectiveTargetSampleSize);
+    }
+
+    console.log(`\n=== Resumo da leitura ===`);
     console.log(`Total de arquivos: ${filePaths.length}`);
     console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
-    console.log(`Linhas lidas: ${totalLinesProcessed}`);
-    console.log(`Linhas amostradas: ${sampledLines.length}`);
-    
-    const allLines = sampledLines;
+    console.log(`Linhas lidas: ${totalLinesRead.toLocaleString()}`);
+    console.log(`Linhas na amostra final: ${finalSampledLines.length.toLocaleString()}`);
 
-    if (headers.length === 0 || allLines.length === 0) {
+    if (headers.length === 0 || finalSampledLines.length === 0) {
       return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -843,8 +879,8 @@ serve(async (req) => {
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
     
-    for (let i = 0; i < allLines.length; i++) {
-      const values = parseCSVLine(allLines[i], delimiter);
+    for (let i = 0; i < finalSampledLines.length; i++) {
+      const values = parseCSVLine(finalSampledLines[i], delimiter);
       
       if (isTargetCategorical) {
         const targetVal = values[targetIndex]?.trim() || "";
@@ -871,20 +907,21 @@ serve(async (req) => {
         y.push(targetNumeric);
       }
       
-      allLines[i] = "";
+      finalSampledLines[i] = "";
     }
     
     sampledLines.length = 0;
+    finalSampledLines.length = 0;
     
     if (isTargetCategorical && labelMap.size > 0) {
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
 
-    console.log(`\nDados válidos: ${X.length} amostras, ${featureNames.length} features`);
+    console.log(`\nDados válidos: ${X.length.toLocaleString()} amostras, ${featureNames.length} features`);
 
-    if (X.length < 10) {
+    if (X.length < 100) {
       return new Response(JSON.stringify({ 
-        error: `Dados insuficientes para treinamento (${X.length} amostras válidas).` 
+        error: `Dados insuficientes após parsing (${X.length} amostras válidas). Verifique a qualidade dos dados.` 
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -894,32 +931,89 @@ serve(async (req) => {
     // Normalize data
     const { normalized: Xnorm } = normalize(X);
 
-    // Split train/test (80/20)
+    // ==================== SPLIT TRAIN/VAL/TEST (70/15/15) ====================
+    const trainRatio = 0.70;
+    const valRatio = 0.15;
+    // testRatio = 0.15 (remainder)
+
     const shuffledIndices = shuffle(Array.from({ length: X.length }, (_, i) => i));
-    const splitIdx = Math.floor(X.length * 0.8);
-    const trainIdx = shuffledIndices.slice(0, splitIdx);
-    const testIdx = shuffledIndices.slice(splitIdx);
+    const n = shuffledIndices.length;
+    
+    const nTrain = Math.floor(n * trainRatio);
+    const nVal = Math.floor(n * valRatio);
+    const nTest = n - nTrain - nVal;
+
+    const trainIdx = shuffledIndices.slice(0, nTrain);
+    const valIdx = shuffledIndices.slice(nTrain, nTrain + nVal);
+    const testIdx = shuffledIndices.slice(nTrain + nVal);
 
     const Xtrain = trainIdx.map(i => Xnorm[i]);
     const ytrain = trainIdx.map(i => y[i]);
+    const Xval = valIdx.map(i => Xnorm[i]);
+    const yval = valIdx.map(i => y[i]);
     const Xtest = testIdx.map(i => Xnorm[i]);
     const ytest = testIdx.map(i => y[i]);
+
+    console.log(`\n=== Split de dados ===`);
+    console.log(`Train: ${nTrain.toLocaleString()} amostras (70%)`);
+    console.log(`Validation: ${nVal.toLocaleString()} amostras (15%)`);
+    console.log(`Test: ${nTest.toLocaleString()} amostras (15%)`);
 
     const isClassification = problem_type === "classification";
     const numClasses = isTargetCategorical ? labelMap.size : new Set(y).size;
     
+    // ==================== CLASS DISTRIBUTION CHECK (CLASSIFICATION ONLY) ====================
+    let classMinSamplesWarning = false;
+    let classDistribution: Record<string, number> = {};
+    
+    if (isClassification) {
+      // Count samples per class
+      const classCounts: Record<number, number> = {};
+      for (const label of y) {
+        classCounts[label] = (classCounts[label] || 0) + 1;
+      }
+      
+      // Create readable class distribution
+      if (labelMap.size > 0) {
+        for (const [label, idx] of labelMap.entries()) {
+          classDistribution[label] = classCounts[idx] || 0;
+        }
+      } else {
+        for (const [cls, count] of Object.entries(classCounts)) {
+          classDistribution[`class_${cls}`] = count;
+        }
+      }
+      
+      console.log(`\n=== Distribuição de classes ===`);
+      for (const [cls, count] of Object.entries(classDistribution)) {
+        const percentage = ((count / X.length) * 100).toFixed(1);
+        console.log(`  ${cls}: ${count.toLocaleString()} amostras (${percentage}%)`);
+        
+        if (count < MIN_CLASS_SAMPLES) {
+          classMinSamplesWarning = true;
+          console.warn(`  ⚠️  AVISO: Classe "${cls}" tem menos de ${MIN_CLASS_SAMPLES} amostras!`);
+        }
+      }
+      
+      if (classMinSamplesWarning) {
+        console.warn(`\n⚠️  AVISO: Uma ou mais classes têm menos de ${MIN_CLASS_SAMPLES} amostras.`);
+        console.warn(`   O modelo pode ter dificuldade em aprender padrões para classes sub-representadas.`);
+      }
+    }
+
     // For classification, convert to binary if needed
     let ytrainFinal = ytrain;
     let ytestFinal = ytest;
+    let yvalFinal = yval;
     
     if (isClassification && numClasses === 2) {
       const uniqueVals = [...new Set(y)].sort((a, b) => a - b);
       ytrainFinal = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
       ytestFinal = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
+      yvalFinal = yval.map(v => v === uniqueVals[0] ? 0 : 1);
     }
 
-    console.log(`\nTreino: ${Xtrain.length} amostras, Teste: ${Xtest.length} amostras`);
-    console.log(`Tipo: ${problem_type}, Classes: ${numClasses}`);
+    console.log(`\nTipo: ${problem_type}, Classes: ${numClasses}`);
 
     // ============ SELECT BEST MODEL ============
     const strategy = selectBestModelStrategy(
@@ -937,11 +1031,15 @@ serve(async (req) => {
       .delete()
       .eq("project_id", project_id);
 
-    // ============ TRAIN SINGLE MODEL ============
+    // ============ TRAIN SINGLE MODEL (using train + val combined for training) ============
+    // Combine train and validation for the actual training (as per common practice)
+    const XtrainCombined = [...Xtrain, ...Xval];
+    const ytrainCombined = [...(isClassification ? ytrainFinal : ytrain), ...(isClassification ? yvalFinal : yval)];
+    
     const trainResult = trainSingleModel(
       strategy,
-      Xtrain,
-      isClassification ? ytrainFinal : ytrain,
+      XtrainCombined,
+      ytrainCombined,
       Xtest,
       isClassification ? ytestFinal : ytest,
       featureNames
@@ -962,10 +1060,22 @@ serve(async (req) => {
           algorithm: strategy.algorithm,
           params: strategy.params,
           reason: strategy.reason,
-          n_train_rows: Xtrain.length,
-          n_test_rows: Xtest.length,
-          sample_size_used: X.length,
+          // Dataset info
           total_rows_dataset: totalDatasetRows,
+          rows_read: totalLinesRead,
+          sample_size_final: X.length,
+          // Split info
+          n_train_rows: nTrain,
+          n_val_rows: nVal,
+          n_test_rows: nTest,
+          n_train_combined: XtrainCombined.length,
+          // Class distribution (if classification)
+          class_distribution: isClassification ? classDistribution : null,
+          class_min_samples_warning: classMinSamplesWarning,
+          // Sampling constants used
+          min_rows_required: MIN_ROWS_FOR_TRAIN,
+          target_sample_size: TARGET_SAMPLE_SIZE,
+          max_rows_to_read: MAX_ROWS_TO_READ,
         },
       })
       .select()
@@ -1020,9 +1130,14 @@ serve(async (req) => {
         metrics: trainResult.metrics,
         sample_info: {
           total_dataset_rows: totalDatasetRows,
+          rows_read: totalLinesRead,
           sample_used: X.length,
-          train_rows: Xtrain.length,
-          test_rows: Xtest.length,
+          train_rows: nTrain,
+          val_rows: nVal,
+          test_rows: nTest,
+        },
+        warnings: {
+          class_min_samples_warning: classMinSamplesWarning,
         }
       }
     }), {
