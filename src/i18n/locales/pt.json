@@ -15,7 +15,9 @@
     "close": "Fechar",
     "confirm": "Confirmar",
     "retry": "Tentar novamente",
-    "refresh": "Atualizar"
+    "refresh": "Atualizar",
+    "rows": "linhas",
+    "columns": "colunas"
   },
   "auth": {
     "login": "Entrar",
@@ -800,6 +802,8 @@
     "file": "Arquivo",
     "rows": "Linhas",
     "columns": "Colunas",
+    "batchImport": "Importação em lote",
+    "batchImportFiles": "Importação em lote ({{count}} arquivos)",
     "noData": "Nenhum dado carregado",
     "noDataDesc": "Faça upload de um arquivo CSV para ver a análise exploratória.",
     "goToWizard": "Ir para o Wizard",

@@ -40,8 +40,22 @@ interface Project {
   dataset_filename: string | null;
   dataset_rows: number | null;
   dataset_columns: number | null;
+  total_rows: number | null;
   created_at: string;
   updated_at: string;
+}
+
+interface ProjectDataset {
+  id: string;
+  name: string;
+  total_rows: number | null;
+  columns_count: number | null;
+  source_type: string;
+  source_metadata: {
+    file_names?: string[];
+    files_count?: number;
+    batch_id?: string;
+  } | null;
 }
 
 const ProjectDetails = () => {
@@ -50,6 +64,7 @@ const ProjectDetails = () => {
   const { toast } = useToast();
   const { t, i18n } = useTranslation();
   const [project, setProject] = useState<Project | null>(null);
+  const [projectDataset, setProjectDataset] = useState<ProjectDataset | null>(null);
   const [loading, setLoading] = useState(true);
   const [chatKey, setChatKey] = useState(0);
 
@@ -83,22 +98,26 @@ const ProjectDetails = () => {
   }, [projectId]);
 
   const loadProject = async (id: string) => {
-    const { data, error } = await supabase
-      .from("projects")
-      .select("*")
-      .eq("id", id)
-      .single();
+    const [projectResult, datasetResult] = await Promise.all([
+      supabase.from("projects").select("*").eq("id", id).single(),
+      supabase.from("project_datasets").select("id, name, total_rows, columns_count, source_type, source_metadata").eq("project_id", id).eq("is_active", true).single(),
+    ]);
 
-    if (error) {
+    if (projectResult.error) {
       toast({
         title: t("common.error"),
-        description: error.message,
+        description: projectResult.error.message,
         variant: "destructive",
       });
       navigate("/dashboard");
     } else {
-      setProject(data);
+      setProject(projectResult.data);
     }
+    
+    if (datasetResult.data) {
+      setProjectDataset(datasetResult.data as ProjectDataset);
+    }
+    
     setLoading(false);
   };
 
@@ -301,15 +320,47 @@ const ProjectDetails = () => {
                 <div className="grid sm:grid-cols-3 gap-4">
                   <div>
                     <p className="text-sm text-muted-foreground">{t("projectDetails.file")}</p>
-                    <p className="font-medium truncate">{project.dataset_filename.split("/").pop()}</p>
+                    <p className="font-medium truncate">
+                      {(() => {
+                        // Check if it's a batch import with friendly names
+                        if (projectDataset?.source_type === "batch_import" && projectDataset?.source_metadata?.files_count) {
+                          const filesCount = projectDataset.source_metadata.files_count;
+                          const fileNames = projectDataset.source_metadata.file_names;
+                          if (fileNames && fileNames.length > 0) {
+                            return (
+                              <span title={fileNames.join(", ")}>
+                                {t("projectDetails.batchImportFiles", { count: filesCount })}
+                              </span>
+                            );
+                          }
+                          return t("projectDetails.batchImportFiles", { count: filesCount });
+                        }
+                        // Use dataset name if available, fallback to filename
+                        if (projectDataset?.name) {
+                          return projectDataset.name;
+                        }
+                        // Extract just the filename from the path (avoid showing hash)
+                        const filename = project.dataset_filename?.split("/").pop() || "-";
+                        // If filename looks like a hash/UUID, try to show a cleaner name
+                        const uuidPattern = /^[a-f0-9-]{36}$/i;
+                        if (uuidPattern.test(filename) || filename.length === 36) {
+                          return projectDataset?.name || t("projectDetails.batchImport");
+                        }
+                        return filename;
+                      })()}
+                    </p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">{t("projectDetails.rows")}</p>
-                    <p className="font-medium">{project.dataset_rows?.toLocaleString(getDateLocale()) || "-"}</p>
+                    <p className="font-medium">
+                      {(projectDataset?.total_rows || project.total_rows || project.dataset_rows)?.toLocaleString(getDateLocale()) || "-"}
+                    </p>
                   </div>
                   <div>
                     <p className="text-sm text-muted-foreground">{t("projectDetails.columns")}</p>
-                    <p className="font-medium">{project.dataset_columns || "-"}</p>
+                    <p className="font-medium">
+                      {projectDataset?.columns_count || project.dataset_columns || "-"}
+                    </p>
                   </div>
                 </div>
               </Card>

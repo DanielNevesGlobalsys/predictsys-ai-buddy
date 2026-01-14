@@ -47,7 +47,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [categoricalStats, setCategoricalStats] = useState<CategoricalStat[]>([]);
   const [hasData, setHasData] = useState(false);
   const [projectHasDataset, setProjectHasDataset] = useState<boolean | null>(null);
-  const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null }>({
+  const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null; sampledRows?: number }>({
     rows: 0, columns: 0, target: null
   });
   const [aiInsights, setAiInsights] = useState<string[]>([]);
@@ -85,19 +85,24 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const loadEDAStats = async () => {
     setLoading(true);
     try {
-      const [numericResult, categoricalResult, projectResult] = await Promise.all([
+      const [numericResult, categoricalResult, projectResult, datasetResult] = await Promise.all([
         supabase.from("project_numeric_stats").select("*").eq("project_id", projectId),
         supabase.from("project_categorical_stats").select("*").eq("project_id", projectId),
-        supabase.from("projects").select("dataset_rows, dataset_columns, target_column").eq("id", projectId).single(),
+        supabase.from("projects").select("dataset_rows, dataset_columns, target_column, total_rows").eq("id", projectId).single(),
+        supabase.from("project_datasets").select("total_rows, columns_count, sample_rows").eq("project_id", projectId).eq("is_active", true).single(),
       ]);
 
-      if (projectResult.data) {
-        setProjectInfo({
-          rows: projectResult.data.dataset_rows || 0,
-          columns: projectResult.data.dataset_columns || 0,
-          target: projectResult.data.target_column || null,
-        });
-      }
+      // Determine the correct row count (prefer dataset total_rows over project fields)
+      const totalRows = datasetResult.data?.total_rows || projectResult.data?.total_rows || projectResult.data?.dataset_rows || 0;
+      const totalColumns = datasetResult.data?.columns_count || projectResult.data?.dataset_columns || 0;
+      const sampledRows = datasetResult.data?.sample_rows;
+
+      setProjectInfo({
+        rows: totalRows,
+        columns: totalColumns,
+        target: projectResult.data?.target_column || null,
+        sampledRows: sampledRows && sampledRows < totalRows ? sampledRows : undefined,
+      });
 
       if (numericResult.data) setNumericStats(numericResult.data);
       if (categoricalResult.data) {
@@ -148,7 +153,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
     missingPercentage,
     targetColumn: projectInfo.target || undefined,
     dataQualityScore: Math.round(qualityScore),
-    sampledRows: projectInfo.rows > 50000 ? 50000 : undefined,
+    sampledRows: projectInfo.sampledRows,
   };
 
   if (loading) {

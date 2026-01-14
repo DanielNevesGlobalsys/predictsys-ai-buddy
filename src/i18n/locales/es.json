@@ -15,7 +15,9 @@
     "close": "Cerrar",
     "confirm": "Confirmar",
     "retry": "Reintentar",
-    "refresh": "Actualizar"
+    "refresh": "Actualizar",
+    "rows": "filas",
+    "columns": "columnas"
   },
   "auth": {
     "login": "Iniciar Sesión",
@@ -538,6 +540,8 @@
     "file": "Archivo",
     "rows": "Filas",
     "columns": "Columnas",
+    "batchImport": "Importación en lote",
+    "batchImportFiles": "Importación en lote ({{count}} archivos)",
     "noData": "Sin datos cargados",
     "noDataDesc": "Sube un archivo CSV para ver el análisis exploratorio.",
     "goToWizard": "Ir al Wizard",

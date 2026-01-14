@@ -25,6 +25,7 @@ interface Project {
   problem_type: string;
   status: string;
   dataset_rows: number | null;
+  total_rows: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -172,10 +173,10 @@ const Dashboard = () => {
                     </div>
 
                     <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                      {project.dataset_rows && (
+                      {(project.total_rows || project.dataset_rows) && (
                         <span className="flex items-center gap-1">
                           <Database className="w-3 h-3" />
-                          {project.dataset_rows.toLocaleString(getDateLocale())} {t("common.rows")}
+                          {(project.total_rows || project.dataset_rows)?.toLocaleString(getDateLocale())} {t("common.rows")}
                         </span>
                       )}
                       <span className="flex items-center gap-1">
