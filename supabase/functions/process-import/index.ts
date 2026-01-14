@@ -8,7 +8,7 @@ const corsHeaders = {
 
 // Configuration
 const MAX_ROWS = 100000000; // 100M rows max
-const SAMPLE_SIZE = 100000;
+const SAMPLE_SIZE = 10000;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
 const PROGRESS_UPDATE_INTERVAL = 50000; // Update progress every 50K rows
 const CHUNK_SIZE = 64 * 1024; // 64KB chunks for reading
@@ -178,36 +178,66 @@ async function createDatasetRecord(
 }
 
 // Stream-based line reader that doesn't load entire file in memory
-async function* readLinesFromBlob(blob: Blob, encoding: string): AsyncGenerator<string> {
-  const decoder = new TextDecoder(encoding === 'ISO-8859-1' ? 'iso-8859-1' : 
-                                   encoding === 'Windows-1252' ? 'windows-1252' : 'utf-8');
-  const reader = blob.stream().getReader();
+async function* readLinesFromStream(
+  stream: ReadableStream<Uint8Array>,
+  encoding: string,
+  bytesCounter: { bytes: number },
+): AsyncGenerator<string> {
+  const decoder = new TextDecoder(
+    encoding === 'ISO-8859-1'
+      ? 'iso-8859-1'
+      : encoding === 'Windows-1252'
+        ? 'windows-1252'
+        : 'utf-8',
+  );
+
+  const reader = stream.getReader();
   let leftover = '';
 
   try {
     while (true) {
       const { done, value } = await reader.read();
-      
-      if (done) {
-        if (leftover.trim()) {
-          yield leftover;
-        }
-        break;
-      }
+
+      if (done) break;
+      if (!value) continue;
+
+      bytesCounter.bytes += value.byteLength;
 
       const text = decoder.decode(value, { stream: true });
       const lines = (leftover + text).split('\n');
       leftover = lines.pop() || '';
 
       for (const line of lines) {
-        if (line.trim()) {
-          yield line;
+        const cleaned = line.replace(/\r$/, '');
+        if (cleaned.trim()) {
+          yield cleaned;
         }
       }
+    }
+
+    // Flush decoder
+    const flushed = decoder.decode();
+    if (flushed) leftover += flushed;
+
+    const last = leftover.replace(/\r$/, '');
+    if (last.trim()) {
+      yield last;
     }
   } finally {
     reader.releaseLock();
   }
+}
+
+async function getSignedDownloadUrl(supabase: any, path: string): Promise<string> {
+  const { data, error } = await supabase.storage
+    .from('big_imports')
+    .createSignedUrl(path, 60 * 60);
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Falha ao gerar URL assinada: ${error?.message || 'erro desconhecido'}`);
+  }
+
+  return data.signedUrl;
 }
 
 // Process a single file and return stats without loading entire content
@@ -224,21 +254,34 @@ async function processFileStreaming(
   sampleRows: Record<string, unknown>[];
   error?: string;
 }> {
-  const { data: fileData, error: downloadError } = await supabase.storage
-    .from('big_imports')
-    .download(job.storage_path);
-
-  if (downloadError || !fileData) {
+  let res: Response;
+  try {
+    const signedUrl = await getSignedDownloadUrl(supabase, job.storage_path);
+    res = await fetch(signedUrl, { headers: { 'Accept-Encoding': 'identity' } });
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'Erro ao preparar download do arquivo';
     return {
       success: false,
       headers: [],
       rowCount: 0,
       sampleRows: [],
-      error: `Falha ao baixar arquivo: ${job.storage_path}. ${downloadError?.message || ''}`
+      error: msg,
     };
   }
 
-  console.log(`[process-import] Downloaded file: ${job.file_name}, size: ${(fileData.size / 1024 / 1024).toFixed(2)} MB`);
+  if (!res.ok || !res.body) {
+    return {
+      success: false,
+      headers: [],
+      rowCount: 0,
+      sampleRows: [],
+      error: `Falha ao baixar arquivo: ${job.storage_path}. HTTP ${res.status}`,
+    };
+  }
+
+  console.log(
+    `[process-import] Streaming file: ${job.file_name}, size: ${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB`,
+  );
 
   const delimiter = job.delimiter || ',';
   const encoding = job.encoding || 'UTF-8';
@@ -247,12 +290,11 @@ async function processFileStreaming(
   const sampleRows: Record<string, unknown>[] = [];
   let isHeaderLine = true;
   let lastProgressUpdate = 0;
-  let bytesProcessed = 0;
+
+  const bytesCounter = { bytes: 0 };
 
   try {
-    for await (const line of readLinesFromBlob(fileData, encoding)) {
-      bytesProcessed += new TextEncoder().encode(line).length + 1;
-
+    for await (const line of readLinesFromStream(res.body, encoding, bytesCounter)) {
       if (isHeaderLine) {
         headers = parseCSVLine(line, delimiter);
         isHeaderLine = false;
@@ -266,7 +308,7 @@ async function processFileStreaming(
               headers: [],
               rowCount: 0,
               sampleRows: [],
-              error: `Colunas incompatíveis: ${comparison.message}`
+              error: `Colunas incompatíveis: ${comparison.message}`,
             };
           }
         }
@@ -288,7 +330,8 @@ async function processFileStreaming(
 
       // Update progress periodically
       if (rowCount - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
-        const progress = Math.min(Math.floor((bytesProcessed / fileData.size) * 95), 95);
+        const denom = job.file_size_bytes > 0 ? job.file_size_bytes : 1;
+        const progress = Math.min(Math.floor((bytesCounter.bytes / denom) * 95), 95);
         await updateJobProgress(supabase, job.id, progress, rowCount);
         lastProgressUpdate = rowCount;
         console.log(`[process-import] File ${job.file_name}: ${rowCount.toLocaleString()} rows processed`);
@@ -390,26 +433,19 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       allSampleRows = allSampleRows.concat(samplesToAdd.slice(0, SAMPLE_SIZE - allSampleRows.length));
     }
 
-    // Copy file to datasets bucket
+    // Copy file to datasets bucket without downloading into memory
     const destPath = `${job.user_id}/${job.project_id}/${job.batch_id}/${job.file_name}`;
-    
+
     try {
-      // Download and re-upload to datasets bucket
-      const { data: fileBlob } = await supabase.storage
+      const { error: copyError } = await supabase.storage
         .from('big_imports')
-        .download(job.storage_path);
-      
-      if (fileBlob) {
-        const { error: uploadErr } = await supabase.storage
-          .from('datasets')
-          .upload(destPath, fileBlob, { upsert: true });
-        
-        if (!uploadErr) {
-          processedFilePaths.push(destPath);
-          totalFileSizeBytes += job.file_size_bytes;
-        } else {
-          console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, uploadErr);
-        }
+        .copy(job.storage_path, destPath, { destinationBucket: 'datasets' });
+
+      if (!copyError) {
+        processedFilePaths.push(destPath);
+        totalFileSizeBytes += job.file_size_bytes;
+      } else {
+        console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, copyError);
       }
     } catch (copyErr) {
       console.warn(`[process-import] Error copying file to datasets:`, copyErr);
@@ -592,22 +628,16 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 
     console.log(`[process-import] Copying to datasets bucket: ${datasetPath}`);
 
-    // Download and re-upload
-    const { data: fileBlob } = await supabase.storage
-      .from('big_imports')
-      .download(job.storage_path);
-    
-    if (fileBlob) {
-      const { error: copyError } = await supabase.storage
-        .from('datasets')
-        .upload(datasetPath, fileBlob, { upsert: true });
+     // Copy file to datasets bucket without downloading into memory
+     const { error: copyError } = await supabase.storage
+       .from('big_imports')
+       .copy(job.storage_path, datasetPath, { destinationBucket: 'datasets' });
 
-      if (copyError) {
-        console.error('[process-import] Error copying to datasets:', copyError);
-      } else {
-        console.log('[process-import] File copied to datasets bucket');
-      }
-    }
+     if (copyError) {
+       console.error('[process-import] Error copying to datasets:', copyError);
+     } else {
+       console.log('[process-import] File copied to datasets bucket');
+     }
 
     // Create dataset record
     const datasetId = await createDatasetRecord(
