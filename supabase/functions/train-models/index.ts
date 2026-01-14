@@ -490,10 +490,10 @@ serve(async (req) => {
       .update({ status: "training" })
       .eq("id", project_id);
 
-    const { dataset_filename, target_column, problem_type } = project;
+    const { target_column, problem_type } = project;
 
-    if (!dataset_filename || !target_column) {
-      return new Response(JSON.stringify({ error: "Dataset ou coluna alvo não definidos" }), {
+    if (!target_column) {
+      return new Response(JSON.stringify({ error: "Coluna alvo não definida" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -514,33 +514,125 @@ serve(async (req) => {
       });
     }
 
-    // Download dataset
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from("datasets")
-      .download(dataset_filename);
+    // Get active dataset from project_datasets
+    const { data: activeDataset, error: datasetError } = await supabase
+      .from("project_datasets")
+      .select("*")
+      .eq("project_id", project_id)
+      .eq("is_active", true)
+      .single();
 
-    if (downloadError || !fileData) {
-      console.error("Erro ao baixar dataset:", downloadError);
-      return new Response(JSON.stringify({ error: "Erro ao baixar dataset" }), {
-        status: 500,
+    if (datasetError || !activeDataset) {
+      console.error("Erro ao buscar dataset ativo:", datasetError);
+      return new Response(JSON.stringify({ error: "Dataset ativo não encontrado" }), {
+        status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Parse CSV
-    const text = await fileData.text();
-    const lines = text.split(/\r?\n/).filter(line => line.trim());
+    // Get delimiter from source_metadata
+    const sourceMetadata = activeDataset.source_metadata as Record<string, any> || {};
+    const delimiter = sourceMetadata.delimiter || ";";
+    const isBatchImport = activeDataset.source_type === "batch_import";
+
+    console.log(`Dataset: ${activeDataset.storage_path}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
+
+    // Collect all file paths to download
+    let filePaths: string[] = [];
     
-    const firstLine = lines[0];
-    const commaCount = (firstLine.match(/,/g) || []).length;
-    const semicolonCount = (firstLine.match(/;/g) || []).length;
-    const delimiter = semicolonCount > commaCount ? ";" : ",";
-    
-    console.log(`Delimitador detectado: "${delimiter}"`);
-    
-    const headers = firstLine.split(delimiter).map(h => h.trim().replace(/^"|"$/g, ""));
-    console.log(`Headers encontrados: ${headers.slice(0, 5).join(", ")}...`);
-    
+    if (isBatchImport && sourceMetadata.file_paths) {
+      filePaths = sourceMetadata.file_paths as string[];
+    } else {
+      // Single file - storage_path is the file path
+      filePaths = [activeDataset.storage_path];
+    }
+
+    if (filePaths.length === 0) {
+      return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log(`Arquivos para processar: ${filePaths.length}`);
+
+    // Function to parse CSV line respecting quotes
+    function parseCSVLine(line: string, delim: string): string[] {
+      const result: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delim && !inQuotes) {
+          result.push(current.trim().replace(/^"|"$/g, ""));
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim().replace(/^"|"$/g, ""));
+      return result;
+    }
+
+    // Download and combine data from all files with sampling
+    const MAX_ROWS = 3000; // Limit for training
+    let allLines: string[] = [];
+    let headers: string[] = [];
+    let isFirstFile = true;
+
+    for (const filePath of filePaths) {
+      if (allLines.length >= MAX_ROWS) break;
+
+      console.log(`Baixando: ${filePath}`);
+      
+      const { data: fileData, error: downloadError } = await supabase.storage
+        .from("datasets")
+        .download(filePath);
+
+      if (downloadError || !fileData) {
+        console.error(`Erro ao baixar ${filePath}:`, downloadError);
+        continue;
+      }
+
+      const text = await fileData.text();
+      const lines = text.split(/\r?\n/).filter(line => line.trim());
+
+      if (lines.length === 0) continue;
+
+      if (isFirstFile) {
+        // First file - get headers
+        headers = parseCSVLine(lines[0], delimiter);
+        console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+        isFirstFile = false;
+        
+        // Add data lines (skip header)
+        const remaining = MAX_ROWS - allLines.length;
+        allLines.push(...lines.slice(1, 1 + remaining));
+      } else {
+        // Subsequent files - skip header if it matches
+        const fileHeaders = parseCSVLine(lines[0], delimiter);
+        const startLine = fileHeaders.length === headers.length ? 1 : 0;
+        
+        const remaining = MAX_ROWS - allLines.length;
+        allLines.push(...lines.slice(startLine, startLine + remaining));
+      }
+
+      console.log(`Linhas acumuladas: ${allLines.length}`);
+    }
+
+    if (headers.length === 0 || allLines.length === 0) {
+      return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log(`Total de linhas para treino: ${allLines.length}, Headers: ${headers.length}`);
+
+    // Find target column index
     const targetIndex = headers.indexOf(target_column);
     if (targetIndex === -1) {
       const availableColumns = columns.map(c => c.column_name).join(", ");
@@ -575,16 +667,15 @@ serve(async (req) => {
     
     console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-    // Parse data
+    // Parse data from allLines
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
     
     // Build label encoding map for categorical targets
-    const MAX_ROWS = 2000; // Reduced for performance
     if (isTargetCategorical) {
-      for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
-        const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
+      for (let i = 0; i < allLines.length; i++) {
+        const values = parseCSVLine(allLines[i], delimiter);
         const targetVal = values[targetIndex]?.trim() || "";
         if (targetVal && !labelMap.has(targetVal)) {
           labelMap.set(targetVal, labelMap.size);
@@ -592,8 +683,9 @@ serve(async (req) => {
       }
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
-    for (let i = 1; i < Math.min(lines.length, MAX_ROWS + 1); i++) {
-      const values = lines[i].split(delimiter).map(v => v.trim().replace(/^"|"$/g, ""));
+
+    for (let i = 0; i < allLines.length; i++) {
+      const values = parseCSVLine(allLines[i], delimiter);
       const features = featureIndices.map(idx => {
         const val = values[idx]?.replace(",", ".") || "";
         return parseFloat(val);
