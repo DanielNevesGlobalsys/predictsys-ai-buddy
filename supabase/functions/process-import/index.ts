@@ -10,8 +10,8 @@ const corsHeaders = {
 const MAX_ROWS = 100000000; // 100M rows max
 const SAMPLE_SIZE = 10000;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
-const PROGRESS_UPDATE_INTERVAL = 50000; // Update progress every 50K rows
-const CHUNK_SIZE = 64 * 1024; // 64KB chunks for reading
+const PROGRESS_UPDATE_INTERVAL = 50000; // Update progress every 50K rows (hoje não está sendo usado)
+const CHUNK_SIZE = 64 * 1024; // 64KB chunks for reading (reserva, não usado diretamente)
 
 interface ImportJob {
   id: string;
@@ -224,21 +224,6 @@ function countNewlines(chunk: Uint8Array): number {
   return c;
 }
 
-/**
- * NOVA FUNÇÃO RE-ADICIONADA
- * Gera uma URL assinada para baixar o arquivo do bucket big_imports
- * sem precisar materializar o blob inteiro em memória.
- */
-async function getSignedDownloadUrl(supabase: any, path: string): Promise<string> {
-  const { data, error } = await supabase.storage.from("big_imports").createSignedUrl(path, 60 * 60); // 1h
-
-  if (error || !data?.signedUrl) {
-    throw new Error(`Falha ao gerar URL assinada: ${error?.message || "erro desconhecido"}`);
-  }
-
-  return data.signedUrl;
-}
-
 // Process a single file and return stats without loading entire content
 // Optimized to avoid per-row CSV parsing on huge files (prevents WORKER_LIMIT)
 async function processFileStreaming(
@@ -255,9 +240,16 @@ async function processFileStreaming(
   error?: string;
 }> {
   let res: Response;
+
+  // 1) Gera URL assinada direto aqui (sem helper) e faz fetch em streaming
   try {
-    const signedUrl = await getSignedDownloadUrl(supabase, job.storage_path);
-    res = await fetch(signedUrl, { headers: { "Accept-Encoding": "identity" } });
+    const { data, error } = await supabase.storage.from("big_imports").createSignedUrl(job.storage_path, 60 * 60); // 1h
+
+    if (error || !data?.signedUrl) {
+      throw new Error(`Falha ao gerar URL assinada: ${error?.message || "erro desconhecido"}`);
+    }
+
+    res = await fetch(data.signedUrl, { headers: { "Accept-Encoding": "identity" } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : "Erro ao preparar download do arquivo";
     return { success: false, headers: [], rowCount: 0, sampleRows: [], error: msg };
@@ -457,7 +449,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   }
 
   console.log(
-    `[process-import] Found ${batchJobs.length} files in batch, total size: ${(totalBatchSize / 1024 / 1024).toFixed(2)} MB`,
+    `[process-import] Found ${batchJobs.length} files in batch, total size: ${(totalBatchSize / 1024 / 1024).toFixed(
+      2,
+    )} MB`,
   );
 
   let primaryHeaders: string[] | null = null;
@@ -483,7 +477,11 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     if (!result.success) {
       console.error(`[process-import] Error processing file ${job.file_name}:`, result.error);
-      failedJobs.push({ id: job.id, fileName: job.file_name, error: result.error || "Erro desconhecido" });
+      failedJobs.push({
+        id: job.id,
+        fileName: job.file_name,
+        error: result.error || "Erro desconhecido",
+      });
       await updateJobError(supabase, job.id, result.error || "Erro desconhecido");
       continue;
     }
@@ -517,7 +515,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
         console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, copyError);
       }
     } catch (copyErr) {
-      console.warn(`[process-import] Error copying file to datasets:`, copyErr);
+      console.warn("[process-import] Error copying file to datasets:", copyErr);
     }
 
     processedJobIds.push(job.id);
