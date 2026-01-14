@@ -117,37 +117,46 @@ serve(async (req) => {
       });
     }
 
-    // Get active dataset from project_datasets
+    // Get active dataset from project_datasets - use maybeSingle for fallback
     const { data: activeDataset, error: datasetError } = await supabase
       .from("project_datasets")
       .select("*")
       .eq("project_id", project_id)
       .eq("is_active", true)
-      .single();
+      .maybeSingle();
 
-    if (datasetError || !activeDataset) {
-      console.error("Active dataset not found:", datasetError);
-      return new Response(JSON.stringify({ error: "Dataset ativo não encontrado" }), {
+    let delimiter = ",";
+    let isBatchImport = false;
+    let filePaths: string[] = [];
+    let sourceMetadata: Record<string, any> = {};
+
+    if (activeDataset) {
+      // Use active dataset
+      sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
+      delimiter = sourceMetadata.delimiter || ",";
+      isBatchImport = activeDataset.source_type === "batch_import";
+      
+      if (isBatchImport && sourceMetadata.file_paths) {
+        filePaths = sourceMetadata.file_paths as string[];
+      } else {
+        filePaths = [activeDataset.storage_path];
+      }
+      console.log(`[Predictions] Usando dataset ativo: ${activeDataset.name}`);
+    } else if (project.dataset_filename) {
+      // Fallback to project.dataset_filename
+      console.log(`[Predictions] Sem dataset ativo, usando project.dataset_filename`);
+      const datasetPath = `${project.user_id}/${project.id}/${project.dataset_filename}`;
+      filePaths = [datasetPath];
+      delimiter = ","; // Default delimiter
+    } else {
+      console.error("No dataset found for project");
+      return new Response(JSON.stringify({ error: "Nenhum dataset encontrado para o projeto" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get delimiter from source_metadata
-    const sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
-    const delimiter = sourceMetadata.delimiter || ";";
-    const isBatchImport = activeDataset.source_type === "batch_import";
-
-    console.log(`Dataset: ${activeDataset.storage_path}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
-
-    // Collect all file paths to download
-    let filePaths: string[] = [];
-    
-    if (isBatchImport && sourceMetadata.file_paths) {
-      filePaths = sourceMetadata.file_paths as string[];
-    } else {
-      filePaths = [activeDataset.storage_path];
-    }
+    console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
 
     if (filePaths.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
