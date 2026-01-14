@@ -143,10 +143,9 @@ serve(async (req) => {
       }
       console.log(`[Predictions] Usando dataset ativo: ${activeDataset.name}`);
     } else if (project.dataset_filename) {
-      // Fallback to project.dataset_filename
+      // Fallback to project.dataset_filename - it already contains the full path!
       console.log(`[Predictions] Sem dataset ativo, usando project.dataset_filename`);
-      const datasetPath = `${project.user_id}/${project.id}/${project.dataset_filename}`;
-      filePaths = [datasetPath];
+      filePaths = [project.dataset_filename];
       delimiter = ","; // Default delimiter
     } else {
       console.error("No dataset found for project");
