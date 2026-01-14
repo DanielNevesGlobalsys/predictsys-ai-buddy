@@ -176,8 +176,42 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     setShowImportJobsModal(true);
   };
 
-  const handleJobCompleted = () => {
+  const handleJobCompleted = async () => {
     // Refresh project data when import completes
+    if (projectData.id) {
+      // Fetch updated project data
+      const { data: updatedProject } = await supabase
+        .from("projects")
+        .select("dataset_filename, dataset_rows, dataset_columns, total_rows, sample_rows, status")
+        .eq("id", projectData.id)
+        .single();
+
+      if (updatedProject) {
+        // Update local state
+        if (updatedProject.dataset_columns) {
+          // Fetch columns info
+          const { data: columnsData } = await supabase
+            .from("project_columns")
+            .select("*")
+            .eq("project_id", projectData.id)
+            .order("column_index");
+
+          if (columnsData && columnsData.length > 0) {
+            setColumns(columnsData.map(c => ({
+              name: c.column_name,
+              inferredType: c.inferred_type,
+              index: c.column_index
+            })));
+          }
+        }
+
+        setRowCount(updatedProject.dataset_rows || updatedProject.sample_rows || 0);
+        setTotalRows(updatedProject.total_rows || 0);
+        setIsSampled((updatedProject.total_rows || 0) > (updatedProject.sample_rows || 0));
+        setUploadStatus("success");
+      }
+    }
+    
     onDataReady();
     toast({
       title: t("dataIngestion.import.statusCompleted"),

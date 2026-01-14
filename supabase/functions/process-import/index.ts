@@ -164,6 +164,17 @@ function makeTextDecoder(encoding: string): TextDecoder {
 }
 
 /**
+ * Sanitize filename for storage path - remove or replace invalid characters
+ */
+function sanitizeFileName(fileName: string): string {
+  // Replace spaces, special chars with underscores, keep only safe chars
+  return fileName
+    .replace(/[^a-zA-Z0-9._-]/g, "_")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+}
+
+/**
  * OPTIMIZED: Only reads up to SAMPLE_BYTES_LIMIT to collect headers + sample rows.
  * Estimates total row count from (file_size / avg_bytes_per_row).
  * This avoids CPU timeout on very large files.
@@ -226,9 +237,10 @@ async function processFileSampling(
   }
 
   console.log(
-    `[process-import] Sampling file: ${job.file_name}, size: ${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB`,
+    `[process-import] Sampling file: ${job.file_name}, size: ${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB, delimiter: "${job.delimiter}"`,
   );
 
+  // IMPORTANT: Use the delimiter from the job
   const delimiter = job.delimiter || ",";
   const encoding = job.encoding || "UTF-8";
   const decoder = makeTextDecoder(encoding);
@@ -265,6 +277,8 @@ async function processFileSampling(
         if (isHeaderLine) {
           headers = parseCSVLine(line, delimiter);
           isHeaderLine = false;
+          
+          console.log(`[process-import] Parsed ${headers.length} headers with delimiter "${delimiter}"`);
 
           if (!isFirstInBatch && primaryHeaders) {
             const comparison = compareHeaders(primaryHeaders, headers);
@@ -343,7 +357,7 @@ async function processFileSampling(
 
     console.log(
       `[process-import] Sampled ${rowCount} rows from ${(totalBytesRead / 1024 / 1024).toFixed(2)} MB. ` +
-        `Avg ${avgBytesPerRow.toFixed(1)} bytes/row. Estimated total: ${estimatedRowCount.toLocaleString()} rows`,
+        `Avg ${avgBytesPerRow.toFixed(1)} bytes/row. Estimated total: ${estimatedRowCount.toLocaleString()} rows. Columns: ${headers.length}`,
     );
 
     return {
@@ -402,6 +416,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const failedJobs: { id: string; fileName: string; error: string }[] = [];
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
+  
+  // For single-file batch, we'll use the actual file path as dataset path
+  let primaryFilePath: string | null = null;
 
   for (let i = 0; i < batchJobs.length; i++) {
     const job = batchJobs[i] as ImportJob;
@@ -435,7 +452,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     }
 
     // Copy file to datasets bucket (server-side copy, no download)
-    const destPath = `${job.user_id}/${job.project_id}/${job.batch_id}/${job.file_name}`;
+    // Use sanitized filename to avoid storage errors
+    const sanitizedFileName = sanitizeFileName(job.file_name);
+    const destPath = `${job.user_id}/${job.project_id}/${sanitizedFileName}`;
 
     try {
       const { error: copyError } = await supabase.storage
@@ -445,6 +464,12 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       if (!copyError) {
         processedFilePaths.push(destPath);
         totalFileSizeBytes += job.file_size_bytes;
+        
+        // Keep track of the primary file path for single-file datasets
+        if (isFirst) {
+          primaryFilePath = destPath;
+        }
+        console.log(`[process-import] Copied ${job.file_name} to datasets: ${destPath}`);
       } else {
         console.warn(`[process-import] Failed to copy ${job.file_name} to datasets:`, copyError);
       }
@@ -482,7 +507,11 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     await supabase.from("project_columns").insert(columnInserts);
 
-    const datasetPath = `${primaryJob.user_id}/${primaryJob.project_id}/${primaryJob.batch_id}`;
+    // IMPORTANT: For the dataset path, use the actual file path for single-file batches
+    // For multi-file batches, use the first file's path as the primary dataset
+    const datasetPath = batchJobs.length === 1 && primaryFilePath 
+      ? primaryFilePath 
+      : processedFilePaths[0] || `${primaryJob.user_id}/${primaryJob.project_id}/${sanitizeFileName(primaryJob.file_name)}`;
 
     const datasetId = await createDatasetRecord(
       supabase,
@@ -494,7 +523,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       totalRowsEstimated,
       Math.min(allSampleRows.length, SAMPLE_SIZE),
       primaryHeaders.length,
-      "batch_import",
+      batchJobs.length === 1 ? "upload" : "batch_import",
       {
         batch_id: primaryJob.batch_id,
         files_count: batchJobs.length,
@@ -607,8 +636,8 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
     await supabase.from("project_columns").insert(columnInserts);
 
     // Copy file to datasets bucket (server-side copy)
-    const datasetFileName = `${job.file_name.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
-    const datasetPath = `${job.user_id}/${job.project_id}/${datasetFileName}`;
+    const sanitizedFileName = sanitizeFileName(job.file_name);
+    const datasetPath = `${job.user_id}/${job.project_id}/${sanitizedFileName}`;
 
     console.log(`[process-import] Copying to datasets bucket: ${datasetPath}`);
 
