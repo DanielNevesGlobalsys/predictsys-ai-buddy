@@ -272,6 +272,9 @@ const ImportJobsModal = ({
   }, [jobs]);
 
   const getStatusBadge = (status: string, progress?: number) => {
+    // Normalize progress: completed jobs should show 100%
+    const displayProgress = status === 'completed' ? 100 : (progress ?? 0);
+    
     switch (status) {
       case 'completed':
         return (
@@ -284,7 +287,7 @@ const ImportJobsModal = ({
         return (
           <Badge variant="secondary">
             <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-            {progress !== undefined ? `${progress}%` : t("dataIngestion.import.statusProcessing")}
+            {displayProgress > 0 ? `${displayProgress}%` : t("dataIngestion.import.statusProcessing")}
           </Badge>
         );
       case 'failed':
@@ -417,25 +420,30 @@ const ImportJobsModal = ({
                         {getStatusBadge(item.status)}
                       </div>
 
-                      {/* Progress for processing batches */}
-                      {item.status === 'processing' && (
+                      {/* Progress for processing/pending batches */}
+                      {(item.status === 'processing' || item.status === 'pending') && (
                         <div className="space-y-1">
-                          {item.jobs.map((job) => (
-                            job.status === 'processing' && (
-                              <div key={job.id} className="space-y-1">
-                                <div className="flex justify-between text-xs text-muted-foreground">
-                                  <span>{job.file_name}</span>
-                                  <span>{job.progress}%</span>
+                          {item.jobs.map((job) => {
+                            // Show progress for processing jobs, or pending indicator
+                            if (job.status === 'processing' || job.status === 'pending') {
+                              const progress = job.progress || 0;
+                              return (
+                                <div key={job.id} className="space-y-1">
+                                  <div className="flex justify-between text-xs text-muted-foreground">
+                                    <span className="truncate max-w-[200px]">{job.file_name}</span>
+                                    <span>{job.status === 'pending' ? t("dataIngestion.import.statusPending") : `${progress}%`}</span>
+                                  </div>
+                                  <div className="w-full bg-muted rounded-full h-1.5">
+                                    <div 
+                                      className={`h-1.5 rounded-full transition-all ${job.status === 'pending' ? 'bg-muted-foreground/30' : 'bg-primary'}`}
+                                      style={{ width: job.status === 'pending' ? '5%' : `${progress}%` }}
+                                    />
+                                  </div>
                                 </div>
-                                <div className="w-full bg-muted rounded-full h-1.5">
-                                  <div 
-                                    className="bg-primary h-1.5 rounded-full transition-all"
-                                    style={{ width: `${job.progress}%` }}
-                                  />
-                                </div>
-                              </div>
-                            )
-                          ))}
+                              );
+                            }
+                            return null;
+                          })}
                         </div>
                       )}
 
@@ -513,12 +521,12 @@ const ImportJobsModal = ({
                         {getStatusBadge(job.status, job.progress)}
                       </div>
 
-                      {/* Progress bar for processing jobs */}
-                      {job.status === 'processing' && (
+                      {/* Progress bar for processing/pending jobs */}
+                      {(job.status === 'processing' || job.status === 'pending') && (
                         <div className="w-full bg-muted rounded-full h-2">
                           <div 
-                            className="bg-primary h-2 rounded-full transition-all"
-                            style={{ width: `${job.progress}%` }}
+                            className={`h-2 rounded-full transition-all ${job.status === 'pending' ? 'bg-muted-foreground/30' : 'bg-primary'}`}
+                            style={{ width: job.status === 'pending' ? '5%' : `${job.progress || 0}%` }}
                           />
                         </div>
                       )}
