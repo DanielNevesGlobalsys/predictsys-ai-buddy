@@ -228,9 +228,11 @@ const BatchImportModal = ({
         const avgProgress = Math.round(totalProgress / jobs.length);
         
         setServerProgress(avgProgress);
-        // Map server progress (0-100) to UI progress (80-100)
-        const uiProgress = 80 + Math.round(avgProgress * 0.2);
-        setUploadProgress(Math.min(99, uiProgress)); // Cap at 99 until fully done
+        
+        // Map server progress (0-100) to UI progress (75-99)
+        // Upload was 0-70%, processing is 75-99%
+        const uiProgress = 75 + Math.round(avgProgress * 0.24);
+        setUploadProgress(Math.min(99, Math.max(75, uiProgress))); // Ensure it stays 75-99
 
       } catch (err) {
         console.warn("[BatchImportModal] Polling error:", err);
@@ -502,8 +504,8 @@ const BatchImportModal = ({
         return;
       }
 
-      // Switch to processing phase: 70-80%
-      setUploadProgress(75);
+      // Switch to processing phase: keep at 70% first, then polling will update
+      setUploadProgress(70);
       setUploadPhase("processing");
       setUploadStats(null);
 
@@ -526,8 +528,8 @@ const BatchImportModal = ({
           .eq("status", "pending");
       }
 
-      // After function invoked, bump to 80% and let polling take over
-      setUploadProgress(80);
+      // After function invoked, bump to 75% and let polling take over
+      setUploadProgress(75);
 
     } catch (error: any) {
       console.error("Batch import error:", error);

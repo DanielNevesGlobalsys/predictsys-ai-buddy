@@ -167,12 +167,11 @@ const LargeImportModal = ({
           return;
         }
 
-        // Update progress
+        // Update progress - map server progress (0-100) to UI progress (75-99)
         const progress = job.progress || 0;
         setServerProgress(progress);
-        // Map server progress (0-100) to UI progress (75-100)
-        const uiProgress = 75 + Math.round(progress * 0.25);
-        setUploadProgress(Math.min(99, uiProgress));
+        const uiProgress = 75 + Math.round(progress * 0.24);
+        setUploadProgress(Math.min(99, Math.max(75, uiProgress)));
 
       } catch (err) {
         console.warn("[LargeImportModal] Polling error:", err);
@@ -381,7 +380,8 @@ const LargeImportModal = ({
         })
         .eq("id", jobId);
 
-      setUploadProgress(75);
+      // Keep at 70% first (upload done), then bump to 75% after triggering
+      setUploadProgress(70);
       setUploadStats(null);
       setUploadPhase("processing");
 
@@ -393,6 +393,9 @@ const LargeImportModal = ({
       const { error: processError } = await supabase.functions.invoke("process-import", {
         body: { job_id: jobId },
       });
+
+      // After triggering, bump to 75% and let polling take over
+      setUploadProgress(75);
 
       if (processError) {
         console.error("Process trigger error:", processError);
