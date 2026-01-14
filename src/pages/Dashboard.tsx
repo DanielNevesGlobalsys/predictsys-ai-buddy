@@ -13,7 +13,6 @@ import {
   ArrowRight,
   Loader2,
   FolderKanban,
-  Bot,
   BookOpen,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
@@ -222,9 +221,11 @@ const Dashboard = () => {
             onClick={() => navigate("/chatbot")}
           >
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-secondary/10 rounded-xl flex items-center justify-center flex-shrink-0">
-                <Bot className="w-6 h-6 text-secondary" />
-              </div>
+              <img 
+                src="/images/assistente-globalsys.png" 
+                alt="Assistente virtual Globalsys"
+                className="w-12 h-12 rounded-full object-cover flex-shrink-0"
+              />
               <div>
                 <h3 className="font-semibold mb-1">{t("dashboard.chatbot")}</h3>
                 <p className="text-sm text-muted-foreground">
