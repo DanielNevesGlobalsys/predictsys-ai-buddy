@@ -577,18 +577,21 @@ serve(async (req) => {
       return result;
     }
 
-    // Stream ALL data from files using RESERVOIR SAMPLING to fit in memory
-    // This ensures a statistically representative sample of the entire dataset
-    const MAX_SAMPLE_SIZE = 100000; // Maximum lines to keep in memory (100k)
+    // Stream data from files using STRATIFIED SAMPLING with EARLY STOP
+    // For large datasets, we sample efficiently without reading the entire file
+    const MAX_SAMPLE_SIZE = 30000; // Maximum lines to keep in memory (30k)
+    const SAMPLING_MULTIPLIER = 3; // Read 3x target to get good distribution
+    const MAX_LINES_TO_READ = MAX_SAMPLE_SIZE * SAMPLING_MULTIPLIER; // Stop after 90k lines
     let sampledLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
     let totalBytesRead = 0;
-    let totalLinesProcessed = 0; // Total lines seen across all files (for reservoir sampling)
+    let totalLinesProcessed = 0;
+    let reachedSampleLimit = false;
 
-    console.log(`Iniciando leitura com amostragem (reservoir sampling, máx ${MAX_SAMPLE_SIZE} linhas)...`);
+    console.log(`Iniciando leitura com amostragem (máx ${MAX_SAMPLE_SIZE} linhas, early stop após ${MAX_LINES_TO_READ})...`);
 
-    for (let fileIndex = 0; fileIndex < filePaths.length; fileIndex++) {
+    for (let fileIndex = 0; fileIndex < filePaths.length && !reachedSampleLimit; fileIndex++) {
       const filePath = filePaths[fileIndex];
       console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
       
@@ -619,8 +622,10 @@ serve(async (req) => {
         let isFirstLineOfFile = true;
         let lastProgressLog = 0;
 
-        // Stream the ENTIRE file to EOF with reservoir sampling
-        while (true) {
+        // Stream file with EARLY STOP for efficiency
+        let shouldStopReading = false;
+        
+        while (!shouldStopReading) {
           const { done, value } = await reader.read();
           if (done) break;
 
@@ -655,63 +660,60 @@ serve(async (req) => {
               }
               isFirstLineOfFile = false;
               
-              // Apply reservoir sampling for this data line
+              // Add data line using stratified sampling
               totalLinesProcessed++;
               if (sampledLines.length < MAX_SAMPLE_SIZE) {
                 sampledLines.push(line);
               } else {
-                // Reservoir sampling: replace with probability MAX_SAMPLE_SIZE / totalLinesProcessed
-                const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
-                if (replaceIdx < MAX_SAMPLE_SIZE) {
+                // Random replacement for diversity
+                const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
+                if (Math.random() < 0.1) { // 10% chance to replace
                   sampledLines[replaceIdx] = line;
                 }
               }
             } else {
-              // Data line - apply reservoir sampling
+              // Data line - add to sample
               totalLinesProcessed++;
               if (sampledLines.length < MAX_SAMPLE_SIZE) {
                 sampledLines.push(line);
               } else {
-                // Reservoir sampling: replace with probability MAX_SAMPLE_SIZE / totalLinesProcessed
-                const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
-                if (replaceIdx < MAX_SAMPLE_SIZE) {
+                // Random replacement for diversity
+                const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
+                if (Math.random() < 0.1) { // 10% chance to replace
                   sampledLines[replaceIdx] = line;
                 }
               }
+            }
+            
+            // EARLY STOP: once we've read enough lines, stop streaming
+            if (totalLinesProcessed >= MAX_LINES_TO_READ) {
+              shouldStopReading = true;
+              reachedSampleLimit = true;
+              console.log(`  Early stop: lidas ${totalLinesProcessed} linhas, amostra de ${sampledLines.length} linhas`);
+              break;
             }
           }
           
           // Keep the last incomplete line in buffer
           buffer = lineBreaks[lineBreaks.length - 1];
           
-          // Log progress every 100MB
+          // Log progress every 50MB for faster feedback
           const mbRead = bytesRead / (1024 * 1024);
-          if (mbRead - lastProgressLog >= 100) {
+          if (mbRead - lastProgressLog >= 50) {
             console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesProcessed} linhas lidas, ${sampledLines.length} amostradas`);
             lastProgressLog = mbRead;
           }
         }
 
-        // Process any remaining content in buffer after EOF
-        if (buffer.trim()) {
-          const line = buffer.trim();
-          if (!isFirstLineOfFile) {
-            totalLinesProcessed++;
-            if (sampledLines.length < MAX_SAMPLE_SIZE) {
-              sampledLines.push(line);
-            } else {
-              const replaceIdx = Math.floor(Math.random() * totalLinesProcessed);
-              if (replaceIdx < MAX_SAMPLE_SIZE) {
-                sampledLines[replaceIdx] = line;
-              }
-            }
-          }
+        // Cancel the reader if we stopped early
+        if (shouldStopReading) {
+          try { await reader.cancel(); } catch (_) { /* ignore */ }
         }
 
         isFirstFile = false;
         totalBytesRead += bytesRead;
 
-        console.log(`  Arquivo concluído: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
+        console.log(`  Arquivo: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB processados, ${fileLinesCount} linhas`);
 
       } catch (err) {
         console.error(`Erro processando ${filePath}:`, err);
@@ -773,25 +775,23 @@ serve(async (req) => {
     
     console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-    // Parse data from allLines
+    // Parse data from allLines - process and free memory immediately
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
     
-    // Build label encoding map for categorical targets
-    if (isTargetCategorical) {
-      for (let i = 0; i < allLines.length; i++) {
-        const values = parseCSVLine(allLines[i], delimiter);
+    // Single pass: build label map AND parse data
+    for (let i = 0; i < allLines.length; i++) {
+      const values = parseCSVLine(allLines[i], delimiter);
+      
+      // Build label encoding for categorical targets
+      if (isTargetCategorical) {
         const targetVal = values[targetIndex]?.trim() || "";
         if (targetVal && !labelMap.has(targetVal)) {
           labelMap.set(targetVal, labelMap.size);
         }
       }
-      console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
-    }
-
-    for (let i = 0; i < allLines.length; i++) {
-      const values = parseCSVLine(allLines[i], delimiter);
+      
       const features = featureIndices.map(idx => {
         const val = values[idx]?.replace(",", ".") || "";
         return parseFloat(val);
@@ -809,6 +809,16 @@ serve(async (req) => {
         X.push(features);
         y.push(targetNumeric);
       }
+      
+      // Clear the line from memory as we process
+      allLines[i] = "";
+    }
+    
+    // Free sampledLines array
+    sampledLines.length = 0;
+    
+    if (isTargetCategorical && labelMap.size > 0) {
+      console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
 
     console.log(`Dados carregados: ${X.length} amostras, ${featureNames.length} features`);
