@@ -32,6 +32,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { buildSafeObjectName } from "@/lib/storageObjectName";
 
 interface BatchFile {
   file: File;
@@ -272,7 +273,8 @@ const BatchImportModal = ({
           prev.map((item, idx) => (idx === i ? { ...item, status: "uploading" } : item))
         );
 
-        const storagePath = `${user.id}/${projectId}/${batchId}/${bf.file.name}`;
+         const storageObjectName = buildSafeObjectName(bf.file.name);
+         const storagePath = `${user.id}/${projectId}/${batchId}/${storageObjectName}`;
         const jobFileName = i === 0 ? datasetName : `${datasetName}_part${i + 1}`;
 
         // Create job BEFORE upload so it never disappears.
