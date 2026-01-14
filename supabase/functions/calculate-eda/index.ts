@@ -25,6 +25,8 @@ interface CategoricalStats {
 
 // Maximum rows to process for EDA (sample for large files)
 const MAX_ROWS_TO_PROCESS = 50000;
+// Maximum bytes to download for sampling (50 MB)
+const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024;
 
 function calculateMedian(sortedValues: number[]): number | null {
   if (sortedValues.length === 0) return null;
@@ -41,8 +43,8 @@ function calculateStd(values: number[], mean: number): number | null {
   return Math.sqrt(avgSquareDiff);
 }
 
-// Simple CSV parser that processes line by line to reduce memory usage
-function parseCSVLine(line: string): string[] {
+// CSV parser that respects delimiter
+function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
   let current = "";
   let inQuotes = false;
@@ -51,7 +53,7 @@ function parseCSVLine(line: string): string[] {
     const char = line[i];
     if (char === '"') {
       inQuotes = !inQuotes;
-    } else if ((char === ',' || char === ';') && !inQuotes) {
+    } else if (char === delimiter && !inQuotes) {
       result.push(current.trim());
       current = "";
     } else {
@@ -62,37 +64,158 @@ function parseCSVLine(line: string): string[] {
   return result;
 }
 
-function parseCSVChunked(csvText: string, maxRows: number): { headers: string[], records: Record<string, string>[] } {
-  const lines = csvText.split(/\r?\n/).filter(line => line.trim() !== "");
+// Detect delimiter from first line
+function detectDelimiter(firstLine: string): string {
+  const semicolonCount = (firstLine.match(/;/g) || []).length;
+  const commaCount = (firstLine.match(/,/g) || []).length;
+  return semicolonCount > commaCount ? ";" : ",";
+}
+
+/**
+ * Try to get the actual file path from various sources
+ */
+async function resolveDatasetPath(
+  supabase: any,
+  project: any,
+): Promise<{ path: string; filePaths?: string[] } | null> {
+  const projectId = project.id;
   
-  if (lines.length === 0) {
-    return { headers: [], records: [] };
-  }
-  
-  // Parse headers
-  const headers = parseCSVLine(lines[0]);
-  
-  // Calculate sampling rate if needed
-  const dataLines = lines.length - 1;
-  const sampleRate = dataLines > maxRows ? Math.ceil(dataLines / maxRows) : 1;
-  
-  const records: Record<string, string>[] = [];
-  
-  for (let i = 1; i < lines.length && records.length < maxRows; i++) {
-    // Sample every Nth row if file is large
-    if (sampleRate > 1 && (i - 1) % sampleRate !== 0) continue;
+  // First, try to get from project_datasets (source of truth for new imports)
+  const { data: datasets } = await supabase
+    .from("project_datasets")
+    .select("storage_path, source_metadata")
+    .eq("project_id", projectId)
+    .eq("is_active", true)
+    .order("created_at", { ascending: false })
+    .limit(1);
+
+  if (datasets && datasets.length > 0) {
+    const dataset = datasets[0];
+    const metadata = dataset.source_metadata as Record<string, any> | null;
     
-    const values = parseCSVLine(lines[i]);
-    const record: Record<string, string> = {};
-    
-    for (let j = 0; j < headers.length && j < values.length; j++) {
-      record[headers[j]] = values[j];
+    // Check if it's a batch with multiple file paths
+    if (metadata?.file_paths && Array.isArray(metadata.file_paths) && metadata.file_paths.length > 0) {
+      // For batch imports with multiple files, use the first file for EDA
+      // Or if storage_path points to an actual file, use that
+      console.log(`[calculate-eda] Dataset has ${metadata.file_paths.length} file paths`);
+      return { 
+        path: metadata.file_paths[0], 
+        filePaths: metadata.file_paths 
+      };
     }
     
-    records.push(record);
+    // Single file import - storage_path should be the actual file path
+    if (dataset.storage_path) {
+      console.log(`[calculate-eda] Using dataset storage_path: ${dataset.storage_path}`);
+      return { path: dataset.storage_path };
+    }
   }
-  
-  return { headers, records };
+
+  // Fallback to project.dataset_filename
+  if (project.dataset_filename) {
+    console.log(`[calculate-eda] Using project.dataset_filename: ${project.dataset_filename}`);
+    return { path: project.dataset_filename };
+  }
+
+  return null;
+}
+
+/**
+ * Stream-based sampling that reads only first N bytes using Range header
+ */
+async function sampleFileWithRange(
+  supabase: any,
+  storagePath: string,
+  maxBytes: number,
+  maxRows: number,
+): Promise<{ headers: string[]; records: Record<string, string>[]; delimiter: string } | null> {
+  try {
+    // Generate signed URL
+    const { data: signedData, error: signedError } = await supabase.storage
+      .from("datasets")
+      .createSignedUrl(storagePath, 60 * 60);
+
+    if (signedError || !signedData?.signedUrl) {
+      console.error(`[calculate-eda] Failed to create signed URL for ${storagePath}:`, signedError);
+      return null;
+    }
+
+    // Fetch with Range header
+    const res = await fetch(signedData.signedUrl, {
+      headers: {
+        "Accept-Encoding": "identity",
+        Range: `bytes=0-${maxBytes - 1}`,
+      },
+    });
+
+    if (!res.ok && res.status !== 206) {
+      console.error(`[calculate-eda] Failed to fetch file: HTTP ${res.status}`);
+      return null;
+    }
+
+    if (!res.body) {
+      console.error(`[calculate-eda] Response has no body`);
+      return null;
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder("utf-8");
+    let text = "";
+    let bytesRead = 0;
+
+    while (bytesRead < maxBytes) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      
+      bytesRead += value.byteLength;
+      text += decoder.decode(value, { stream: true });
+    }
+    
+    text += decoder.decode(); // Flush
+    reader.releaseLock();
+
+    // Parse the sampled text
+    const lines = text.split(/\r?\n/).filter(line => line.trim() !== "");
+    
+    if (lines.length === 0) {
+      console.error(`[calculate-eda] No lines found in file`);
+      return null;
+    }
+
+    // Detect delimiter from first line
+    const delimiter = detectDelimiter(lines[0]);
+    console.log(`[calculate-eda] Detected delimiter: "${delimiter}"`);
+
+    // Parse headers
+    const headers = parseCSVLine(lines[0], delimiter);
+    console.log(`[calculate-eda] Parsed ${headers.length} headers`);
+
+    // Parse data rows (sample if needed)
+    const dataLines = lines.slice(1);
+    const sampleRate = dataLines.length > maxRows ? Math.ceil(dataLines.length / maxRows) : 1;
+    
+    const records: Record<string, string>[] = [];
+    
+    for (let i = 0; i < dataLines.length && records.length < maxRows; i++) {
+      if (sampleRate > 1 && i % sampleRate !== 0) continue;
+      
+      const values = parseCSVLine(dataLines[i], delimiter);
+      const record: Record<string, string> = {};
+      
+      for (let j = 0; j < headers.length && j < values.length; j++) {
+        record[headers[j]] = values[j];
+      }
+      
+      records.push(record);
+    }
+
+    console.log(`[calculate-eda] Parsed ${records.length} records from ${bytesRead} bytes`);
+    return { headers, records, delimiter };
+  } catch (error) {
+    console.error(`[calculate-eda] Error sampling file:`, error);
+    return null;
+  }
 }
 
 Deno.serve(async (req) => {
@@ -111,7 +234,7 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Calculando EDA para projeto: ${project_id}`);
+    console.log(`[calculate-eda] Calculando EDA para projeto: ${project_id}`);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -125,21 +248,25 @@ Deno.serve(async (req) => {
       .single();
 
     if (projectError || !project) {
-      console.error("Projeto não encontrado:", projectError);
+      console.error("[calculate-eda] Projeto não encontrado:", projectError);
       return new Response(
         JSON.stringify({ error: "Projeto não encontrado" }),
         { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    if (!project.dataset_filename) {
+    // Resolve the actual dataset path
+    const pathInfo = await resolveDatasetPath(supabase, project);
+    
+    if (!pathInfo) {
+      console.error("[calculate-eda] Nenhum dataset encontrado para o projeto");
       return new Response(
         JSON.stringify({ error: "Nenhum dataset carregado para este projeto" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    console.log(`Dataset: ${project.dataset_filename}`);
+    console.log(`[calculate-eda] Resolved dataset path: ${pathInfo.path}`);
 
     // Get column metadata
     const { data: columns, error: columnsError } = await supabase
@@ -148,34 +275,30 @@ Deno.serve(async (req) => {
       .eq("project_id", project_id)
       .order("column_index");
 
-    if (columnsError || !columns || columns.length === 0) {
-      console.error("Colunas não encontradas:", columnsError);
-      return new Response(
-        JSON.stringify({ error: "Metadados de colunas não encontrados. Faça upload do dataset novamente." }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    if (columnsError) {
+      console.error("[calculate-eda] Erro ao buscar colunas:", columnsError);
     }
 
-    console.log(`Colunas encontradas: ${columns.length}`);
+    // Sample the file using Range header (memory efficient)
+    const sampledData = await sampleFileWithRange(
+      supabase,
+      pathInfo.path,
+      SAMPLE_BYTES_LIMIT,
+      MAX_ROWS_TO_PROCESS,
+    );
 
-    // Download CSV from storage
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from("datasets")
-      .download(project.dataset_filename);
-
-    if (downloadError || !fileData) {
-      console.error("Erro ao baixar arquivo:", downloadError);
+    if (!sampledData) {
+      console.error(`[calculate-eda] Falha ao amostrar arquivo: ${pathInfo.path}`);
       return new Response(
-        JSON.stringify({ error: "Arquivo de dados não encontrado no storage. Faça upload novamente." }),
+        JSON.stringify({ 
+          error: "Arquivo de dados não encontrado no storage. Faça upload novamente.",
+          details: { path: pathInfo.path, bucket: "datasets" }
+        }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Parse CSV with memory-efficient chunked parser
-    const csvText = await fileData.text();
-    console.log(`Tamanho do arquivo: ${(csvText.length / 1024 / 1024).toFixed(2)} MB`);
-    
-    const { records } = parseCSVChunked(csvText, MAX_ROWS_TO_PROCESS);
+    const { headers, records, delimiter } = sampledData;
     
     if (records.length === 0) {
       return new Response(
@@ -184,13 +307,18 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`Registros processados: ${records.length} (máx: ${MAX_ROWS_TO_PROCESS})`);
+    console.log(`[calculate-eda] Registros processados: ${records.length} (máx: ${MAX_ROWS_TO_PROCESS})`);
+
+    // Use columns from DB if available, otherwise use headers from file
+    const columnsToProcess = columns && columns.length > 0 
+      ? columns 
+      : headers.map((h, i) => ({ column_name: h, column_index: i, inferred_type: "texto" }));
 
     const numericStats: NumericStats[] = [];
     const categoricalStats: CategoricalStats[] = [];
 
     // Process each column
-    for (const column of columns) {
+    for (const column of columnsToProcess) {
       const columnName = column.column_name;
       const columnType = column.inferred_type;
       
@@ -268,7 +396,7 @@ Deno.serve(async (req) => {
       }
     }
 
-    console.log(`Estatísticas numéricas: ${numericStats.length}, Categóricas: ${categoricalStats.length}`);
+    console.log(`[calculate-eda] Estatísticas numéricas: ${numericStats.length}, Categóricas: ${categoricalStats.length}`);
 
     // Delete existing stats and insert new ones
     await supabase.from("project_numeric_stats").delete().eq("project_id", project_id);
@@ -279,7 +407,7 @@ Deno.serve(async (req) => {
         .from("project_numeric_stats")
         .insert(numericStats);
       if (insertNumericError) {
-        console.error("Erro ao inserir estatísticas numéricas:", insertNumericError);
+        console.error("[calculate-eda] Erro ao inserir estatísticas numéricas:", insertNumericError);
       }
     }
 
@@ -288,7 +416,7 @@ Deno.serve(async (req) => {
         .from("project_categorical_stats")
         .insert(categoricalStats);
       if (insertCategoricalError) {
-        console.error("Erro ao inserir estatísticas categóricas:", insertCategoricalError);
+        console.error("[calculate-eda] Erro ao inserir estatísticas categóricas:", insertCategoricalError);
       }
     }
 
@@ -298,7 +426,7 @@ Deno.serve(async (req) => {
       .update({ status: "eda_complete" })
       .eq("id", project_id);
 
-    console.log("EDA calculada com sucesso!");
+    console.log("[calculate-eda] EDA calculada com sucesso!");
 
     return new Response(
       JSON.stringify({
@@ -307,11 +435,12 @@ Deno.serve(async (req) => {
         rows_processed: records.length,
         numeric_columns: numericStats.length,
         categorical_columns: categoricalStats.length,
+        delimiter_used: delimiter,
       }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
-    console.error("Erro inesperado:", error);
+    console.error("[calculate-eda] Erro inesperado:", error);
     return new Response(
       JSON.stringify({ error: "Erro interno do servidor. Tente com um arquivo menor." }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
