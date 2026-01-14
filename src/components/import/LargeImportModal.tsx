@@ -40,6 +40,7 @@ interface UploadStats {
 }
 
 const MAX_LARGE_IMPORT_GB = 10;
+const POLL_INTERVAL_MS = 1500;
 
 const LargeImportModal = ({
   open,
@@ -60,10 +61,13 @@ const LargeImportModal = ({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isDetectingDelimiter, setIsDetectingDelimiter] = useState(false);
   const [delimiterAutoDetected, setDelimiterAutoDetected] = useState(false);
+  const [serverProgress, setServerProgress] = useState(0);
 
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
   const speedHistoryRef = useRef<number[]>([]);
+  const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const jobIdRef = useRef<string | null>(null);
 
   // Auto-detect delimiter when modal opens
   useEffect(() => {
@@ -86,6 +90,15 @@ const LargeImportModal = ({
     }
   }, [open, file]);
 
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current);
+      }
+    };
+  }, []);
+
   const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
   const fileSizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
 
@@ -103,6 +116,72 @@ const LargeImportModal = ({
     const mins = Math.ceil((seconds % 3600) / 60);
     return `~${hours}h ${mins}min`;
   };
+
+  // Poll for job progress during server processing phase
+  const startProgressPolling = useCallback((jobId: string) => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+    }
+
+    jobIdRef.current = jobId;
+
+    const poll = async () => {
+      if (!jobIdRef.current) return;
+
+      try {
+        const { data: job } = await supabase
+          .from("import_jobs")
+          .select("status, progress, rows_processed, error_message")
+          .eq("id", jobIdRef.current)
+          .single();
+
+        if (!job) return;
+
+        if (job.status === "completed") {
+          setServerProgress(100);
+          setUploadProgress(100);
+          setUploadPhase("done");
+          
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+
+          toast({
+            title: t("dataIngestion.import.importStarted"),
+            description: t("dataIngestion.import.importStartedDesc"),
+          });
+          onImportStarted();
+          onOpenChange(false);
+          return;
+        }
+
+        if (job.status === "failed") {
+          if (pollIntervalRef.current) {
+            clearInterval(pollIntervalRef.current);
+            pollIntervalRef.current = null;
+          }
+
+          setErrorMessage(job.error_message || t("dataIngestion.import.errors.unexpected"));
+          setIsUploading(false);
+          return;
+        }
+
+        // Update progress
+        const progress = job.progress || 0;
+        setServerProgress(progress);
+        // Map server progress (0-100) to UI progress (75-100)
+        const uiProgress = 75 + Math.round(progress * 0.25);
+        setUploadProgress(Math.min(99, uiProgress));
+
+      } catch (err) {
+        console.warn("[LargeImportModal] Polling error:", err);
+      }
+    };
+
+    poll();
+    pollIntervalRef.current = setInterval(poll, POLL_INTERVAL_MS);
+  }, [t, toast, onImportStarted, onOpenChange]);
 
   // Upload with XMLHttpRequest for real progress tracking
   const uploadFileWithProgress = useCallback(
@@ -124,8 +203,6 @@ const LargeImportModal = ({
           const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
           const apiKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 
-          // IMPORTANT: URL-encode each segment, preserving "/".
-          // This avoids 400 errors for file names with spaces/accents/dashes.
           const encodedPath = storagePath
             .split("/")
             .map((seg) => encodeURIComponent(seg))
@@ -169,7 +246,7 @@ const LargeImportModal = ({
           xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
           xhr.setRequestHeader("apikey", apiKey);
           xhr.setRequestHeader("x-upsert", "true");
-          xhr.timeout = 0; // No timeout for large files
+          xhr.timeout = 0;
 
           xhr.send(fileToUpload);
         } catch (err) {
@@ -186,6 +263,7 @@ const LargeImportModal = ({
     setUploadPhase("uploading");
     setUploadStats(null);
     setErrorMessage(null);
+    setServerProgress(0);
     lastBytesRef.current = 0;
     lastTimeRef.current = Date.now();
     speedHistoryRef.current = [];
@@ -199,13 +277,14 @@ const LargeImportModal = ({
           description: t("dataIngestion.import.errors.notAuthenticated"),
           variant: "destructive",
         });
+        setIsUploading(false);
         return;
       }
 
       const storageObjectName = buildSafeObjectName(file.name);
       const storagePath = `${user.id}/${projectId}/${storageObjectName}`;
 
-      // Create job first so it NEVER disappears even if upload fails.
+      // Create job first
       const { data: createdJob, error: jobCreateError } = await supabase
         .from("import_jobs")
         .insert({
@@ -230,12 +309,13 @@ const LargeImportModal = ({
           description: t("dataIngestion.import.errors.jobCreationFailed"),
           variant: "destructive",
         });
+        setIsUploading(false);
         return;
       }
 
       const jobId = createdJob.id;
 
-      // Upload with real progress
+      // Upload with real progress (0-70%)
       const { error: uploadError } = await uploadFileWithProgress(file, storagePath, (loaded, total) => {
         const now = Date.now();
         const timeDelta = (now - lastTimeRef.current) / 1000;
@@ -287,10 +367,11 @@ const LargeImportModal = ({
           description: uploadError.message,
           variant: "destructive",
         });
+        setIsUploading(false);
         return;
       }
 
-      // Mark job ready for backend processing
+      // Mark job ready for processing
       await supabase
         .from("import_jobs")
         .update({
@@ -302,9 +383,10 @@ const LargeImportModal = ({
 
       setUploadProgress(75);
       setUploadStats(null);
-
-      setUploadProgress(85);
       setUploadPhase("processing");
+
+      // Start polling for server progress
+      startProgressPolling(jobId);
 
       // Trigger processing
       console.log("Invoking process-import for job:", jobId);
@@ -314,20 +396,10 @@ const LargeImportModal = ({
 
       if (processError) {
         console.error("Process trigger error:", processError);
-        // Don't fail - the job was created and might still process
+        // Don't fail - polling will detect actual status
         console.log("Note: Edge function may continue processing in background");
       }
 
-      setUploadProgress(100);
-      setUploadPhase("done");
-
-      toast({
-        title: t("dataIngestion.import.importStarted"),
-        description: t("dataIngestion.import.importStartedDesc"),
-      });
-
-      onImportStarted();
-      onOpenChange(false);
     } catch (error: any) {
       console.error("Import error:", error);
       setErrorMessage(error.message || t("dataIngestion.import.errors.unexpected"));
@@ -336,7 +408,6 @@ const LargeImportModal = ({
         description: error.message || t("dataIngestion.import.errors.unexpected"),
         variant: "destructive",
       });
-    } finally {
       setIsUploading(false);
     }
   };
@@ -459,7 +530,7 @@ const LargeImportModal = ({
               </div>
               <div className="w-full bg-muted rounded-full h-2">
                 <div 
-                  className="bg-primary h-2 rounded-full transition-all"
+                  className="bg-primary h-2 rounded-full transition-all duration-300"
                   style={{ width: `${uploadProgress}%` }}
                 />
               </div>
@@ -467,6 +538,18 @@ const LargeImportModal = ({
                 <div className="flex justify-between text-xs text-muted-foreground">
                   <span>{formatSpeed(uploadStats.speed)}</span>
                   <span>{formatETA(uploadStats.eta)}</span>
+                </div>
+              )}
+              {uploadPhase === "processing" && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">
+                    {t("dataIngestion.import.uploadCompletedProcessing")}
+                  </p>
+                  {serverProgress > 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      {t("dataIngestion.batchImport.serverProgress", { progress: serverProgress })}
+                    </p>
+                  )}
                 </div>
               )}
             </div>
