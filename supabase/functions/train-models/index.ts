@@ -577,30 +577,32 @@ serve(async (req) => {
       return result;
     }
 
-    // Stream data from files with strict byte limits to avoid memory issues
-    const MAX_ROWS = 3000; // Limit for training
-    const MAX_BYTES_PER_FILE = 5 * 1024 * 1024; // 5MB per file max
+    // Stream ALL data from files - NO BYTE LIMITS for training
+    // Use mini-batches to manage memory while processing the entire dataset
     let allLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
+    let totalBytesRead = 0;
+    let totalLinesRead = 0;
 
-    for (const filePath of filePaths) {
-      if (allLines.length >= MAX_ROWS) break;
+    console.log(`Iniciando leitura completa do dataset (sem limite de bytes)...`);
 
-      console.log(`Baixando (streaming): ${filePath}`);
+    for (let fileIndex = 0; fileIndex < filePaths.length; fileIndex++) {
+      const filePath = filePaths[fileIndex];
+      console.log(`[${fileIndex + 1}/${filePaths.length}] Baixando (streaming completo): ${filePath}`);
       
       try {
-        // Use createSignedUrl + fetch with streaming to limit bytes read
+        // Create signed URL with longer expiration for large files
         const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from("datasets")
-          .createSignedUrl(filePath, 300);
+          .createSignedUrl(filePath, 3600); // 1 hour for large files
 
         if (signedUrlError || !signedUrlData?.signedUrl) {
           console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
           continue;
         }
 
-        // Fetch with streaming - read limited bytes
+        // Fetch with streaming - read ENTIRE file (no byte limit)
         const response = await fetch(signedUrlData.signedUrl);
         if (!response.ok || !response.body) {
           console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
@@ -608,59 +610,94 @@ serve(async (req) => {
         }
 
         const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
+        const encoding = sourceMetadata.encoding || "utf-8";
+        const decoder = new TextDecoder(encoding);
         let bytesRead = 0;
         let buffer = "";
-        let fileLines: string[] = [];
+        let fileLinesCount = 0;
+        let isFirstLineOfFile = true;
 
-        while (bytesRead < MAX_BYTES_PER_FILE && fileLines.length < MAX_ROWS + 10) {
+        // Stream the ENTIRE file to EOF
+        while (true) {
           const { done, value } = await reader.read();
           if (done) break;
 
           bytesRead += value?.length || 0;
           buffer += decoder.decode(value, { stream: true });
 
-          // Extract complete lines
+          // Extract complete lines as they arrive
           const lineBreaks = buffer.split(/\r?\n/);
+          
+          // Process all complete lines (keep the last incomplete one in buffer)
           for (let i = 0; i < lineBreaks.length - 1; i++) {
             const line = lineBreaks[i].trim();
-            if (line) fileLines.push(line);
+            if (!line) continue;
+            
+            fileLinesCount++;
+            
+            if (isFirstFile && isFirstLineOfFile) {
+              // First line of first file = headers
+              headers = parseCSVLine(line, delimiter);
+              console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+              isFirstLineOfFile = false;
+            } else if (!isFirstFile && isFirstLineOfFile) {
+              // First line of subsequent files - check if it's a header
+              const possibleHeaders = parseCSVLine(line, delimiter);
+              const isHeader = possibleHeaders.length === headers.length && 
+                               possibleHeaders.every((h, idx) => h === headers[idx] || !isNaN(parseFloat(h.replace(",", "."))) === false);
+              
+              if (isHeader || possibleHeaders.length === headers.length) {
+                // Skip header line
+                isFirstLineOfFile = false;
+                continue;
+              }
+              isFirstLineOfFile = false;
+              allLines.push(line);
+            } else {
+              // Data line - add to collection
+              allLines.push(line);
+            }
           }
+          
+          // Keep the last incomplete line in buffer
           buffer = lineBreaks[lineBreaks.length - 1];
+          
+          // Log progress every 100MB
+          if (bytesRead > 0 && bytesRead % (100 * 1024 * 1024) < 65536) {
+            console.log(`  Progresso: ${(bytesRead / (1024 * 1024)).toFixed(1)} MB lidos, ${allLines.length} linhas acumuladas`);
+          }
         }
 
-        // Cancel the stream to release resources
-        try { await reader.cancel(); } catch (_) {}
-
-        console.log(`Bytes lidos: ${bytesRead}, Linhas: ${fileLines.length}`);
-
-        if (fileLines.length === 0) continue;
-
-        if (isFirstFile) {
-          // First file - get headers
-          headers = parseCSVLine(fileLines[0], delimiter);
-          console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
-          isFirstFile = false;
-          
-          // Add data lines (skip header)
-          const remaining = MAX_ROWS - allLines.length;
-          allLines.push(...fileLines.slice(1, 1 + remaining));
-        } else {
-          // Subsequent files - skip header if it matches
-          const fileHeaders = parseCSVLine(fileLines[0], delimiter);
-          const startLine = fileHeaders.length === headers.length ? 1 : 0;
-          
-          const remaining = MAX_ROWS - allLines.length;
-          allLines.push(...fileLines.slice(startLine, startLine + remaining));
+        // Process any remaining content in buffer after EOF
+        if (buffer.trim()) {
+          const line = buffer.trim();
+          if (isFirstLineOfFile) {
+            if (isFirstFile) {
+              headers = parseCSVLine(line, delimiter);
+            }
+          } else {
+            allLines.push(line);
+          }
         }
 
-        console.log(`Linhas acumuladas: ${allLines.length}`);
+        isFirstFile = false;
+        totalBytesRead += bytesRead;
+        totalLinesRead += fileLinesCount;
+
+        console.log(`  Arquivo concluído: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
+        console.log(`  Total acumulado: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB, ${allLines.length} linhas de dados`);
 
       } catch (err) {
         console.error(`Erro processando ${filePath}:`, err);
         continue;
       }
     }
+
+    console.log(`=== Leitura completa ===`);
+    console.log(`Total de arquivos: ${filePaths.length}`);
+    console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
+    console.log(`Total de linhas de dados: ${allLines.length}`);
+    console.log(`Headers: ${headers.length} colunas`)
 
     if (headers.length === 0 || allLines.length === 0) {
       return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
