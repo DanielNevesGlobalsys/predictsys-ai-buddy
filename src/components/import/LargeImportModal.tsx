@@ -80,63 +80,80 @@ const LargeImportModal = ({
   };
 
   // Upload with XMLHttpRequest for real progress tracking
-  const uploadFileWithProgress = useCallback(async (
-    fileToUpload: File,
-    storagePath: string,
-    onProgress: (loaded: number, total: number) => void
-  ): Promise<{ error: Error | null }> => {
-    return new Promise(async (resolve) => {
-      try {
-        const { data: { session } } = await supabase.auth.getSession();
-        if (!session) {
-          resolve({ error: new Error("Not authenticated") });
-          return;
+  const uploadFileWithProgress = useCallback(
+    async (
+      fileToUpload: File,
+      storagePath: string,
+      onProgress: (loaded: number, total: number) => void
+    ): Promise<{ error: Error | null }> => {
+      return new Promise(async (resolve) => {
+        try {
+          const {
+            data: { session },
+          } = await supabase.auth.getSession();
+          if (!session) {
+            resolve({ error: new Error("Not authenticated") });
+            return;
+          }
+
+          const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+          const apiKey = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
+
+          // IMPORTANT: URL-encode each segment, preserving "/".
+          // This avoids 400 errors for file names with spaces/accents/dashes.
+          const encodedPath = storagePath
+            .split("/")
+            .map((seg) => encodeURIComponent(seg))
+            .join("/");
+
+          const url = `${supabaseUrl}/storage/v1/object/big_imports/${encodedPath}`;
+
+          const xhr = new XMLHttpRequest();
+
+          xhr.upload.onprogress = (event) => {
+            if (event.lengthComputable) {
+              onProgress(event.loaded, event.total);
+            }
+          };
+
+          xhr.onload = () => {
+            if (xhr.status >= 200 && xhr.status < 300) {
+              resolve({ error: null });
+            } else {
+              let errorMsg = `Upload failed: ${xhr.status}`;
+              try {
+                const resp = JSON.parse(xhr.responseText);
+                if (resp.message) errorMsg = resp.message;
+                if (resp.error) errorMsg = resp.error;
+              } catch {
+                // keep default message
+              }
+              resolve({ error: new Error(errorMsg) });
+            }
+          };
+
+          xhr.onerror = () => {
+            resolve({ error: new Error("Erro de rede durante upload. Verifique sua conexão.") });
+          };
+
+          xhr.ontimeout = () => {
+            resolve({ error: new Error("Upload expirou. O arquivo pode ser muito grande para sua conexão.") });
+          };
+
+          xhr.open("POST", url, true);
+          xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+          xhr.setRequestHeader("apikey", apiKey);
+          xhr.setRequestHeader("x-upsert", "true");
+          xhr.timeout = 0; // No timeout for large files
+
+          xhr.send(fileToUpload);
+        } catch (err) {
+          resolve({ error: err instanceof Error ? err : new Error("Erro desconhecido") });
         }
-
-        const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-        const url = `${supabaseUrl}/storage/v1/object/big_imports/${storagePath}`;
-
-        const xhr = new XMLHttpRequest();
-
-        xhr.upload.onprogress = (event) => {
-          if (event.lengthComputable) {
-            onProgress(event.loaded, event.total);
-          }
-        };
-
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) {
-            resolve({ error: null });
-          } else {
-            let errorMsg = `Upload failed: ${xhr.status}`;
-            try {
-              const resp = JSON.parse(xhr.responseText);
-              if (resp.message) errorMsg = resp.message;
-              if (resp.error) errorMsg = resp.error;
-            } catch {}
-            resolve({ error: new Error(errorMsg) });
-          }
-        };
-
-        xhr.onerror = () => {
-          resolve({ error: new Error("Erro de rede durante upload. Verifique sua conexão.") });
-        };
-
-        xhr.ontimeout = () => {
-          resolve({ error: new Error("Upload expirou. O arquivo pode ser muito grande para sua conexão.") });
-        };
-
-        xhr.open("POST", url, true);
-        xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
-        xhr.setRequestHeader("x-upsert", "true");
-        xhr.timeout = 0; // No timeout for large files
-
-        xhr.send(fileToUpload);
-      } catch (err) {
-        resolve({ error: err instanceof Error ? err : new Error("Erro desconhecido") });
-      }
-    });
-  }, []);
+      });
+    },
+    []
+  );
 
   const handleStartImport = async () => {
     setIsUploading(true);
@@ -162,59 +179,8 @@ const LargeImportModal = ({
 
       const storagePath = `${user.id}/${projectId}/${file.name}`;
 
-      // Upload with real progress
-      const { error: uploadError } = await uploadFileWithProgress(
-        file,
-        storagePath,
-        (loaded, total) => {
-          const now = Date.now();
-          const timeDelta = (now - lastTimeRef.current) / 1000;
-
-          if (timeDelta >= 0.5) {
-            const bytesDelta = loaded - lastBytesRef.current;
-            const instantSpeed = bytesDelta / timeDelta;
-
-            speedHistoryRef.current.push(instantSpeed);
-            if (speedHistoryRef.current.length > 5) {
-              speedHistoryRef.current.shift();
-            }
-
-            const avgSpeed = speedHistoryRef.current.reduce((a, b) => a + b, 0) / speedHistoryRef.current.length;
-            const bytesRemaining = total - loaded;
-            const eta = avgSpeed > 0 ? bytesRemaining / avgSpeed : 0;
-
-            setUploadStats({
-              bytesUploaded: loaded,
-              totalBytes: total,
-              speed: avgSpeed,
-              eta,
-            });
-
-            lastBytesRef.current = loaded;
-            lastTimeRef.current = now;
-          }
-
-          const progress = Math.floor((loaded / total) * 70);
-          setUploadProgress(progress);
-        }
-      );
-
-      if (uploadError) {
-        console.error("Upload error:", uploadError);
-        setErrorMessage(uploadError.message);
-        toast({
-          title: t("common.error"),
-          description: uploadError.message,
-          variant: "destructive",
-        });
-        return;
-      }
-
-      setUploadProgress(75);
-      setUploadStats(null);
-
-      // Create import job
-      const { data: job, error: jobError } = await supabase
+      // Create job first so it NEVER disappears even if upload fails.
+      const { data: createdJob, error: jobCreateError } = await supabase
         .from("import_jobs")
         .insert({
           project_id: projectId,
@@ -224,13 +190,14 @@ const LargeImportModal = ({
           storage_path: storagePath,
           delimiter,
           encoding,
-          status: "pending",
+          status: "uploading",
+          progress: 0,
         })
-        .select()
+        .select("id")
         .single();
 
-      if (jobError) {
-        console.error("Job creation error:", jobError);
+      if (jobCreateError || !createdJob) {
+        console.error("Job creation error:", jobCreateError);
         setErrorMessage(t("dataIngestion.import.errors.jobCreationFailed"));
         toast({
           title: t("common.error"),
@@ -240,13 +207,83 @@ const LargeImportModal = ({
         return;
       }
 
+      const jobId = createdJob.id;
+
+      // Upload with real progress
+      const { error: uploadError } = await uploadFileWithProgress(file, storagePath, (loaded, total) => {
+        const now = Date.now();
+        const timeDelta = (now - lastTimeRef.current) / 1000;
+
+        if (timeDelta >= 0.5) {
+          const bytesDelta = loaded - lastBytesRef.current;
+          const instantSpeed = bytesDelta / timeDelta;
+
+          speedHistoryRef.current.push(instantSpeed);
+          if (speedHistoryRef.current.length > 5) {
+            speedHistoryRef.current.shift();
+          }
+
+          const avgSpeed =
+            speedHistoryRef.current.reduce((a, b) => a + b, 0) / speedHistoryRef.current.length;
+          const bytesRemaining = total - loaded;
+          const eta = avgSpeed > 0 ? bytesRemaining / avgSpeed : 0;
+
+          setUploadStats({
+            bytesUploaded: loaded,
+            totalBytes: total,
+            speed: avgSpeed,
+            eta,
+          });
+
+          lastBytesRef.current = loaded;
+          lastTimeRef.current = now;
+        }
+
+        const progress = Math.floor((loaded / total) * 70);
+        setUploadProgress(progress);
+      });
+
+      if (uploadError) {
+        console.error("Upload error:", uploadError);
+
+        await supabase
+          .from("import_jobs")
+          .update({
+            status: "failed",
+            error_message: uploadError.message,
+            finished_at: new Date().toISOString(),
+          })
+          .eq("id", jobId);
+
+        setErrorMessage(uploadError.message);
+        toast({
+          title: t("common.error"),
+          description: uploadError.message,
+          variant: "destructive",
+        });
+        return;
+      }
+
+      // Mark job ready for backend processing
+      await supabase
+        .from("import_jobs")
+        .update({
+          status: "pending",
+          progress: 0,
+          error_message: null,
+        })
+        .eq("id", jobId);
+
+      setUploadProgress(75);
+      setUploadStats(null);
+
       setUploadProgress(85);
       setUploadPhase("processing");
 
       // Trigger processing
-      console.log("Invoking process-import for job:", job.id);
+      console.log("Invoking process-import for job:", jobId);
       const { error: processError } = await supabase.functions.invoke("process-import", {
-        body: { job_id: job.id },
+        body: { job_id: jobId },
       });
 
       if (processError) {
