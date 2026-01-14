@@ -228,25 +228,33 @@ async function* readLinesFromStream(
   }
 }
 
-async function getSignedDownloadUrl(supabase: any, path: string): Promise<string> {
-  const { data, error } = await supabase.storage
-    .from('big_imports')
-    .createSignedUrl(path, 60 * 60);
+function makeTextDecoder(encoding: string): TextDecoder {
+  return new TextDecoder(
+    encoding === 'ISO-8859-1'
+      ? 'iso-8859-1'
+      : encoding === 'Windows-1252'
+        ? 'windows-1252'
+        : 'utf-8',
+  );
+}
 
-  if (error || !data?.signedUrl) {
-    throw new Error(`Falha ao gerar URL assinada: ${error?.message || 'erro desconhecido'}`);
+function countNewlines(chunk: Uint8Array): number {
+  // Count '\n' bytes (0x0A). Works for UTF-8 and most single-byte encodings.
+  let c = 0;
+  for (let i = 0; i < chunk.length; i++) {
+    if (chunk[i] === 10) c++;
   }
-
-  return data.signedUrl;
+  return c;
 }
 
 // Process a single file and return stats without loading entire content
+// Optimized to avoid per-row CSV parsing on huge files (prevents WORKER_LIMIT)
 async function processFileStreaming(
   supabase: any,
   job: ImportJob,
   isFirstInBatch: boolean,
   primaryHeaders: string[] | null,
-  totalBytesInBatch: number
+  totalBytesInBatch: number,
 ): Promise<{
   success: boolean;
   headers: string[];
@@ -260,13 +268,7 @@ async function processFileStreaming(
     res = await fetch(signedUrl, { headers: { 'Accept-Encoding': 'identity' } });
   } catch (e) {
     const msg = e instanceof Error ? e.message : 'Erro ao preparar download do arquivo';
-    return {
-      success: false,
-      headers: [],
-      rowCount: 0,
-      sampleRows: [],
-      error: msg,
-    };
+    return { success: false, headers: [], rowCount: 0, sampleRows: [], error: msg };
   }
 
   if (!res.ok || !res.body) {
@@ -285,56 +287,139 @@ async function processFileStreaming(
 
   const delimiter = job.delimiter || ',';
   const encoding = job.encoding || 'UTF-8';
+  const decoder = makeTextDecoder(encoding);
+
+  // Progress updates by bytes are much cheaper than per-row updates.
+  const PROGRESS_UPDATE_BYTES = 32 * 1024 * 1024; // 32MB
+
   let headers: string[] = [];
   let rowCount = 0;
   const sampleRows: Record<string, unknown>[] = [];
   let isHeaderLine = true;
-  let lastProgressUpdate = 0;
 
   const bytesCounter = { bytes: 0 };
+  let lastProgressBytes = 0;
+
+  const reader = res.body.getReader();
+  let leftover = '';
+  let samplingComplete = false;
+  let lastByteWasNewline = true;
 
   try {
-    for await (const line of readLinesFromStream(res.body, encoding, bytesCounter)) {
-      if (isHeaderLine) {
-        headers = parseCSVLine(line, delimiter);
-        isHeaderLine = false;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
 
-        // Validate headers if not first file
-        if (!isFirstInBatch && primaryHeaders) {
-          const comparison = compareHeaders(primaryHeaders, headers);
-          if (!comparison.compatible) {
-            return {
-              success: false,
-              headers: [],
-              rowCount: 0,
-              sampleRows: [],
-              error: `Colunas incompatíveis: ${comparison.message}`,
-            };
+      bytesCounter.bytes += value.byteLength;
+      lastByteWasNewline = value[value.length - 1] === 10;
+
+      if (!samplingComplete) {
+        // Decode only until we have headers + SAMPLE_SIZE rows (for type inference).
+        const text = decoder.decode(value, { stream: true });
+        leftover += text;
+
+        let nlIndex = -1;
+        while ((nlIndex = leftover.indexOf('\n')) !== -1) {
+          const rawLine = leftover.slice(0, nlIndex);
+          leftover = leftover.slice(nlIndex + 1);
+
+          const line = rawLine.replace(/\r$/, '');
+          if (!line.trim()) continue;
+
+          if (isHeaderLine) {
+            headers = parseCSVLine(line, delimiter);
+            isHeaderLine = false;
+
+            // Validate headers if not first file
+            if (!isFirstInBatch && primaryHeaders) {
+              const comparison = compareHeaders(primaryHeaders, headers);
+              if (!comparison.compatible) {
+                return {
+                  success: false,
+                  headers: [],
+                  rowCount: 0,
+                  sampleRows: [],
+                  error: `Colunas incompatíveis: ${comparison.message}`,
+                };
+              }
+            }
+
+            continue;
+          }
+
+          rowCount++;
+
+          if (sampleRows.length < SAMPLE_SIZE) {
+            const values = parseCSVLine(line, delimiter);
+            const row: Record<string, unknown> = {};
+            const headersToUse = primaryHeaders || headers;
+            headersToUse.forEach((h, idx) => {
+              row[h] = values[idx] ?? null;
+            });
+            sampleRows.push(row);
+          }
+
+          if (sampleRows.length >= SAMPLE_SIZE) {
+            // From here on, stop decoding/parsing; only count newlines in raw bytes.
+            samplingComplete = true;
+
+            // Account for any complete lines already buffered in leftover (without parsing them).
+            const extraLines = (leftover.match(/\n/g) || []).length;
+            rowCount += extraLines;
+            leftover = '';
+            break;
           }
         }
-        continue;
+      } else {
+        // Cheap counting: count '\n' bytes only (no decoding, no CSV parsing)
+        rowCount += countNewlines(value);
       }
 
-      rowCount++;
-
-      // Collect sample rows
-      if (sampleRows.length < SAMPLE_SIZE) {
-        const values = parseCSVLine(line, delimiter);
-        const row: Record<string, unknown> = {};
-        const headersToUse = primaryHeaders || headers;
-        headersToUse.forEach((h, idx) => {
-          row[h] = values[idx] ?? null;
-        });
-        sampleRows.push(row);
-      }
-
-      // Update progress periodically
-      if (rowCount - lastProgressUpdate >= PROGRESS_UPDATE_INTERVAL) {
+      if (bytesCounter.bytes - lastProgressBytes >= PROGRESS_UPDATE_BYTES) {
         const denom = job.file_size_bytes > 0 ? job.file_size_bytes : 1;
         const progress = Math.min(Math.floor((bytesCounter.bytes / denom) * 95), 95);
         await updateJobProgress(supabase, job.id, progress, rowCount);
-        lastProgressUpdate = rowCount;
-        console.log(`[process-import] File ${job.file_name}: ${rowCount.toLocaleString()} rows processed`);
+        lastProgressBytes = bytesCounter.bytes;
+      }
+
+      // Basic safety guard
+      if (rowCount > MAX_ROWS) {
+        return {
+          success: false,
+          headers,
+          rowCount,
+          sampleRows,
+          error: `Arquivo excede o limite de ${MAX_ROWS.toLocaleString()} linhas.`,
+        };
+      }
+    }
+
+    // Flush decoder if we never switched to counting-only mode
+    if (!samplingComplete) {
+      leftover += decoder.decode();
+
+      const tail = leftover.replace(/\r$/, '');
+      if (tail.trim()) {
+        if (isHeaderLine) {
+          headers = parseCSVLine(tail, delimiter);
+        } else {
+          rowCount++;
+          if (sampleRows.length < SAMPLE_SIZE) {
+            const values = parseCSVLine(tail, delimiter);
+            const row: Record<string, unknown> = {};
+            const headersToUse = primaryHeaders || headers;
+            headersToUse.forEach((h, idx) => {
+              row[h] = values[idx] ?? null;
+            });
+            sampleRows.push(row);
+          }
+        }
+      }
+    } else {
+      // If file doesn't end with a newline, newline-counting misses the last line.
+      if (!lastByteWasNewline) {
+        rowCount += 1;
       }
     }
 
@@ -342,6 +427,8 @@ async function processFileStreaming(
   } catch (e) {
     const errorMessage = e instanceof Error ? e.message : 'Erro ao processar arquivo';
     return { success: false, headers, rowCount, sampleRows, error: errorMessage };
+  } finally {
+    reader.releaseLock();
   }
 }
 
