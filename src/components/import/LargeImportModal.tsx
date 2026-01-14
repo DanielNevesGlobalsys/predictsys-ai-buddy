@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import {
   Dialog,
@@ -18,11 +18,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, Loader2, FileWarning } from "lucide-react";
+import { Upload, Loader2, FileWarning, Sparkles } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildSafeObjectName } from "@/lib/storageObjectName";
-
+import { detectCSVDelimiter } from "@/lib/csvDelimiterDetector";
 
 interface LargeImportModalProps {
   open: boolean;
@@ -58,10 +58,33 @@ const LargeImportModal = ({
   const [uploadStats, setUploadStats] = useState<UploadStats | null>(null);
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "processing" | "done">("uploading");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [isDetectingDelimiter, setIsDetectingDelimiter] = useState(false);
+  const [delimiterAutoDetected, setDelimiterAutoDetected] = useState(false);
 
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
   const speedHistoryRef = useRef<number[]>([]);
+
+  // Auto-detect delimiter when modal opens
+  useEffect(() => {
+    if (open && file) {
+      setIsDetectingDelimiter(true);
+      setDelimiterAutoDetected(false);
+      
+      detectCSVDelimiter(file)
+        .then((result) => {
+          setDelimiter(result.delimiter);
+          setDelimiterAutoDetected(true);
+          console.log(`[LargeImportModal] Auto-detected delimiter: "${result.delimiter}" (confidence: ${result.confidence})`);
+        })
+        .catch((err) => {
+          console.warn('[LargeImportModal] Failed to detect delimiter:', err);
+        })
+        .finally(() => {
+          setIsDetectingDelimiter(false);
+        });
+    }
+  }, [open, file]);
 
   const fileSizeMB = (file.size / 1024 / 1024).toFixed(2);
   const fileSizeGB = (file.size / 1024 / 1024 / 1024).toFixed(2);
@@ -373,8 +396,29 @@ const LargeImportModal = ({
 
           {/* Delimiter */}
           <div className="space-y-2">
-            <Label>{t("dataIngestion.import.delimiter")}</Label>
-            <Select value={delimiter} onValueChange={setDelimiter} disabled={isUploading}>
+            <div className="flex items-center gap-2">
+              <Label>{t("dataIngestion.import.delimiter")}</Label>
+              {isDetectingDelimiter && (
+                <span className="text-xs text-muted-foreground flex items-center gap-1">
+                  <Loader2 className="w-3 h-3 animate-spin" />
+                  {t("dataIngestion.import.detectingDelimiter")}
+                </span>
+              )}
+              {delimiterAutoDetected && !isDetectingDelimiter && (
+                <span className="text-xs text-primary flex items-center gap-1">
+                  <Sparkles className="w-3 h-3" />
+                  {t("dataIngestion.import.delimiterAutoDetected")}
+                </span>
+              )}
+            </div>
+            <Select 
+              value={delimiter} 
+              onValueChange={(val) => {
+                setDelimiter(val);
+                setDelimiterAutoDetected(false);
+              }} 
+              disabled={isUploading || isDetectingDelimiter}
+            >
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>

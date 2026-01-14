@@ -1313,6 +1313,8 @@
       "delimiterSemicolon": "Ponto e vírgula (;)",
       "delimiterTab": "Tab (\\t)",
       "delimiterPipe": "Pipe (|)",
+      "detectingDelimiter": "Detectando...",
+      "delimiterAutoDetected": "Auto-detectado",
       "encoding": "Codificação",
       "uploading": "Enviando...",
       "startImport": "Iniciar importação",
