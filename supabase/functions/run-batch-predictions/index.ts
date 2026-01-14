@@ -117,24 +117,153 @@ serve(async (req) => {
       });
     }
 
-    // Download dataset
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from("datasets")
-      .download(project.dataset_filename);
+    // Get active dataset from project_datasets
+    const { data: activeDataset, error: datasetError } = await supabase
+      .from("project_datasets")
+      .select("*")
+      .eq("project_id", project_id)
+      .eq("is_active", true)
+      .single();
 
-    if (downloadError || !fileData) {
-      console.error("Error downloading dataset:", downloadError);
-      return new Response(JSON.stringify({ error: "Erro ao carregar dataset" }), {
-        status: 500,
+    if (datasetError || !activeDataset) {
+      console.error("Active dataset not found:", datasetError);
+      return new Response(JSON.stringify({ error: "Dataset ativo não encontrado" }), {
+        status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Parse CSV
-    const text = await fileData.text();
-    const lines = text.split("\n").filter(line => line.trim());
-    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
+    // Get delimiter from source_metadata
+    const sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
+    const delimiter = sourceMetadata.delimiter || ";";
+    const isBatchImport = activeDataset.source_type === "batch_import";
+
+    console.log(`Dataset: ${activeDataset.storage_path}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
+
+    // Collect all file paths to download
+    let filePaths: string[] = [];
     
+    if (isBatchImport && sourceMetadata.file_paths) {
+      filePaths = sourceMetadata.file_paths as string[];
+    } else {
+      filePaths = [activeDataset.storage_path];
+    }
+
+    if (filePaths.length === 0) {
+      return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // CSV parsing helper
+    function parseCSVLine(line: string, delim: string): string[] {
+      const result: string[] = [];
+      let current = "";
+      let inQuotes = false;
+      
+      for (let i = 0; i < line.length; i++) {
+        const char = line[i];
+        if (char === '"') {
+          inQuotes = !inQuotes;
+        } else if (char === delim && !inQuotes) {
+          result.push(current.trim().replace(/^"|"$/g, ""));
+          current = "";
+        } else {
+          current += char;
+        }
+      }
+      result.push(current.trim().replace(/^"|"$/g, ""));
+      return result;
+    }
+
+    // Stream data from files with byte limits
+    const MAX_ROWS = 5000; // Limit for batch predictions
+    const MAX_BYTES_PER_FILE = 10 * 1024 * 1024; // 10MB per file
+    let allLines: string[] = [];
+    let headers: string[] = [];
+    let isFirstFile = true;
+
+    for (const filePath of filePaths) {
+      if (allLines.length >= MAX_ROWS) break;
+
+      console.log(`Streaming: ${filePath}`);
+      
+      try {
+        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+          .from("datasets")
+          .createSignedUrl(filePath, 300);
+
+        if (signedUrlError || !signedUrlData?.signedUrl) {
+          console.error(`Error creating signed URL for ${filePath}:`, signedUrlError);
+          continue;
+        }
+
+        const response = await fetch(signedUrlData.signedUrl);
+        if (!response.ok || !response.body) {
+          console.error(`Error fetching ${filePath}: HTTP ${response.status}`);
+          continue;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let bytesRead = 0;
+        let buffer = "";
+        let fileLines: string[] = [];
+
+        while (bytesRead < MAX_BYTES_PER_FILE && fileLines.length < MAX_ROWS + 10) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          bytesRead += value?.length || 0;
+          buffer += decoder.decode(value, { stream: true });
+
+          const lineBreaks = buffer.split(/\r?\n/);
+          for (let i = 0; i < lineBreaks.length - 1; i++) {
+            const line = lineBreaks[i].trim();
+            if (line) fileLines.push(line);
+          }
+          buffer = lineBreaks[lineBreaks.length - 1];
+        }
+
+        try { await reader.cancel(); } catch (_) {}
+
+        console.log(`Bytes read: ${bytesRead}, Lines: ${fileLines.length}`);
+
+        if (fileLines.length === 0) continue;
+
+        if (isFirstFile) {
+          headers = parseCSVLine(fileLines[0], delimiter);
+          console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+          isFirstFile = false;
+          
+          const remaining = MAX_ROWS - allLines.length;
+          allLines.push(...fileLines.slice(1, 1 + remaining));
+        } else {
+          const fileHeaders = parseCSVLine(fileLines[0], delimiter);
+          const startLine = fileHeaders.length === headers.length ? 1 : 0;
+          
+          const remaining = MAX_ROWS - allLines.length;
+          allLines.push(...fileLines.slice(startLine, startLine + remaining));
+        }
+
+        console.log(`Lines accumulated: ${allLines.length}`);
+
+      } catch (err) {
+        console.error(`Error processing ${filePath}:`, err);
+        continue;
+      }
+    }
+
+    if (headers.length === 0 || allLines.length === 0) {
+      return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    console.log(`Total lines for predictions: ${allLines.length}`);
+
     // Find column indices
     const featureIndices = featureNames.map(name => headers.indexOf(name));
     const categoricalIndices = categoricalFeatures.map(c => ({
@@ -142,7 +271,7 @@ serve(async (req) => {
       index: headers.indexOf(c.column_name)
     }));
 
-    // Look for entity_id column (try different common names)
+    // Look for entity_id column
     const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'ID', 'Id'];
     let entityIdIndex = -1;
     let entityIdColumn = 'row_index';
@@ -166,12 +295,12 @@ serve(async (req) => {
       }
     });
 
-    // Calculate means and stds for normalization
+    // Calculate means and stds for normalization from sample data
     const featureData: number[][] = featureNames.map(() => []);
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+    for (let i = 0; i < allLines.length; i++) {
+      const values = parseCSVLine(allLines[i], delimiter);
       featureIndices.forEach((idx, j) => {
-        const val = parseFloat(values[idx]);
+        const val = parseFloat((values[idx] || "").replace(",", "."));
         if (!isNaN(val)) featureData[j].push(val);
       });
     }
@@ -184,7 +313,7 @@ serve(async (req) => {
     const predictionDate = new Date().toISOString();
     const predictions: any[] = [];
 
-    console.log(`Processing ${lines.length - 1} entities...`);
+    console.log(`Processing ${allLines.length} entities...`);
 
     // First, mark all existing predictions for this project as not latest
     await supabase
@@ -193,15 +322,15 @@ serve(async (req) => {
       .eq("project_id", project_id);
 
     // Process each row
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
+    for (let i = 0; i < allLines.length; i++) {
+      const values = parseCSVLine(allLines[i], delimiter);
       
       // Get entity ID
-      const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${i}`;
+      const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${i + 1}`;
       
       // Extract and normalize feature values
       const featureValues = featureIndices.map((idx, j) => {
-        const val = parseFloat(values[idx]);
+        const val = parseFloat((values[idx] || "").replace(",", "."));
         if (isNaN(val)) return 0;
         return (val - means[j]) / stds[j];
       });
