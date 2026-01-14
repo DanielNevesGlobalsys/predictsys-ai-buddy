@@ -2,8 +2,8 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
 const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
 // Configuration
@@ -32,57 +32,52 @@ interface ImportJob {
 }
 
 serve(async (req) => {
-  if (req.method === 'OPTIONS') {
+  if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
-  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
-  const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
     const { job_id, batch_id } = await req.json();
 
     if (!job_id) {
-      return new Response(
-        JSON.stringify({ success: false, message: 'job_id is required' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ success: false, message: "job_id is required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    console.log(`[process-import] Starting import job: ${job_id}, batch_id: ${batch_id || 'none'}`);
+    console.log(`[process-import] Starting import job: ${job_id}, batch_id: ${batch_id || "none"}`);
 
     // Fetch the import job
-    const { data: job, error: jobError } = await supabase
-      .from('import_jobs')
-      .select('*')
-      .eq('id', job_id)
-      .single();
+    const { data: job, error: jobError } = await supabase.from("import_jobs").select("*").eq("id", job_id).single();
 
     if (jobError || !job) {
       console.error(`[process-import] Job not found: ${job_id}`, jobError);
-      return new Response(
-        JSON.stringify({ success: false, message: 'Import job not found' }),
-        { status: 404, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ success: false, message: "Import job not found" }), {
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    if (job.status !== 'pending') {
+    if (job.status !== "pending") {
       console.log(`[process-import] Job ${job_id} is already ${job.status}`);
-      return new Response(
-        JSON.stringify({ success: true, message: `Job is already ${job.status}` }),
-        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ success: true, message: `Job is already ${job.status}` }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // Validate file size
     if (job.file_size_bytes > MAX_FILE_SIZE_BYTES) {
       const maxGB = (MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
       await updateJobError(supabase, job_id, `Arquivo excede o limite de ${maxGB} GB.`);
-      return new Response(
-        JSON.stringify({ success: false, message: `File exceeds ${maxGB} GB limit` }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      return new Response(JSON.stringify({ success: false, message: `File exceeds ${maxGB} GB limit` }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     // If this is a batch import, process all files in sequence
@@ -91,46 +86,36 @@ serve(async (req) => {
     } else {
       return await processSingleImport(supabase, job as ImportJob);
     }
-
   } catch (error: unknown) {
-    console.error('[process-import] Unexpected error:', error);
-    const message = error instanceof Error ? error.message : 'Internal server error';
-    return new Response(
-      JSON.stringify({ success: false, message }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    console.error("[process-import] Unexpected error:", error);
+    const message = error instanceof Error ? error.message : "Internal server error";
+    return new Response(JSON.stringify({ success: false, message }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 });
 
-async function updateJobProgress(
-  supabase: any, 
-  jobId: string, 
-  progress: number, 
-  rowsProcessed: number
-): Promise<void> {
+async function updateJobProgress(supabase: any, jobId: string, progress: number, rowsProcessed: number): Promise<void> {
   try {
     await supabase
-      .from('import_jobs')
+      .from("import_jobs")
       .update({ progress, rows_processed: rowsProcessed, updated_at: new Date().toISOString() })
-      .eq('id', jobId);
+      .eq("id", jobId);
   } catch (e) {
     console.warn(`[process-import] Failed to update progress for job ${jobId}:`, e);
   }
 }
 
-async function updateJobError(
-  supabase: any, 
-  jobId: string, 
-  errorMessage: string
-): Promise<void> {
+async function updateJobError(supabase: any, jobId: string, errorMessage: string): Promise<void> {
   await supabase
-    .from('import_jobs')
-    .update({ 
-      status: 'failed', 
+    .from("import_jobs")
+    .update({
+      status: "failed",
       error_message: errorMessage,
-      finished_at: new Date().toISOString()
+      finished_at: new Date().toISOString(),
     })
-    .eq('id', jobId);
+    .eq("id", jobId);
 }
 
 async function createDatasetRecord(
@@ -144,11 +129,11 @@ async function createDatasetRecord(
   sampleRows: number,
   columnsCount: number,
   sourceType: string,
-  sourceMetadata: Record<string, unknown>
+  sourceMetadata: Record<string, unknown>,
 ): Promise<string | null> {
   try {
     const { data, error } = await supabase
-      .from('project_datasets')
+      .from("project_datasets")
       .insert({
         project_id: projectId,
         user_id: userId,
@@ -162,17 +147,17 @@ async function createDatasetRecord(
         source_type: sourceType,
         source_metadata: sourceMetadata,
       })
-      .select('id')
+      .select("id")
       .single();
 
     if (error) {
-      console.error('[process-import] Failed to create dataset record:', error);
+      console.error("[process-import] Failed to create dataset record:", error);
       return null;
     }
 
     return data.id;
   } catch (e) {
-    console.error('[process-import] Error creating dataset record:', e);
+    console.error("[process-import] Error creating dataset record:", e);
     return null;
   }
 }
@@ -184,15 +169,11 @@ async function* readLinesFromStream(
   bytesCounter: { bytes: number },
 ): AsyncGenerator<string> {
   const decoder = new TextDecoder(
-    encoding === 'ISO-8859-1'
-      ? 'iso-8859-1'
-      : encoding === 'Windows-1252'
-        ? 'windows-1252'
-        : 'utf-8',
+    encoding === "ISO-8859-1" ? "iso-8859-1" : encoding === "Windows-1252" ? "windows-1252" : "utf-8",
   );
 
   const reader = stream.getReader();
-  let leftover = '';
+  let leftover = "";
 
   try {
     while (true) {
@@ -204,11 +185,11 @@ async function* readLinesFromStream(
       bytesCounter.bytes += value.byteLength;
 
       const text = decoder.decode(value, { stream: true });
-      const lines = (leftover + text).split('\n');
-      leftover = lines.pop() || '';
+      const lines = (leftover + text).split("\n");
+      leftover = lines.pop() || "";
 
       for (const line of lines) {
-        const cleaned = line.replace(/\r$/, '');
+        const cleaned = line.replace(/\r$/, "");
         if (cleaned.trim()) {
           yield cleaned;
         }
@@ -219,7 +200,7 @@ async function* readLinesFromStream(
     const flushed = decoder.decode();
     if (flushed) leftover += flushed;
 
-    const last = leftover.replace(/\r$/, '');
+    const last = leftover.replace(/\r$/, "");
     if (last.trim()) {
       yield last;
     }
@@ -230,11 +211,7 @@ async function* readLinesFromStream(
 
 function makeTextDecoder(encoding: string): TextDecoder {
   return new TextDecoder(
-    encoding === 'ISO-8859-1'
-      ? 'iso-8859-1'
-      : encoding === 'Windows-1252'
-        ? 'windows-1252'
-        : 'utf-8',
+    encoding === "ISO-8859-1" ? "iso-8859-1" : encoding === "Windows-1252" ? "windows-1252" : "utf-8",
   );
 }
 
@@ -245,6 +222,21 @@ function countNewlines(chunk: Uint8Array): number {
     if (chunk[i] === 10) c++;
   }
   return c;
+}
+
+/**
+ * NOVA FUNÇÃO RE-ADICIONADA
+ * Gera uma URL assinada para baixar o arquivo do bucket big_imports
+ * sem precisar materializar o blob inteiro em memória.
+ */
+async function getSignedDownloadUrl(supabase: any, path: string): Promise<string> {
+  const { data, error } = await supabase.storage.from("big_imports").createSignedUrl(path, 60 * 60); // 1h
+
+  if (error || !data?.signedUrl) {
+    throw new Error(`Falha ao gerar URL assinada: ${error?.message || "erro desconhecido"}`);
+  }
+
+  return data.signedUrl;
 }
 
 // Process a single file and return stats without loading entire content
@@ -265,9 +257,9 @@ async function processFileStreaming(
   let res: Response;
   try {
     const signedUrl = await getSignedDownloadUrl(supabase, job.storage_path);
-    res = await fetch(signedUrl, { headers: { 'Accept-Encoding': 'identity' } });
+    res = await fetch(signedUrl, { headers: { "Accept-Encoding": "identity" } });
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Erro ao preparar download do arquivo';
+    const msg = e instanceof Error ? e.message : "Erro ao preparar download do arquivo";
     return { success: false, headers: [], rowCount: 0, sampleRows: [], error: msg };
   }
 
@@ -285,8 +277,8 @@ async function processFileStreaming(
     `[process-import] Streaming file: ${job.file_name}, size: ${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB`,
   );
 
-  const delimiter = job.delimiter || ',';
-  const encoding = job.encoding || 'UTF-8';
+  const delimiter = job.delimiter || ",";
+  const encoding = job.encoding || "UTF-8";
   const decoder = makeTextDecoder(encoding);
 
   // Progress updates by bytes are much cheaper than per-row updates.
@@ -301,7 +293,7 @@ async function processFileStreaming(
   let lastProgressBytes = 0;
 
   const reader = res.body.getReader();
-  let leftover = '';
+  let leftover = "";
   let samplingComplete = false;
   let lastByteWasNewline = true;
 
@@ -320,11 +312,11 @@ async function processFileStreaming(
         leftover += text;
 
         let nlIndex = -1;
-        while ((nlIndex = leftover.indexOf('\n')) !== -1) {
+        while ((nlIndex = leftover.indexOf("\n")) !== -1) {
           const rawLine = leftover.slice(0, nlIndex);
           leftover = leftover.slice(nlIndex + 1);
 
-          const line = rawLine.replace(/\r$/, '');
+          const line = rawLine.replace(/\r$/, "");
           if (!line.trim()) continue;
 
           if (isHeaderLine) {
@@ -367,7 +359,7 @@ async function processFileStreaming(
             // Account for any complete lines already buffered in leftover (without parsing them).
             const extraLines = (leftover.match(/\n/g) || []).length;
             rowCount += extraLines;
-            leftover = '';
+            leftover = "";
             break;
           }
         }
@@ -399,7 +391,7 @@ async function processFileStreaming(
     if (!samplingComplete) {
       leftover += decoder.decode();
 
-      const tail = leftover.replace(/\r$/, '');
+      const tail = leftover.replace(/\r$/, "");
       if (tail.trim()) {
         if (isHeaderLine) {
           headers = parseCSVLine(tail, delimiter);
@@ -425,7 +417,7 @@ async function processFileStreaming(
 
     return { success: true, headers, rowCount, sampleRows };
   } catch (e) {
-    const errorMessage = e instanceof Error ? e.message : 'Erro ao processar arquivo';
+    const errorMessage = e instanceof Error ? e.message : "Erro ao processar arquivo";
     return { success: false, headers, rowCount, sampleRows, error: errorMessage };
   } finally {
     reader.releaseLock();
@@ -437,18 +429,18 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
   // Get all jobs in this batch, ordered by sequence
   const { data: batchJobs, error: batchError } = await supabase
-    .from('import_jobs')
-    .select('*')
-    .eq('batch_id', primaryJob.batch_id)
-    .order('batch_sequence', { ascending: true });
+    .from("import_jobs")
+    .select("*")
+    .eq("batch_id", primaryJob.batch_id)
+    .order("batch_sequence", { ascending: true });
 
   if (batchError || !batchJobs || batchJobs.length === 0) {
     console.error(`[process-import] Failed to fetch batch jobs`, batchError);
-    await updateJobError(supabase, primaryJob.id, 'Falha ao buscar jobs do lote.');
-    return new Response(
-      JSON.stringify({ success: false, message: 'Failed to fetch batch jobs' }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    await updateJobError(supabase, primaryJob.id, "Falha ao buscar jobs do lote.");
+    return new Response(JSON.stringify({ success: false, message: "Failed to fetch batch jobs" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
   // Validate total batch size
@@ -458,20 +450,22 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     for (const job of batchJobs) {
       await updateJobError(supabase, job.id, `Lote excede o limite total de ${maxGB} GB.`);
     }
-    return new Response(
-      JSON.stringify({ success: false, message: `Batch exceeds ${maxGB} GB limit` }),
-      { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ success: false, message: `Batch exceeds ${maxGB} GB limit` }), {
+      status: 400,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 
-  console.log(`[process-import] Found ${batchJobs.length} files in batch, total size: ${(totalBatchSize / 1024 / 1024).toFixed(2)} MB`);
+  console.log(
+    `[process-import] Found ${batchJobs.length} files in batch, total size: ${(totalBatchSize / 1024 / 1024).toFixed(2)} MB`,
+  );
 
   let primaryHeaders: string[] | null = null;
   let totalRowsProcessed = 0;
   let allSampleRows: Record<string, unknown>[] = [];
   const processedJobIds: string[] = [];
   const failedJobs: { id: string; fileName: string; error: string }[] = [];
-  
+
   // We'll copy each file to datasets bucket individually, then store paths
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
@@ -481,38 +475,26 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     console.log(`[process-import] Processing file ${i + 1}/${batchJobs.length}: ${job.file_name}`);
 
     // Update job to processing
-    await supabase
-      .from('import_jobs')
-      .update({ status: 'processing', progress: 0 })
-      .eq('id', job.id);
+    await supabase.from("import_jobs").update({ status: "processing", progress: 0 }).eq("id", job.id);
 
     const isFirst = job.is_batch_primary;
-    
-    const result = await processFileStreaming(
-      supabase,
-      job,
-      isFirst,
-      primaryHeaders,
-      totalBatchSize
-    );
+
+    const result = await processFileStreaming(supabase, job, isFirst, primaryHeaders, totalBatchSize);
 
     if (!result.success) {
       console.error(`[process-import] Error processing file ${job.file_name}:`, result.error);
-      failedJobs.push({ id: job.id, fileName: job.file_name, error: result.error || 'Erro desconhecido' });
-      await updateJobError(supabase, job.id, result.error || 'Erro desconhecido');
+      failedJobs.push({ id: job.id, fileName: job.file_name, error: result.error || "Erro desconhecido" });
+      await updateJobError(supabase, job.id, result.error || "Erro desconhecido");
       continue;
     }
 
     if (isFirst) {
       primaryHeaders = result.headers;
-      await supabase
-        .from('import_jobs')
-        .update({ headers_json: result.headers })
-        .eq('id', job.id);
+      await supabase.from("import_jobs").update({ headers_json: result.headers }).eq("id", job.id);
     }
 
     totalRowsProcessed += result.rowCount;
-    
+
     // Collect sample rows proportionally
     const samplesPerFile = Math.ceil(SAMPLE_SIZE / batchJobs.length);
     const samplesToAdd = result.sampleRows.slice(0, samplesPerFile);
@@ -525,8 +507,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     try {
       const { error: copyError } = await supabase.storage
-        .from('big_imports')
-        .copy(job.storage_path, destPath, { destinationBucket: 'datasets' });
+        .from("big_imports")
+        .copy(job.storage_path, destPath, { destinationBucket: "datasets" });
 
       if (!copyError) {
         processedFilePaths.push(destPath);
@@ -542,14 +524,14 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
     // Mark job as completed
     await supabase
-      .from('import_jobs')
-      .update({ 
-        status: 'completed', 
+      .from("import_jobs")
+      .update({
+        status: "completed",
         progress: 100,
         rows_processed: result.rowCount,
-        finished_at: new Date().toISOString()
+        finished_at: new Date().toISOString(),
       })
-      .eq('id', job.id);
+      .eq("id", job.id);
 
     console.log(`[process-import] File ${job.file_name} completed: ${result.rowCount.toLocaleString()} rows`);
   }
@@ -559,20 +541,17 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     const columnTypes = inferColumnTypes(primaryHeaders, allSampleRows);
 
     // Delete existing columns for this project
-    await supabase
-      .from('project_columns')
-      .delete()
-      .eq('project_id', primaryJob.project_id);
+    await supabase.from("project_columns").delete().eq("project_id", primaryJob.project_id);
 
     // Insert column metadata
     const columnInserts = primaryHeaders.map((name, index) => ({
       project_id: primaryJob.project_id,
       column_name: name,
       column_index: index,
-      inferred_type: columnTypes[name] || 'texto'
+      inferred_type: columnTypes[name] || "texto",
     }));
 
-    await supabase.from('project_columns').insert(columnInserts);
+    await supabase.from("project_columns").insert(columnInserts);
 
     // Dataset path - use the batch folder
     const datasetPath = `${primaryJob.user_id}/${primaryJob.project_id}/${primaryJob.batch_id}`;
@@ -588,41 +567,38 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       totalRowsProcessed,
       Math.min(allSampleRows.length, SAMPLE_SIZE),
       primaryHeaders.length,
-      'batch_import',
+      "batch_import",
       {
         batch_id: primaryJob.batch_id,
         files_count: batchJobs.length,
         files_processed: processedJobIds.length,
         files_failed: failedJobs.length,
-        file_paths: processedFilePaths
-      }
+        file_paths: processedFilePaths,
+      },
     );
 
     // Link dataset to jobs
     if (datasetId) {
-      await supabase
-        .from('import_jobs')
-        .update({ dataset_id: datasetId })
-        .eq('batch_id', primaryJob.batch_id);
+      await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("batch_id", primaryJob.batch_id);
     }
 
     // Update project with dataset info
     await supabase
-      .from('projects')
+      .from("projects")
       .update({
         dataset_filename: datasetPath,
         dataset_rows: Math.min(allSampleRows.length, SAMPLE_SIZE),
         dataset_columns: primaryHeaders.length,
         total_rows: totalRowsProcessed,
         sample_rows: Math.min(allSampleRows.length, SAMPLE_SIZE),
-        status: 'data_uploaded'
+        status: "data_uploaded",
       })
-      .eq('id', primaryJob.project_id);
+      .eq("id", primaryJob.project_id);
 
     // Log ingestion
-    await supabase.from('project_data_ingestion_logs').insert({
+    await supabase.from("project_data_ingestion_logs").insert({
       project_id: primaryJob.project_id,
-      status: failedJobs.length > 0 ? 'partial' : 'success',
+      status: failedJobs.length > 0 ? "partial" : "success",
       rows_read: totalRowsProcessed,
       rows_sampled: Math.min(allSampleRows.length, SAMPLE_SIZE),
       completed_at: new Date().toISOString(),
@@ -630,41 +606,39 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
         batch_id: primaryJob.batch_id,
         files_processed: processedJobIds.length,
         files_failed: failedJobs.length,
-        failed_files: failedJobs.map(f => ({ name: f.fileName, error: f.error })),
+        failed_files: failedJobs.map((f) => ({ name: f.fileName, error: f.error })),
         dataset_path: datasetPath,
         dataset_id: datasetId,
-        file_paths: processedFilePaths
-      }
+        file_paths: processedFilePaths,
+      },
     });
   }
 
-  const responseMessage = failedJobs.length > 0
-    ? `Importação parcial: ${processedJobIds.length} arquivos ok, ${failedJobs.length} com erro`
-    : `Batch importado com sucesso: ${processedJobIds.length} arquivos, ${totalRowsProcessed.toLocaleString()} linhas`;
+  const responseMessage =
+    failedJobs.length > 0
+      ? `Importação parcial: ${processedJobIds.length} arquivos ok, ${failedJobs.length} com erro`
+      : `Batch importado com sucesso: ${processedJobIds.length} arquivos, ${totalRowsProcessed.toLocaleString()} linhas`;
 
   console.log(`[process-import] Batch ${primaryJob.batch_id} completed. ${responseMessage}`);
 
   return new Response(
-    JSON.stringify({ 
-      success: processedJobIds.length > 0, 
+    JSON.stringify({
+      success: processedJobIds.length > 0,
       message: responseMessage,
       rows_processed: totalRowsProcessed,
       files_processed: processedJobIds.length,
       files_failed: failedJobs.length,
-      failed_files: failedJobs
+      failed_files: failedJobs,
     }),
-    { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+    { headers: { ...corsHeaders, "Content-Type": "application/json" } },
   );
 }
 
 async function processSingleImport(supabase: any, job: ImportJob): Promise<Response> {
   const job_id = job.id;
-  
+
   // Update job to processing
-  await supabase
-    .from('import_jobs')
-    .update({ status: 'processing', progress: 0 })
-    .eq('id', job_id);
+  await supabase.from("import_jobs").update({ status: "processing", progress: 0 }).eq("id", job_id);
 
   console.log(`[process-import] Job ${job_id} set to processing`);
 
@@ -672,59 +646,58 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
     const result = await processFileStreaming(supabase, job, true, null, job.file_size_bytes);
 
     if (!result.success) {
-      await updateJobError(supabase, job_id, result.error || 'Erro ao processar arquivo');
-      return new Response(
-        JSON.stringify({ success: false, message: result.error }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      await updateJobError(supabase, job_id, result.error || "Erro ao processar arquivo");
+      return new Response(JSON.stringify({ success: false, message: result.error }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
     const { headers, rowCount, sampleRows } = result;
 
     if (headers.length === 0) {
-      await updateJobError(supabase, job_id, 'Não foi possível detectar colunas no arquivo.');
-      return new Response(
-        JSON.stringify({ success: false, message: 'Could not parse headers' }),
-        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
+      await updateJobError(supabase, job_id, "Não foi possível detectar colunas no arquivo.");
+      return new Response(JSON.stringify({ success: false, message: "Could not parse headers" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
 
-    console.log(`[process-import] Processed ${rowCount.toLocaleString()} rows, ${sampleRows.length} samples, ${headers.length} columns`);
+    console.log(
+      `[process-import] Processed ${rowCount.toLocaleString()} rows, ${sampleRows.length} samples, ${headers.length} columns`,
+    );
 
     const columnTypes = inferColumnTypes(headers, sampleRows);
 
     // Delete existing columns
-    await supabase
-      .from('project_columns')
-      .delete()
-      .eq('project_id', job.project_id);
+    await supabase.from("project_columns").delete().eq("project_id", job.project_id);
 
     // Insert column metadata
     const columnInserts = headers.map((name, index) => ({
       project_id: job.project_id,
       column_name: name,
       column_index: index,
-      inferred_type: columnTypes[name] || 'texto'
+      inferred_type: columnTypes[name] || "texto",
     }));
 
-    await supabase.from('project_columns').insert(columnInserts);
+    await supabase.from("project_columns").insert(columnInserts);
 
     // Copy file to datasets bucket
-    const datasetFileName = `${job.file_name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
+    const datasetFileName = `${job.file_name.replace(/[^a-zA-Z0-9_.-]/g, "_")}`;
     const datasetPath = `${job.user_id}/${job.project_id}/${datasetFileName}`;
 
     console.log(`[process-import] Copying to datasets bucket: ${datasetPath}`);
 
-     // Copy file to datasets bucket without downloading into memory
-     const { error: copyError } = await supabase.storage
-       .from('big_imports')
-       .copy(job.storage_path, datasetPath, { destinationBucket: 'datasets' });
+    // Copy file to datasets bucket without downloading into memory
+    const { error: copyError } = await supabase.storage
+      .from("big_imports")
+      .copy(job.storage_path, datasetPath, { destinationBucket: "datasets" });
 
-     if (copyError) {
-       console.error('[process-import] Error copying to datasets:', copyError);
-     } else {
-       console.log('[process-import] File copied to datasets bucket');
-     }
+    if (copyError) {
+      console.error("[process-import] Error copying to datasets:", copyError);
+    } else {
+      console.log("[process-import] File copied to datasets bucket");
+    }
 
     // Create dataset record
     const datasetId = await createDatasetRecord(
@@ -737,57 +710,54 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       rowCount,
       Math.min(sampleRows.length, SAMPLE_SIZE),
       headers.length,
-      'upload',
-      { original_path: job.storage_path }
+      "upload",
+      { original_path: job.storage_path },
     );
 
     // Link dataset to job
     if (datasetId) {
-      await supabase
-        .from('import_jobs')
-        .update({ dataset_id: datasetId })
-        .eq('id', job_id);
+      await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("id", job_id);
     }
 
     // Update project
     await supabase
-      .from('projects')
+      .from("projects")
       .update({
         dataset_filename: datasetPath,
         dataset_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
         dataset_columns: headers.length,
         total_rows: rowCount,
         sample_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
-        status: 'data_uploaded'
+        status: "data_uploaded",
       })
-      .eq('id', job.project_id);
+      .eq("id", job.project_id);
 
     // Log ingestion
-    await supabase.from('project_data_ingestion_logs').insert({
+    await supabase.from("project_data_ingestion_logs").insert({
       project_id: job.project_id,
-      status: 'success',
+      status: "success",
       rows_read: rowCount,
       rows_sampled: Math.min(sampleRows.length, SAMPLE_SIZE),
       completed_at: new Date().toISOString(),
-      metadata: { 
-        file_name: job.file_name, 
+      metadata: {
+        file_name: job.file_name,
         storage_path: job.storage_path,
         dataset_path: datasetPath,
-        dataset_id: datasetId
-      }
+        dataset_id: datasetId,
+      },
     });
 
     // Mark job as completed
     await supabase
-      .from('import_jobs')
+      .from("import_jobs")
       .update({
-        status: 'completed',
+        status: "completed",
         progress: 100,
         rows_processed: rowCount,
         finished_at: new Date().toISOString(),
-        dataset_id: datasetId
+        dataset_id: datasetId,
       })
-      .eq('id', job_id);
+      .eq("id", job_id);
 
     console.log(`[process-import] Job ${job_id} completed successfully`);
 
@@ -797,25 +767,24 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
         message: `Importação concluída: ${rowCount.toLocaleString()} linhas processadas`,
         rows_processed: rowCount,
         columns: headers.length,
-        dataset_id: datasetId
+        dataset_id: datasetId,
       }),
-      { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
-
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+    const errorMessage = error instanceof Error ? error.message : "Erro desconhecido";
     console.error(`[process-import] Error processing job ${job_id}:`, errorMessage);
     await updateJobError(supabase, job_id, errorMessage);
-    return new Response(
-      JSON.stringify({ success: false, message: errorMessage }),
-      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-    );
+    return new Response(JSON.stringify({ success: false, message: errorMessage }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
   }
 }
 
 function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
-  let current = '';
+  let current = "";
   let inQuotes = false;
 
   for (let i = 0; i < line.length; i++) {
@@ -830,7 +799,7 @@ function parseCSVLine(line: string, delimiter: string): string[] {
       }
     } else if (char === delimiter && !inQuotes) {
       result.push(current.trim());
-      current = '';
+      current = "";
     } else {
       current += char;
     }
@@ -842,9 +811,9 @@ function parseCSVLine(line: string, delimiter: string): string[] {
 
 function compareHeaders(primary: string[], current: string[]): { compatible: boolean; message: string } {
   if (primary.length !== current.length) {
-    return { 
-      compatible: false, 
-      message: `Número de colunas diferente: esperado ${primary.length}, encontrado ${current.length}` 
+    return {
+      compatible: false,
+      message: `Número de colunas diferente: esperado ${primary.length}, encontrado ${current.length}`,
     };
   }
 
@@ -856,13 +825,13 @@ function compareHeaders(primary: string[], current: string[]): { compatible: boo
   }
 
   if (mismatches.length > 0) {
-    return { 
-      compatible: false, 
-      message: `Colunas diferentes: ${mismatches.slice(0, 3).join(', ')}${mismatches.length > 3 ? '...' : ''}` 
+    return {
+      compatible: false,
+      message: `Colunas diferentes: ${mismatches.slice(0, 3).join(", ")}${mismatches.length > 3 ? "..." : ""}`,
     };
   }
 
-  return { compatible: true, message: '' };
+  return { compatible: true, message: "" };
 }
 
 function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>[]): Record<string, string> {
@@ -870,48 +839,42 @@ function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>
 
   for (const header of headers) {
     const values = sampleRows
-      .map(row => row[header])
-      .filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+      .map((row) => row[header])
+      .filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
 
     if (values.length === 0) {
-      types[header] = 'texto';
+      types[header] = "texto";
       continue;
     }
 
     // Check for numeric
-    const numericCount = values.filter(v => {
-      const str = String(v).replace(',', '.').trim();
-      return !isNaN(Number(str)) && str !== '';
+    const numericCount = values.filter((v) => {
+      const str = String(v).replace(",", ".").trim();
+      return !isNaN(Number(str)) && str !== "";
     }).length;
 
     if (numericCount >= values.length * 0.8) {
-      types[header] = 'numérico';
+      types[header] = "numérico";
       continue;
     }
 
     // Check for date
-    const datePatterns = [
-      /^\d{4}-\d{2}-\d{2}/,
-      /^\d{2}\/\d{2}\/\d{4}/,
-      /^\d{2}-\d{2}-\d{4}/,
-    ];
-    const dateCount = values.filter(v => 
-      datePatterns.some(p => p.test(String(v)))
-    ).length;
+    const datePatterns = [/^\d{4}-\d{2}-\d{2}/, /^\d{2}\/\d{2}\/\d{4}/, /^\d{2}-\d{2}-\d{4}/];
+    const dateCount = values.filter((v) => datePatterns.some((p) => p.test(String(v)))).length;
 
     if (dateCount >= values.length * 0.8) {
-      types[header] = 'data';
+      types[header] = "data";
       continue;
     }
 
     // Check for categorical (low cardinality)
-    const uniqueValues = new Set(values.map(v => String(v)));
+    const uniqueValues = new Set(values.map((v) => String(v)));
     if (uniqueValues.size <= Math.min(20, values.length * 0.1)) {
-      types[header] = 'categórico';
+      types[header] = "categórico";
       continue;
     }
 
-    types[header] = 'texto';
+    types[header] = "texto";
   }
 
   return types;
