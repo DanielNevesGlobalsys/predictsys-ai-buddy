@@ -1149,6 +1149,22 @@
       "importStartedDesc": "{{count}} file(s) will be processed. You'll be notified when complete.",
       "processingServer": "Processing on server...",
       "processingServerDesc": "Upload complete. Files are being processed."
+    },
+    "datasets": {
+      "title": "Dataset History",
+      "active": "Active",
+      "activate": "Activate",
+      "activated": "Dataset activated!",
+      "activatedDesc": "Dataset \"{{name}}\" is now active for analysis.",
+      "deleted": "Dataset removed",
+      "deletedDesc": "Dataset \"{{name}}\" has been removed.",
+      "deleteTitle": "Delete dataset?",
+      "deleteDesc": "Dataset \"{{name}}\" will be permanently removed. This action cannot be undone.",
+      "cantDeleteActive": "Cannot delete the active dataset. Activate another one first.",
+      "sourceUpload": "Upload",
+      "sourceBatch": "Batch",
+      "sourceDatabase": "Database",
+      "sourceCloud": "Cloud"
     }
   },
   "export": {

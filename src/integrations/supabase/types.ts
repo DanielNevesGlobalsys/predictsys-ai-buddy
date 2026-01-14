@@ -147,6 +147,7 @@ export type Database = {
           batch_id: string | null
           batch_sequence: number | null
           created_at: string
+          dataset_id: string | null
           delimiter: string
           encoding: string
           error_message: string | null
@@ -169,6 +170,7 @@ export type Database = {
           batch_id?: string | null
           batch_sequence?: number | null
           created_at?: string
+          dataset_id?: string | null
           delimiter?: string
           encoding?: string
           error_message?: string | null
@@ -191,6 +193,7 @@ export type Database = {
           batch_id?: string | null
           batch_sequence?: number | null
           created_at?: string
+          dataset_id?: string | null
           delimiter?: string
           encoding?: string
           error_message?: string | null
@@ -210,6 +213,13 @@ export type Database = {
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "import_jobs_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "import_jobs_project_id_fkey"
             columns: ["project_id"]
@@ -499,6 +509,65 @@ export type Database = {
           },
           {
             foreignKeyName: "project_data_ingestion_logs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_datasets: {
+        Row: {
+          columns_count: number | null
+          created_at: string
+          file_size_bytes: number | null
+          id: string
+          is_active: boolean
+          name: string
+          project_id: string
+          sample_rows: number | null
+          source_metadata: Json | null
+          source_type: string
+          storage_path: string
+          total_rows: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          columns_count?: number | null
+          created_at?: string
+          file_size_bytes?: number | null
+          id?: string
+          is_active?: boolean
+          name: string
+          project_id: string
+          sample_rows?: number | null
+          source_metadata?: Json | null
+          source_type?: string
+          storage_path: string
+          total_rows?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          columns_count?: number | null
+          created_at?: string
+          file_size_bytes?: number | null
+          id?: string
+          is_active?: boolean
+          name?: string
+          project_id?: string
+          sample_rows?: number | null
+          source_metadata?: Json | null
+          source_type?: string
+          storage_path?: string
+          total_rows?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_datasets_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"

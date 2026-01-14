@@ -7,7 +7,6 @@ const corsHeaders = {
 };
 
 // Configuration
-const CHUNK_SIZE = 10000;
 const MAX_ROWS = 10000000;
 const SAMPLE_SIZE = 100000;
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024 * 1024; // 10 GB
@@ -28,6 +27,7 @@ interface ImportJob {
   is_batch_primary: boolean;
   headers_json: string[] | null;
   headers_hash: string | null;
+  dataset_id: string | null;
 }
 
 serve(async (req) => {
@@ -107,10 +107,14 @@ async function updateJobProgress(
   progress: number, 
   rowsProcessed: number
 ): Promise<void> {
-  await supabase
-    .from('import_jobs')
-    .update({ progress, rows_processed: rowsProcessed })
-    .eq('id', jobId);
+  try {
+    await supabase
+      .from('import_jobs')
+      .update({ progress, rows_processed: rowsProcessed, updated_at: new Date().toISOString() })
+      .eq('id', jobId);
+  } catch (e) {
+    console.warn(`[process-import] Failed to update progress for job ${jobId}:`, e);
+  }
 }
 
 async function updateJobError(
@@ -128,6 +132,50 @@ async function updateJobError(
     .eq('id', jobId);
 }
 
+async function createDatasetRecord(
+  supabase: any,
+  projectId: string,
+  userId: string,
+  name: string,
+  storagePath: string,
+  fileSizeBytes: number,
+  totalRows: number,
+  sampleRows: number,
+  columnsCount: number,
+  sourceType: string,
+  sourceMetadata: Record<string, unknown>
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from('project_datasets')
+      .insert({
+        project_id: projectId,
+        user_id: userId,
+        name,
+        storage_path: storagePath,
+        file_size_bytes: fileSizeBytes,
+        total_rows: totalRows,
+        sample_rows: sampleRows,
+        columns_count: columnsCount,
+        is_active: true, // New dataset becomes active
+        source_type: sourceType,
+        source_metadata: sourceMetadata,
+      })
+      .select('id')
+      .single();
+
+    if (error) {
+      console.error('[process-import] Failed to create dataset record:', error);
+      return null;
+    }
+
+    return data.id;
+  } catch (e) {
+    console.error('[process-import] Error creating dataset record:', e);
+    return null;
+  }
+}
+
 async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise<Response> {
   console.log(`[process-import] Processing batch: ${primaryJob.batch_id}`);
 
@@ -140,6 +188,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
   if (batchError || !batchJobs || batchJobs.length === 0) {
     console.error(`[process-import] Failed to fetch batch jobs`, batchError);
+    await updateJobError(supabase, primaryJob.id, 'Falha ao buscar jobs do lote.');
     return new Response(
       JSON.stringify({ success: false, message: 'Failed to fetch batch jobs' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -332,6 +381,34 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       console.log(`[process-import] Consolidated dataset uploaded successfully`);
     }
 
+    // Create dataset record in project_datasets
+    const datasetId = await createDatasetRecord(
+      supabase,
+      primaryJob.project_id,
+      primaryJob.user_id,
+      primaryJob.file_name,
+      datasetPath,
+      totalBatchSize,
+      totalRowsProcessed,
+      Math.min(allSampleRows.length, SAMPLE_SIZE),
+      primaryHeaders.length,
+      'batch_import',
+      {
+        batch_id: primaryJob.batch_id,
+        files_count: batchJobs.length,
+        files_processed: processedJobIds.length,
+        files_failed: failedJobs.length
+      }
+    );
+
+    // Link dataset to jobs
+    if (datasetId) {
+      await supabase
+        .from('import_jobs')
+        .update({ dataset_id: datasetId })
+        .eq('batch_id', primaryJob.batch_id);
+    }
+
     // Update project with dataset info - use the correct path!
     await supabase
       .from('projects')
@@ -359,7 +436,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
           files_processed: processedJobIds.length,
           files_failed: failedJobs.length,
           failed_files: failedJobs.map(f => ({ name: f.fileName, error: f.error })),
-          consolidated_path: datasetPath
+          consolidated_path: datasetPath,
+          dataset_id: datasetId
         }
       });
   }
@@ -500,85 +578,103 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       inferred_type: columnTypes[name] || 'texto'
     }));
 
-    await supabase
-      .from('project_columns')
-      .insert(columnInserts);
+    await supabase.from('project_columns').insert(columnInserts);
 
-    // Upload file to datasets bucket (copy from big_imports)
+    // Copy file to datasets bucket with proper path
     const datasetFileName = `${job.file_name.replace(/[^a-zA-Z0-9_.-]/g, '_')}`;
     const datasetPath = `${job.user_id}/${job.project_id}/${datasetFileName}`;
-    
-    console.log(`[process-import] Uploading dataset to: ${datasetPath}`);
-    
-    const { error: uploadError } = await supabase.storage
+
+    console.log(`[process-import] Copying to datasets bucket: ${datasetPath}`);
+
+    // Re-upload to datasets bucket
+    const { error: copyError } = await supabase.storage
       .from('datasets')
       .upload(datasetPath, fileData, { upsert: true });
 
-    if (uploadError) {
-      console.error(`[process-import] Error uploading to datasets:`, uploadError);
+    if (copyError) {
+      console.error('[process-import] Error copying to datasets:', copyError);
     }
 
-    // Update project with correct dataset path
+    // Create dataset record
+    const datasetId = await createDatasetRecord(
+      supabase,
+      job.project_id,
+      job.user_id,
+      job.file_name,
+      datasetPath,
+      job.file_size_bytes,
+      totalRows,
+      Math.min(sampleRows.length, SAMPLE_SIZE),
+      headers.length,
+      'upload',
+      { original_path: job.storage_path }
+    );
+
+    // Link dataset to job
+    if (datasetId) {
+      await supabase
+        .from('import_jobs')
+        .update({ dataset_id: datasetId })
+        .eq('id', job_id);
+    }
+
+    // Update project
     await supabase
       .from('projects')
       .update({
         dataset_filename: datasetPath,
-        dataset_rows: Math.min(processedRows, SAMPLE_SIZE),
+        dataset_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
         dataset_columns: headers.length,
-        total_rows: processedRows,
-        sample_rows: Math.min(processedRows, SAMPLE_SIZE),
+        total_rows: totalRows,
+        sample_rows: Math.min(sampleRows.length, SAMPLE_SIZE),
         status: 'data_uploaded'
       })
       .eq('id', job.project_id);
 
     // Log ingestion
-    await supabase
-      .from('project_data_ingestion_logs')
-      .insert({
-        project_id: job.project_id,
-        status: 'success',
-        rows_read: processedRows,
-        rows_sampled: Math.min(processedRows, SAMPLE_SIZE),
-        completed_at: new Date().toISOString(),
-        metadata: {
-          file_name: job.file_name,
-          file_size_bytes: job.file_size_bytes,
-          delimiter: job.delimiter,
-          encoding: job.encoding,
-          import_job_id: job_id,
-          dataset_path: datasetPath
-        }
-      });
+    await supabase.from('project_data_ingestion_logs').insert({
+      project_id: job.project_id,
+      status: 'success',
+      rows_read: totalRows,
+      rows_sampled: Math.min(sampleRows.length, SAMPLE_SIZE),
+      completed_at: new Date().toISOString(),
+      metadata: { 
+        file_name: job.file_name, 
+        storage_path: job.storage_path,
+        dataset_path: datasetPath,
+        dataset_id: datasetId
+      }
+    });
 
     // Mark job as completed
     await supabase
       .from('import_jobs')
-      .update({ 
-        status: 'completed', 
+      .update({
+        status: 'completed',
         progress: 100,
         rows_processed: processedRows,
-        finished_at: new Date().toISOString()
+        finished_at: new Date().toISOString(),
+        dataset_id: datasetId
       })
       .eq('id', job_id);
 
     console.log(`[process-import] Job ${job_id} completed successfully`);
 
     return new Response(
-      JSON.stringify({ 
-        success: true, 
-        message: 'Import completed successfully',
+      JSON.stringify({
+        success: true,
+        message: `Importação concluída: ${processedRows.toLocaleString()} linhas processadas`,
         rows_processed: processedRows,
         columns: headers.length,
-        dataset_path: datasetPath
+        dataset_id: datasetId
       }),
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
-    
+
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido durante processamento';
+    const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
     console.error(`[process-import] Error processing job ${job_id}:`, errorMessage);
     await updateJobError(supabase, job_id, errorMessage);
-    
     return new Response(
       JSON.stringify({ success: false, message: errorMessage }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -586,18 +682,16 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
   }
 }
 
-// Helper functions
 function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
   let current = '';
   let inQuotes = false;
-  
+
   for (let i = 0; i < line.length; i++) {
     const char = line[i];
-    const nextChar = line[i + 1];
-    
+
     if (char === '"') {
-      if (inQuotes && nextChar === '"') {
+      if (inQuotes && line[i + 1] === '"') {
         current += '"';
         i++;
       } else {
@@ -610,78 +704,84 @@ function parseCSVLine(line: string, delimiter: string): string[] {
       current += char;
     }
   }
-  
+
   result.push(current.trim());
   return result;
 }
 
-function compareHeaders(
-  primary: string[], 
-  current: string[]
-): { compatible: boolean; message: string } {
-  const primaryNorm = primary.map(h => h.toLowerCase().trim());
-  const currentNorm = current.map(h => h.toLowerCase().trim());
-
-  const primarySet = new Set(primaryNorm);
-  const currentSet = new Set(currentNorm);
-
-  const missing = primaryNorm.filter(h => !currentSet.has(h));
-  const extra = currentNorm.filter(h => !primarySet.has(h));
-
-  if (missing.length === 0 && extra.length === 0) {
-    return { compatible: true, message: '' };
+function compareHeaders(primary: string[], current: string[]): { compatible: boolean; message: string } {
+  if (primary.length !== current.length) {
+    return { 
+      compatible: false, 
+      message: `Número de colunas diferente: esperado ${primary.length}, encontrado ${current.length}` 
+    };
   }
 
-  let message = '';
-  if (missing.length > 0) {
-    message += `Colunas faltando: ${missing.slice(0, 5).join(', ')}${missing.length > 5 ? '...' : ''}. `;
-  }
-  if (extra.length > 0) {
-    message += `Colunas extras: ${extra.slice(0, 5).join(', ')}${extra.length > 5 ? '...' : ''}.`;
+  const mismatches: string[] = [];
+  for (let i = 0; i < primary.length; i++) {
+    if (primary[i].toLowerCase() !== current[i].toLowerCase()) {
+      mismatches.push(`"${primary[i]}" vs "${current[i]}"`);
+    }
   }
 
-  return { compatible: false, message };
+  if (mismatches.length > 0) {
+    return { 
+      compatible: false, 
+      message: `Colunas diferentes: ${mismatches.slice(0, 3).join(', ')}${mismatches.length > 3 ? '...' : ''}` 
+    };
+  }
+
+  return { compatible: true, message: '' };
 }
 
 function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>[]): Record<string, string> {
   const types: Record<string, string> = {};
-  
+
   for (const header of headers) {
     const values = sampleRows
       .map(row => row[header])
-      .filter(v => v !== null && v !== undefined && String(v).trim() !== '')
-      .map(v => String(v));
-    
+      .filter(v => v !== null && v !== undefined && String(v).trim() !== '');
+
     if (values.length === 0) {
       types[header] = 'texto';
       continue;
     }
-    
-    const allNumbers = values.every(v => !isNaN(Number(v.replace(',', '.'))));
-    if (allNumbers) {
+
+    // Check for numeric
+    const numericCount = values.filter(v => {
+      const str = String(v).replace(',', '.').trim();
+      return !isNaN(Number(str)) && str !== '';
+    }).length;
+
+    if (numericCount >= values.length * 0.8) {
       types[header] = 'numérico';
       continue;
     }
-    
+
+    // Check for date
     const datePatterns = [
       /^\d{4}-\d{2}-\d{2}/,
       /^\d{2}\/\d{2}\/\d{4}/,
       /^\d{2}-\d{2}-\d{4}/,
     ];
-    const allDates = values.every(v => datePatterns.some(p => p.test(v)));
-    if (allDates) {
+    const dateCount = values.filter(v => 
+      datePatterns.some(p => p.test(String(v)))
+    ).length;
+
+    if (dateCount >= values.length * 0.8) {
       types[header] = 'data';
       continue;
     }
-    
-    const uniqueValues = new Set(values);
-    if (uniqueValues.size <= Math.min(10, values.length * 0.3)) {
+
+    // Check for categorical (low cardinality)
+    const uniqueValues = new Set(values.map(v => String(v)));
+    if (uniqueValues.size <= Math.min(20, values.length * 0.1)) {
       types[header] = 'categórico';
       continue;
     }
-    
+
     types[header] = 'texto';
   }
-  
+
   return types;
 }
