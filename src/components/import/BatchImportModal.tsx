@@ -286,7 +286,7 @@ const BatchImportModal = ({
             storage_path: storagePath,
             delimiter,
             encoding,
-            status: "uploading",
+            status: "pending",
             progress: 0,
             batch_id: batchId,
             batch_sequence: i + 1,

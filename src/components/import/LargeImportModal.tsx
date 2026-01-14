@@ -190,7 +190,7 @@ const LargeImportModal = ({
           storage_path: storagePath,
           delimiter,
           encoding,
-          status: "uploading",
+          status: "pending",
           progress: 0,
         })
         .select("id")
