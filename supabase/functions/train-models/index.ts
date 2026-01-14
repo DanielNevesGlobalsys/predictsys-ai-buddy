@@ -6,7 +6,8 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Simple statistical functions
+// ==================== UTILITY FUNCTIONS ====================
+
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -47,42 +48,107 @@ function normalize(data: number[][]): { normalized: number[][]; means: number[];
   return { normalized, means, stds };
 }
 
-// ==================== ALGORITHMS ====================
+// ==================== MODEL STRATEGY ====================
 
-// Simple Linear Regression
-function trainLinearRegression(X: number[][], y: number[]): { weights: number[]; bias: number } {
-  const n = X.length;
-  const numFeatures = X[0]?.length || 0;
-  const weights = new Array(numFeatures).fill(0);
-  let bias = 0;
-  const lr = 0.01;
-  const epochs = 50; // Reduced for performance
-  
-  for (let epoch = 0; epoch < epochs; epoch++) {
-    for (let i = 0; i < n; i++) {
-      let pred = bias;
-      for (let j = 0; j < numFeatures; j++) {
-        pred += weights[j] * X[i][j];
-      }
-      const error = pred - y[i];
-      bias -= lr * error / n;
-      for (let j = 0; j < numFeatures; j++) {
-        weights[j] -= lr * error * X[i][j] / n;
-      }
-    }
-  }
-  
-  return { weights, bias };
+interface ModelStrategy {
+  id: string;
+  name: string;
+  type: "classification" | "regression";
+  algorithm: "logistic_regression" | "linear_regression" | "gradient_boosting" | "random_forest";
+  params: {
+    nEstimators?: number;
+    maxDepth?: number;
+    learningRate?: number;
+    lambda?: number;
+    epochs?: number;
+  };
+  reason: string;
 }
 
-// Ridge Regression (L2 regularization)
-function trainRidgeRegression(X: number[][], y: number[], lambda = 0.1): { weights: number[]; bias: number } {
+/**
+ * Selects the best model strategy based on dataset characteristics
+ * This is the core AutoML heuristic for choosing a single model
+ */
+function selectBestModelStrategy(
+  problemType: "classification" | "regression",
+  nRows: number,
+  nFeatures: number
+): ModelStrategy {
+  const isLargeDataset = nRows > 200_000;
+  const hasHighDimensionality = nFeatures > 100;
+  const shouldUseLinearModel = isLargeDataset || hasHighDimensionality;
+
+  console.log(`[AutoML] Dataset: ${nRows} linhas, ${nFeatures} features`);
+  console.log(`[AutoML] Tipo: ${problemType}, Grande: ${isLargeDataset}, Alta dim: ${hasHighDimensionality}`);
+
+  if (problemType === "classification") {
+    if (shouldUseLinearModel) {
+      return {
+        id: "logistic_regression",
+        name: "Regressão Logística Regularizada",
+        type: "classification",
+        algorithm: "logistic_regression",
+        params: {
+          epochs: 100,
+          lambda: 0.1,
+        },
+        reason: `Dataset grande (${nRows.toLocaleString()} linhas) ou alta dimensionalidade (${nFeatures} features). Modelo linear é mais eficiente e generaliza bem.`,
+      };
+    } else {
+      // For smaller datasets, use Gradient Boosting with conservative params
+      return {
+        id: "gradient_boosting_classifier",
+        name: "Gradient Boosting Classifier",
+        type: "classification",
+        algorithm: "gradient_boosting",
+        params: {
+          nEstimators: 50,
+          maxDepth: 6,
+          learningRate: 0.1,
+        },
+        reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting oferece excelente performance e interpretabilidade.`,
+      };
+    }
+  } else {
+    // Regression
+    if (shouldUseLinearModel) {
+      return {
+        id: "linear_regression",
+        name: "Regressão Linear Regularizada (Ridge)",
+        type: "regression",
+        algorithm: "linear_regression",
+        params: {
+          epochs: 100,
+          lambda: 0.1,
+        },
+        reason: `Dataset grande (${nRows.toLocaleString()} linhas) ou alta dimensionalidade (${nFeatures} features). Modelo linear regularizado é robusto e escalável.`,
+      };
+    } else {
+      return {
+        id: "gradient_boosting_regressor",
+        name: "Gradient Boosting Regressor",
+        type: "regression",
+        algorithm: "gradient_boosting",
+        params: {
+          nEstimators: 50,
+          maxDepth: 6,
+          learningRate: 0.1,
+        },
+        reason: `Dataset de tamanho moderado (${nRows.toLocaleString()} linhas). Gradient Boosting captura padrões não-lineares mantendo bom desempenho.`,
+      };
+    }
+  }
+}
+
+// ==================== ALGORITHMS ====================
+
+function trainLinearRegression(X: number[][], y: number[], lambda = 0.1): { weights: number[]; bias: number } {
   const n = X.length;
   const numFeatures = X[0]?.length || 0;
   const weights = new Array(numFeatures).fill(0);
   let bias = 0;
   const lr = 0.01;
-  const epochs = 50; // Reduced for performance
+  const epochs = 100;
   
   for (let epoch = 0; epoch < epochs; epoch++) {
     for (let i = 0; i < n; i++) {
@@ -101,14 +167,13 @@ function trainRidgeRegression(X: number[][], y: number[], lambda = 0.1): { weigh
   return { weights, bias };
 }
 
-// Simple Logistic Regression
-function trainLogisticRegression(X: number[][], y: number[]): { weights: number[]; bias: number } {
+function trainLogisticRegression(X: number[][], y: number[], lambda = 0.1): { weights: number[]; bias: number } {
   const n = X.length;
   const numFeatures = X[0]?.length || 0;
   const weights = new Array(numFeatures).fill(0);
   let bias = 0;
   const lr = 0.1;
-  const epochs = 50; // Reduced for performance
+  const epochs = 100;
   
   for (let epoch = 0; epoch < epochs; epoch++) {
     for (let i = 0; i < n; i++) {
@@ -120,7 +185,7 @@ function trainLogisticRegression(X: number[][], y: number[]): { weights: number[
       const error = pred - y[i];
       bias -= lr * error / n;
       for (let j = 0; j < numFeatures; j++) {
-        weights[j] -= lr * error * X[i][j] / n;
+        weights[j] -= lr * (error * X[i][j] / n + lambda * weights[j] / n);
       }
     }
   }
@@ -128,7 +193,6 @@ function trainLogisticRegression(X: number[][], y: number[]): { weights: number[
   return { weights, bias };
 }
 
-// Predictions
 function predictLinear(X: number[][], weights: number[], bias: number): number[] {
   return X.map(row => {
     let pred = bias;
@@ -149,22 +213,22 @@ function predictLogistic(X: number[][], weights: number[], bias: number): number
   });
 }
 
-// Simple Decision Tree
-function trainSimpleTree(X: number[][], y: number[], isClassification: boolean, maxDepth = 5): any {
+// Simple Decision Tree for Gradient Boosting
+function trainSimpleTree(X: number[][], y: number[], maxDepth = 6): any {
   function buildTree(indices: number[], depth: number): any {
     if (depth >= maxDepth || indices.length < 5) {
       const values = indices.map(i => y[i]);
-      if (isClassification) {
-        const sum = values.reduce((a, b) => a + b, 0);
-        return { isLeaf: true, value: sum / values.length };
-      }
       return { isLeaf: true, value: mean(values) };
     }
     
     const numFeatures = X[0].length;
     let bestFeature = 0, bestThreshold = 0, bestScore = Infinity;
     
-    for (let f = 0; f < numFeatures; f++) {
+    // Sample features for faster training
+    const featuresToCheck = Math.min(numFeatures, Math.max(5, Math.floor(Math.sqrt(numFeatures))));
+    const featureIndices = shuffle(Array.from({ length: numFeatures }, (_, i) => i)).slice(0, featuresToCheck);
+    
+    for (const f of featureIndices) {
       const vals = indices.map(i => X[i][f]).sort((a, b) => a - b);
       const threshold = vals[Math.floor(vals.length / 2)];
       
@@ -176,15 +240,9 @@ function trainSimpleTree(X: number[][], y: number[], isClassification: boolean, 
       const leftY = leftIdx.map(i => y[i]);
       const rightY = rightIdx.map(i => y[i]);
       
-      let score;
-      if (isClassification) {
-        const leftP = mean(leftY);
-        const rightP = mean(rightY);
-        score = leftY.length * leftP * (1 - leftP) + rightY.length * rightP * (1 - rightP);
-      } else {
-        score = leftY.reduce((a, v) => a + Math.pow(v - mean(leftY), 2), 0) +
-                rightY.reduce((a, v) => a + Math.pow(v - mean(rightY), 2), 0);
-      }
+      // MSE for split quality
+      const score = leftY.reduce((a, v) => a + Math.pow(v - mean(leftY), 2), 0) +
+                    rightY.reduce((a, v) => a + Math.pow(v - mean(rightY), 2), 0);
       
       if (score < bestScore) {
         bestScore = score;
@@ -198,7 +256,7 @@ function trainSimpleTree(X: number[][], y: number[], isClassification: boolean, 
     
     if (leftIdx.length === 0 || rightIdx.length === 0) {
       const values = indices.map(i => y[i]);
-      return { isLeaf: true, value: isClassification ? mean(values) : mean(values) };
+      return { isLeaf: true, value: mean(values) };
     }
     
     return {
@@ -220,150 +278,49 @@ function predictTree(tree: any, x: number[]): number {
     : predictTree(tree.right, x);
 }
 
-// Random Forest (optimized)
-function trainRandomForest(X: number[][], y: number[], isClassification: boolean, numTrees = 3): any[] {
-  const trees: any[] = [];
-  const sampleSize = Math.min(X.length, 500); // Reduced sample per tree
-  
-  for (let t = 0; t < numTrees; t++) {
-    const indices: number[] = [];
-    for (let i = 0; i < sampleSize; i++) {
-      indices.push(Math.floor(Math.random() * X.length));
-    }
-    const Xb = indices.map(i => X[i]);
-    const yb = indices.map(i => y[i]);
-    trees.push(trainSimpleTree(Xb, yb, isClassification, 3)); // Reduced depth
-  }
-  
-  return trees;
-}
-
-function predictRandomForest(trees: any[], X: number[][], isClassification: boolean): number[] {
-  return X.map(x => {
-    const preds = trees.map(tree => predictTree(tree, x));
-    return mean(preds);
-  });
-}
-
-// Gradient Boosting (optimized)
-function trainGradientBoosting(X: number[][], y: number[], isClassification: boolean, numTrees = 3): { trees: any[]; lr: number; base: number } {
-  const sampleSize = Math.min(X.length, 500); // Reduced sample size
-  const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, sampleSize);
+// Gradient Boosting - optimized for Edge Function limits
+function trainGradientBoosting(
+  X: number[][], 
+  y: number[], 
+  isClassification: boolean,
+  nTrees: number,
+  maxDepth: number,
+  learningRate: number
+): { trees: any[]; lr: number; base: number; isClassification: boolean } {
+  // Subsample for faster training
+  const maxSamples = Math.min(X.length, 5000);
+  const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxSamples);
   const Xs = sampleIndices.map(i => X[i]);
   const ys = sampleIndices.map(i => y[i]);
   
   const base = mean(ys);
   let residuals = ys.map(v => v - base);
   const trees: any[] = [];
-  const lr = 0.1;
   
-  for (let t = 0; t < numTrees; t++) {
-    const tree = trainSimpleTree(Xs, residuals, false, 2); // Reduced depth
+  for (let t = 0; t < nTrees; t++) {
+    const tree = trainSimpleTree(Xs, residuals, maxDepth);
     trees.push(tree);
     
     for (let i = 0; i < Xs.length; i++) {
       const pred = predictTree(tree, Xs[i]);
-      residuals[i] -= lr * pred;
+      residuals[i] -= learningRate * pred;
     }
   }
   
-  return { trees, lr, base };
+  return { trees, lr: learningRate, base, isClassification };
 }
 
-function predictGradientBoosting(model: { trees: any[]; lr: number; base: number }, X: number[][], isClassification: boolean): number[] {
+function predictGradientBoosting(
+  model: { trees: any[]; lr: number; base: number; isClassification: boolean }, 
+  X: number[][]
+): number[] {
   return X.map(x => {
     let pred = model.base;
     for (const tree of model.trees) {
       pred += model.lr * predictTree(tree, x);
     }
-    return isClassification ? sigmoid(pred) : pred;
+    return model.isClassification ? sigmoid(pred) : pred;
   });
-}
-
-// k-Nearest Neighbors Classifier (optimized with sample limit)
-function trainKNN(X: number[][], y: number[], k = 3): { X: number[][]; y: number[]; k: number } {
-  // Limit training data for KNN to avoid O(n*m) complexity explosion
-  const maxSamples = 300;
-  if (X.length > maxSamples) {
-    const indices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxSamples);
-    return { X: indices.map(i => X[i]), y: indices.map(i => y[i]), k };
-  }
-  return { X, y, k };
-}
-
-function predictKNN(model: { X: number[][]; y: number[]; k: number }, Xtest: number[][], isClassification: boolean): number[] {
-  return Xtest.map(x => {
-    const distances = model.X.map((xi, i) => ({
-      dist: Math.sqrt(xi.reduce((sum, val, j) => sum + Math.pow(val - x[j], 2), 0)),
-      label: model.y[i]
-    }));
-    distances.sort((a, b) => a.dist - b.dist);
-    const neighbors = distances.slice(0, model.k);
-    
-    if (isClassification) {
-      const sum = neighbors.reduce((s, n) => s + n.label, 0);
-      return sum / model.k;
-    } else {
-      return mean(neighbors.map(n => n.label));
-    }
-  });
-}
-
-// Naive Bayes Classifier
-function trainNaiveBayes(X: number[][], y: number[]): { means0: number[]; stds0: number[]; means1: number[]; stds1: number[]; prior0: number; prior1: number } {
-  const X0 = X.filter((_, i) => y[i] === 0);
-  const X1 = X.filter((_, i) => y[i] === 1);
-  
-  const numFeatures = X[0].length;
-  const means0: number[] = [];
-  const stds0: number[] = [];
-  const means1: number[] = [];
-  const stds1: number[] = [];
-  
-  for (let j = 0; j < numFeatures; j++) {
-    const col0 = X0.map(row => row[j]);
-    const col1 = X1.map(row => row[j]);
-    means0.push(mean(col0));
-    stds0.push(std(col0) || 0.001);
-    means1.push(mean(col1));
-    stds1.push(std(col1) || 0.001);
-  }
-  
-  return {
-    means0, stds0,
-    means1, stds1,
-    prior0: X0.length / X.length,
-    prior1: X1.length / X.length
-  };
-}
-
-function predictNaiveBayes(model: any, X: number[][]): number[] {
-  const gaussianPDF = (x: number, mean: number, std: number) => {
-    const exp = Math.exp(-Math.pow(x - mean, 2) / (2 * std * std));
-    return exp / (std * Math.sqrt(2 * Math.PI));
-  };
-  
-  return X.map(row => {
-    let logP0 = Math.log(model.prior0);
-    let logP1 = Math.log(model.prior1);
-    
-    for (let j = 0; j < row.length; j++) {
-      logP0 += Math.log(gaussianPDF(row[j], model.means0[j], model.stds0[j]) + 1e-10);
-      logP1 += Math.log(gaussianPDF(row[j], model.means1[j], model.stds1[j]) + 1e-10);
-    }
-    
-    const prob1 = 1 / (1 + Math.exp(logP0 - logP1));
-    return prob1;
-  });
-}
-
-// Baseline Models
-function trainBaselineClassifier(y: number[]): number {
-  return mean(y);
-}
-
-function trainBaselineRegressor(y: number[]): number {
-  return mean(y);
 }
 
 // ==================== METRICS ====================
@@ -434,19 +391,129 @@ function calcFeatureImportance(weights: number[], featureNames: string[]): { fea
   }));
 }
 
-// Generate random but consistent feature importances for ensemble methods
-function calcEnsembleFeatureImportance(featureNames: string[], seed: number): { feature_name: string; importance_value: number }[] {
-  const rng = (s: number) => {
-    const x = Math.sin(s) * 10000;
-    return x - Math.floor(x);
-  };
-  const importances = featureNames.map((_, i) => rng(seed + i));
-  const total = importances.reduce((a, b) => a + b, 0);
+function calcTreeFeatureImportance(trees: any[], featureNames: string[]): { feature_name: string; importance_value: number }[] {
+  const counts: Record<number, number> = {};
+  
+  function countSplits(node: any) {
+    if (node.isLeaf) return;
+    counts[node.feature] = (counts[node.feature] || 0) + 1;
+    countSplits(node.left);
+    countSplits(node.right);
+  }
+  
+  for (const tree of trees) {
+    countSplits(tree);
+  }
+  
+  const total = Object.values(counts).reduce((a, b) => a + b, 0) || 1;
+  
   return featureNames.map((name, i) => ({
     feature_name: name,
-    importance_value: importances[i] / total
+    importance_value: (counts[i] || 0) / total
   }));
 }
+
+// ==================== SINGLE MODEL TRAINING ====================
+
+interface TrainResult {
+  model: any;
+  predictions: number[];
+  metrics: Record<string, number>;
+  featureImportances: { feature_name: string; importance_value: number }[];
+}
+
+function trainSingleModel(
+  strategy: ModelStrategy,
+  Xtrain: number[][],
+  ytrain: number[],
+  Xtest: number[][],
+  ytest: number[],
+  featureNames: string[]
+): TrainResult {
+  console.log(`[AutoML] Treinando modelo: ${strategy.name}`);
+  console.log(`[AutoML] Algoritmo: ${strategy.algorithm}, Params:`, strategy.params);
+  
+  const isClassification = strategy.type === "classification";
+  let model: any;
+  let predictions: number[];
+  let featureImportances: { feature_name: string; importance_value: number }[];
+  
+  switch (strategy.algorithm) {
+    case "logistic_regression":
+      model = trainLogisticRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      predictions = predictLogistic(Xtest, model.weights, model.bias);
+      featureImportances = calcFeatureImportance(model.weights, featureNames);
+      break;
+      
+    case "linear_regression":
+      model = trainLinearRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      predictions = predictLinear(Xtest, model.weights, model.bias);
+      featureImportances = calcFeatureImportance(model.weights, featureNames);
+      break;
+      
+    case "gradient_boosting":
+      model = trainGradientBoosting(
+        Xtrain, 
+        ytrain, 
+        isClassification,
+        strategy.params.nEstimators || 50,
+        strategy.params.maxDepth || 6,
+        strategy.params.learningRate || 0.1
+      );
+      predictions = predictGradientBoosting(model, Xtest);
+      featureImportances = calcTreeFeatureImportance(model.trees, featureNames);
+      break;
+      
+    case "random_forest":
+      // Use Gradient Boosting as fallback (similar performance, more stable)
+      model = trainGradientBoosting(
+        Xtrain, 
+        ytrain, 
+        isClassification,
+        strategy.params.nEstimators || 50,
+        strategy.params.maxDepth || 6,
+        0.3 // Higher learning rate for RF-like behavior
+      );
+      predictions = predictGradientBoosting(model, Xtest);
+      featureImportances = calcTreeFeatureImportance(model.trees, featureNames);
+      break;
+      
+    default:
+      throw new Error(`Algoritmo não suportado: ${strategy.algorithm}`);
+  }
+  
+  const metrics = isClassification
+    ? calcClassificationMetrics(ytest, predictions)
+    : calcRegressionMetrics(ytest, predictions);
+  
+  console.log(`[AutoML] Métricas:`, metrics);
+  
+  return { model, predictions, metrics, featureImportances };
+}
+
+// ==================== CSV PARSING ====================
+
+function parseCSVLine(line: string, delim: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === delim && !inQuotes) {
+      result.push(current.trim().replace(/^"|"$/g, ""));
+      current = "";
+    } else {
+      current += char;
+    }
+  }
+  result.push(current.trim().replace(/^"|"$/g, ""));
+  return result;
+}
+
+// ==================== MAIN HANDLER ====================
 
 serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -463,7 +530,9 @@ serve(async (req) => {
       });
     }
 
-    console.log(`Iniciando treinamento para projeto: ${project_id}`);
+    console.log(`\n========================================`);
+    console.log(`[AutoML] Iniciando treinamento para projeto: ${project_id}`);
+    console.log(`========================================\n`);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -530,10 +599,34 @@ serve(async (req) => {
       });
     }
 
-    // Get delimiter from source_metadata
+    // Determine sampling strategy based on dataset size
+    const totalDatasetRows = activeDataset.total_rows || 0;
     const sourceMetadata = activeDataset.source_metadata as Record<string, any> || {};
     const delimiter = sourceMetadata.delimiter || ";";
     const isBatchImport = activeDataset.source_type === "batch_import";
+
+    // SAMPLING STRATEGY:
+    // - Small datasets (≤ 100k): Use 100% of data
+    // - Medium datasets (100k-300k): Sample up to 50k
+    // - Large datasets (> 300k): Sample up to 30k with early stop
+    let MAX_SAMPLE_SIZE: number;
+    let MAX_LINES_TO_READ: number;
+    let useFullDataset = false;
+
+    if (totalDatasetRows <= 100_000) {
+      MAX_SAMPLE_SIZE = 100_000;
+      MAX_LINES_TO_READ = 150_000;
+      useFullDataset = true;
+      console.log(`[AutoML] Dataset pequeno (${totalDatasetRows} linhas) - usando 100% dos dados`);
+    } else if (totalDatasetRows <= 300_000) {
+      MAX_SAMPLE_SIZE = 50_000;
+      MAX_LINES_TO_READ = 150_000;
+      console.log(`[AutoML] Dataset médio (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas`);
+    } else {
+      MAX_SAMPLE_SIZE = 30_000;
+      MAX_LINES_TO_READ = 90_000;
+      console.log(`[AutoML] Dataset grande (${totalDatasetRows} linhas) - amostrando até ${MAX_SAMPLE_SIZE} linhas com early stop`);
+    }
 
     console.log(`Dataset: ${activeDataset.storage_path}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
 
@@ -543,7 +636,6 @@ serve(async (req) => {
     if (isBatchImport && sourceMetadata.file_paths) {
       filePaths = sourceMetadata.file_paths as string[];
     } else {
-      // Single file - storage_path is the file path
       filePaths = [activeDataset.storage_path];
     }
 
@@ -556,33 +648,7 @@ serve(async (req) => {
 
     console.log(`Arquivos para processar: ${filePaths.length}`);
 
-    // Function to parse CSV line respecting quotes
-    function parseCSVLine(line: string, delim: string): string[] {
-      const result: string[] = [];
-      let current = "";
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === delim && !inQuotes) {
-          result.push(current.trim().replace(/^"|"$/g, ""));
-          current = "";
-        } else {
-          current += char;
-        }
-      }
-      result.push(current.trim().replace(/^"|"$/g, ""));
-      return result;
-    }
-
-    // Stream data from files using STRATIFIED SAMPLING with EARLY STOP
-    // For large datasets, we sample efficiently without reading the entire file
-    // Reduced sample size for faster training within Edge Function CPU limits
-    const MAX_SAMPLE_SIZE = 15000; // Maximum lines to keep in memory (15k for CPU limit)
-    const SAMPLING_MULTIPLIER = 4; // Read 4x target to get good distribution
-    const MAX_LINES_TO_READ = MAX_SAMPLE_SIZE * SAMPLING_MULTIPLIER; // Stop after 60k lines
+    // Stream data from files with stratified sampling
     let sampledLines: string[] = [];
     let headers: string[] = [];
     let isFirstFile = true;
@@ -590,24 +656,22 @@ serve(async (req) => {
     let totalLinesProcessed = 0;
     let reachedSampleLimit = false;
 
-    console.log(`Iniciando leitura com amostragem (máx ${MAX_SAMPLE_SIZE} linhas, early stop após ${MAX_LINES_TO_READ})...`);
+    console.log(`[AutoML] Iniciando leitura (máx ${MAX_SAMPLE_SIZE} linhas, early stop após ${MAX_LINES_TO_READ})...`);
 
     for (let fileIndex = 0; fileIndex < filePaths.length && !reachedSampleLimit; fileIndex++) {
       const filePath = filePaths[fileIndex];
       console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
       
       try {
-        // Create signed URL with longer expiration for large files
         const { data: signedUrlData, error: signedUrlError } = await supabase.storage
           .from("datasets")
-          .createSignedUrl(filePath, 3600); // 1 hour for large files
+          .createSignedUrl(filePath, 3600);
 
         if (signedUrlError || !signedUrlData?.signedUrl) {
           console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
           continue;
         }
 
-        // Fetch with streaming - read ENTIRE file
         const response = await fetch(signedUrlData.signedUrl);
         if (!response.ok || !response.body) {
           console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
@@ -622,8 +686,6 @@ serve(async (req) => {
         let fileLinesCount = 0;
         let isFirstLineOfFile = true;
         let lastProgressLog = 0;
-
-        // Stream file with EARLY STOP for efficiency
         let shouldStopReading = false;
         
         while (!shouldStopReading) {
@@ -633,10 +695,8 @@ serve(async (req) => {
           bytesRead += value?.length || 0;
           buffer += decoder.decode(value, { stream: true });
 
-          // Extract complete lines as they arrive
           const lineBreaks = buffer.split(/\r?\n/);
           
-          // Process all complete lines (keep the last incomplete one in buffer)
           for (let i = 0; i < lineBreaks.length - 1; i++) {
             const line = lineBreaks[i].trim();
             if (!line) continue;
@@ -644,49 +704,42 @@ serve(async (req) => {
             fileLinesCount++;
             
             if (isFirstFile && isFirstLineOfFile) {
-              // First line of first file = headers
               headers = parseCSVLine(line, delimiter);
               console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
               isFirstLineOfFile = false;
             } else if (!isFirstFile && isFirstLineOfFile) {
-              // First line of subsequent files - check if it's a header
               const possibleHeaders = parseCSVLine(line, delimiter);
               const matchesHeaders = possibleHeaders.length === headers.length && 
                 possibleHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
               
               if (matchesHeaders) {
-                // Skip header line in subsequent files
                 isFirstLineOfFile = false;
                 continue;
               }
               isFirstLineOfFile = false;
               
-              // Add data line using stratified sampling
               totalLinesProcessed++;
               if (sampledLines.length < MAX_SAMPLE_SIZE) {
                 sampledLines.push(line);
-              } else {
-                // Random replacement for diversity
+              } else if (!useFullDataset) {
+                // Reservoir sampling for diversity
                 const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
-                if (Math.random() < 0.1) { // 10% chance to replace
+                if (Math.random() < 0.1) {
                   sampledLines[replaceIdx] = line;
                 }
               }
             } else {
-              // Data line - add to sample
               totalLinesProcessed++;
               if (sampledLines.length < MAX_SAMPLE_SIZE) {
                 sampledLines.push(line);
-              } else {
-                // Random replacement for diversity
+              } else if (!useFullDataset) {
                 const replaceIdx = Math.floor(Math.random() * MAX_SAMPLE_SIZE);
-                if (Math.random() < 0.1) { // 10% chance to replace
+                if (Math.random() < 0.1) {
                   sampledLines[replaceIdx] = line;
                 }
               }
             }
             
-            // EARLY STOP: once we've read enough lines, stop streaming
             if (totalLinesProcessed >= MAX_LINES_TO_READ) {
               shouldStopReading = true;
               reachedSampleLimit = true;
@@ -695,18 +748,15 @@ serve(async (req) => {
             }
           }
           
-          // Keep the last incomplete line in buffer
           buffer = lineBreaks[lineBreaks.length - 1];
           
-          // Log progress every 50MB for faster feedback
           const mbRead = bytesRead / (1024 * 1024);
           if (mbRead - lastProgressLog >= 50) {
-            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesProcessed} linhas lidas, ${sampledLines.length} amostradas`);
+            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesProcessed} linhas lidas`);
             lastProgressLog = mbRead;
           }
         }
 
-        // Cancel the reader if we stopped early
         if (shouldStopReading) {
           try { await reader.cancel(); } catch (_) { /* ignore */ }
         }
@@ -714,7 +764,7 @@ serve(async (req) => {
         isFirstFile = false;
         totalBytesRead += bytesRead;
 
-        console.log(`  Arquivo: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB processados, ${fileLinesCount} linhas`);
+        console.log(`  Arquivo: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
 
       } catch (err) {
         console.error(`Erro processando ${filePath}:`, err);
@@ -722,14 +772,12 @@ serve(async (req) => {
       }
     }
 
-    console.log(`=== Leitura completa ===`);
+    console.log(`\n=== Leitura completa ===`);
     console.log(`Total de arquivos: ${filePaths.length}`);
     console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
-    console.log(`Total de linhas processadas: ${totalLinesProcessed}`);
-    console.log(`Linhas amostradas para treino: ${sampledLines.length}`);
-    console.log(`Headers: ${headers.length} colunas`);
+    console.log(`Linhas lidas: ${totalLinesProcessed}`);
+    console.log(`Linhas amostradas: ${sampledLines.length}`);
     
-    // Use sampledLines as allLines for the rest of the processing
     const allLines = sampledLines;
 
     if (headers.length === 0 || allLines.length === 0) {
@@ -739,13 +787,10 @@ serve(async (req) => {
       });
     }
 
-    console.log(`Total de linhas para treino: ${allLines.length}, Headers: ${headers.length}`);
-
     // Find target column index
     const targetIndex = headers.indexOf(target_column);
     if (targetIndex === -1) {
-      const availableColumns = columns.map(c => c.column_name).join(", ");
-      console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${availableColumns}`);
+      console.error(`Coluna alvo "${target_column}" não encontrada.`);
       return new Response(JSON.stringify({ 
         error: `Coluna alvo "${target_column}" não encontrada no dataset.` 
       }), {
@@ -774,18 +819,17 @@ serve(async (req) => {
                                  targetColumnInfo?.inferred_type === "categorico" ||
                                  targetColumnInfo?.inferred_type === "texto";
     
-    console.log(`Features: ${featureNames.join(", ")}, Target: ${target_column} (categorical: ${isTargetCategorical})`);
+    console.log(`\nFeatures: ${featureNames.length} colunas numéricas`);
+    console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-    // Parse data from allLines - process and free memory immediately
+    // Parse data
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
     
-    // Single pass: build label map AND parse data
     for (let i = 0; i < allLines.length; i++) {
       const values = parseCSVLine(allLines[i], delimiter);
       
-      // Build label encoding for categorical targets
       if (isTargetCategorical) {
         const targetVal = values[targetIndex]?.trim() || "";
         if (targetVal && !labelMap.has(targetVal)) {
@@ -811,18 +855,16 @@ serve(async (req) => {
         y.push(targetNumeric);
       }
       
-      // Clear the line from memory as we process
       allLines[i] = "";
     }
     
-    // Free sampledLines array
     sampledLines.length = 0;
     
     if (isTargetCategorical && labelMap.size > 0) {
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
 
-    console.log(`Dados carregados: ${X.length} amostras, ${featureNames.length} features`);
+    console.log(`\nDados válidos: ${X.length} amostras, ${featureNames.length} features`);
 
     if (X.length < 10) {
       return new Response(JSON.stringify({ 
@@ -851,16 +893,27 @@ serve(async (req) => {
     const numClasses = isTargetCategorical ? labelMap.size : new Set(y).size;
     
     // For classification, convert to binary if needed
-    let ytrainBin = ytrain;
-    let ytestBin = ytest;
+    let ytrainFinal = ytrain;
+    let ytestFinal = ytest;
     
     if (isClassification && numClasses === 2) {
       const uniqueVals = [...new Set(y)].sort((a, b) => a - b);
-      ytrainBin = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
-      ytestBin = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
-    } else if (isClassification) {
-      console.log(`Multi-class classification com ${numClasses} classes`);
+      ytrainFinal = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
+      ytestFinal = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
     }
+
+    console.log(`\nTreino: ${Xtrain.length} amostras, Teste: ${Xtest.length} amostras`);
+    console.log(`Tipo: ${problem_type}, Classes: ${numClasses}`);
+
+    // ============ SELECT BEST MODEL ============
+    const strategy = selectBestModelStrategy(
+      problem_type as "classification" | "regression",
+      totalDatasetRows,
+      featureNames.length
+    );
+
+    console.log(`\n[AutoML] Modelo selecionado: ${strategy.name}`);
+    console.log(`[AutoML] Razão: ${strategy.reason}`);
 
     // Delete existing models for this project
     await supabase
@@ -868,164 +921,65 @@ serve(async (req) => {
       .delete()
       .eq("project_id", project_id);
 
-    // ============ ALGORITHM CATALOG ============
-    type AlgorithmDef = {
-      name: string;
-      type: string;
-      train: (X: number[][], y: number[]) => any;
-      predict: (model: any, X: number[][]) => number[];
-      getImportance: (model: any, featureNames: string[], idx: number) => { feature_name: string; importance_value: number }[];
-    };
+    // ============ TRAIN SINGLE MODEL ============
+    const trainResult = trainSingleModel(
+      strategy,
+      Xtrain,
+      isClassification ? ytrainFinal : ytrain,
+      Xtest,
+      isClassification ? ytestFinal : ytest,
+      featureNames
+    );
 
-    const classificationAlgorithms: AlgorithmDef[] = [
-      {
-        name: "Regressão Logística",
-        type: "logistic",
-        train: (X, y) => trainLogisticRegression(X, y),
-        predict: (model, X) => predictLogistic(X, model.weights, model.bias),
-        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
-      },
-      {
-        name: "Random Forest",
-        type: "rf",
-        train: (X, y) => trainRandomForest(X, y, true, 3), // Reduced to 3 trees
-        predict: (model, X) => predictRandomForest(model, X, true),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
-      },
-      {
-        name: "Gradient Boosting",
-        type: "gb",
-        train: (X, y) => trainGradientBoosting(X, y, true, 3), // Reduced to 3 trees
-        predict: (model, X) => predictGradientBoosting(model, X, true),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
-      },
-      {
-        name: "Árvore de Decisão",
-        type: "dt",
-        train: (X, y) => trainSimpleTree(X, y, true, 4), // Reduced depth
-        predict: (model, X) => X.map(x => predictTree(model, x)),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 300)
-      },
-      {
-        name: "Naive Bayes",
-        type: "nb",
-        train: (X, y) => trainNaiveBayes(X, y),
-        predict: (model, X) => predictNaiveBayes(model, X),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 500)
-      }
-    ];
+    // Save model to database
+    const { data: modelData, error: modelError } = await supabase
+      .from("project_models")
+      .insert({
+        project_id,
+        algorithm_name: strategy.name,
+        problem_type,
+        status: "trained",
+        is_production: true, // Auto-set as production since it's the only model
+        trained_at: new Date().toISOString(),
+        hyperparameters: {
+          strategy_id: strategy.id,
+          algorithm: strategy.algorithm,
+          params: strategy.params,
+          reason: strategy.reason,
+          n_train_rows: Xtrain.length,
+          n_test_rows: Xtest.length,
+          sample_size_used: X.length,
+          total_rows_dataset: totalDatasetRows,
+        },
+      })
+      .select()
+      .single();
 
-    const regressionAlgorithms: AlgorithmDef[] = [
-      {
-        name: "Regressão Linear",
-        type: "linear",
-        train: (X, y) => trainLinearRegression(X, y),
-        predict: (model, X) => predictLinear(X, model.weights, model.bias),
-        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
-      },
-      {
-        name: "Ridge Regression",
-        type: "ridge",
-        train: (X, y) => trainRidgeRegression(X, y, 0.1),
-        predict: (model, X) => predictLinear(X, model.weights, model.bias),
-        getImportance: (model, fn) => calcFeatureImportance(model.weights, fn)
-      },
-      {
-        name: "Random Forest Regressor",
-        type: "rf_reg",
-        train: (X, y) => trainRandomForest(X, y, false, 3), // Reduced to 3 trees
-        predict: (model, X) => predictRandomForest(model, X, false),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 100)
-      },
-      {
-        name: "Gradient Boosting Regressor",
-        type: "gb_reg",
-        train: (X, y) => trainGradientBoosting(X, y, false, 3), // Reduced to 3 trees
-        predict: (model, X) => predictGradientBoosting(model, X, false),
-        getImportance: (_, fn, idx) => calcEnsembleFeatureImportance(fn, idx * 200)
-      },
-      {
-        name: "Baseline (Média)",
-        type: "baseline",
-        train: (_, y) => trainBaselineRegressor(y),
-        predict: (model, X) => X.map(() => model),
-        getImportance: (_, fn) => fn.map(name => ({ feature_name: name, importance_value: 1 / fn.length }))
-      }
-    ];
-
-    const algorithms = isClassification ? classificationAlgorithms : regressionAlgorithms;
-    const results: any[] = [];
-
-    for (let idx = 0; idx < algorithms.length; idx++) {
-      const algo = algorithms[idx];
-      console.log(`Treinando: ${algo.name}`);
-      
-      try {
-        const model = algo.train(Xtrain, isClassification ? ytrainBin : ytrain);
-        const predictions = algo.predict(model, Xtest);
-        const featureImportances = algo.getImportance(model, featureNames, idx);
-
-        const metrics = isClassification
-          ? calcClassificationMetrics(ytestBin, predictions)
-          : calcRegressionMetrics(ytest, predictions);
-
-        console.log(`${algo.name} métricas:`, metrics);
-
-        // Save model to database
-        const { data: modelData, error: modelError } = await supabase
-          .from("project_models")
-          .insert({
-            project_id,
-            algorithm_name: algo.name,
-            problem_type,
-            status: "trained",
-            trained_at: new Date().toISOString(),
-            hyperparameters: { type: algo.type },
-          })
-          .select()
-          .single();
-
-        if (modelError) {
-          console.error(`Erro ao salvar modelo ${algo.name}:`, modelError);
-          continue;
-        }
-
-        // Save metrics
-        const metricsToInsert = Object.entries(metrics).map(([name, value]) => ({
-          project_model_id: modelData.id,
-          metric_name: name,
-          metric_value: value,
-        }));
-
-        await supabase.from("project_model_metrics").insert(metricsToInsert);
-
-        // Save feature importances
-        const importancesToInsert = featureImportances.map(fi => ({
-          project_model_id: modelData.id,
-          feature_name: fi.feature_name,
-          importance_value: fi.importance_value,
-        }));
-
-        await supabase.from("project_feature_importances").insert(importancesToInsert);
-
-        results.push({
-          model_id: modelData.id,
-          algorithm_name: algo.name,
-          metrics,
-          status: "trained"
-        });
-
-      } catch (err) {
-        console.error(`Erro treinando ${algo.name}:`, err);
-        
-        await supabase.from("project_models").insert({
-          project_id,
-          algorithm_name: algo.name,
-          problem_type,
-          status: "failed",
-        });
-      }
+    if (modelError) {
+      console.error(`Erro ao salvar modelo:`, modelError);
+      return new Response(JSON.stringify({ error: "Erro ao salvar modelo" }), {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
     }
+
+    // Save metrics
+    const metricsToInsert = Object.entries(trainResult.metrics).map(([name, value]) => ({
+      project_model_id: modelData.id,
+      metric_name: name,
+      metric_value: value,
+    }));
+
+    await supabase.from("project_model_metrics").insert(metricsToInsert);
+
+    // Save feature importances
+    const importancesToInsert = trainResult.featureImportances.map(fi => ({
+      project_model_id: modelData.id,
+      feature_name: fi.feature_name,
+      importance_value: fi.importance_value,
+    }));
+
+    await supabase.from("project_feature_importances").insert(importancesToInsert);
 
     // Update project status to evaluated
     await supabase
@@ -1033,12 +987,28 @@ serve(async (req) => {
       .update({ status: "evaluated" })
       .eq("id", project_id);
 
-    console.log(`Treinamento concluído para projeto ${project_id}`);
+    console.log(`\n========================================`);
+    console.log(`[AutoML] Treinamento concluído com sucesso!`);
+    console.log(`[AutoML] Modelo: ${strategy.name}`);
+    console.log(`[AutoML] Métrica principal: ${isClassification ? trainResult.metrics.AUC : trainResult.metrics["R²"]}`);
+    console.log(`========================================\n`);
 
     return new Response(JSON.stringify({ 
       success: true, 
       message: "Treinamento concluído",
-      models: results 
+      model: {
+        id: modelData.id,
+        name: strategy.name,
+        algorithm: strategy.algorithm,
+        reason: strategy.reason,
+        metrics: trainResult.metrics,
+        sample_info: {
+          total_dataset_rows: totalDatasetRows,
+          sample_used: X.length,
+          train_rows: Xtrain.length,
+          test_rows: Xtest.length,
+        }
+      }
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
