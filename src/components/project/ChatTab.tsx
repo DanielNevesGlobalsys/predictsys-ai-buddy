@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Card } from "@/components/ui/card";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Bot, User, Send, Loader2, Sparkles, Trash2, Download } from "lucide-react";
+import { User, Send, Loader2, Sparkles, Trash2, Download } from "lucide-react";
 import ExportChatDialog from "@/components/chat/ExportChatDialog";
 
 interface Message {
@@ -188,9 +188,11 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
       <Card className="bg-gradient-card shadow-card p-4 mb-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Bot className="w-5 h-5 text-primary-foreground" />
-            </div>
+            <img 
+              src="/images/assistente-globalsys.png" 
+              alt="Assistente virtual Globalsys"
+              className="w-10 h-10 rounded-full object-cover"
+            />
             <div>
               <h3 className="font-semibold">{t("chat.title")}</h3>
               <p className="text-sm text-muted-foreground">
@@ -285,9 +287,11 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
                   }`}
                 >
                   {msg.sender_type === "assistant" && (
-                    <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center flex-shrink-0">
-                      <Bot className="w-4 h-4 text-primary" />
-                    </div>
+                    <img 
+                      src="/images/assistente-globalsys.png" 
+                      alt="Assistente virtual Globalsys"
+                      className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                    />
                   )}
                   <div
                     className={`max-w-[80%] rounded-2xl px-4 py-3 ${
@@ -309,9 +313,11 @@ const ChatTab = ({ projectId, projectName }: ChatTabProps) => {
               ))}
               {isLoading && (
                 <div className="flex gap-3 justify-start">
-                  <div className="w-8 h-8 bg-primary/10 rounded-lg flex items-center justify-center flex-shrink-0">
-                    <Bot className="w-4 h-4 text-primary" />
-                  </div>
+                  <img 
+                    src="/images/assistente-globalsys.png" 
+                    alt="Assistente virtual Globalsys"
+                    className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                  />
                   <div className="bg-muted rounded-2xl px-4 py-3">
                     <Loader2 className="w-4 h-4 animate-spin" />
                   </div>

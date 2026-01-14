@@ -8,11 +8,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import {
-  Brain,
   ChevronLeft,
   Send,
   Loader2,
-  Bot,
   User,
   Trash2,
   Sparkles,
@@ -159,9 +157,11 @@ const GlobalChat = () => {
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
               <ChevronLeft className="w-5 h-5" />
             </Button>
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Bot className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <img 
+              src="/images/assistente-globalsys.png" 
+              alt="Assistente virtual Globalsys"
+              className="w-10 h-10 rounded-full object-cover"
+            />
             <div>
               <h1 className="text-xl font-bold">{t("globalChat.title")}</h1>
               <p className="text-sm text-muted-foreground">{t("globalChat.subtitle")}</p>
@@ -193,7 +193,11 @@ const GlobalChat = () => {
             ) : messages.length === 0 ? (
               <div className="space-y-6">
                 <div className="text-center py-8">
-                  <Bot className="w-16 h-16 text-muted-foreground mx-auto mb-4" />
+                  <img 
+                    src="/images/assistente-globalsys.png" 
+                    alt="Assistente virtual Globalsys"
+                    className="w-16 h-16 rounded-full object-cover mx-auto mb-4"
+                  />
                   <h3 className="font-semibold text-lg mb-2">{t("globalChat.howCanIHelp")}</h3>
                   <p className="text-muted-foreground">
                     {t("globalChat.askAboutPlatform")}
@@ -226,9 +230,11 @@ const GlobalChat = () => {
                     }`}
                   >
                     {message.sender_type === "assistant" && (
-                      <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0">
-                        <Bot className="w-4 h-4 text-primary-foreground" />
-                      </div>
+                      <img 
+                        src="/images/assistente-globalsys.png" 
+                        alt="Assistente virtual Globalsys"
+                        className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                      />
                     )}
                     <div
                       className={`max-w-[80%] rounded-lg p-3 ${
@@ -250,9 +256,11 @@ const GlobalChat = () => {
                 ))}
                 {isLoading && (
                   <div className="flex gap-3 justify-start">
-                    <div className="w-8 h-8 bg-gradient-primary rounded-full flex items-center justify-center flex-shrink-0">
-                      <Bot className="w-4 h-4 text-primary-foreground" />
-                    </div>
+                    <img 
+                      src="/images/assistente-globalsys.png" 
+                      alt="Assistente virtual Globalsys"
+                      className="w-8 h-8 rounded-full object-cover flex-shrink-0"
+                    />
                     <div className="bg-muted rounded-lg p-3">
                       <Loader2 className="w-4 h-4 animate-spin" />
                     </div>
