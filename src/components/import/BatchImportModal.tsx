@@ -28,11 +28,13 @@ import {
   CheckCircle, 
   AlertCircle,
   Plus,
-  Info
+  Info,
+  Sparkles
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildSafeObjectName } from "@/lib/storageObjectName";
+import { detectCSVDelimiterFromFiles } from "@/lib/csvDelimiterDetector";
 
 interface BatchFile {
   file: File;
@@ -82,11 +84,35 @@ const BatchImportModal = ({
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>(
     initialFiles.map(f => ({ file: f, status: "pending" }))
   );
+  const [isDetectingDelimiter, setIsDetectingDelimiter] = useState(false);
+  const [delimiterAutoDetected, setDelimiterAutoDetected] = useState(false);
 
   // Refs for speed calculation
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
   const speedHistoryRef = useRef<number[]>([]);
+
+  // Auto-detect delimiter when modal opens or files change
+  useEffect(() => {
+    if (open && batchFiles.length > 0) {
+      const files = batchFiles.map(bf => bf.file);
+      setIsDetectingDelimiter(true);
+      setDelimiterAutoDetected(false);
+      
+      detectCSVDelimiterFromFiles(files)
+        .then((result) => {
+          setDelimiter(result.delimiter);
+          setDelimiterAutoDetected(true);
+          console.log(`[BatchImportModal] Auto-detected delimiter: "${result.delimiter}" (confidence: ${result.confidence})`);
+        })
+        .catch((err) => {
+          console.warn('[BatchImportModal] Failed to detect delimiter:', err);
+        })
+        .finally(() => {
+          setIsDetectingDelimiter(false);
+        });
+    }
+  }, [open, batchFiles.length]);
 
   const totalSizeBytes = batchFiles.reduce((sum, bf) => sum + bf.file.size, 0);
   const totalSizeGB = (totalSizeBytes / 1024 / 1024 / 1024).toFixed(2);
@@ -579,8 +605,29 @@ const BatchImportModal = ({
           {/* Delimiter & Encoding */}
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label>{t("dataIngestion.import.delimiter")}</Label>
-              <Select value={delimiter} onValueChange={setDelimiter} disabled={isUploading}>
+              <div className="flex items-center gap-2">
+                <Label>{t("dataIngestion.import.delimiter")}</Label>
+                {isDetectingDelimiter && (
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    {t("dataIngestion.import.detectingDelimiter")}
+                  </span>
+                )}
+                {delimiterAutoDetected && !isDetectingDelimiter && (
+                  <span className="text-xs text-primary flex items-center gap-1">
+                    <Sparkles className="w-3 h-3" />
+                    {t("dataIngestion.import.delimiterAutoDetected")}
+                  </span>
+                )}
+              </div>
+              <Select 
+                value={delimiter} 
+                onValueChange={(val) => {
+                  setDelimiter(val);
+                  setDelimiterAutoDetected(false);
+                }} 
+                disabled={isUploading || isDetectingDelimiter}
+              >
                 <SelectTrigger>
                   <SelectValue />
                 </SelectTrigger>

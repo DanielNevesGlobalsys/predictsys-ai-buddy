@@ -1097,6 +1097,8 @@
       "delimiterSemicolon": "Punto y coma (;)",
       "delimiterTab": "Tab (\\t)",
       "delimiterPipe": "Pipe (|)",
+      "detectingDelimiter": "Detectando...",
+      "delimiterAutoDetected": "Auto-detectado",
       "encoding": "Codificación",
       "uploading": "Subiendo...",
       "startImport": "Iniciar importación",
