@@ -642,6 +642,50 @@ export type Database = {
           },
         ]
       }
+      project_features: {
+        Row: {
+          created_at: string
+          description: string | null
+          enabled: boolean
+          expression: Json
+          id: string
+          label: string
+          name: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          description?: string | null
+          enabled?: boolean
+          expression?: Json
+          id?: string
+          label: string
+          name: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          description?: string | null
+          enabled?: boolean
+          expression?: Json
+          id?: string
+          label?: string
+          name?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_features_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_model_insights: {
         Row: {
           created_at: string
