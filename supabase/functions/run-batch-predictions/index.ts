@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { applyFeatureTransforms, type ProjectFeature, type FeatureExpression } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -106,16 +107,39 @@ serve(async (req) => {
     const categoricalFeatures = columns.filter(c => 
       categoricalTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
     );
-    const featureNames = numericFeatures.map(c => c.column_name);
+    const baseFeatureNames = numericFeatures.map(c => c.column_name);
 
     console.log(`Found ${numericFeatures.length} numeric features and ${categoricalFeatures.length} categorical features`);
 
-    if (featureNames.length === 0) {
+    if (baseFeatureNames.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada no projeto" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+    
+    // Fetch enabled project features for feature engineering
+    const { data: projectFeaturesData } = await supabase
+      .from("project_features")
+      .select("*")
+      .eq("project_id", project_id)
+      .eq("enabled", true);
+    
+    const enabledFeatures: ProjectFeature[] = (projectFeaturesData || []).map(f => ({
+      id: f.id,
+      project_id: f.project_id,
+      name: f.name,
+      label: f.label,
+      description: f.description || undefined,
+      enabled: f.enabled,
+      expression: f.expression as FeatureExpression
+    }));
+    
+    const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+    const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+    
+    console.log(`Engineered features: ${engineeredFeatureNames.length}`);
+    console.log(`Total features: ${allFeatureNames.length}`);
 
     // Get active dataset from project_datasets - use maybeSingle for fallback
     const { data: activeDataset, error: datasetError } = await supabase
@@ -297,8 +321,8 @@ serve(async (req) => {
 
     console.log(`Total lines for predictions: ${allLines.length}`);
 
-    // Find column indices
-    const featureIndices = featureNames.map(name => headers.indexOf(name));
+    // Find column indices for base features
+    const featureIndices = baseFeatureNames.map(name => headers.indexOf(name));
     const categoricalIndices = categoricalFeatures.map(c => ({
       name: c.column_name,
       index: headers.indexOf(c.column_name)
@@ -328,8 +352,8 @@ serve(async (req) => {
       }
     });
 
-    // Calculate means and stds for normalization from sample data
-    const featureData: number[][] = featureNames.map(() => []);
+    // Calculate means and stds for normalization from sample data (base features only)
+    const featureData: number[][] = baseFeatureNames.map(() => []);
     for (let i = 0; i < allLines.length; i++) {
       const values = parseCSVLine(allLines[i], delimiter);
       featureIndices.forEach((idx, j) => {
@@ -340,6 +364,25 @@ serve(async (req) => {
 
     const means = featureData.map(arr => mean(arr));
     const stds = featureData.map(arr => std(arr) || 1);
+    
+    // Calculate means and stds for engineered features
+    const engineeredData: number[][] = engineeredFeatureNames.map(() => []);
+    for (let i = 0; i < Math.min(allLines.length, 1000); i++) {
+      const values = parseCSVLine(allLines[i], delimiter);
+      const rawRecord: Record<string, string | number | null> = {};
+      headers.forEach((h, idx) => {
+        rawRecord[h] = values[idx] || null;
+      });
+      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+      engineeredFeatureNames.forEach((name, j) => {
+        const val = engineeredValues[name];
+        if (typeof val === "number" && !isNaN(val)) {
+          engineeredData[j].push(val);
+        }
+      });
+    }
+    const engineeredMeans = engineeredData.map(arr => mean(arr));
+    const engineeredStds = engineeredData.map(arr => std(arr) || 1);
 
     const isClassification = project.problem_type === "classification";
     const batchId = `batch_${Date.now()}`;
@@ -361,12 +404,29 @@ serve(async (req) => {
       // Get entity ID
       const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${i + 1}`;
       
-      // Extract and normalize feature values
-      const featureValues = featureIndices.map((idx, j) => {
+      // Build raw record for feature engineering
+      const rawRecord: Record<string, string | number | null> = {};
+      headers.forEach((h, idx) => {
+        rawRecord[h] = values[idx] || null;
+      });
+      
+      // Extract and normalize base feature values
+      const baseFeatureValues = featureIndices.map((idx, j) => {
         const val = parseFloat((values[idx] || "").replace(",", "."));
         if (isNaN(val)) return 0;
         return (val - means[j]) / stds[j];
       });
+      
+      // Apply and normalize engineered features
+      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+      const engineeredFeatureValues = engineeredFeatureNames.map((name, j) => {
+        const val = engineeredValues[name];
+        if (typeof val !== "number" || isNaN(val)) return 0;
+        return (val - engineeredMeans[j]) / engineeredStds[j];
+      });
+      
+      // Combine all features
+      const featureValues = [...baseFeatureValues, ...engineeredFeatureValues];
 
       // Make prediction
       const featureSum = featureValues.reduce((a, b) => a + b, 0);

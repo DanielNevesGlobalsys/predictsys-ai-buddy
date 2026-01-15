@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -587,6 +588,25 @@ serve(async (req) => {
       });
     }
 
+    // Fetch enabled project features for feature engineering
+    const { data: projectFeaturesData } = await supabase
+      .from("project_features")
+      .select("*")
+      .eq("project_id", project_id)
+      .eq("enabled", true);
+    
+    const enabledFeatures: ProjectFeature[] = (projectFeaturesData || []).map(f => ({
+      id: f.id,
+      project_id: f.project_id,
+      name: f.name,
+      label: f.label,
+      description: f.description || undefined,
+      enabled: f.enabled,
+      expression: f.expression as any
+    }));
+    
+    console.log(`[AutoML] Features de engenharia habilitadas: ${enabledFeatures.length}`);
+
     // Get active dataset from project_datasets (use maybeSingle to handle no results)
     const { data: activeDataset, error: datasetError } = await supabase
       .from("project_datasets")
@@ -881,14 +901,22 @@ serve(async (req) => {
       (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
     );
     const featureIndices = numericColumns.map(c => headers.indexOf(c.column_name)).filter(i => i !== -1);
-    const featureNames = featureIndices.map(i => headers[i]);
+    const baseFeatureNames = featureIndices.map(i => headers[i]);
+    
+    // Add engineered feature names
+    const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+    const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
 
-    if (featureNames.length === 0) {
+    if (baseFeatureNames.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+    console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
+    console.log(`Total features: ${allFeatureNames.length}`);
 
     // Check if target is categorical
     const targetColumnInfo = columns.find(c => c.column_name === target_column);
@@ -896,10 +924,10 @@ serve(async (req) => {
                                  targetColumnInfo?.inferred_type === "categorico" ||
                                  targetColumnInfo?.inferred_type === "texto";
     
-    console.log(`\nFeatures: ${featureNames.length} colunas numéricas`);
+    console.log(`\nFeatures: ${baseFeatureNames.length} base + ${engineeredFeatureNames.length} engineered = ${allFeatureNames.length} total`);
     console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-    // Parse data
+    // Parse data with engineered features
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
@@ -914,10 +942,27 @@ serve(async (req) => {
         }
       }
       
-      const features = featureIndices.map(idx => {
+      // Build raw record for feature engineering
+      const rawRecord: Record<string, string | number | null> = {};
+      headers.forEach((h, idx) => {
+        rawRecord[h] = values[idx] || null;
+      });
+      
+      // Get base features
+      const baseFeatures = featureIndices.map(idx => {
         const val = values[idx]?.replace(",", ".") || "";
         return parseFloat(val);
       });
+      
+      // Apply engineered features
+      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+      const engineeredFeatures = engineeredFeatureNames.map(name => {
+        const val = engineeredValues[name];
+        return typeof val === "number" ? val : 0;
+      });
+      
+      // Combine all features
+      const allFeatures = [...baseFeatures, ...engineeredFeatures];
       
       let targetNumeric: number;
       if (isTargetCategorical) {
@@ -927,8 +972,8 @@ serve(async (req) => {
         targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
       }
       
-      if (features.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
-        X.push(features);
+      if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
+        X.push(allFeatures);
         y.push(targetNumeric);
       }
       
@@ -942,7 +987,7 @@ serve(async (req) => {
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
 
-    console.log(`\nDados válidos: ${X.length.toLocaleString()} amostras, ${featureNames.length} features`);
+    console.log(`\nDados válidos: ${X.length.toLocaleString()} amostras, ${allFeatureNames.length} features`);
 
     if (X.length < 100) {
       return new Response(JSON.stringify({ 
@@ -1044,7 +1089,7 @@ serve(async (req) => {
     const strategy = selectBestModelStrategy(
       problem_type as "classification" | "regression",
       totalDatasetRows,
-      featureNames.length
+      allFeatureNames.length
     );
 
     console.log(`\n[AutoML] Modelo selecionado: ${strategy.name}`);
@@ -1067,7 +1112,7 @@ serve(async (req) => {
       ytrainCombined,
       Xtest,
       isClassification ? ytestFinal : ytest,
-      featureNames
+      allFeatureNames
     );
 
     // Save model to database

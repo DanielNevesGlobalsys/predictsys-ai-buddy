@@ -12,6 +12,7 @@ import EDACorrelationSection from "./EDACorrelationSection";
 import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
 import { ExportCSVModal, ExportJobsModal } from "@/components/export";
+import { FeatureEngineeringSection } from "@/components/feature-engineering";
 
 interface NumericStat {
   id: string;
@@ -53,11 +54,29 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [aiInsights, setAiInsights] = useState<string[]>([]);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
+  const [projectColumns, setProjectColumns] = useState<{ column_name: string; inferred_type: string }[]>([]);
 
   useEffect(() => {
     checkProjectDataset();
     loadEDAStats();
+    loadProjectColumns();
   }, [projectId]);
+
+  const loadProjectColumns = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("project_columns")
+        .select("column_name, inferred_type")
+        .eq("project_id", projectId)
+        .order("column_index");
+      
+      if (!error && data) {
+        setProjectColumns(data);
+      }
+    } catch (error) {
+      console.error("Error loading project columns:", error);
+    }
+  };
 
   const checkProjectDataset = async () => {
     if (datasetFilename !== undefined) {
@@ -232,6 +251,17 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
 
       {/* KPI Cards */}
       <EDAKPICards data={kpiData} />
+
+      {/* Feature Engineering Section */}
+      {projectColumns.length > 0 && (
+        <FeatureEngineeringSection 
+          projectId={projectId}
+          columns={projectColumns}
+          onFeaturesChanged={() => {
+            // Features changed, user should recalculate EDA
+          }}
+        />
+      )}
 
       {/* Numeric Section */}
       {numericStats.length > 0 && <EDANumericSection stats={numericStats} totalRows={projectInfo.rows} />}
