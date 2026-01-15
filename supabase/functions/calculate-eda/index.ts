@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { applyFeatureTransforms, type ProjectFeature, type RawRecord } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -305,6 +306,7 @@ function isHeaderLine(line: string, headerIndex: Map<string, number>, delimiter:
 
 /**
  * Process a single file with streaming, respecting global limits
+ * Now supports feature engineering - computed features are accumulated alongside raw columns
  */
 async function processFileStreaming(
   supabase: any,
@@ -320,8 +322,10 @@ async function processFileStreaming(
     categoricalIndices: Array<{ idx: number; name: string }>;
     numericAccByName: Map<string, NumericAccumulator>;
     catAccByName: Map<string, CategoricalAccumulator>;
+    featureAccByName: Map<string, NumericAccumulator>;
   },
-  columnsToProcess: Array<{ column_name: string; inferred_type: string }>,
+  columnsToProcess: Array<{ column_name: string; inferred_type: string; is_feature?: boolean }>,
+  enabledFeatures: ProjectFeature[] = [],
 ): Promise<boolean> {
   const signedUrl = await createSignedDatasetUrl(supabase, filePath);
   if (!signedUrl) {
@@ -475,6 +479,36 @@ async function processFileStreaming(
           }
         }
 
+        // Process feature engineering - apply transforms to this row
+        if (enabledFeatures.length > 0) {
+          // Build raw record from values
+          const rawRecord: RawRecord = {};
+          for (const [headerName, headerIdx] of globalState.headerIndex.entries()) {
+            rawRecord[headerName] = values[headerIdx] ?? null;
+          }
+          
+          // Apply feature transforms
+          const featureValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+          
+          // Accumulate feature stats
+          for (const [featureName, featureValue] of Object.entries(featureValues)) {
+            const acc = globalState.featureAccByName.get(featureName);
+            if (!acc) continue;
+            
+            if (featureValue === null || featureValue === undefined) {
+              acc.nullCount += 1;
+              continue;
+            }
+            
+            const num = typeof featureValue === "number" ? featureValue : parseFloat(String(featureValue));
+            if (Number.isFinite(num)) {
+              addNumericValue(acc, num);
+            } else {
+              acc.nullCount += 1;
+            }
+          }
+        }
+
         globalState.rowsProcessed += 1;
 
         if (globalState.rowsProcessed >= MAX_ROWS_TO_PROCESS) break;
@@ -499,14 +533,16 @@ async function processFileStreaming(
 
 /**
  * Compute EDA from multiple files with global limits
+ * Now supports feature engineering - computed features are included in stats
  */
 async function computeEDAFromFiles(
   supabase: any,
   projectId: string,
   filePaths: string[],
-  columnsToProcess: Array<{ column_name: string; inferred_type: string }>,
+  columnsToProcess: Array<{ column_name: string; inferred_type: string; is_feature?: boolean }>,
   delimiter: string,
   encoding: string,
+  enabledFeatures: ProjectFeature[] = [],
 ): Promise<{
   delimiter: string;
   rowsProcessed: number;
@@ -518,8 +554,12 @@ async function computeEDAFromFiles(
     `[calculate-eda] Processing ${filePaths.length} files with limits: rows=${MAX_ROWS_TO_PROCESS}, bytes=${MAX_BYTES_TO_READ}`,
   );
 
-  const numericColumns = columnsToProcess.filter((c) => c.inferred_type === "numérico");
-  const categoricalColumns = columnsToProcess.filter((c) => c.inferred_type !== "numérico");
+  // Split original columns vs feature columns
+  const originalColumns = columnsToProcess.filter((c) => !c.is_feature);
+  const featureColumns = columnsToProcess.filter((c) => c.is_feature);
+  
+  const numericColumns = originalColumns.filter((c) => c.inferred_type === "numérico");
+  const categoricalColumns = originalColumns.filter((c) => c.inferred_type !== "numérico");
 
   const globalState = {
     bytesRead: 0,
@@ -532,7 +572,13 @@ async function computeEDAFromFiles(
     categoricalIndices: [] as Array<{ idx: number; name: string }>,
     numericAccByName: new Map<string, NumericAccumulator>(),
     catAccByName: new Map<string, CategoricalAccumulator>(),
+    featureAccByName: new Map<string, NumericAccumulator>(),
   };
+
+  // Initialize accumulators for feature columns
+  for (const fc of featureColumns) {
+    globalState.featureAccByName.set(fc.column_name, createNumericAccumulator());
+  }
 
   let filesProcessed = 0;
 
@@ -548,7 +594,7 @@ async function computeEDAFromFiles(
 
     console.log(`[calculate-eda] Processing file ${filesProcessed + 1}/${filePaths.length}: ${filePath}`);
 
-    const success = await processFileStreaming(supabase, filePath, globalState, columnsToProcess);
+    const success = await processFileStreaming(supabase, filePath, globalState, originalColumns, enabledFeatures);
     if (success) {
       filesProcessed++;
     }
@@ -591,6 +637,39 @@ async function computeEDAFromFiles(
     numericStats.push({
       project_id: projectId,
       column_name: c.column_name,
+      min_value: Number.isFinite(acc.min) ? Math.round(acc.min * 10000) / 10000 : null,
+      max_value: Number.isFinite(acc.max) ? Math.round(acc.max * 10000) / 10000 : null,
+      mean_value: Number.isFinite(mean) ? Math.round(mean * 10000) / 10000 : null,
+      median_value: median !== null ? Math.round(median * 10000) / 10000 : null,
+      std_value: std !== null && Number.isFinite(std) ? Math.round(std * 10000) / 10000 : null,
+      null_count: acc.nullCount,
+    });
+  }
+
+  // Add feature stats to numeric stats (features always produce numeric values)
+  for (const [featureName, acc] of globalState.featureAccByName.entries()) {
+    if (!acc || acc.count === 0) {
+      numericStats.push({
+        project_id: projectId,
+        column_name: featureName,
+        min_value: null,
+        max_value: null,
+        mean_value: null,
+        median_value: null,
+        std_value: null,
+        null_count: acc?.nullCount ?? globalState.rowsProcessed,
+      });
+      continue;
+    }
+
+    const mean = acc.mean;
+    const variance = acc.count >= 2 ? acc.M2 / (acc.count - 1) : 0;
+    const std = variance > 0 ? Math.sqrt(variance) : null;
+    const median = calculateMedianFromSample(acc.sample);
+
+    numericStats.push({
+      project_id: projectId,
+      column_name: featureName,
       min_value: Number.isFinite(acc.min) ? Math.round(acc.min * 10000) / 10000 : null,
       max_value: Number.isFinite(acc.max) ? Math.round(acc.max * 10000) / 10000 : null,
       mean_value: Number.isFinite(mean) ? Math.round(mean * 10000) / 10000 : null,
@@ -698,10 +777,43 @@ Deno.serve(async (req) => {
       console.error("[calculate-eda] Erro ao buscar colunas:", columnsError);
     }
 
-    const columnsToProcess =
+    // Get project features for feature engineering
+    const { data: projectFeatures, error: featuresError } = await supabase
+      .from("project_features")
+      .select("*")
+      .eq("project_id", project_id)
+      .eq("enabled", true);
+
+    if (featuresError) {
+      console.error("[calculate-eda] Erro ao buscar features:", featuresError);
+    }
+
+    const enabledFeatures: ProjectFeature[] = (projectFeatures || []).map((f: any) => ({
+      id: f.id,
+      project_id: f.project_id,
+      name: f.name,
+      label: f.label,
+      description: f.description,
+      enabled: f.enabled,
+      expression: f.expression,
+    }));
+
+    console.log(`[calculate-eda] Found ${enabledFeatures.length} enabled features`);
+
+    // Build columns to process - include original columns + feature columns
+    let columnsToProcess =
       columns && columns.length > 0
-        ? columns.map((c: any) => ({ column_name: c.column_name, inferred_type: c.inferred_type }))
+        ? columns.map((c: any) => ({ column_name: c.column_name, inferred_type: c.inferred_type, is_feature: false }))
         : [];
+
+    // Add feature columns as numeric (features always produce numeric values)
+    for (const feature of enabledFeatures) {
+      columnsToProcess.push({
+        column_name: feature.name,
+        inferred_type: "numérico",
+        is_feature: true,
+      });
+    }
 
     if (columnsToProcess.length === 0) {
       return new Response(
@@ -717,7 +829,7 @@ Deno.serve(async (req) => {
       `${columnsToProcess.filter((c: any) => c.inferred_type === "numérico").length} numeric, ` +
       `${columnsToProcess.filter((c: any) => c.inferred_type !== "numérico").length} categorical`);
 
-    const eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess, delimiter, encoding);
+    const eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess, delimiter, encoding, enabledFeatures);
 
     if (!eda) {
       console.error(`[calculate-eda] Falha ao processar arquivos do dataset`);
