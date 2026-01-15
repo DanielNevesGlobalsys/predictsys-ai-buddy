@@ -173,11 +173,23 @@ const StepTraining = ({
       });
 
       if (fnError) {
+        // Supabase functions return a generic "Edge function returned ..." error for non-2xx.
+        // Try to extract the backend JSON body so we can show a useful message to the user.
+        const ctxBody = (fnError as any)?.context?.body;
+        if (ctxBody) {
+          try {
+            const parsed = typeof ctxBody === "string" ? JSON.parse(ctxBody) : ctxBody;
+            const msg = parsed?.error || parsed?.message;
+            if (msg) throw new Error(String(msg));
+          } catch {
+            // ignore parsing errors and fall back to the original error
+          }
+        }
         throw fnError;
       }
 
-      if (data?.error) {
-        throw new Error(data.error);
+      if ((data as any)?.error) {
+        throw new Error(String((data as any).error));
       }
 
       toast.success(t("stepTraining.trainingSuccess"));
