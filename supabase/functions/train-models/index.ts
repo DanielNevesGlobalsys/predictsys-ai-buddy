@@ -702,6 +702,31 @@ serve(async (req) => {
 
     console.log(`Arquivos para processar: ${filePaths.length}`);
 
+    // Some ingestion flows store a *folder prefix* in storage_path (e.g. ".../uuid")
+    // while the actual file lives inside that folder (e.g. ".../uuid/dataset.csv").
+    // If we receive a folder, expand it into real object paths before streaming.
+    const expandedFilePaths = (await Promise.all(
+      filePaths.map(async (p) => {
+        const { data: listed, error: listError } = await supabase.storage
+          .from("datasets")
+          .list(p, { limit: 1000 });
+
+        if (!listError && listed && listed.length > 0) {
+          const childPaths = listed
+            .map((obj) => (obj as any)?.name)
+            .filter((name): name is string => typeof name === "string" && name.length > 0)
+            .map((name) => `${p}/${name}`);
+
+          return childPaths.length > 0 ? childPaths : [p];
+        }
+
+        return [p];
+      })
+    )).flat();
+
+    filePaths = expandedFilePaths;
+    console.log(`Arquivos resolvidos para processar: ${filePaths.length}`);
+
     // Stream data from files with stratified sampling
     let sampledLines: string[] = [];
     let headers: string[] = [];
