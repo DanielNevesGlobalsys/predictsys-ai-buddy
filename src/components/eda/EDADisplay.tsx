@@ -79,19 +79,44 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   };
 
   const checkProjectDataset = async () => {
-    if (datasetFilename !== undefined) {
-      setProjectHasDataset(!!datasetFilename);
-      return;
-    }
     try {
+      // First check project_datasets for any active dataset (including cloud sources)
+      const { data: activeDataset } = await supabase
+        .from("project_datasets")
+        .select("id, name, total_rows, columns_count, sample_rows, source_type")
+        .eq("project_id", projectId)
+        .eq("is_active", true)
+        .single();
+
+      if (activeDataset) {
+        // Found an active dataset (file upload, cloud, etc.)
+        setProjectHasDataset(true);
+        setProjectInfo({
+          rows: activeDataset.total_rows || 0,
+          columns: activeDataset.columns_count || 0,
+          target: null, // Will be updated by loadEDAStats
+          sampledRows: activeDataset.sample_rows && activeDataset.sample_rows < (activeDataset.total_rows || 0) 
+            ? activeDataset.sample_rows 
+            : undefined
+        });
+        return;
+      }
+
+      // Fallback to project.dataset_filename check
+      if (datasetFilename !== undefined) {
+        setProjectHasDataset(!!datasetFilename);
+        return;
+      }
+
       const { data: project } = await supabase
         .from("projects")
-        .select("dataset_filename, dataset_rows, dataset_columns, target_column")
+        .select("dataset_filename, dataset_rows, dataset_columns, target_column, total_rows")
         .eq("id", projectId)
         .single();
+      
       setProjectHasDataset(!!project?.dataset_filename);
       setProjectInfo({
-        rows: project?.dataset_rows || 0,
+        rows: project?.total_rows || project?.dataset_rows || 0,
         columns: project?.dataset_columns || 0,
         target: project?.target_column || null,
       });
