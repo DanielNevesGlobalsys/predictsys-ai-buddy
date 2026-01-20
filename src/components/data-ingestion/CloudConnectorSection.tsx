@@ -276,6 +276,17 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
               />
             </div>
             <div className="space-y-2">
+              <Label>{t("dataIngestion.cloud.powerbi.tableName")}</Label>
+              <Input
+                value={formData.table_name || ""}
+                onChange={(e) => handleInputChange("table_name", e.target.value)}
+                placeholder={t("dataIngestion.cloud.powerbi.tableNamePlaceholder")}
+              />
+              <p className="text-xs text-muted-foreground">
+                {t("dataIngestion.cloud.powerbi.tableNameHint")}
+              </p>
+            </div>
+            <div className="space-y-2">
               <Label>{t("dataIngestion.cloud.powerbi.clientId")}</Label>
               <Input
                 value={formData.client_id || ""}
