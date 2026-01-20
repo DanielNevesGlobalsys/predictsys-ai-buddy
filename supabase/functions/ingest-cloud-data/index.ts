@@ -51,34 +51,7 @@ async function getPowerBIAccessToken(
 }
 
 /**
- * Get dataset tables from Power BI
- */
-async function getPowerBIDatasetTables(
-  accessToken: string,
-  workspaceId: string,
-  datasetId: string
-): Promise<any[]> {
-  const url = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/tables`;
-  
-  const response = await fetch(url, {
-    headers: {
-      'Authorization': `Bearer ${accessToken}`,
-      'Content-Type': 'application/json'
-    }
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    console.error('[ingest-cloud-data] Power BI tables error:', errorText);
-    throw new Error(`Failed to get Power BI tables: ${response.status}`);
-  }
-
-  const data = await response.json();
-  return data.value || [];
-}
-
-/**
- * Execute DAX query on Power BI dataset
+ * Execute DAX query on Power BI semantic model
  */
 async function executePowerBIQuery(
   accessToken: string,
@@ -95,6 +68,8 @@ async function executePowerBIQuery(
     }
   };
 
+  console.log(`[ingest-cloud-data] Executing DAX query: ${daxQuery.substring(0, 100)}...`);
+
   const response = await fetch(url, {
     method: 'POST',
     headers: {
@@ -107,41 +82,103 @@ async function executePowerBIQuery(
   if (!response.ok) {
     const errorText = await response.text();
     console.error('[ingest-cloud-data] Power BI query error:', errorText);
-    throw new Error(`Failed to execute DAX query: ${response.status}`);
+    throw new Error(`Failed to execute DAX query: ${response.status} - ${errorText}`);
   }
 
   return await response.json();
 }
 
 /**
- * Infer column type from sample values
+ * Get list of tables from semantic model using DAX
  */
-function inferColumnType(values: any[]): string {
+async function getSemanticModelTables(
+  accessToken: string,
+  workspaceId: string,
+  datasetId: string
+): Promise<string[]> {
+  // Use INFO.TABLES() DMV to get table names
+  const daxQuery = `EVALUATE INFO.TABLES()`;
+  
+  try {
+    const result = await executePowerBIQuery(accessToken, workspaceId, datasetId, daxQuery);
+    const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+    
+    // Filter for user tables (not system tables)
+    const tableNames = rows
+      .filter((row: any) => {
+        const name = row['[Name]'] || row['Name'];
+        // Skip system tables and date tables
+        return name && !name.startsWith('DateTable') && !name.startsWith('LocalDateTable');
+      })
+      .map((row: any) => row['[Name]'] || row['Name']);
+    
+    console.log(`[ingest-cloud-data] Found ${tableNames.length} user tables in semantic model`);
+    return tableNames;
+  } catch (error) {
+    console.error('[ingest-cloud-data] Error getting tables via DMV:', error);
+    // Fallback: try to get a simple evaluation
+    throw error;
+  }
+}
+
+/**
+ * Get column info from a table using DAX
+ */
+async function getTableColumns(
+  accessToken: string,
+  workspaceId: string,
+  datasetId: string,
+  tableName: string
+): Promise<{ name: string; dataType: string }[]> {
+  // Use INFO.COLUMNS() DMV filtered by table name
+  const daxQuery = `EVALUATE FILTER(INFO.COLUMNS(), [TableName] = "${tableName}")`;
+  
+  try {
+    const result = await executePowerBIQuery(accessToken, workspaceId, datasetId, daxQuery);
+    const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+    
+    return rows.map((row: any) => ({
+      name: row['[ExplicitName]'] || row['[Name]'] || row['ExplicitName'] || row['Name'],
+      dataType: row['[DataType]'] || row['DataType'] || 'String'
+    }));
+  } catch (error) {
+    console.error(`[ingest-cloud-data] Error getting columns for table ${tableName}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Infer column type from Power BI data type or sample values
+ */
+function inferColumnType(pbiDataType: string, values: any[]): string {
+  // Check Power BI data type first
+  const typeUpper = (pbiDataType || '').toUpperCase();
+  if (typeUpper.includes('INT') || typeUpper.includes('DECIMAL') || typeUpper.includes('DOUBLE') || typeUpper.includes('CURRENCY')) {
+    return 'numérico';
+  }
+  if (typeUpper.includes('DATE') || typeUpper.includes('TIME')) {
+    return 'data';
+  }
+  if (typeUpper.includes('BOOL')) {
+    return 'categórico';
+  }
+
+  // Fallback to value inspection
   let numericCount = 0;
-  let dateCount = 0;
   let validCount = 0;
 
   for (const val of values.slice(0, 100)) {
     if (val === null || val === undefined || val === '') continue;
     validCount++;
 
-    // Check if numeric
     const numVal = typeof val === 'number' ? val : parseFloat(String(val).replace(',', '.'));
     if (!isNaN(numVal) && isFinite(numVal)) {
       numericCount++;
-      continue;
-    }
-
-    // Check if date
-    const strVal = String(val);
-    if (/^\d{4}-\d{2}-\d{2}/.test(strVal) || /^\d{2}\/\d{2}\/\d{4}/.test(strVal)) {
-      dateCount++;
     }
   }
 
   if (validCount === 0) return 'texto';
   if (numericCount / validCount > 0.8) return 'numérico';
-  if (dateCount / validCount > 0.8) return 'data';
   return 'texto';
 }
 
@@ -163,7 +200,8 @@ async function convertToCSVAndUpload(
   // Data rows
   for (const row of rows) {
     const values = columns.map(col => {
-      const val = row[col];
+      // Power BI returns columns as [ColumnName] format
+      const val = row[`[${col}]`] ?? row[col] ?? '';
       if (val === null || val === undefined) return '';
       const strVal = String(val);
       // Escape quotes and wrap in quotes if contains special chars
@@ -259,56 +297,89 @@ serve(async (req) => {
       const accessToken = await getPowerBIAccessToken(client_id, client_secret, tenant_id);
       console.log('[ingest-cloud-data] Got Power BI access token');
 
-      // Get tables in the dataset
-      const tables = await getPowerBIDatasetTables(accessToken, workspace_id, dataset_id);
-      console.log(`[ingest-cloud-data] Found ${tables.length} tables in dataset`);
-
-      if (tables.length === 0) {
-        throw new Error('No tables found in Power BI dataset');
+      // Get tables from semantic model using DAX DMV
+      let tableNames: string[];
+      try {
+        tableNames = await getSemanticModelTables(accessToken, workspace_id, dataset_id);
+      } catch (error) {
+        console.error('[ingest-cloud-data] Could not get table list, will try with provided table name');
+        // If user provided a table_name in config, use that
+        if (connectionConfig.table_name) {
+          tableNames = [connectionConfig.table_name];
+        } else {
+          throw new Error('Could not retrieve table list from semantic model. Please specify a table_name in the connection config.');
+        }
       }
 
-      // Use the first/main table (or you could let user select)
-      const mainTable = tables[0];
-      const tableName = mainTable.name;
-      console.log(`[ingest-cloud-data] Processing main table: ${tableName}`);
+      if (tableNames.length === 0) {
+        throw new Error('No tables found in Power BI semantic model');
+      }
 
-      // Get row count
+      // Use the first table (or user-specified table)
+      const tableName = connectionConfig.table_name || tableNames[0];
+      console.log(`[ingest-cloud-data] Processing table: ${tableName}`);
+
+      // Get column info
+      const tableColumns = await getTableColumns(accessToken, workspace_id, dataset_id, tableName);
+      console.log(`[ingest-cloud-data] Found ${tableColumns.length} columns in table`);
+
+      // Get row count using DAX
       const countQuery = `EVALUATE ROW("count", COUNTROWS('${tableName}'))`;
-      const countResult = await executePowerBIQuery(accessToken, workspace_id, dataset_id, countQuery);
-      
-      if (countResult.results?.[0]?.tables?.[0]?.rows?.[0]) {
-        totalRows = countResult.results[0].tables[0].rows[0]['[count]'] || 0;
+      try {
+        const countResult = await executePowerBIQuery(accessToken, workspace_id, dataset_id, countQuery);
+        if (countResult.results?.[0]?.tables?.[0]?.rows?.[0]) {
+          const countRow = countResult.results[0].tables[0].rows[0];
+          totalRows = countRow['[count]'] ?? countRow['count'] ?? 0;
+        }
+      } catch (error) {
+        console.warn('[ingest-cloud-data] Could not get row count:', error);
+        totalRows = 0;
       }
       console.log(`[ingest-cloud-data] Total rows in table: ${totalRows}`);
 
-      // Query sample data (limit for performance)
-      const sampleLimit = Math.min(totalRows, MAX_ROWS_TO_SAMPLE);
+      // Query sample data using TOPN
+      const sampleLimit = Math.min(totalRows || MAX_ROWS_TO_SAMPLE, MAX_ROWS_TO_SAMPLE);
       const sampleQuery = `EVALUATE TOPN(${sampleLimit}, '${tableName}')`;
       
-      console.log(`[ingest-cloud-data] Fetching ${sampleLimit} sample rows...`);
-      const sampleResult = await executePowerBIQuery(accessToken, workspace_id, dataset_id, sampleQuery);
-
-      const rows = sampleResult.results?.[0]?.tables?.[0]?.rows || [];
+      console.log(`[ingest-cloud-data] Fetching up to ${sampleLimit} sample rows...`);
+      
+      let rows: any[] = [];
+      try {
+        const sampleResult = await executePowerBIQuery(accessToken, workspace_id, dataset_id, sampleQuery);
+        rows = sampleResult.results?.[0]?.tables?.[0]?.rows || [];
+      } catch (error) {
+        console.error('[ingest-cloud-data] Error fetching data:', error);
+        throw new Error(`Failed to fetch data from table '${tableName}': ${error}`);
+      }
+      
       sampleRows = rows.length;
+      if (totalRows === 0) totalRows = sampleRows;
       console.log(`[ingest-cloud-data] Retrieved ${sampleRows} rows`);
 
       if (rows.length > 0) {
-        // Extract column names from first row
+        // Extract column names from first row (Power BI returns [ColumnName] format)
         const firstRow = rows[0];
         const rawColumnNames = Object.keys(firstRow);
         
-        // Power BI returns columns like "[ColumnName]" - clean them up
+        // Clean column names (remove brackets)
         const columnNames = rawColumnNames.map(col => 
           col.replace(/^\[/, '').replace(/\]$/, '')
         );
         
         columnsCount = columnNames.length;
 
+        // Build column type mapping from tableColumns
+        const columnTypeMap = new Map<string, string>();
+        for (const col of tableColumns) {
+          columnTypeMap.set(col.name, col.dataType);
+        }
+
         // Infer column types
         columns = columnNames.map((colName, idx) => {
           const rawKey = rawColumnNames[idx];
+          const pbiType = columnTypeMap.get(colName) || '';
           const values = rows.slice(0, 100).map((r: any) => r[rawKey]);
-          const inferredType = inferColumnType(values);
+          const inferredType = inferColumnType(pbiType, values);
           
           return {
             column_name: colName,
@@ -319,16 +390,6 @@ serve(async (req) => {
 
         console.log(`[ingest-cloud-data] Detected ${columnsCount} columns`);
 
-        // Clean up row data (remove brackets from keys)
-        const cleanedRows = rows.map((row: any) => {
-          const cleaned: Record<string, any> = {};
-          for (const [key, value] of Object.entries(row)) {
-            const cleanKey = key.replace(/^\[/, '').replace(/\]$/, '');
-            cleaned[cleanKey] = value;
-          }
-          return cleaned;
-        });
-
         // Generate storage path
         const timestamp = Date.now();
         storagePath = `${project_id}/powerbi_${dataset_id}_${timestamp}.csv`;
@@ -336,7 +397,7 @@ serve(async (req) => {
         // Convert to CSV and upload
         const { fileSizeBytes } = await convertToCSVAndUpload(
           supabase, 
-          cleanedRows, 
+          rows, 
           columnNames,
           storagePath
         );
@@ -349,13 +410,14 @@ serve(async (req) => {
           .update({ is_active: false })
           .eq('project_id', project_id);
 
-        // Create project_datasets record
+        // Get user_id from project
         const { data: userData } = await supabase
           .from('projects')
           .select('user_id')
           .eq('id', project_id)
           .single();
 
+        // Create project_datasets record
         const { error: datasetError } = await supabase
           .from('project_datasets')
           .insert({
