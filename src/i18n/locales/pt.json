@@ -1281,6 +1281,9 @@
       "powerbi": {
         "workspaceId": "ID do Workspace",
         "datasetId": "ID do Dataset",
+        "tableName": "Nome da Tabela",
+        "tableNamePlaceholder": "Ex: Vendas, Clientes, Faturamento",
+        "tableNameHint": "Informe o nome exato da tabela do modelo semântico que deseja importar.",
         "clientId": "Client ID (Azure AD)",
         "clientIdPlaceholder": "Application (client) ID",
         "clientSecret": "Client Secret",

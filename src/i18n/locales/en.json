@@ -1092,7 +1092,7 @@
       "useConnection": "Use",
       "ingestionStarted": "Data ingestion started",
       "connectorNotYetImplemented": "This connector is still in development",
-      "powerbi": { "workspaceId": "Workspace ID", "datasetId": "Dataset ID", "clientId": "Client ID (Azure AD)", "clientIdPlaceholder": "Application (client) ID", "clientSecret": "Client Secret", "tenantId": "Tenant ID" },
+      "powerbi": { "workspaceId": "Workspace ID", "datasetId": "Dataset ID", "tableName": "Table Name", "tableNamePlaceholder": "E.g., Sales, Customers, Revenue", "tableNameHint": "Enter the exact name of the semantic model table you want to import.", "clientId": "Client ID (Azure AD)", "clientIdPlaceholder": "Application (client) ID", "clientSecret": "Client Secret", "tenantId": "Tenant ID" },
       "azure": { "serverName": "Server name", "database": "Database", "username": "Username", "password": "Password", "accountName": "Storage account name", "containerName": "Container name", "blobPath": "File path", "sasToken": "SAS Token" },
       "aws": { "bucketName": "Bucket name", "objectKey": "Object path", "region": "Region", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Port", "database": "Database", "username": "Username", "password": "Password", "s3OutputLocation": "S3 output location" },
       "errors": { "nameRequired": "Connection name is required" }

@@ -289,35 +289,21 @@ serve(async (req) => {
 
     if (connectorType === 'powerbi') {
       // Power BI Semantic Model ingestion
-      const { workspace_id, dataset_id, client_id, client_secret, tenant_id } = connectionConfig;
+      const { workspace_id, dataset_id, client_id, client_secret, tenant_id, table_name } = connectionConfig;
 
       console.log(`[ingest-cloud-data] Connecting to Power BI workspace=${workspace_id}, dataset=${dataset_id}`);
+
+      // Validate table_name is provided (required for semantic models)
+      if (!table_name || typeof table_name !== 'string' || table_name.trim() === '') {
+        throw new Error('Table name is required for Power BI Semantic Model ingestion. Please specify the table name in the connection settings.');
+      }
+
+      const tableName = table_name.trim();
+      console.log(`[ingest-cloud-data] Will process table: ${tableName}`);
 
       // Get access token
       const accessToken = await getPowerBIAccessToken(client_id, client_secret, tenant_id);
       console.log('[ingest-cloud-data] Got Power BI access token');
-
-      // Get tables from semantic model using DAX DMV
-      let tableNames: string[];
-      try {
-        tableNames = await getSemanticModelTables(accessToken, workspace_id, dataset_id);
-      } catch (error) {
-        console.error('[ingest-cloud-data] Could not get table list, will try with provided table name');
-        // If user provided a table_name in config, use that
-        if (connectionConfig.table_name) {
-          tableNames = [connectionConfig.table_name];
-        } else {
-          throw new Error('Could not retrieve table list from semantic model. Please specify a table_name in the connection config.');
-        }
-      }
-
-      if (tableNames.length === 0) {
-        throw new Error('No tables found in Power BI semantic model');
-      }
-
-      // Use the first table (or user-specified table)
-      const tableName = connectionConfig.table_name || tableNames[0];
-      console.log(`[ingest-cloud-data] Processing table: ${tableName}`);
 
       // Get column info
       const tableColumns = await getTableColumns(accessToken, workspace_id, dataset_id, tableName);

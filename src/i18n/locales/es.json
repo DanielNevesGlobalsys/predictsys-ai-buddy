@@ -1092,7 +1092,7 @@
       "useConnection": "Usar",
       "ingestionStarted": "Ingesta de datos iniciada",
       "connectorNotYetImplemented": "Este conector aún está en desarrollo",
-      "powerbi": { "workspaceId": "ID del Workspace", "datasetId": "ID del Dataset", "clientId": "Client ID (Azure AD)", "clientIdPlaceholder": "Application (client) ID", "clientSecret": "Client Secret", "tenantId": "Tenant ID" },
+      "powerbi": { "workspaceId": "ID del Workspace", "datasetId": "ID del Dataset", "tableName": "Nombre de la Tabla", "tableNamePlaceholder": "Ej: Ventas, Clientes, Facturación", "tableNameHint": "Ingrese el nombre exacto de la tabla del modelo semántico que desea importar.", "clientId": "Client ID (Azure AD)", "clientIdPlaceholder": "Application (client) ID", "clientSecret": "Client Secret", "tenantId": "Tenant ID" },
       "azure": { "serverName": "Nombre del servidor", "database": "Base de datos", "username": "Usuario", "password": "Contraseña", "accountName": "Nombre de cuenta de storage", "containerName": "Nombre del container", "blobPath": "Ruta del archivo", "sasToken": "Token SAS" },
       "aws": { "bucketName": "Nombre del bucket", "objectKey": "Ruta del objeto", "region": "Región", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Puerto", "database": "Base de datos", "username": "Usuario", "password": "Contraseña", "s3OutputLocation": "Ubicación de salida S3" },
       "errors": { "nameRequired": "El nombre de la conexión es obligatorio" }
