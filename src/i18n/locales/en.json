@@ -1093,6 +1093,23 @@
       "ingestionStarted": "Data ingestion started",
       "connectorNotYetImplemented": "This connector is still in development",
       "powerbi": { "workspaceId": "Workspace ID", "datasetId": "Dataset ID", "tableName": "Table Name", "tableNamePlaceholder": "E.g., Sales, Customers, Revenue", "tableNameHint": "Enter the exact name of the semantic model table you want to import.", "clientId": "Client ID (Azure AD)", "clientIdPlaceholder": "Application (client) ID", "clientSecret": "Client Secret", "tenantId": "Tenant ID" },
+      "databricks": { 
+        "host": "Workspace Host", 
+        "hostPlaceholder": "adb-1234567890123456.7.azuredatabricks.net", 
+        "hostHint": "Your Databricks workspace URL without https://",
+        "httpPath": "HTTP Path", 
+        "httpPathPlaceholder": "/sql/1.0/warehouses/xxxxxxxxxxxx", 
+        "httpPathHint": "Found in SQL Warehouse connection details",
+        "accessToken": "Personal Access Token", 
+        "accessTokenHint": "Generate a PAT in Databricks User Settings > Developer",
+        "catalog": "Catalog", 
+        "catalogPlaceholder": "E.g., hive_metastore, main",
+        "schema": "Schema", 
+        "schemaPlaceholder": "E.g., default, my_schema",
+        "tableName": "Table Name", 
+        "tableNamePlaceholder": "E.g., sales, customers, catalog.schema.table", 
+        "tableNameHint": "Full table name. Can include catalog.schema.table format."
+      },
       "azure": { "serverName": "Server name", "database": "Database", "username": "Username", "password": "Password", "accountName": "Storage account name", "containerName": "Container name", "blobPath": "File path", "sasToken": "SAS Token" },
       "aws": { "bucketName": "Bucket name", "objectKey": "Object path", "region": "Region", "accessKeyId": "Access Key ID", "secretAccessKey": "Secret Access Key", "endpoint": "Endpoint", "port": "Port", "database": "Database", "username": "Username", "password": "Password", "s3OutputLocation": "S3 output location" },
       "errors": { "nameRequired": "Connection name is required" }
