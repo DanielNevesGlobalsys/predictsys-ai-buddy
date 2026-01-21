@@ -1289,6 +1289,23 @@
         "clientSecret": "Client Secret",
         "tenantId": "Tenant ID"
       },
+      "databricks": {
+        "host": "Host do Workspace",
+        "hostPlaceholder": "adb-1234567890123456.7.azuredatabricks.net",
+        "hostHint": "URL do seu workspace Databricks sem https://",
+        "httpPath": "HTTP Path",
+        "httpPathPlaceholder": "/sql/1.0/warehouses/xxxxxxxxxxxx",
+        "httpPathHint": "Encontrado nos detalhes de conexão do SQL Warehouse",
+        "accessToken": "Personal Access Token",
+        "accessTokenHint": "Gere um PAT em Configurações de Usuário > Developer",
+        "catalog": "Catálogo",
+        "catalogPlaceholder": "Ex: hive_metastore, main",
+        "schema": "Schema",
+        "schemaPlaceholder": "Ex: default, meu_schema",
+        "tableName": "Nome da Tabela",
+        "tableNamePlaceholder": "Ex: vendas, clientes, catalogo.schema.tabela",
+        "tableNameHint": "Nome completo da tabela. Pode incluir formato catalogo.schema.tabela."
+      },
       "azure": {
         "serverName": "Nome do servidor",
         "database": "Banco de dados",
