@@ -12,6 +12,7 @@ import { Brain, LogOut, MessageSquare, Moon, Sun, Globe } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/contexts/ThemeContext";
+import OrganizationSelector from "./OrganizationSelector";
 
 interface HeaderProps {
   showBackButton?: boolean;
@@ -20,6 +21,7 @@ interface HeaderProps {
   title?: string;
   subtitle?: string;
   rightContent?: React.ReactNode;
+  showOrgSelector?: boolean;
 }
 
 const Header = ({ 
@@ -28,7 +30,8 @@ const Header = ({
   backIcon, 
   title, 
   subtitle,
-  rightContent 
+  rightContent,
+  showOrgSelector = true
 }: HeaderProps) => {
   const navigate = useNavigate();
   const { toast } = useToast();
@@ -88,6 +91,13 @@ const Header = ({
               </h1>
             )}
           </div>
+          
+          {/* Organization Selector */}
+          {showOrgSelector && (
+            <div className="ml-4 hidden sm:block">
+              <OrganizationSelector />
+            </div>
+          )}
         </div>
         <div className="flex items-center gap-2">
           {rightContent}

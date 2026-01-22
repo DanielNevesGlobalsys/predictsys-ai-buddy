@@ -175,15 +175,15 @@ const AdminOrgUsers = () => {
         return;
       }
 
-      // Check if already a member
-      const { data: existingMember } = await supabase
+      // Check if already a member - use supabase as any to avoid type depth issues
+      const existingMemberRes = await (supabase as any)
         .from('organization_users')
         .select('id')
         .eq('organization_id', targetOrgId)
         .eq('user_id', existingUser.id)
         .single();
 
-      if (existingMember) {
+      if (existingMemberRes.data) {
         toast({
           title: t('common.error'),
           description: t('admin.userAlreadyMember'),
@@ -192,11 +192,11 @@ const AdminOrgUsers = () => {
         return;
       }
 
-      const { error } = await supabase.from('organization_users' as any).insert({
+      const { error } = await (supabase as any).from('organization_users').insert({
         organization_id: targetOrgId,
         user_id: existingUser.id,
         role: inviteRole,
-      } as any);
+      });
 
       if (error) throw error;
 

@@ -52,15 +52,26 @@ const OrgSettings = () => {
     try {
       setIsLoading(true);
 
-      // Use separate queries to avoid type depth issues
-      const usersQuery = supabase.from('organization_users' as any).select('id', { count: 'exact', head: true }).eq('organization_id', currentOrganization.id);
-      const projectsQuery = supabase.from('projects').select('id, total_rows', { count: 'exact' }).eq('organization_id', currentOrganization.id);
-      const connectionsQuery = supabase.from('data_sources').select('id', { count: 'exact', head: true }).eq('organization_id', currentOrganization.id);
+      // Use supabase as any to avoid type depth issues with new tables
+      const usersPromise = (supabase as any)
+        .from('organization_users')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', currentOrganization.id);
+      
+      const projectsPromise = supabase
+        .from('projects')
+        .select('id, total_rows', { count: 'exact' })
+        .eq('organization_id', currentOrganization.id);
+      
+      const connectionsPromise = supabase
+        .from('data_sources')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', currentOrganization.id);
 
       const [usersRes, projectsRes, connectionsRes] = await Promise.all([
-        usersQuery,
-        projectsQuery,
-        connectionsQuery,
+        usersPromise,
+        projectsPromise,
+        connectionsPromise,
       ]);
 
       const totalRows = (projectsRes.data || []).reduce(
