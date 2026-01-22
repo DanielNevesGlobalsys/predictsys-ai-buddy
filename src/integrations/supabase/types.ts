@@ -24,6 +24,7 @@ export type Database = {
           is_continuous: boolean
           last_sync_at: string | null
           name: string
+          organization_id: string | null
           source_type: string
           sync_message: string | null
           sync_status: string | null
@@ -39,6 +40,7 @@ export type Database = {
           is_continuous?: boolean
           last_sync_at?: string | null
           name: string
+          organization_id?: string | null
           source_type: string
           sync_message?: string | null
           sync_status?: string | null
@@ -54,13 +56,22 @@ export type Database = {
           is_continuous?: boolean
           last_sync_at?: string | null
           name?: string
+          organization_id?: string | null
           source_type?: string
           sync_message?: string | null
           sync_status?: string | null
           updated_at?: string
           user_id?: string
         }
-        Relationships: []
+        Relationships: [
+          {
+            foreignKeyName: "data_sources_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       export_jobs: {
         Row: {
@@ -228,6 +239,80 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      organization_users: {
+        Row: {
+          created_at: string
+          id: string
+          organization_id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          organization_id: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          organization_id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_users_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organizations: {
+        Row: {
+          created_at: string
+          document: string | null
+          id: string
+          logo_url: string | null
+          max_projects: number | null
+          max_rows: number | null
+          max_storage_mb: number | null
+          name: string
+          plan: Database["public"]["Enums"]["org_plan"]
+          slug: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          document?: string | null
+          id?: string
+          logo_url?: string | null
+          max_projects?: number | null
+          max_rows?: number | null
+          max_storage_mb?: number | null
+          name: string
+          plan?: Database["public"]["Enums"]["org_plan"]
+          slug: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          document?: string | null
+          id?: string
+          logo_url?: string | null
+          max_projects?: number | null
+          max_rows?: number | null
+          max_storage_mb?: number | null
+          name?: string
+          plan?: Database["public"]["Enums"]["org_plan"]
+          slug?: string
+          updated_at?: string
+        }
+        Relationships: []
       }
       predictions: {
         Row: {
@@ -952,6 +1037,7 @@ export type Database = {
           detected_problem_type: string | null
           id: string
           name: string
+          organization_id: string | null
           problem_type: string
           sample_rows: number | null
           status: string
@@ -971,6 +1057,7 @@ export type Database = {
           detected_problem_type?: string | null
           id?: string
           name: string
+          organization_id?: string | null
           problem_type: string
           sample_rows?: number | null
           status?: string
@@ -990,6 +1077,7 @@ export type Database = {
           detected_problem_type?: string | null
           id?: string
           name?: string
+          organization_id?: string | null
           problem_type?: string
           sample_rows?: number | null
           status?: string
@@ -1006,6 +1094,13 @@ export type Database = {
             referencedRelation: "data_sources"
             referencedColumns: ["id"]
           },
+          {
+            foreignKeyName: "projects_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
         ]
       }
     }
@@ -1013,9 +1108,23 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      get_user_organizations: { Args: { _user_id: string }; Returns: string[] }
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
+      is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      user_belongs_to_org: {
+        Args: { _org_id: string; _user_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
+      app_role: "super_admin" | "org_admin" | "analyst" | "viewer"
+      org_plan: "trial" | "standard" | "enterprise"
       schedule_frequency:
         | "daily"
         | "weekly"
@@ -1152,6 +1261,8 @@ export type CompositeTypes<
 export const Constants = {
   public: {
     Enums: {
+      app_role: ["super_admin", "org_admin", "analyst", "viewer"],
+      org_plan: ["trial", "standard", "enterprise"],
       schedule_frequency: [
         "daily",
         "weekly",
