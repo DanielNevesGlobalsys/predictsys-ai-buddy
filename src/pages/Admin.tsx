@@ -104,15 +104,18 @@ const Admin = () => {
       // Load stats for each org
       const stats: Record<string, OrgStats> = {};
       for (const org of typedOrgs) {
-        const [usersRes, projectsRes] = await Promise.all([
-          supabase.rpc('get_user_organizations', { _user_id: org.id }).then(() => 
-            supabase.from('organization_users' as any).select('id', { count: 'exact', head: true }).eq('organization_id', org.id)
-          ).catch(() => ({ count: 0 })),
-          supabase
-            .from('projects')
-            .select('id', { count: 'exact', head: true })
-            .eq('organization_id', org.id),
-        ]);
+        // Use separate promise-based queries to avoid type depth issues
+        const usersPromise = (supabase as any)
+          .from('organization_users')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', org.id);
+        
+        const projectsPromise = supabase
+          .from('projects')
+          .select('id', { count: 'exact', head: true })
+          .eq('organization_id', org.id);
+
+        const [usersRes, projectsRes] = await Promise.all([usersPromise, projectsPromise]);
 
         stats[org.id] = {
           org_id: org.id,
