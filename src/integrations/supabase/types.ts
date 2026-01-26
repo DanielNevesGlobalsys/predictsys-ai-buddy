@@ -442,6 +442,115 @@ export type Database = {
         }
         Relationships: []
       }
+      project_actions: {
+        Row: {
+          action_name: string
+          action_type: string
+          created_at: string
+          end_date: string | null
+          expected_conversion_percent: number | null
+          id: string
+          notes: string | null
+          observed_conversion_percent: number | null
+          project_id: string
+          segment_used: string | null
+          start_date: string
+          status: string
+          success_metric: string | null
+          target_customers: number | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          action_name: string
+          action_type: string
+          created_at?: string
+          end_date?: string | null
+          expected_conversion_percent?: number | null
+          id?: string
+          notes?: string | null
+          observed_conversion_percent?: number | null
+          project_id: string
+          segment_used?: string | null
+          start_date: string
+          status?: string
+          success_metric?: string | null
+          target_customers?: number | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          action_name?: string
+          action_type?: string
+          created_at?: string
+          end_date?: string | null
+          expected_conversion_percent?: number | null
+          id?: string
+          notes?: string | null
+          observed_conversion_percent?: number | null
+          project_id?: string
+          segment_used?: string | null
+          start_date?: string
+          status?: string
+          success_metric?: string | null
+          target_customers?: number | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_actions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_business_config: {
+        Row: {
+          average_margin_percent: number | null
+          average_sale_value: number | null
+          baseline_conversion_percent: number | null
+          cost_per_contact: number | null
+          created_at: string
+          id: string
+          impact_window_days: number | null
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          average_margin_percent?: number | null
+          average_sale_value?: number | null
+          baseline_conversion_percent?: number | null
+          cost_per_contact?: number | null
+          created_at?: string
+          id?: string
+          impact_window_days?: number | null
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          average_margin_percent?: number | null
+          average_sale_value?: number | null
+          baseline_conversion_percent?: number | null
+          cost_per_contact?: number | null
+          created_at?: string
+          id?: string
+          impact_window_days?: number | null
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_business_config_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_categorical_stats: {
         Row: {
           column_name: string

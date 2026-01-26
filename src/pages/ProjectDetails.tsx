@@ -20,6 +20,7 @@ import {
   Loader2,
   Languages,
   LayoutDashboard,
+  TrendingUp,
 } from "lucide-react";
 import EDADisplay from "@/components/eda/EDADisplay";
 import ModelsTab from "@/components/project/ModelsTab";
@@ -27,6 +28,7 @@ import APIDeployTab from "@/components/project/APIDeployTab";
 import ChatTab from "@/components/project/ChatTab";
 import SettingsTab from "@/components/project/SettingsTab";
 import { BusinessDashboard } from "@/components/business-dashboard";
+import { BusinessImpactTab } from "@/components/business-impact";
 import Header from "@/components/layout/Header";
 
 interface Project {
@@ -226,6 +228,10 @@ const ProjectDetails = () => {
               <LayoutDashboard className="w-4 h-4" />
               {t("project.tabs.dashboard")}
             </TabsTrigger>
+            <TabsTrigger value="impact" className="gap-2">
+              <TrendingUp className="w-4 h-4" />
+              {t("project.tabs.impact")}
+            </TabsTrigger>
             <TabsTrigger value="chat" className="gap-2">
               <MessageSquare className="w-4 h-4" />
               {t("project.tabs.chat")}
@@ -402,6 +408,10 @@ const ProjectDetails = () => {
 
           <TabsContent value="dashboard">
             <BusinessDashboard projectId={project.id} />
+          </TabsContent>
+
+          <TabsContent value="impact">
+            <BusinessImpactTab projectId={project.id} />
           </TabsContent>
 
           <TabsContent value="chat">
