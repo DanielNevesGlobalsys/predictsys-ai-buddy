@@ -1532,7 +1532,64 @@
     "roleUpdated": "Papel atualizado com sucesso!",
     "updateRoleError": "Erro ao atualizar papel",
     "userRemoved": "Usuário removido com sucesso!",
-    "removeUserError": "Erro ao remover usuário"
+    "removeUserError": "Erro ao remover usuário",
+    "analytics": "PredictSys Analytics",
+    "analyticsTitle": "PredictSys Analytics",
+    "analyticsSubtitle": "Painel de métricas da plataforma"
+  },
+  "adminAnalytics": {
+    "title": "PredictSys Analytics",
+    "subtitle": "Painel de métricas da plataforma",
+    "refresh": "Atualizar",
+    "exportPdf": "Exportar PDF",
+    "dateRange": {
+      "7": "Últimos 7 dias",
+      "30": "Últimos 30 dias",
+      "90": "Últimos 90 dias"
+    },
+    "kpis": {
+      "activeOrgs": "Orgs Ativas",
+      "projects": "Projetos",
+      "models": "Modelos",
+      "predictions": "Previsões",
+      "exports": "Exports",
+      "errors": "Erros"
+    },
+    "trend": {
+      "title": "Tendência Diária",
+      "models": "Modelos",
+      "predictions": "Previsões",
+      "errors": "Erros",
+      "noData": "Sem dados no período"
+    },
+    "timeToValue": {
+      "title": "Time to Value",
+      "subtitle": "Tempo médio entre etapas do projeto",
+      "projectToDataset": "Projeto → Dataset",
+      "datasetToTraining": "Dataset → Treino",
+      "trainingToPrediction": "Treino → Previsão",
+      "predictionToExport": "Previsão → Export",
+      "totalTTV": "Total TTV",
+      "reachedValue": "dos projetos chegaram ao valor"
+    },
+    "orgUsage": {
+      "title": "Uso por Organização",
+      "organization": "Organização",
+      "plan": "Plano",
+      "projects": "Projetos",
+      "models": "Modelos",
+      "predictions": "Previsões",
+      "users": "Usuários",
+      "lastEvent": "Último Evento",
+      "noData": "Nenhum dado no período"
+    },
+    "health": {
+      "title": "Performance da Plataforma",
+      "import": "Importação",
+      "eda": "EDA",
+      "training": "Treinamento",
+      "prediction": "Previsão"
+    }
   },
   "businessImpact": {
     "title": "Impacto de Negócio",

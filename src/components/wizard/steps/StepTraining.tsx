@@ -19,6 +19,7 @@ import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
+import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface StepTrainingProps {
   projectData: ProjectData;
@@ -161,6 +162,7 @@ const StepTraining = ({
       return;
     }
 
+    const startTime = Date.now();
     setIsTraining(true);
     setError(null);
     setModels([]);
@@ -197,6 +199,14 @@ const StepTraining = ({
       setTrainingComplete(true);
       onTrainingComplete?.();
 
+      // Track model training event
+      trackEventWithTiming({
+        event_type: "model_trained",
+        project_id: projectData.id,
+        status: "success",
+        source: "app",
+      }, startTime);
+
     } catch (err) {
       console.error("Training error:", err);
       const errorMessage = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
@@ -214,6 +224,15 @@ const StepTraining = ({
       setError(userMessage);
       toast.error(userMessage);
       await saveProject({ status: "eda_complete" });
+
+      // Track job error event
+      trackEventWithTiming({
+        event_type: "job_error",
+        project_id: projectData.id,
+        status: "error",
+        metadata: { stage: "training", error_message: userMessage },
+        source: "app",
+      }, startTime);
     } finally {
       setIsTraining(false);
     }

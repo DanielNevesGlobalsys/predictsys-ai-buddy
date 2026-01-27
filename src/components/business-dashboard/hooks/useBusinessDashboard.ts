@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useDashboardMetrics } from './useDashboardMetrics';
+import { trackEventWithTiming } from '@/lib/platformTracking';
 import type { 
   Prediction, 
   DashboardFilters, 
@@ -134,6 +135,7 @@ export function useBusinessDashboard(projectId: string) {
       return { success: false, error: 'Nenhum modelo em produção' };
     }
     
+    const startTime = Date.now();
     setRunningBatch(true);
     setError(null);
     
@@ -146,6 +148,15 @@ export function useBusinessDashboard(projectId: string) {
         console.error('Error invoking batch predictions:', invokeError);
         const errorMsg = invokeError.message || 'Erro ao gerar previsões';
         setError(errorMsg);
+        
+        trackEventWithTiming({
+          event_type: "job_error",
+          project_id: projectId,
+          status: "error",
+          metadata: { stage: "prediction", error_message: errorMsg },
+          source: "app",
+        }, startTime);
+        
         return { success: false, error: errorMsg };
       }
       
@@ -153,10 +164,28 @@ export function useBusinessDashboard(projectId: string) {
       if (data?.error) {
         console.error('Batch predictions error:', data.error);
         setError(data.error);
+        
+        trackEventWithTiming({
+          event_type: "job_error",
+          project_id: projectId,
+          status: "error",
+          metadata: { stage: "prediction", error_message: data.error },
+          source: "app",
+        }, startTime);
+        
         return { success: false, error: data.error };
       }
       
       console.log('Batch predictions result:', data);
+      
+      // Track successful prediction run
+      trackEventWithTiming({
+        event_type: "prediction_run",
+        project_id: projectId,
+        status: "success",
+        metadata: { rows_scored: data?.rows_scored || data?.predictions_created },
+        source: "app",
+      }, startTime);
       
       // Refetch predictions and metrics after batch is done
       await Promise.all([fetchPredictions(), refetchMetrics()]);
@@ -166,6 +195,15 @@ export function useBusinessDashboard(projectId: string) {
       console.error('Error running batch predictions:', err);
       const errorMsg = err instanceof Error ? err.message : 'Erro ao gerar previsões';
       setError(errorMsg);
+      
+      trackEventWithTiming({
+        event_type: "job_error",
+        project_id: projectId,
+        status: "error",
+        metadata: { stage: "prediction", error_message: errorMsg },
+        source: "app",
+      }, startTime);
+      
       return { success: false, error: errorMsg };
     } finally {
       setRunningBatch(false);

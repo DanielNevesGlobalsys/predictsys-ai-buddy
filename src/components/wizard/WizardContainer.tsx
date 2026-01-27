@@ -13,6 +13,7 @@ import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
 import StepDashboard from "./steps/StepDashboard";
+import { trackEvent } from "@/lib/platformTracking";
 
 export interface ProjectData {
   id?: string;
@@ -153,6 +154,15 @@ const WizardContainer = () => {
 
         if (error) throw error;
         setProjectData((prev) => ({ ...prev, ...data, id: newProject.id, status: "configuring" }));
+        
+        // Track project creation event
+        trackEvent({
+          event_type: "project_created",
+          project_id: newProject.id,
+          organization_id: newProject.organization_id,
+          source: "app",
+        });
+        
         // Update URL to include project ID
         navigate(`/projeto/${newProject.id}/wizard`, { replace: true });
       }

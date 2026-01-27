@@ -1313,7 +1313,64 @@
     "roleUpdated": "Role updated successfully!",
     "updateRoleError": "Error updating role",
     "userRemoved": "User removed successfully!",
-    "removeUserError": "Error removing user"
+    "removeUserError": "Error removing user",
+    "analytics": "PredictSys Analytics",
+    "analyticsTitle": "PredictSys Analytics",
+    "analyticsSubtitle": "Platform metrics dashboard"
+  },
+  "adminAnalytics": {
+    "title": "PredictSys Analytics",
+    "subtitle": "Platform metrics dashboard",
+    "refresh": "Refresh",
+    "exportPdf": "Export PDF",
+    "dateRange": {
+      "7": "Last 7 days",
+      "30": "Last 30 days",
+      "90": "Last 90 days"
+    },
+    "kpis": {
+      "activeOrgs": "Active Orgs",
+      "projects": "Projects",
+      "models": "Models",
+      "predictions": "Predictions",
+      "exports": "Exports",
+      "errors": "Errors"
+    },
+    "trend": {
+      "title": "Daily Trend",
+      "models": "Models",
+      "predictions": "Predictions",
+      "errors": "Errors",
+      "noData": "No data in period"
+    },
+    "timeToValue": {
+      "title": "Time to Value",
+      "subtitle": "Average time between project stages",
+      "projectToDataset": "Project → Dataset",
+      "datasetToTraining": "Dataset → Training",
+      "trainingToPrediction": "Training → Prediction",
+      "predictionToExport": "Prediction → Export",
+      "totalTTV": "Total TTV",
+      "reachedValue": "of projects reached value"
+    },
+    "orgUsage": {
+      "title": "Usage by Organization",
+      "organization": "Organization",
+      "plan": "Plan",
+      "projects": "Projects",
+      "models": "Models",
+      "predictions": "Predictions",
+      "users": "Users",
+      "lastEvent": "Last Event",
+      "noData": "No data in period"
+    },
+    "health": {
+      "title": "Platform Performance",
+      "import": "Import",
+      "eda": "EDA",
+      "training": "Training",
+      "prediction": "Prediction"
+    }
   },
   "businessImpact": {
     "title": "Business Impact",

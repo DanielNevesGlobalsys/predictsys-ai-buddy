@@ -13,8 +13,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { useAdminAnalytics } from "./hooks/useAdminAnalytics";
-import { DateRange, OrganizationUsage } from "./types";
+import { useAdminAnalytics } from "@/components/admin-analytics/hooks/useAdminAnalytics";
+import { DateRange, OrganizationUsage } from "@/components/admin-analytics/types";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const AdminAnalytics = () => {
