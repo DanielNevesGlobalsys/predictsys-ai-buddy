@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
+import { useSimulation } from './hooks/useSimulation';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
 import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessKPICards } from './BusinessKPICards';
@@ -11,8 +12,9 @@ import { GroupSegmentation } from './GroupSegmentation';
 import { TimeProjection } from './TimeProjection';
 import { ActionableList } from './ActionableList';
 import { CohortComparison } from './CohortComparison';
-import { WhatIfSimulation } from './WhatIfSimulation';
+import { SimulationPanel } from './SimulationPanel';
 import { BusinessAIInsights } from './BusinessAIInsights';
+import { DashboardPDFExport } from './DashboardPDFExport';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -25,6 +27,8 @@ interface BusinessDashboardProps {
 export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const { t } = useTranslation();
   const [projectInfo, setProjectInfo] = useState<{
+    name: string;
+    organization_name: string;
     problem_type: string;
     problem_context: string | null;
     target_column: string | null;
@@ -43,18 +47,52 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     runBatchPredictions,
     runningBatch 
   } = useBusinessDashboard(projectId);
+
+  const problemType = projectInfo?.problem_type || 
+    (data.predictions.length > 0 ? data.predictions[0].problem_type : 'classification');
+
+  // Simulation hook
+  const {
+    params: simulationParams,
+    updateParams: updateSimulationParams,
+    resetParams: resetSimulationParams,
+    simulationResults,
+    simulatedKpis,
+    businessConfig,
+    isSimulationActive,
+  } = useSimulation({
+    projectId,
+    predictions: data.predictions,
+    baseKpis: data.kpis,
+    problemType,
+  });
   
   useEffect(() => {
     async function fetchProjectInfo() {
       try {
         const { data: project } = await supabase
           .from('projects')
-          .select('problem_type, detected_problem_type, target_column, business_objective')
+          .select('name, organization_id, problem_type, detected_problem_type, target_column, business_objective')
           .eq('id', projectId)
           .maybeSingle();
         
         if (project) {
+          // Fetch organization name
+          let orgName = 'Organização';
+          if (project.organization_id) {
+            const { data: org } = await supabase
+              .from('organizations')
+              .select('name')
+              .eq('id', project.organization_id)
+              .maybeSingle();
+            if (org) {
+              orgName = org.name;
+            }
+          }
+          
           setProjectInfo({
+            name: project.name,
+            organization_name: orgName,
             problem_type: project.problem_type,
             problem_context: project.business_objective || project.detected_problem_type || null,
             target_column: project.target_column
@@ -68,9 +106,6 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     fetchProjectInfo();
   }, [projectId]);
   
-  const problemType = projectInfo?.problem_type || 
-    (data.predictions.length > 0 ? data.predictions[0].problem_type : 'classification');
-  
   const problemContext = projectInfo?.problem_context || 
     (data.predictions.length > 0 ? data.predictions[0].problem_context : null);
 
@@ -82,6 +117,9 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
       toast.error(result.error || t('businessDashboard.predictionsError'));
     }
   };
+
+  // Use simulated KPIs when simulation is active
+  const displayKpis = isSimulationActive ? simulatedKpis : data.kpis;
 
   // Show loading state while batch is running or initial load
   if (runningBatch) {
@@ -234,7 +272,23 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
           <p className="text-sm text-muted-foreground">
             {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
           </p>
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-2 flex-wrap">
+            <DashboardPDFExport
+              projectId={projectId}
+              projectName={projectInfo?.name || 'Projeto'}
+              organizationName={projectInfo?.organization_name || 'Organização'}
+              modelName={productionModel.algorithm_name}
+              filters={filters}
+              kpis={data.kpis}
+              simulatedKpis={simulatedKpis}
+              simulationParams={simulationParams}
+              simulationResults={simulationResults}
+              businessConfig={businessConfig}
+              segmentationBands={data.segmentationBands}
+              predictions={data.predictions}
+              problemType={problemType}
+              isSimulationActive={isSimulationActive}
+            />
             <Button 
               variant="outline"
               size="sm"
@@ -283,9 +337,21 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         availableSegmentFields={data.availableSegmentFields}
       />
       
-      {/* KPI Cards */}
+      {/* KPI Cards - Now using display KPIs that reflect simulation */}
       <BusinessKPICards 
-        kpis={data.kpis}
+        kpis={displayKpis}
+        problemType={problemType}
+        viewMode={filters.viewMode}
+      />
+      
+      {/* Simulation Panel - BEFORE segmentation */}
+      <SimulationPanel
+        params={simulationParams}
+        results={simulationResults}
+        businessConfig={businessConfig}
+        onParamsChange={updateSimulationParams}
+        onReset={resetSimulationParams}
+        isActive={isSimulationActive}
         problemType={problemType}
         viewMode={filters.viewMode}
       />
@@ -329,19 +395,12 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         viewMode={filters.viewMode}
       />
       
-      {/* What-if Simulation */}
-      <WhatIfSimulation 
-        predictions={data.predictions}
-        problemType={problemType}
-        viewMode={filters.viewMode}
-      />
-      
       {/* AI Insights */}
       <BusinessAIInsights 
         projectId={projectId}
         problemType={problemType}
         problemContext={problemContext}
-        kpis={data.kpis}
+        kpis={displayKpis}
         segmentationBands={data.segmentationBands}
         groupSegmentation={data.groupSegmentation}
         viewMode={filters.viewMode}
