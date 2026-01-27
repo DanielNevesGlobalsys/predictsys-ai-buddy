@@ -175,7 +175,7 @@ export function ActionsTable({
                         <TableCell>{getActionTypeLabel(action.action_type)}</TableCell>
                         <TableCell>{getStatusBadge(action.status)}</TableCell>
                         <TableCell className="text-right">
-                          {action.target_customers.toLocaleString('pt-BR')}
+                          {(action.target_customers ?? 0).toLocaleString('pt-BR')}
                         </TableCell>
                         <TableCell>
                           <div className="text-sm">
@@ -188,9 +188,9 @@ export function ActionsTable({
                         <TableCell className="text-right">
                           <div className="text-sm">
                             <span className="text-muted-foreground">
-                              {action.expected_conversion_percent.toFixed(1)}%
+                              {(action.expected_conversion_percent ?? 0).toFixed(1)}%
                             </span>
-                            {action.observed_conversion_percent !== null && (
+                            {action.observed_conversion_percent !== null && action.observed_conversion_percent !== undefined && (
                               <span className="font-medium">
                                 {' → '}{action.observed_conversion_percent.toFixed(1)}%
                               </span>
