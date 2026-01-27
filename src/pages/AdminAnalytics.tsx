@@ -15,12 +15,14 @@ import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useAdminAnalytics } from "@/components/admin-analytics/hooks/useAdminAnalytics";
 import { DateRange, OrganizationUsage } from "@/components/admin-analytics/types";
+import { ExportAnalyticsPDFModal } from "@/components/admin-analytics/ExportAnalyticsPDFModal";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts";
 
 const AdminAnalytics = () => {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { isSuperAdmin } = useOrganization();
+  const [showExportModal, setShowExportModal] = useState(false);
 
   const {
     dateRange, setDateRange,
@@ -72,11 +74,22 @@ const AdminAnalytics = () => {
               <RefreshCw className={`w-4 h-4 mr-2 ${isLoading ? "animate-spin" : ""}`} />
               Atualizar
             </Button>
-            <Button variant="outline" disabled>
+            <Button variant="outline" onClick={() => setShowExportModal(true)} disabled={isLoading}>
               <Download className="w-4 h-4 mr-2" />
               Exportar PDF
             </Button>
           </div>
+
+          <ExportAnalyticsPDFModal
+            open={showExportModal}
+            onOpenChange={setShowExportModal}
+            dateRange={dateRange}
+            globalKPIs={globalKPIs}
+            healthMetrics={healthMetrics}
+            organizationUsage={organizationUsage}
+            dailyTrend={dailyTrend}
+            timeToValue={timeToValue}
+          />
         </div>
 
         {/* KPI Cards */}
