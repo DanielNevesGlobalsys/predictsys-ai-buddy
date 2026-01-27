@@ -59,3 +59,15 @@ verify_jwt = false
 
 [functions.calculate-dashboard-metrics]
 verify_jwt = false
+
+[functions.track-event]
+verify_jwt = false
+
+[functions.aggregate-metrics-daily]
+verify_jwt = false
+
+[functions.analytics-data]
+verify_jwt = false
+
+[functions.analytics-time-to-value]
+verify_jwt = false

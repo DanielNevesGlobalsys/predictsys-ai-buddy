@@ -314,6 +314,134 @@ export type Database = {
         }
         Relationships: []
       }
+      platform_events: {
+        Row: {
+          created_at: string
+          duration_ms: number | null
+          event_type: string
+          id: string
+          metadata: Json | null
+          organization_id: string | null
+          project_id: string | null
+          source: string
+          status: string
+          timestamp: string
+          user_id: string | null
+        }
+        Insert: {
+          created_at?: string
+          duration_ms?: number | null
+          event_type: string
+          id?: string
+          metadata?: Json | null
+          organization_id?: string | null
+          project_id?: string | null
+          source?: string
+          status?: string
+          timestamp?: string
+          user_id?: string | null
+        }
+        Update: {
+          created_at?: string
+          duration_ms?: number | null
+          event_type?: string
+          id?: string
+          metadata?: Json | null
+          organization_id?: string | null
+          project_id?: string | null
+          source?: string
+          status?: string
+          timestamp?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_events_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "platform_events_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      platform_metrics_daily: {
+        Row: {
+          active_users_1d: number
+          active_users_30d: number
+          active_users_7d: number
+          avg_eda_ms: number | null
+          avg_import_ms: number | null
+          avg_predict_ms: number | null
+          avg_train_ms: number | null
+          created_at: string
+          datasets_connected: number
+          day: string
+          id: string
+          jobs_error_count: number
+          models_trained: number
+          organization_id: string | null
+          predictions_run: number
+          projects_created: number
+          segments_exported: number
+          updated_at: string
+        }
+        Insert: {
+          active_users_1d?: number
+          active_users_30d?: number
+          active_users_7d?: number
+          avg_eda_ms?: number | null
+          avg_import_ms?: number | null
+          avg_predict_ms?: number | null
+          avg_train_ms?: number | null
+          created_at?: string
+          datasets_connected?: number
+          day: string
+          id?: string
+          jobs_error_count?: number
+          models_trained?: number
+          organization_id?: string | null
+          predictions_run?: number
+          projects_created?: number
+          segments_exported?: number
+          updated_at?: string
+        }
+        Update: {
+          active_users_1d?: number
+          active_users_30d?: number
+          active_users_7d?: number
+          avg_eda_ms?: number | null
+          avg_import_ms?: number | null
+          avg_predict_ms?: number | null
+          avg_train_ms?: number | null
+          created_at?: string
+          datasets_connected?: number
+          day?: string
+          id?: string
+          jobs_error_count?: number
+          models_trained?: number
+          organization_id?: string | null
+          predictions_run?: number
+          projects_created?: number
+          segments_exported?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "platform_metrics_daily_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       predictions: {
         Row: {
           age_group: string | null
@@ -1217,6 +1345,27 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      calculate_time_to_value: {
+        Args: {
+          p_date_from?: string
+          p_date_to?: string
+          p_organization_id?: string
+        }
+        Returns: {
+          avg_dataset_to_training_hours: number
+          avg_prediction_to_export_hours: number
+          avg_project_to_dataset_hours: number
+          avg_total_time_to_value_hours: number
+          avg_training_to_prediction_hours: number
+          organization_id: string
+          organization_name: string
+          projects_with_dataset_pct: number
+          projects_with_export_pct: number
+          projects_with_prediction_pct: number
+          projects_with_training_pct: number
+          total_projects: number
+        }[]
+      }
       get_user_organizations: { Args: { _user_id: string }; Returns: string[] }
       has_role: {
         Args: {
