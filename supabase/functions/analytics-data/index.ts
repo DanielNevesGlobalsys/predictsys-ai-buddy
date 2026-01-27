@@ -86,11 +86,19 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Parse query params
-    const url = new URL(req.url);
-    const dateFrom = url.searchParams.get("date_from") || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-    const dateTo = url.searchParams.get("date_to") || new Date().toISOString().split("T")[0];
-    const orgId = url.searchParams.get("organization_id");
+    // Parse body params
+    let dateFrom = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+    let dateTo = new Date().toISOString().split("T")[0];
+    let orgId: string | null = null;
+
+    try {
+      const body = await req.json();
+      if (body.date_from) dateFrom = body.date_from;
+      if (body.date_to) dateTo = body.date_to;
+      if (body.organization_id) orgId = body.organization_id;
+    } catch {
+      // If no body or invalid JSON, use defaults
+    }
 
     console.log(`[analytics-data] Fetching data from ${dateFrom} to ${dateTo}, org: ${orgId || "all"}`);
 
