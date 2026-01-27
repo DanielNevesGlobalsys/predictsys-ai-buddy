@@ -7,6 +7,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Trash2, MessageSquareX, AlertTriangle } from "lucide-react";
 import DeleteProjectDialog from "./DeleteProjectDialog";
 import ClearChatDialog from "./ClearChatDialog";
+import GovernanceInfoBlock from "./GovernanceInfoBlock";
 
 interface SettingsTabProps {
   projectId: string;
@@ -102,6 +103,9 @@ const SettingsTab = ({ projectId, projectName, onChatCleared }: SettingsTabProps
 
   return (
     <div className="space-y-6">
+      {/* Governance Info Block */}
+      <GovernanceInfoBlock />
+
       <Card className="bg-gradient-card shadow-card p-6">
         <h3 className="font-semibold mb-4 flex items-center gap-2">
           <AlertTriangle className="w-5 h-5 text-destructive" />

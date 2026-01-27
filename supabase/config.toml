@@ -71,3 +71,9 @@ verify_jwt = false
 
 [functions.analytics-time-to-value]
 verify_jwt = false
+
+[functions.audit-log]
+verify_jwt = false
+
+[functions.enforce-data-retention]
+verify_jwt = false

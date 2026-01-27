@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { ArrowLeft, Building2, Users, FolderKanban, Database, Settings } from 'lucide-react';
+import { ArrowLeft, Building2, Users, FolderKanban, Database, Settings, Shield, History } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useOrganization } from '@/contexts/OrganizationContext';
@@ -12,6 +12,8 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { PLAN_LABELS } from '@/types/organization';
+import DataPolicyTab from '@/components/org-settings/DataPolicyTab';
+import AuditLogsTab from '@/components/org-settings/AuditLogsTab';
 
 interface OrgStats {
   users_count: number;
@@ -135,6 +137,18 @@ const OrgSettings = () => {
               <Database className="w-4 h-4" />
               {t('organization.integrations')}
             </TabsTrigger>
+            {(isOrgAdmin || isSuperAdmin) && (
+              <>
+                <TabsTrigger value="data-lgpd" className="gap-2">
+                  <Shield className="w-4 h-4" />
+                  {t('lgpd.dataLgpdTab')}
+                </TabsTrigger>
+                <TabsTrigger value="audit" className="gap-2">
+                  <History className="w-4 h-4" />
+                  {t('lgpd.auditTab')}
+                </TabsTrigger>
+              </>
+            )}
           </TabsList>
 
           <TabsContent value="overview" className="space-y-6">
@@ -291,6 +305,20 @@ const OrgSettings = () => {
               </CardContent>
             </Card>
           </TabsContent>
+
+          {/* LGPD & Data Policy Tab */}
+          {(isOrgAdmin || isSuperAdmin) && (
+            <TabsContent value="data-lgpd">
+              <DataPolicyTab />
+            </TabsContent>
+          )}
+
+          {/* Audit Logs Tab */}
+          {(isOrgAdmin || isSuperAdmin) && (
+            <TabsContent value="audit">
+              <AuditLogsTab />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>

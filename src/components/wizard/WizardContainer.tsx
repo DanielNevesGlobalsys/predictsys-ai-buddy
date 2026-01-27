@@ -14,6 +14,7 @@ import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
 import StepDashboard from "./steps/StepDashboard";
 import { trackEvent } from "@/lib/platformTracking";
+import { logProjectAuditEvent } from "@/lib/auditLog";
 
 export interface ProjectData {
   id?: string;
@@ -162,6 +163,14 @@ const WizardContainer = () => {
           organization_id: newProject.organization_id,
           source: "app",
         });
+        
+        // Audit log for LGPD compliance
+        logProjectAuditEvent(
+          newProject.id,
+          "project_created",
+          "project",
+          data.name || projectData.name
+        );
         
         // Update URL to include project ID
         navigate(`/projeto/${newProject.id}/wizard`, { replace: true });
