@@ -4,7 +4,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
 import {
-  Brain,
   ChevronLeft,
   BookOpen,
   Lightbulb,
@@ -12,6 +11,9 @@ import {
   BarChart3,
   MessageSquare,
   HelpCircle,
+  TrendingUp,
+  Shield,
+  CheckCircle2,
 } from "lucide-react";
 
 const Documentation = () => {
@@ -24,12 +26,15 @@ const Documentation = () => {
     { id: "conceitos", titleKey: "documentation.sections.concepts", icon: Lightbulb },
     { id: "fluxo", titleKey: "documentation.sections.flow", icon: GitBranch },
     { id: "metricas", titleKey: "documentation.sections.metrics", icon: BarChart3 },
+    { id: "impacto", titleKey: "documentation.sections.businessImpact", icon: TrendingUp },
+    { id: "governanca", titleKey: "documentation.sections.governance", icon: Shield },
     { id: "assistente", titleKey: "documentation.sections.assistant", icon: MessageSquare },
     { id: "faq", titleKey: "documentation.sections.faq", icon: HelpCircle },
   ];
 
   const concepts = [
-    "project", "dataset", "target", "features", "eda", "production"
+    "project", "dataset", "target", "features", "eda", "production", 
+    "organization", "businessImpact", "dataGovernance"
   ];
 
   const flowStepNumbers = ["1", "2", "3", "4", "5", "6"];
@@ -37,7 +42,9 @@ const Documentation = () => {
   const classificationMetrics = ["AUC", "F1", "Precision", "Recall", "Accuracy"];
   const regressionMetrics = ["MAE", "MSE", "RMSE", "R2"];
 
-  const faqNumbers = ["q1", "q2", "q3", "q4", "q5"];
+  const faqNumbers = ["q1", "q2", "q3", "q4", "q5", "q6"];
+
+  const governanceTopics = ["isolation", "audit", "retention", "transparency"];
 
   const scrollToSection = (id: string) => {
     setActiveSection(id);
@@ -95,8 +102,11 @@ const Documentation = () => {
                   <BookOpen className="w-6 h-6 text-primary" />
                   {t("documentation.sections.introduction")}
                 </h2>
-                <p className="text-muted-foreground leading-relaxed">
+                <p className="text-muted-foreground leading-relaxed mb-4">
                   {t("documentation.introText")}
+                </p>
+                <p className="text-muted-foreground leading-relaxed">
+                  {t("documentation.introTextExtra")}
                 </p>
               </Card>
             </section>
@@ -131,6 +141,11 @@ const Documentation = () => {
                     <li key={stepNum}>{t(`documentation.flowSteps.${stepNum}`)}</li>
                   ))}
                 </ol>
+                <div className="mt-4 p-3 bg-muted/50 rounded-lg border border-border/50">
+                  <p className="text-sm text-muted-foreground italic">
+                    {t("documentation.flowNote")}
+                  </p>
+                </div>
               </Card>
             </section>
 
@@ -141,6 +156,12 @@ const Documentation = () => {
                   <BarChart3 className="w-6 h-6 text-primary" />
                   {t("documentation.sections.metrics")}
                 </h2>
+
+                <div className="mb-4 p-3 bg-blue-500/10 rounded-lg border border-blue-500/20">
+                  <p className="text-sm text-muted-foreground">
+                    {t("documentation.metricsNote")}
+                  </p>
+                </div>
 
                 <div className="space-y-6">
                   <div>
@@ -170,6 +191,47 @@ const Documentation = () => {
                       ))}
                     </div>
                   </div>
+                </div>
+              </Card>
+            </section>
+
+            {/* Impacto de Negócio */}
+            <section id="impacto">
+              <Card className="bg-gradient-card shadow-card p-6">
+                <h2 className="text-2xl font-display font-bold mb-4 flex items-center gap-2">
+                  <TrendingUp className="w-6 h-6 text-primary" />
+                  {t("documentation.businessImpactTitle")}
+                </h2>
+                <p className="text-muted-foreground leading-relaxed mb-4">
+                  {t("documentation.businessImpactText")}
+                </p>
+                <div className="p-3 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                  <p className="text-sm text-muted-foreground italic">
+                    {t("documentation.businessImpactNote")}
+                  </p>
+                </div>
+              </Card>
+            </section>
+
+            {/* Governança & LGPD */}
+            <section id="governanca">
+              <Card className="bg-gradient-card shadow-card p-6">
+                <h2 className="text-2xl font-display font-bold mb-4 flex items-center gap-2">
+                  <Shield className="w-6 h-6 text-primary" />
+                  {t("documentation.governanceTitle")}
+                </h2>
+                <p className="text-muted-foreground leading-relaxed mb-4">
+                  {t("documentation.governanceText")}
+                </p>
+                <div className="space-y-3">
+                  {governanceTopics.map((topic) => (
+                    <div key={topic} className="flex items-start gap-3">
+                      <CheckCircle2 className="w-5 h-5 text-green-500 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm text-muted-foreground">
+                        {t(`documentation.governanceTopics.${topic}`)}
+                      </p>
+                    </div>
+                  ))}
                 </div>
               </Card>
             </section>
