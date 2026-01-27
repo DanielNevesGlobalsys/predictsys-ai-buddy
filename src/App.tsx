@@ -15,6 +15,7 @@ import GlobalChat from "./pages/GlobalChat";
 import Documentation from "./pages/Documentation";
 import Admin from "./pages/Admin";
 import AdminOrgUsers from "./pages/AdminOrgUsers";
+import AdminAnalytics from "./pages/AdminAnalytics";
 import OrgSettings from "./pages/OrgSettings";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
@@ -78,6 +79,14 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <AdminOrgUsers />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/admin/analytics" 
+              element={
+                <ProtectedRoute>
+                  <AdminAnalytics />
                 </ProtectedRoute>
               } 
             />
