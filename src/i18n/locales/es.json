@@ -1313,7 +1313,64 @@
     "roleUpdated": "¡Rol actualizado con éxito!",
     "updateRoleError": "Error al actualizar rol",
     "userRemoved": "¡Usuario eliminado con éxito!",
-    "removeUserError": "Error al eliminar usuario"
+    "removeUserError": "Error al eliminar usuario",
+    "analytics": "PredictSys Analytics",
+    "analyticsTitle": "PredictSys Analytics",
+    "analyticsSubtitle": "Panel de métricas de la plataforma"
+  },
+  "adminAnalytics": {
+    "title": "PredictSys Analytics",
+    "subtitle": "Panel de métricas de la plataforma",
+    "refresh": "Actualizar",
+    "exportPdf": "Exportar PDF",
+    "dateRange": {
+      "7": "Últimos 7 días",
+      "30": "Últimos 30 días",
+      "90": "Últimos 90 días"
+    },
+    "kpis": {
+      "activeOrgs": "Orgs Activas",
+      "projects": "Proyectos",
+      "models": "Modelos",
+      "predictions": "Predicciones",
+      "exports": "Exports",
+      "errors": "Errores"
+    },
+    "trend": {
+      "title": "Tendencia Diaria",
+      "models": "Modelos",
+      "predictions": "Predicciones",
+      "errors": "Errores",
+      "noData": "Sin datos en el período"
+    },
+    "timeToValue": {
+      "title": "Time to Value",
+      "subtitle": "Tiempo promedio entre etapas del proyecto",
+      "projectToDataset": "Proyecto → Dataset",
+      "datasetToTraining": "Dataset → Entrenamiento",
+      "trainingToPrediction": "Entrenamiento → Predicción",
+      "predictionToExport": "Predicción → Export",
+      "totalTTV": "Total TTV",
+      "reachedValue": "de proyectos llegaron al valor"
+    },
+    "orgUsage": {
+      "title": "Uso por Organización",
+      "organization": "Organización",
+      "plan": "Plan",
+      "projects": "Proyectos",
+      "models": "Modelos",
+      "predictions": "Predicciones",
+      "users": "Usuarios",
+      "lastEvent": "Último Evento",
+      "noData": "Sin datos en el período"
+    },
+    "health": {
+      "title": "Performance de la Plataforma",
+      "import": "Importación",
+      "eda": "EDA",
+      "training": "Entrenamiento",
+      "prediction": "Predicción"
+    }
   },
   "businessImpact": {
     "title": "Impacto de Negocio",

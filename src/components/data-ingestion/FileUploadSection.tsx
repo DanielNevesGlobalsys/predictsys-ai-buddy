@@ -9,6 +9,7 @@ import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
 import DatasetSelector from "./DatasetSelector";
 import { BatchImportModal, ImportJobsModal } from "@/components/import";
+import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -227,6 +228,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     }
 
     setUploadStatus("processing");
+    const startTime = Date.now();
 
     try {
       // First, upload the file to storage
@@ -330,11 +332,28 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             }),
       });
 
+      // Track dataset upload event
+      trackEventWithTiming({
+        event_type: "dataset_uploaded",
+        project_id: projectData.id,
+        status: "success",
+        metadata: { file_type: file.name.split('.').pop(), rows: data.totalRows, columns: columnInfos.length },
+        source: "app",
+      }, startTime);
+
       onDataReady();
     } catch (error: any) {
       console.error("Processing error:", error);
       setErrorMessage(error.message || t("dataIngestion.file.errors.processingFailed"));
       setUploadStatus("error");
+
+      trackEventWithTiming({
+        event_type: "job_error",
+        project_id: projectData.id,
+        status: "error",
+        metadata: { stage: "dataset_upload", error_message: error.message },
+        source: "app",
+      }, startTime);
     }
   };
 

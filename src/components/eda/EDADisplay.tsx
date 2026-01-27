@@ -13,6 +13,7 @@ import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
 import { ExportCSVModal, ExportJobsModal } from "@/components/export";
 import { FeatureEngineeringSection } from "@/components/feature-engineering";
+import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface NumericStat {
   id: string;
@@ -168,6 +169,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
 
   const calculateEDA = async () => {
     setCalculating(true);
+    const startTime = Date.now();
     try {
       const { error } = await supabase.functions.invoke("calculate-eda", {
         body: { project_id: projectId },
@@ -176,9 +178,25 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       toast({ title: t("eda.calculateSuccess"), description: t("eda.calculateSuccessDesc") });
       await loadEDAStats();
       onEDAComplete?.();
+
+      // Track dataset profiled event
+      trackEventWithTiming({
+        event_type: "dataset_profiled",
+        project_id: projectId,
+        status: "success",
+        source: "app",
+      }, startTime);
     } catch (error: any) {
       console.error("Error calculating EDA:", error);
       toast({ title: t("eda.calculateError"), description: error.message, variant: "destructive" });
+
+      trackEventWithTiming({
+        event_type: "job_error",
+        project_id: projectId,
+        status: "error",
+        metadata: { stage: "eda", error_message: error.message },
+        source: "app",
+      }, startTime);
     }
     setCalculating(false);
   };

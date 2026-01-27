@@ -22,6 +22,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Download, FileSpreadsheet, Info, Loader2 } from "lucide-react";
+import { trackEvent } from "@/lib/platformTracking";
 
 interface ExportCSVModalProps {
   open: boolean;
@@ -98,6 +99,14 @@ export function ExportCSVModal({
 
       toast.success(t('export.started'), {
         description: t('export.startedDescription'),
+      });
+
+      // Track segment export event
+      trackEvent({
+        event_type: "segment_exported",
+        project_id: projectId,
+        source: "app",
+        metadata: { export_type: exportType },
       });
 
       onOpenChange(false);
