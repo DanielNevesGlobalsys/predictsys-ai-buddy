@@ -71,11 +71,19 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Parse query params
-    const url = new URL(req.url);
-    const dateFrom = url.searchParams.get("date_from") || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
-    const dateTo = url.searchParams.get("date_to") || new Date().toISOString();
-    const orgId = url.searchParams.get("organization_id") || null;
+    // Parse body params
+    let dateFrom = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    let dateTo = new Date().toISOString();
+    let orgId: string | null = null;
+
+    try {
+      const body = await req.json();
+      if (body.date_from) dateFrom = body.date_from;
+      if (body.date_to) dateTo = body.date_to;
+      if (body.organization_id) orgId = body.organization_id;
+    } catch {
+      // If no body or invalid JSON, use defaults
+    }
 
     console.log(`[analytics-time-to-value] Calculating TTV from ${dateFrom} to ${dateTo}`);
 

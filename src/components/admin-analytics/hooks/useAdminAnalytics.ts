@@ -74,24 +74,11 @@ export function useAdminAnalytics() {
       const dateFrom = getDateFromDays(parseInt(dateRange));
       const dateTo = new Date().toISOString().split("T")[0];
 
-      const { data, error } = await supabase.functions.invoke<AnalyticsData>("analytics-data", {
-        body: null,
-        headers: {},
-      });
-
-      // Construct URL with params
-      const params = new URLSearchParams({
-        date_from: dateFrom,
-        date_to: dateTo,
-      });
-      if (selectedOrgId) {
-        params.append("organization_id", selectedOrgId);
-      }
-
-      const response = await supabase.functions.invoke("analytics-data", {
-        body: null,
-        headers: {
-          "x-params": params.toString(),
+      const response = await supabase.functions.invoke<AnalyticsData>("analytics-data", {
+        body: {
+          date_from: dateFrom,
+          date_to: dateTo,
+          organization_id: selectedOrgId || null,
         },
       });
 
@@ -99,7 +86,7 @@ export function useAdminAnalytics() {
         throw new Error(response.error.message);
       }
 
-      const result = response.data as AnalyticsData;
+      const result = response.data;
 
       if (result?.success) {
         setGlobalKPIs(result.global_kpis || DEFAULT_GLOBAL_KPIS);
@@ -126,18 +113,11 @@ export function useAdminAnalytics() {
       const dateFrom = getDateFromDays(parseInt(dateRange));
       const dateTo = new Date().toISOString();
 
-      const params = new URLSearchParams({
-        date_from: dateFrom,
-        date_to: dateTo,
-      });
-      if (selectedOrgId) {
-        params.append("organization_id", selectedOrgId);
-      }
-
-      const response = await supabase.functions.invoke("analytics-time-to-value", {
-        body: null,
-        headers: {
-          "x-params": params.toString(),
+      const response = await supabase.functions.invoke<TimeToValueData>("analytics-time-to-value", {
+        body: {
+          date_from: dateFrom,
+          date_to: dateTo,
+          organization_id: selectedOrgId || null,
         },
       });
 
@@ -145,7 +125,7 @@ export function useAdminAnalytics() {
         throw new Error(response.error.message);
       }
 
-      const result = response.data as TimeToValueData;
+      const result = response.data;
 
       if (result?.success) {
         setTimeToValue(result.global_averages || DEFAULT_TTV);
