@@ -15,6 +15,7 @@ import StepDeploy from "./steps/StepDeploy";
 import StepDashboard from "./steps/StepDashboard";
 import { trackEvent } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
+import { useOrganization } from "@/contexts/OrganizationContext";
 
 export interface ProjectData {
   id?: string;
@@ -37,6 +38,7 @@ const WizardContainer = () => {
   const { projectId } = useParams();
   const { toast } = useToast();
   const { t } = useTranslation();
+  const { currentOrganization } = useOrganization();
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [needsRetrain, setNeedsRetrain] = useState(false);
@@ -139,7 +141,7 @@ const WizardContainer = () => {
         if (error) throw error;
         setProjectData((prev) => ({ ...prev, ...data }));
       } else {
-        // Create new project
+        // Create new project with organization_id
         const { data: newProject, error } = await supabase
           .from("projects")
           .insert({
@@ -149,6 +151,7 @@ const WizardContainer = () => {
             problem_type: data.problem_type || projectData.problem_type,
             status: "configuring",
             user_id: user.id,
+            organization_id: currentOrganization?.id || null,
           })
           .select()
           .single();

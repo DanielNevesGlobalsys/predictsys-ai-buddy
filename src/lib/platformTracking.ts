@@ -25,6 +25,7 @@ interface TrackEventPayload {
 /**
  * Track platform events for analytics
  * Events are sent to the backend and stored for admin analytics
+ * If organization_id is not provided but project_id is, it will be resolved from the project
  */
 export async function trackEvent(payload: TrackEventPayload): Promise<void> {
   try {
@@ -35,10 +36,29 @@ export async function trackEvent(payload: TrackEventPayload): Promise<void> {
       return;
     }
 
+    let organizationId = payload.organization_id || null;
+
+    // If no organization_id but we have project_id, try to resolve it
+    if (!organizationId && payload.project_id) {
+      try {
+        const { data: project } = await supabase
+          .from("projects")
+          .select("organization_id")
+          .eq("id", payload.project_id)
+          .maybeSingle();
+        
+        if (project?.organization_id) {
+          organizationId = project.organization_id;
+        }
+      } catch (e) {
+        console.debug("[platformTracking] Could not resolve org_id from project:", e);
+      }
+    }
+
     const response = await supabase.functions.invoke("track-event", {
       body: {
         event_type: payload.event_type,
-        organization_id: payload.organization_id || null,
+        organization_id: organizationId,
         project_id: payload.project_id || null,
         status: payload.status || "success",
         duration_ms: payload.duration_ms || null,

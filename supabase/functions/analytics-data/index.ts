@@ -20,19 +20,14 @@ interface OrgUsage {
   last_event_at: string | null;
 }
 
-interface MetricRow {
-  day: string;
+interface PlatformEvent {
+  event_type: string;
+  status: string;
+  user_id: string;
   organization_id: string | null;
-  projects_created: number;
-  datasets_connected: number;
-  models_trained: number;
-  predictions_run: number;
-  segments_exported: number;
-  jobs_error_count: number;
-  avg_import_ms: number;
-  avg_eda_ms: number;
-  avg_train_ms: number;
-  avg_predict_ms: number;
+  project_id: string | null;
+  duration_ms: number | null;
+  timestamp: string;
 }
 
 Deno.serve(async (req) => {
@@ -102,28 +97,7 @@ Deno.serve(async (req) => {
 
     console.log(`[analytics-data] Fetching data from ${dateFrom} to ${dateTo}, org: ${orgId || "all"}`);
 
-    // Fetch daily metrics
-    let metricsQuery = supabase
-      .from("platform_metrics_daily")
-      .select("*")
-      .gte("day", dateFrom)
-      .lte("day", dateTo)
-      .order("day", { ascending: false });
-
-    if (orgId) {
-      metricsQuery = metricsQuery.eq("organization_id", orgId);
-    }
-
-    const { data: metrics, error: metricsError } = await metricsQuery;
-
-    if (metricsError) {
-      console.error("[analytics-data] Error fetching metrics:", metricsError);
-      throw metricsError;
-    }
-
-    const metricsTyped = (metrics || []) as MetricRow[];
-
-    // Fetch organizations with stats
+    // Fetch organizations
     const { data: organizations, error: orgsError } = await supabase
       .from("organizations")
       .select("id, name, plan, created_at");
@@ -133,52 +107,119 @@ Deno.serve(async (req) => {
       throw orgsError;
     }
 
-    // Fetch per-org usage summary
+    // Build a map of project_id -> organization_id for resolving null org_ids in events
+    const { data: projectsData } = await supabase
+      .from("projects")
+      .select("id, organization_id");
+    
+    const projectOrgMap = new Map<string, string>();
+    for (const p of projectsData || []) {
+      if (p.organization_id) {
+        projectOrgMap.set(p.id, p.organization_id);
+      }
+    }
+
+    // Fetch raw events for the period - this is our source of truth
+    const startTimestamp = `${dateFrom}T00:00:00.000Z`;
+    const endTimestamp = `${dateTo}T23:59:59.999Z`;
+
+    const { data: eventsData, error: eventsError } = await supabase
+      .from("platform_events")
+      .select("event_type, status, user_id, organization_id, project_id, duration_ms, timestamp")
+      .gte("timestamp", startTimestamp)
+      .lte("timestamp", endTimestamp)
+      .order("timestamp", { ascending: false });
+
+    if (eventsError) {
+      console.error("[analytics-data] Error fetching events:", eventsError);
+      throw eventsError;
+    }
+
+    const events = (eventsData || []) as PlatformEvent[];
+    console.log(`[analytics-data] Found ${events.length} events in period`);
+
+    // Resolve organization_id for events where it's null but project_id exists
+    const resolvedEvents = events.map(e => ({
+      ...e,
+      resolved_org_id: e.organization_id || (e.project_id ? projectOrgMap.get(e.project_id) : null) || null
+    }));
+
+    // Calculate global KPIs from events
+    const globalKPIs = {
+      projects_created: resolvedEvents.filter(e => e.event_type === "project_created").length,
+      datasets_connected: resolvedEvents.filter(e => 
+        e.event_type === "dataset_connected" || e.event_type === "dataset_uploaded"
+      ).length,
+      models_trained: resolvedEvents.filter(e => e.event_type === "model_trained").length,
+      predictions_run: resolvedEvents.filter(e => e.event_type === "prediction_run").length,
+      segments_exported: resolvedEvents.filter(e => e.event_type === "segment_exported").length,
+      jobs_error_count: resolvedEvents.filter(e => 
+        e.event_type === "job_error" || e.status === "error"
+      ).length,
+      active_organizations: 0,
+      total_organizations: organizations?.length || 0,
+    };
+
+    // Calculate health metrics (average durations)
+    const importEvents = resolvedEvents.filter(e => 
+      (e.event_type === "dataset_connected" || e.event_type === "dataset_uploaded") && e.duration_ms
+    );
+    const edaEvents = resolvedEvents.filter(e => e.event_type === "dataset_profiled" && e.duration_ms);
+    const trainEvents = resolvedEvents.filter(e => e.event_type === "model_trained" && e.duration_ms);
+    const predictEvents = resolvedEvents.filter(e => e.event_type === "prediction_run" && e.duration_ms);
+
+    const healthMetrics = {
+      avg_import_ms: importEvents.length > 0 
+        ? Math.round(importEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0) / importEvents.length)
+        : 0,
+      avg_eda_ms: edaEvents.length > 0
+        ? Math.round(edaEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0) / edaEvents.length)
+        : 0,
+      avg_train_ms: trainEvents.length > 0
+        ? Math.round(trainEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0) / trainEvents.length)
+        : 0,
+      avg_predict_ms: predictEvents.length > 0
+        ? Math.round(predictEvents.reduce((sum, e) => sum + (e.duration_ms || 0), 0) / predictEvents.length)
+        : 0,
+      total_errors: globalKPIs.jobs_error_count,
+    };
+
+    // Calculate per-organization usage
     const orgUsage: OrgUsage[] = [];
+    const activeOrgIds = new Set<string>();
+
     for (const org of organizations || []) {
-      // Get metrics for this org
-      const orgMetrics = metricsTyped.filter((m) => m.organization_id === org.id);
+      const orgEvents = resolvedEvents.filter(e => e.resolved_org_id === org.id);
       
-      // Sum up totals
-      const totals = orgMetrics.reduce((acc, m) => ({
-        projects_created: acc.projects_created + (m.projects_created || 0),
-        datasets_connected: acc.datasets_connected + (m.datasets_connected || 0),
-        models_trained: acc.models_trained + (m.models_trained || 0),
-        predictions_run: acc.predictions_run + (m.predictions_run || 0),
-        segments_exported: acc.segments_exported + (m.segments_exported || 0),
-        jobs_error_count: acc.jobs_error_count + (m.jobs_error_count || 0),
-      }), {
-        projects_created: 0,
-        datasets_connected: 0,
-        models_trained: 0,
-        predictions_run: 0,
-        segments_exported: 0,
-        jobs_error_count: 0,
-      });
+      if (orgEvents.length > 0) {
+        activeOrgIds.add(org.id);
+      }
 
-      // Get last event timestamp
-      const { data: lastEvent } = await supabase
-        .from("platform_events")
-        .select("timestamp")
-        .eq("organization_id", org.id)
-        .order("timestamp", { ascending: false })
-        .limit(1);
+      // Sum up totals for this org
+      const totals = {
+        projects_created: orgEvents.filter(e => e.event_type === "project_created").length,
+        datasets_connected: orgEvents.filter(e => 
+          e.event_type === "dataset_connected" || e.event_type === "dataset_uploaded"
+        ).length,
+        models_trained: orgEvents.filter(e => e.event_type === "model_trained").length,
+        predictions_run: orgEvents.filter(e => e.event_type === "prediction_run").length,
+        segments_exported: orgEvents.filter(e => e.event_type === "segment_exported").length,
+        jobs_error_count: orgEvents.filter(e => 
+          e.event_type === "job_error" || e.status === "error"
+        ).length,
+      };
 
-      // Get active users count (distinct users in period)
-      const { data: activeUsersData } = await supabase
-        .from("platform_events")
-        .select("user_id")
-        .eq("organization_id", org.id)
-        .gte("timestamp", `${dateFrom}T00:00:00.000Z`)
-        .lte("timestamp", `${dateTo}T23:59:59.999Z`);
+      // Get distinct active users for this org
+      const activeUsers = new Set(orgEvents.map(e => e.user_id)).size;
 
-      const activeUsers = new Set((activeUsersData || []).map((e: { user_id: string }) => e.user_id)).size;
-
-      // Get user count
+      // Get total user count for org
       const { count: userCount } = await supabase
         .from("organization_users")
         .select("id", { count: "exact", head: true })
         .eq("organization_id", org.id);
+
+      // Get last event timestamp
+      const lastEventAt = orgEvents.length > 0 ? orgEvents[0].timestamp : null;
 
       orgUsage.push({
         organization_id: org.id,
@@ -187,62 +228,39 @@ Deno.serve(async (req) => {
         ...totals,
         active_users: activeUsers,
         total_users: userCount || 0,
-        last_event_at: (lastEvent as { timestamp: string }[] | null)?.[0]?.timestamp || null,
+        last_event_at: lastEventAt,
       });
     }
 
-    // Calculate global KPIs
-    const globalMetrics = metricsTyped.filter((m) => m.organization_id === null);
-    const globalTotals = globalMetrics.reduce((acc, m) => ({
-      projects_created: acc.projects_created + (m.projects_created || 0),
-      datasets_connected: acc.datasets_connected + (m.datasets_connected || 0),
-      models_trained: acc.models_trained + (m.models_trained || 0),
-      predictions_run: acc.predictions_run + (m.predictions_run || 0),
-      segments_exported: acc.segments_exported + (m.segments_exported || 0),
-      jobs_error_count: acc.jobs_error_count + (m.jobs_error_count || 0),
-    }), {
-      projects_created: 0,
-      datasets_connected: 0,
-      models_trained: 0,
-      predictions_run: 0,
-      segments_exported: 0,
-      jobs_error_count: 0,
-    });
+    globalKPIs.active_organizations = activeOrgIds.size;
 
-    // Calculate health metrics (averages)
-    const nonZeroMetrics = globalMetrics.filter(m => 
-      m.avg_import_ms > 0 || m.avg_eda_ms > 0 || m.avg_train_ms > 0 || m.avg_predict_ms > 0
-    );
-    const healthMetrics = nonZeroMetrics.length > 0 
-      ? {
-          avg_import_ms: Math.round(nonZeroMetrics.reduce((sum, m) => sum + (m.avg_import_ms || 0), 0) / nonZeroMetrics.length),
-          avg_eda_ms: Math.round(nonZeroMetrics.reduce((sum, m) => sum + (m.avg_eda_ms || 0), 0) / nonZeroMetrics.length),
-          avg_train_ms: Math.round(nonZeroMetrics.reduce((sum, m) => sum + (m.avg_train_ms || 0), 0) / nonZeroMetrics.length),
-          avg_predict_ms: Math.round(nonZeroMetrics.reduce((sum, m) => sum + (m.avg_predict_ms || 0), 0) / nonZeroMetrics.length),
-        }
-      : { avg_import_ms: 0, avg_eda_ms: 0, avg_train_ms: 0, avg_predict_ms: 0 };
+    // Build daily trend from events
+    const dailyMap = new Map<string, { models_trained: number; predictions_run: number; jobs_error_count: number }>();
+    
+    for (const e of resolvedEvents) {
+      const day = e.timestamp.split("T")[0];
+      if (!dailyMap.has(day)) {
+        dailyMap.set(day, { models_trained: 0, predictions_run: 0, jobs_error_count: 0 });
+      }
+      const dayData = dailyMap.get(day)!;
+      
+      if (e.event_type === "model_trained") dayData.models_trained++;
+      if (e.event_type === "prediction_run") dayData.predictions_run++;
+      if (e.event_type === "job_error" || e.status === "error") dayData.jobs_error_count++;
+    }
 
-    // Daily trend data
-    const dailyTrend = globalMetrics.map((m) => ({
-      day: m.day,
-      models_trained: m.models_trained || 0,
-      predictions_run: m.predictions_run || 0,
-      jobs_error_count: m.jobs_error_count || 0,
-    })).sort((a, b) => a.day.localeCompare(b.day));
+    const dailyTrend = Array.from(dailyMap.entries())
+      .map(([day, data]) => ({ day, ...data }))
+      .sort((a, b) => a.day.localeCompare(b.day));
+
+    console.log(`[analytics-data] Returning KPIs: projects=${globalKPIs.projects_created}, models=${globalKPIs.models_trained}, predictions=${globalKPIs.predictions_run}`);
 
     return new Response(
       JSON.stringify({
         success: true,
         date_range: { from: dateFrom, to: dateTo },
-        global_kpis: {
-          ...globalTotals,
-          active_organizations: orgUsage.filter((o) => o.last_event_at).length,
-          total_organizations: organizations?.length || 0,
-        },
-        health_metrics: {
-          ...healthMetrics,
-          total_errors: globalTotals.jobs_error_count,
-        },
+        global_kpis: globalKPIs,
+        health_metrics: healthMetrics,
         organization_usage: orgUsage,
         daily_trend: dailyTrend,
       }),
