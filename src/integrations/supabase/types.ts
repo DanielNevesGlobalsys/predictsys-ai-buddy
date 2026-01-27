@@ -14,6 +14,63 @@ export type Database = {
   }
   public: {
     Tables: {
+      audit_logs: {
+        Row: {
+          action: string
+          id: string
+          ip_address: string | null
+          metadata: Json | null
+          organization_id: string
+          project_id: string | null
+          resource_name: string | null
+          resource_type: string
+          timestamp: string
+          user_agent: string | null
+          user_id: string | null
+        }
+        Insert: {
+          action: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          organization_id: string
+          project_id?: string | null
+          resource_name?: string | null
+          resource_type: string
+          timestamp?: string
+          user_agent?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          action?: string
+          id?: string
+          ip_address?: string | null
+          metadata?: Json | null
+          organization_id?: string
+          project_id?: string | null
+          resource_name?: string | null
+          resource_type?: string
+          timestamp?: string
+          user_agent?: string | null
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "audit_logs_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "audit_logs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       data_sources: {
         Row: {
           connection_config: Json
@@ -236,6 +293,47 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      organization_data_policy: {
+        Row: {
+          allow_data_export: boolean
+          anonymize_ids: boolean
+          created_at: string
+          data_retention_months: number
+          id: string
+          log_retention_months: number
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          allow_data_export?: boolean
+          anonymize_ids?: boolean
+          created_at?: string
+          data_retention_months?: number
+          id?: string
+          log_retention_months?: number
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          allow_data_export?: boolean
+          anonymize_ids?: boolean
+          created_at?: string
+          data_retention_months?: number
+          id?: string
+          log_retention_months?: number
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "organization_data_policy_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: true
+            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]

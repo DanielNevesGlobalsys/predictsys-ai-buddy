@@ -10,6 +10,7 @@ import DataPreviewSection from "./DataPreviewSection";
 import DatasetSelector from "./DatasetSelector";
 import { BatchImportModal, ImportJobsModal } from "@/components/import";
 import { trackEventWithTiming } from "@/lib/platformTracking";
+import { logProjectAuditEvent } from "@/lib/auditLog";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -340,6 +341,15 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         metadata: { file_type: file.name.split('.').pop(), rows: data.totalRows, columns: columnInfos.length },
         source: "app",
       }, startTime);
+
+      // Audit log for LGPD compliance
+      logProjectAuditEvent(
+        projectData.id,
+        "dataset_uploaded",
+        "dataset",
+        file.name,
+        { rows: data.totalRows, columns: columnInfos.length, file_type: file.name.split('.').pop() }
+      );
 
       onDataReady();
     } catch (error: any) {
