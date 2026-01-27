@@ -266,22 +266,30 @@
   },
   "documentation": {
     "title": "Documentación",
+    "backToProjects": "Volver a Proyectos",
     "sections": {
       "intro": "Introducción",
+      "introduction": "Introducción",
       "concepts": "Conceptos básicos",
       "flow": "Flujo de creación",
       "metrics": "Métricas del modelo",
-      "assistant": "Asistente IA",
+      "businessImpact": "Impacto de Negocio",
+      "governance": "Gobernanza & LGPD",
+      "assistant": "Asistente IA (Lys)",
       "faq": "Preguntas frecuentes"
     },
-    "introText": "PredictSys AI es una plataforma de modelos predictivos enfocada en datos tabulares. Permite que usuarios de negocios creen proyectos de machine learning sin escribir código, pasando por etapas de datos, análisis, entrenamiento y deploy de forma guiada.",
+    "introText": "PredictSys AI es una plataforma de inteligencia predictiva enfocada en transformar datos en decisiones de negocio. Permite que equipos de negocio y datos creen, analicen y pongan modelos de Machine Learning en producción sin escribir código, con foco en impacto real, seguridad y gobernanza.",
+    "introTextExtra": "La plataforma fue diseñada para escalar con múltiples organizaciones, garantizando aislamiento de datos, conformidad con LGPD/GDPR y transparencia en todo el ciclo de vida del modelo.",
     "concepts": {
-      "project": { "term": "Proyecto", "desc": "Conjunto de datos, modelado y resultados para un objetivo de negocio específico (ej.: \"Predicción de churn en el journey\")." },
+      "project": { "term": "Proyecto", "desc": "Conjunto de datos, modelado y resultados para un objetivo de negocio específico (ej.: \"Predicción de churn del journey\")." },
       "dataset": { "term": "Dataset", "desc": "Archivo CSV con historial de clientes, transacciones o eventos." },
       "target": { "term": "Variable objetivo (target)", "desc": "Lo que quieres predecir (ej.: churn_90d, valor de compra, morosidad)." },
       "features": { "term": "Features", "desc": "Columnas usadas como entrada para el modelo (edad del cliente, número de compras, canal, etc.)." },
       "eda": { "term": "EDA", "desc": "Análisis Exploratorio que muestra estadísticas y gráficos sobre los datos." },
-      "production": { "term": "Modelo en producción", "desc": "Modelo elegido para ser usado por la API de predicción." }
+      "production": { "term": "Modelo en producción", "desc": "Modelo elegido para ser usado por la API de predicción." },
+      "organization": { "term": "Organización", "desc": "Espacio aislado donde quedan usuarios, proyectos, datos y configuraciones de una empresa específica." },
+      "businessImpact": { "term": "Impacto de Negocio", "desc": "Estimativa financiera del valor generado por un modelo predictivo, traduciendo métricas técnicas en indicadores de resultado." },
+      "dataGovernance": { "term": "Gobernanza de Datos", "desc": "Conjunto de prácticas que garantizan seguridad, trazabilidad, retención y uso responsable de los datos." }
     },
     "flowSteps": {
       "1": "Información del proyecto: Nombre, descripción, objetivo y tipo de problema.",
@@ -291,8 +299,10 @@
       "5": "Entrenamiento: La plataforma entrena automáticamente múltiples algoritmos.",
       "6": "Deploy: Publica el modelo elegido y obtén la API de predicción."
     },
+    "flowNote": "Después del deploy del modelo, es posible configurar métricas de impacto de negocio y gobernanza, pero estas etapas no son obligatorias para crear tu primer modelo.",
     "metricsClassification": "Clasificación",
     "metricsRegression": "Regresión",
+    "metricsNote": "Estas métricas evalúan la calidad estadística del modelo. Para entender el impacto financiero y estratégico del proyecto, consulta la sección Impacto de Negocio.",
     "metrics": {
       "AUC": "Mide qué tan bien el modelo puede separar quiénes van a hacer churn de quiénes no, en todos los umbrales posibles. Va de 0 a 1: cuanto más cerca de 1, mejor. Buena métrica cuando los datos están desbalanceados (pocos churns).",
       "F1": "Media armónica entre Precisión y Recall. Resume en un número el equilibrio entre: cuántos churns predichos son realmente churns (Precisión) y cuántos churns reales el modelo encontró (Recall).",
@@ -304,12 +314,23 @@
       "RMSE": "Raíz cuadrada del MSE. Queda en la misma unidad que la variable objetivo y también penaliza bastante los errores grandes.",
       "R2": "Mide cuánto de la variación del objetivo el modelo explica (de 0 a 1). Cuanto más cerca de 1, más el modelo explica el comportamiento de la variable."
     },
+    "businessImpactTitle": "Impacto de Negocio",
+    "businessImpactText": "El Impacto de Negocio traduce predicciones en valor real para la empresa. PredictSys permite configurar parámetros financieros como valor promedio por venta, margen y costo de acción para estimar el retorno generado por el modelo.",
+    "businessImpactNote": "En la versión actual, el impacto es estimado con base en parámetros informados por el usuario. La medición automática con grupo de control podrá ser activada en versiones futuras.",
+    "governanceTitle": "Gobernanza & LGPD",
+    "governanceText": "PredictSys aplica prácticas de LGPD/GDPR y gobernanza para TODOS los clientes, independientemente del plan.",
+    "governanceTopics": {
+      "isolation": "Aislamiento por organización: tus datos están separados de otros clientes",
+      "audit": "Logs de auditoría: todas las acciones sensibles son registradas",
+      "retention": "Política de retención: tú defines por cuánto tiempo mantener los datos",
+      "transparency": "Transparencia: sabes exactamente cómo se usan tus datos"
+    },
     "assistantProject": {
-      "title": "Asistente IA del proyecto",
-      "desc": "Responde sobre datos, modelos y métricas de ese proyecto específico. Tiene acceso al contexto completo del proyecto: dataset, EDA, modelos entrenados e importancia de features."
+      "title": "Asistente IA del proyecto (Lys)",
+      "desc": "Responde sobre datos, modelos y métricas de ese proyecto específico. Tiene acceso al contexto completo del proyecto: dataset, EDA, modelos entrenados e importancia de features. Lys entiende el contexto del proyecto, de la organización y de las métricas disponibles, ayudando a traducir datos técnicos en decisiones de negocio."
     },
     "assistantGlobal": {
-      "title": "Chatbot IA global",
+      "title": "Chatbot IA global (Lys)",
       "desc": "Responde sobre uso de la plataforma y conceptos generales de machine learning. Ideal para dudas sobre cómo usar PredictSys o entender métricas y términos técnicos."
     },
     "faq": {
@@ -317,7 +338,8 @@
       "q2": { "question": "¿Qué formato de archivo se acepta?", "answer": "Actualmente aceptamos archivos CSV (valores separados por coma) con codificación UTF-8. Es el formato más común para exportar datos de hojas de cálculo y sistemas." },
       "q3": { "question": "¿Cuántas filas puede tener mi dataset?", "answer": "El archivo puede tener hasta 50 MB. Para el entrenamiento de modelos, utilizamos hasta 5.000 filas para garantizar que el procesamiento sea rápido y eficiente." },
       "q4": { "question": "¿Puedo usar la plataforma para otros casos además de churn?", "answer": "¡Sí! PredictSys sirve para cualquier problema de clasificación (predecir categorías, como sí/no, A/B/C) o regresión (predecir valores numéricos, como ventas, precio). Ejemplos: morosidad, propensión de compra, pronóstico de ventas, score de crédito." },
-      "q5": { "question": "¿Cómo funciona la API de predicción?", "answer": "Después de publicar un modelo en producción, recibes un endpoint de API REST. Solo envía los datos de entrada en formato JSON y recibe la predicción como respuesta. Ejemplos de código se proporcionan en la pestaña 'API & Deploy'." }
+      "q5": { "question": "¿Cómo funciona la API de predicción?", "answer": "Después de publicar un modelo en producción, recibes un endpoint de API REST. Solo envía los datos de entrada en formato JSON y recibe la predicción como respuesta. Ejemplos de código se proporcionan en la pestaña 'API & Deploy'." },
+      "q6": { "question": "¿Mis datos están seguros y en conformidad con LGPD?", "answer": "Sí. PredictSys aísla datos por organización, mantiene logs de auditoría y permite políticas de retención alineadas con LGPD/GDPR. GlobalSys no accede a tus datos sin autorización explícita." }
     }
   },
   "settings": {
