@@ -10,6 +10,30 @@ const DEFAULT_CONFIG: Omit<BusinessConfig, 'project_id'> = {
   baseline_conversion_percent: 0,
 };
 
+// Helper to normalize config values (handle nulls from database)
+function normalizeConfig(data: any, projectId: string): BusinessConfig {
+  return {
+    id: data?.id,
+    project_id: projectId,
+    average_sale_value: data?.average_sale_value ?? 0,
+    average_margin_percent: data?.average_margin_percent ?? 0,
+    cost_per_contact: data?.cost_per_contact ?? 0,
+    impact_window_days: data?.impact_window_days ?? 30,
+    baseline_conversion_percent: data?.baseline_conversion_percent ?? 0,
+    created_at: data?.created_at,
+    updated_at: data?.updated_at,
+  };
+}
+
+// Helper to normalize action values (handle nulls from database)
+function normalizeAction(data: any): ProjectAction {
+  return {
+    ...data,
+    target_customers: data.target_customers ?? 0,
+    expected_conversion_percent: data.expected_conversion_percent ?? 0,
+  };
+}
+
 export function useBusinessImpact(projectId: string) {
   const [config, setConfig] = useState<BusinessConfig | null>(null);
   const [actions, setActions] = useState<ProjectAction[]>([]);
@@ -34,12 +58,8 @@ export function useBusinessImpact(projectId: string) {
       
       if (configError) throw configError;
       
-      if (configData) {
-        setConfig(configData as unknown as BusinessConfig);
-      } else {
-        // Set default config if none exists
-        setConfig({ ...DEFAULT_CONFIG, project_id: projectId });
-      }
+      // Always normalize config to handle null values
+      setConfig(normalizeConfig(configData, projectId));
       
       // Fetch actions
       const { data: actionsData, error: actionsError } = await supabase
@@ -50,7 +70,9 @@ export function useBusinessImpact(projectId: string) {
       
       if (actionsError) throw actionsError;
       
-      setActions((actionsData as unknown as ProjectAction[]) || []);
+      // Normalize all actions to handle null values
+      const normalizedActions = (actionsData || []).map(normalizeAction);
+      setActions(normalizedActions as ProjectAction[]);
     } catch (err) {
       console.error('Error fetching business impact data:', err);
       setError(err instanceof Error ? err.message : 'Erro ao carregar dados');
@@ -65,16 +87,23 @@ export function useBusinessImpact(projectId: string) {
 
   // Save config
   const saveConfig = useCallback(async (newConfig: Partial<BusinessConfig>) => {
-    if (!projectId) return;
+    if (!projectId) return false;
     
     setSaving(true);
     setError(null);
     
     try {
-      const configToSave = {
+      // Create normalized config with new values, ensuring no nulls
+      const configToSave: BusinessConfig = {
+        ...DEFAULT_CONFIG,
         ...config,
         ...newConfig,
         project_id: projectId,
+        average_sale_value: newConfig.average_sale_value ?? config?.average_sale_value ?? 0,
+        average_margin_percent: newConfig.average_margin_percent ?? config?.average_margin_percent ?? 0,
+        cost_per_contact: newConfig.cost_per_contact ?? config?.cost_per_contact ?? 0,
+        impact_window_days: newConfig.impact_window_days ?? config?.impact_window_days ?? 30,
+        baseline_conversion_percent: newConfig.baseline_conversion_percent ?? config?.baseline_conversion_percent ?? 0,
       };
       
       // Check if config exists
@@ -86,7 +115,7 @@ export function useBusinessImpact(projectId: string) {
       
       if (existing) {
         // Update
-        const { error: updateError } = await supabase
+        const { data: updatedData, error: updateError } = await supabase
           .from('project_business_config' as any)
           .update({
             average_sale_value: configToSave.average_sale_value,
@@ -95,12 +124,17 @@ export function useBusinessImpact(projectId: string) {
             impact_window_days: configToSave.impact_window_days,
             baseline_conversion_percent: configToSave.baseline_conversion_percent,
           })
-          .eq('project_id', projectId);
+          .eq('project_id', projectId)
+          .select()
+          .single();
         
         if (updateError) throw updateError;
+        
+        // Update state with the returned data to ensure consistency
+        setConfig(normalizeConfig(updatedData, projectId));
       } else {
         // Insert
-        const { error: insertError } = await supabase
+        const { data: insertedData, error: insertError } = await supabase
           .from('project_business_config' as any)
           .insert({
             project_id: projectId,
@@ -109,12 +143,16 @@ export function useBusinessImpact(projectId: string) {
             cost_per_contact: configToSave.cost_per_contact,
             impact_window_days: configToSave.impact_window_days,
             baseline_conversion_percent: configToSave.baseline_conversion_percent,
-          });
+          })
+          .select()
+          .single();
         
         if (insertError) throw insertError;
+        
+        // Update state with the returned data
+        setConfig(normalizeConfig(insertedData, projectId));
       }
       
-      setConfig(configToSave as BusinessConfig);
       return true;
     } catch (err) {
       console.error('Error saving config:', err);
@@ -140,13 +178,17 @@ export function useBusinessImpact(projectId: string) {
           ...action,
           project_id: projectId,
           user_id: userData.user.id,
+          target_customers: action.target_customers ?? 0,
+          expected_conversion_percent: action.expected_conversion_percent ?? 0,
         })
         .select()
         .single();
       
       if (insertError) throw insertError;
       
-      setActions(prev => [data as unknown as ProjectAction, ...prev]);
+      // Normalize the returned action data
+      const normalizedAction = normalizeAction(data);
+      setActions(prev => [normalizedAction as ProjectAction, ...prev]);
       return true;
     } catch (err) {
       console.error('Error creating action:', err);
@@ -163,15 +205,19 @@ export function useBusinessImpact(projectId: string) {
     setError(null);
     
     try {
-      const { error: updateError } = await supabase
+      const { data: updatedData, error: updateError } = await supabase
         .from('project_actions' as any)
         .update(updates)
-        .eq('id', actionId);
+        .eq('id', actionId)
+        .select()
+        .single();
       
       if (updateError) throw updateError;
       
+      // Normalize and update the action in state
+      const normalizedAction = normalizeAction(updatedData);
       setActions(prev => prev.map(a => 
-        a.id === actionId ? { ...a, ...updates } : a
+        a.id === actionId ? normalizedAction as ProjectAction : a
       ));
       return true;
     } catch (err) {
@@ -207,16 +253,28 @@ export function useBusinessImpact(projectId: string) {
     }
   }, []);
 
-  // Calculate ROI for a single action
+  // Calculate ROI for a single action - uses normalized config values
   const calculateActionROI = useCallback((action: ProjectAction): ROICalculation | null => {
-    if (!config || action.observed_conversion_percent === null) return null;
+    // Only calculate if we have config and observed conversion
+    if (!config || action.observed_conversion_percent === null || action.observed_conversion_percent === undefined) {
+      return null;
+    }
     
-    const baselineConversion = action.expected_conversion_percent || config.baseline_conversion_percent;
-    const incrementalConversionPercent = action.observed_conversion_percent - baselineConversion;
-    const incrementalCustomers = Math.round((incrementalConversionPercent / 100) * action.target_customers);
-    const incrementalRevenue = incrementalCustomers * config.average_sale_value;
-    const incrementalProfit = incrementalRevenue * (config.average_margin_percent / 100);
-    const totalCost = action.target_customers * config.cost_per_contact;
+    // Use normalized values (already handled nulls in fetch/save)
+    const targetCustomers = action.target_customers ?? 0;
+    const observedConversion = action.observed_conversion_percent ?? 0;
+    const expectedConversion = action.expected_conversion_percent ?? 0;
+    const baselineConversion = expectedConversion || (config.baseline_conversion_percent ?? 0);
+    
+    const avgSaleValue = config.average_sale_value ?? 0;
+    const avgMarginPercent = config.average_margin_percent ?? 0;
+    const costPerContact = config.cost_per_contact ?? 0;
+    
+    const incrementalConversionPercent = observedConversion - baselineConversion;
+    const incrementalCustomers = Math.round((incrementalConversionPercent / 100) * targetCustomers);
+    const incrementalRevenue = incrementalCustomers * avgSaleValue;
+    const incrementalProfit = incrementalRevenue * (avgMarginPercent / 100);
+    const totalCost = targetCustomers * costPerContact;
     const netROI = incrementalProfit - totalCost;
     const roiPercent = totalCost > 0 ? (netROI / totalCost) * 100 : 0;
     
@@ -231,9 +289,14 @@ export function useBusinessImpact(projectId: string) {
     };
   }, [config]);
 
-  // Calculate total ROI across all completed actions
+  // Calculate total ROI across all completed actions - reactive to config and actions changes
   const totalROI = useMemo(() => {
-    const completedActions = actions.filter(a => a.status === 'completed' && a.observed_conversion_percent !== null);
+    // Filter only completed actions with observed conversion
+    const completedActions = actions.filter(a => 
+      a.status === 'completed' && 
+      a.observed_conversion_percent !== null && 
+      a.observed_conversion_percent !== undefined
+    );
     
     let totalIncrementalRevenue = 0;
     let totalIncrementalProfit = 0;
@@ -246,7 +309,8 @@ export function useBusinessImpact(projectId: string) {
         totalIncrementalRevenue += roi.incrementalRevenue;
         totalIncrementalProfit += roi.incrementalProfit;
         totalCost += roi.totalCost;
-        totalCustomersImpacted += action.target_customers;
+        // Handle potential null values
+        totalCustomersImpacted += action.target_customers ?? 0;
       }
     });
     
@@ -262,7 +326,7 @@ export function useBusinessImpact(projectId: string) {
       netROI,
       roiPercent,
     };
-  }, [actions, calculateActionROI]);
+  }, [actions, calculateActionROI, config]); // Added config dependency for full reactivity
 
   return {
     config,
