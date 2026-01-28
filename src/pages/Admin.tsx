@@ -1,7 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3 } from 'lucide-react';
+import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3, FileText } from 'lucide-react';
+import { ExportTechnicalReportButton } from '@/components/admin-analytics/ExportTechnicalReportButton';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
 import { useOrganization } from '@/contexts/OrganizationContext';
@@ -323,14 +324,15 @@ const Admin = () => {
       <Header title={t('admin.title')} subtitle={t('admin.subtitle')} />
 
       <main className="container mx-auto px-4 py-8">
-        {/* Analytics Link */}
-        <div className="mb-6">
+        {/* Analytics & Reports */}
+        <div className="mb-6 flex flex-wrap gap-3">
           <Link to="/admin/analytics">
             <Button variant="outline" className="gap-2">
               <BarChart3 className="w-4 h-4" />
               {t('admin.analytics')}
             </Button>
           </Link>
+          <ExportTechnicalReportButton variant="outline" />
         </div>
 
         {/* Stats Cards */}
