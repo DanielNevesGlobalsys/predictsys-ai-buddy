@@ -6,6 +6,7 @@ import { BrowserRouter, Routes, Route } from "react-router-dom";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { OrganizationProvider } from "@/contexts/OrganizationContext";
 import "@/i18n";
+import Favicon from "@/components/Favicon";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -27,6 +28,7 @@ const App = () => (
   <ThemeProvider>
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
+      <Favicon />
       <Toaster />
       <Sonner />
       <BrowserRouter>
