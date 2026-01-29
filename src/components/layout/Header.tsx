@@ -71,7 +71,7 @@ const Header = ({
             className="flex items-center gap-3 cursor-pointer" 
             onClick={() => navigate("/dashboard")}
           >
-            <PredictSysLogo size="md" className="flex-shrink-0" />
+            <PredictSysLogo size="md" className="sm:h-8 h-7" />
             {title ? (
               <div>
                 <h1 className="text-xl font-bold">{title}</h1>
