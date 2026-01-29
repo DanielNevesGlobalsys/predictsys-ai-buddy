@@ -26,11 +26,14 @@ export const PredictSysLogo = ({
   return (
     <div
       className={cn(
-        "flex items-center justify-center bg-gradient-to-br from-accent to-primary flex-shrink-0",
+        "flex items-center justify-center flex-shrink-0",
         config.container,
         config.rounded,
         className
       )}
+      style={{
+        background: "linear-gradient(135deg, #1ABCEC 0%, #1083E9 100%)"
+      }}
     >
       <Brain className={cn("text-white", config.icon)} />
     </div>
