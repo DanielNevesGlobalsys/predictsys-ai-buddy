@@ -131,7 +131,7 @@ const Auth = () => {
       <div className="w-full max-w-md space-y-8">
         {/* Logo */}
         <div className="text-center space-y-2">
-          <PredictSysLogo size="2xl" className="mx-auto mb-4" />
+          <PredictSysLogo size="3xl" className="mx-auto mb-4" />
           <h1 className="text-3xl font-display font-bold bg-gradient-primary bg-clip-text text-transparent">
             PredictSys AI
           </h1>

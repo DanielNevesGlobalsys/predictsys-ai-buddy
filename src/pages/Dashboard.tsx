@@ -143,7 +143,7 @@ const Dashboard = () => {
                 >
                   <div className="p-6">
                     <div className="flex items-start justify-between mb-4">
-                      <PredictSysLogo size="lg" />
+                      <PredictSysLogo size="sm" />
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
                           {statusInfo.label}
@@ -204,7 +204,7 @@ const Dashboard = () => {
             onClick={() => navigate("/guia-rapido")}
           >
             <div className="flex items-start gap-4">
-              <PredictSysLogo size="lg" className="flex-shrink-0" />
+              <PredictSysLogo size="sm" className="flex-shrink-0" />
               <div>
                 <h3 className="font-semibold mb-1">{t("dashboard.quickGuide")}</h3>
                 <p className="text-sm text-muted-foreground">
