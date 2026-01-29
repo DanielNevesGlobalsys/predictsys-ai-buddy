@@ -26,7 +26,7 @@ export const PredictSysLogo = ({
   return (
     <div
       className={cn(
-        "flex items-center justify-center bg-gradient-to-br from-primary to-accent flex-shrink-0",
+        "flex items-center justify-center bg-gradient-to-br from-accent to-primary flex-shrink-0",
         config.container,
         config.rounded,
         className
