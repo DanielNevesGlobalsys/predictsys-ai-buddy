@@ -58,7 +58,7 @@ const Landing = () => {
       <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <PredictSysLogo size="md" />
+            <PredictSysLogo size="md" className="flex-shrink-0" />
             <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
               PredictSys AI
             </h1>
@@ -196,7 +196,7 @@ const Landing = () => {
         <div className="container mx-auto px-4 py-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <PredictSysLogo size="sm" />
+              <PredictSysLogo size="sm" className="flex-shrink-0" />
               <span className="font-semibold">PredictSys AI</span>
             </div>
             <p className="text-sm text-muted-foreground">
