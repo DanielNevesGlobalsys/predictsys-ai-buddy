@@ -1,5 +1,5 @@
+import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
-import logoIcon from "@/assets/logo-icon.svg";
 
 interface PredictSysLogoProps {
   size?: "xs" | "sm" | "md" | "lg" | "xl" | "2xl" | "3xl";
@@ -8,13 +8,13 @@ interface PredictSysLogoProps {
 
 // Tamanhos do container e ícone
 const sizeConfig = {
-  xs: { container: "w-8 h-8", icon: "w-5 h-5", rounded: "rounded-lg" },
-  sm: { container: "w-10 h-10", icon: "w-6 h-6", rounded: "rounded-xl" },
-  md: { container: "w-11 h-11", icon: "w-7 h-7", rounded: "rounded-xl" },
-  lg: { container: "w-12 h-12", icon: "w-7 h-7", rounded: "rounded-xl" },
-  xl: { container: "w-14 h-14", icon: "w-8 h-8", rounded: "rounded-2xl" },
-  "2xl": { container: "w-16 h-16", icon: "w-10 h-10", rounded: "rounded-2xl" },
-  "3xl": { container: "w-20 h-20", icon: "w-12 h-12", rounded: "rounded-2xl" },
+  xs: { container: "w-8 h-8", icon: "w-4 h-4", rounded: "rounded-lg" },
+  sm: { container: "w-10 h-10", icon: "w-5 h-5", rounded: "rounded-xl" },
+  md: { container: "w-11 h-11", icon: "w-6 h-6", rounded: "rounded-xl" },
+  lg: { container: "w-12 h-12", icon: "w-6 h-6", rounded: "rounded-xl" },
+  xl: { container: "w-14 h-14", icon: "w-7 h-7", rounded: "rounded-2xl" },
+  "2xl": { container: "w-16 h-16", icon: "w-8 h-8", rounded: "rounded-2xl" },
+  "3xl": { container: "w-20 h-20", icon: "w-10 h-10", rounded: "rounded-2xl" },
 };
 
 export const PredictSysLogo = ({
@@ -35,11 +35,7 @@ export const PredictSysLogo = ({
         background: "linear-gradient(135deg, #1ABCEC 0%, #1083E9 100%)"
       }}
     >
-      <img 
-        src={logoIcon} 
-        alt="PredictSys Logo" 
-        className={cn(config.icon)}
-      />
+      <Brain className={cn("text-white", config.icon)} />
     </div>
   );
 };
