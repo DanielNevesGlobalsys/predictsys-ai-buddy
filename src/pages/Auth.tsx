@@ -5,12 +5,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Brain, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { z } from "zod";
 import GlobalControls from "@/components/layout/GlobalControls";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 const Auth = () => {
   const navigate = useNavigate();
@@ -130,8 +131,8 @@ const Auth = () => {
       <div className="w-full max-w-md space-y-8">
         {/* Logo */}
         <div className="text-center space-y-2">
-          <div className="w-16 h-16 bg-gradient-primary rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Brain className="w-9 h-9 text-primary-foreground" />
+          <div className="mx-auto mb-4">
+            <PredictSysLogo size="xl" className="mx-auto" />
           </div>
           <h1 className="text-3xl font-display font-bold bg-gradient-primary bg-clip-text text-transparent">
             PredictSys AI

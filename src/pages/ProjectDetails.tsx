@@ -8,7 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
-  Brain,
   ChevronLeft,
   Settings,
   BarChart3,
@@ -30,6 +29,7 @@ import SettingsTab from "@/components/project/SettingsTab";
 import { BusinessDashboard } from "@/components/business-dashboard";
 import { BusinessImpactTab } from "@/components/business-impact";
 import Header from "@/components/layout/Header";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 interface Project {
   id: string;
@@ -177,9 +177,7 @@ const ProjectDetails = () => {
             <Button variant="ghost" size="icon" onClick={() => navigate("/dashboard")}>
               <ChevronLeft className="w-5 h-5" />
             </Button>
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <PredictSysLogo size="md" />
             <div>
               <h1 className="text-xl font-bold">{project.name}</h1>
               <div className="flex items-center gap-2">

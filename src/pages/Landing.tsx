@@ -1,8 +1,9 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import { Brain, BarChart3, MessageSquare, Zap, Shield, TrendingUp, LayoutDashboard, Database } from "lucide-react";
+import { BarChart3, MessageSquare, Zap, Shield, TrendingUp, LayoutDashboard, Database, Cpu } from "lucide-react";
 import GlobalControls from "@/components/layout/GlobalControls";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 const Landing = () => {
   const navigate = useNavigate();
@@ -10,7 +11,7 @@ const Landing = () => {
 
   const features = [
     {
-      icon: Brain,
+      icon: Cpu,
       titleKey: "landing.features.automl",
       descKey: "landing.features.automlDesc"
     },
@@ -57,9 +58,7 @@ const Landing = () => {
       <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <PredictSysLogo size="md" />
             <h1 className="text-2xl font-bold bg-gradient-primary bg-clip-text text-transparent">
               PredictSys AI
             </h1>
@@ -197,9 +196,7 @@ const Landing = () => {
         <div className="container mx-auto px-4 py-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-gradient-primary rounded-lg flex items-center justify-center">
-                <Brain className="w-5 h-5 text-primary-foreground" />
-              </div>
+              <PredictSysLogo size="sm" />
               <span className="font-semibold">PredictSys AI</span>
             </div>
             <p className="text-sm text-muted-foreground">
