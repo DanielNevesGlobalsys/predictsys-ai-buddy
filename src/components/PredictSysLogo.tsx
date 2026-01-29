@@ -6,15 +6,15 @@ interface PredictSysLogoProps {
   className?: string;
 }
 
-// Tamanhos maiores para melhor visibilidade
+// Tamanhos controlados via CSS - altura fixa, largura automática
 const sizeClasses = {
-  xs: "w-10 h-10",     // 40px - cards pequenos
-  sm: "w-12 h-12",     // 48px - footer/cards
-  md: "w-14 h-14",     // 56px - navbar/header
-  lg: "w-16 h-16",     // 64px
-  xl: "w-20 h-20",     // 80px
-  "2xl": "w-24 h-24",  // 96px - login
-  "3xl": "w-32 h-32",  // 128px - splash/hero grande
+  xs: "h-6 w-auto",      // 24px
+  sm: "h-7 w-auto",      // 28px - mobile header
+  md: "h-8 w-auto",      // 32px - desktop header
+  lg: "h-10 w-auto",     // 40px
+  xl: "h-14 w-auto",     // 56px
+  "2xl": "h-20 w-auto",  // 80px
+  "3xl": "h-28 w-auto",  // 112px - login/splash
 };
 
 export const PredictSysLogo = ({
@@ -26,7 +26,7 @@ export const PredictSysLogo = ({
       src={logoImage}
       alt="PredictSys AI"
       className={cn(
-        "object-contain aspect-square flex-shrink-0",
+        "object-contain block flex-shrink-0",
         sizeClasses[size],
         className
       )}
