@@ -12,10 +12,10 @@ import {
   ArrowRight,
   Loader2,
   BookOpen,
+  Brain,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
-import PredictSysLogo from "@/components/PredictSysLogo";
 
 interface Project {
   id: string;
@@ -116,8 +116,8 @@ const Dashboard = () => {
           </div>
         ) : projects.length === 0 ? (
           <Card className="bg-gradient-card shadow-card p-12 text-center">
-            <div className="mx-auto mb-4">
-              <PredictSysLogo size="2xl" className="mx-auto opacity-50" />
+            <div className="mx-auto mb-4 w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center">
+              <Brain className="w-8 h-8 text-primary opacity-50" />
             </div>
             <h3 className="text-xl font-semibold mb-2">{t("dashboard.noProjects")}</h3>
             <p className="text-muted-foreground mb-6 max-w-md mx-auto">
@@ -143,7 +143,9 @@ const Dashboard = () => {
                 >
                   <div className="p-6">
                     <div className="flex items-start justify-between mb-4">
-                      <PredictSysLogo size="lg" />
+                      <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center">
+                        <Brain className="w-5 h-5 text-primary" />
+                      </div>
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
                           {statusInfo.label}
@@ -204,7 +206,9 @@ const Dashboard = () => {
             onClick={() => navigate("/guia-rapido")}
           >
             <div className="flex items-start gap-4">
-              <PredictSysLogo size="lg" />
+              <div className="w-10 h-10 bg-primary/10 rounded-xl flex items-center justify-center flex-shrink-0">
+                <BookOpen className="w-5 h-5 text-primary" />
+              </div>
               <div>
                 <h3 className="font-semibold mb-1">{t("dashboard.quickGuide")}</h3>
                 <p className="text-sm text-muted-foreground">

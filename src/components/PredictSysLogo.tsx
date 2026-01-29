@@ -9,12 +9,12 @@ interface PredictSysLogoProps {
 // Tamanhos controlados via CSS - altura fixa, largura automática
 const sizeClasses = {
   xs: "h-6 w-auto",      // 24px
-  sm: "h-7 w-auto",      // 28px - mobile header
-  md: "h-8 w-auto",      // 32px - desktop header
-  lg: "h-10 w-auto",     // 40px
-  xl: "h-14 w-auto",     // 56px
-  "2xl": "h-20 w-auto",  // 80px
-  "3xl": "h-28 w-auto",  // 112px - login/splash
+  sm: "h-7 w-auto",      // 28px - header mobile
+  md: "h-8 w-auto",      // 32px - header desktop
+  lg: "h-12 w-auto",     // 48px - landing
+  xl: "h-14 w-auto",     // 56px - landing grande
+  "2xl": "h-16 w-auto",  // 64px - login
+  "3xl": "h-20 w-auto",  // 80px
 };
 
 export const PredictSysLogo = ({
