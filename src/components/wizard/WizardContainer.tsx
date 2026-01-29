@@ -3,7 +3,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
-import { Brain, ChevronLeft } from "lucide-react";
+import { ChevronLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import GlobalControls from "@/components/layout/GlobalControls";
 import StepProjectInfo from "./steps/StepProjectInfo";
@@ -16,6 +16,7 @@ import StepDashboard from "./steps/StepDashboard";
 import { trackEvent } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useOrganization } from "@/contexts/OrganizationContext";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 export interface ProjectData {
   id?: string;
@@ -319,9 +320,7 @@ const WizardContainer = () => {
             <Button variant="ghost" size="icon" onClick={handleCancel}>
               <ChevronLeft className="w-5 h-5" />
             </Button>
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <PredictSysLogo size="md" />
             <div>
               <h1 className="text-xl font-bold">
                 {projectData.id ? t("wizard.editProject") : t("wizard.newProject")}
