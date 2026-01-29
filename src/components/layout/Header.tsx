@@ -68,7 +68,7 @@ const Header = ({
             </Button>
           )}
           <div 
-            className="flex items-center gap-2 cursor-pointer" 
+            className="flex items-center gap-3 cursor-pointer" 
             onClick={() => navigate("/dashboard")}
           >
             <PredictSysLogo size="md" />

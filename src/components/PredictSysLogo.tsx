@@ -1,4 +1,4 @@
-import logoImage from "@/assets/logo-predictsys.png";
+import { Brain } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface PredictSysLogoProps {
@@ -6,31 +6,34 @@ interface PredictSysLogoProps {
   className?: string;
 }
 
-// Tamanhos controlados via CSS - altura fixa, largura automática
-const sizeClasses = {
-  xs: "h-6 w-auto",      // 24px
-  sm: "h-7 w-auto",      // 28px - header mobile
-  md: "h-8 w-auto",      // 32px - header desktop
-  lg: "h-12 w-auto",     // 48px - landing
-  xl: "h-14 w-auto",     // 56px - landing grande
-  "2xl": "h-16 w-auto",  // 64px - login
-  "3xl": "h-20 w-auto",  // 80px
+// Tamanhos do container e ícone
+const sizeConfig = {
+  xs: { container: "w-8 h-8", icon: "w-4 h-4", rounded: "rounded-lg" },
+  sm: { container: "w-10 h-10", icon: "w-5 h-5", rounded: "rounded-xl" },
+  md: { container: "w-11 h-11", icon: "w-6 h-6", rounded: "rounded-xl" },
+  lg: { container: "w-12 h-12", icon: "w-6 h-6", rounded: "rounded-xl" },
+  xl: { container: "w-14 h-14", icon: "w-7 h-7", rounded: "rounded-2xl" },
+  "2xl": { container: "w-16 h-16", icon: "w-8 h-8", rounded: "rounded-2xl" },
+  "3xl": { container: "w-20 h-20", icon: "w-10 h-10", rounded: "rounded-2xl" },
 };
 
 export const PredictSysLogo = ({
   size = "md",
   className,
 }: PredictSysLogoProps) => {
+  const config = sizeConfig[size];
+  
   return (
-    <img
-      src={logoImage}
-      alt="PredictSys AI"
+    <div
       className={cn(
-        "object-contain block flex-shrink-0",
-        sizeClasses[size],
+        "flex items-center justify-center bg-gradient-to-br from-primary to-accent flex-shrink-0",
+        config.container,
+        config.rounded,
         className
       )}
-    />
+    >
+      <Brain className={cn("text-white", config.icon)} />
+    </div>
   );
 };
 
