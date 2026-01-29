@@ -8,11 +8,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Brain, LogOut, MessageSquare, Moon, Sun, Globe } from "lucide-react";
+import { LogOut, MessageSquare, Moon, Sun, Globe } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { useTheme } from "@/contexts/ThemeContext";
 import OrganizationSelector from "./OrganizationSelector";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 interface HeaderProps {
   showBackButton?: boolean;
@@ -56,11 +57,6 @@ const Header = ({
   };
 
   const currentLanguage = i18n.language;
-  const languageLabels: Record<string, string> = {
-    pt: "PT",
-    en: "EN",
-    es: "ES",
-  };
 
   return (
     <header className="border-b border-border/40 bg-card/50 backdrop-blur-sm sticky top-0 z-50">
@@ -75,9 +71,7 @@ const Header = ({
             className="flex items-center gap-3 cursor-pointer" 
             onClick={() => navigate("/dashboard")}
           >
-            <div className="w-10 h-10 bg-gradient-primary rounded-xl flex items-center justify-center">
-              <Brain className="w-6 h-6 text-primary-foreground" />
-            </div>
+            <PredictSysLogo size="md" />
             {title ? (
               <div>
                 <h1 className="text-xl font-bold">{title}</h1>

@@ -7,16 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import {
   PlusCircle,
-  Brain,
   Calendar,
   Database,
   ArrowRight,
   Loader2,
-  FolderKanban,
   BookOpen,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
+import PredictSysLogo from "@/components/PredictSysLogo";
 
 interface Project {
   id: string;
@@ -117,7 +116,9 @@ const Dashboard = () => {
           </div>
         ) : projects.length === 0 ? (
           <Card className="bg-gradient-card shadow-card p-12 text-center">
-            <Brain className="w-16 h-16 text-primary mx-auto mb-4 opacity-50" />
+            <div className="mx-auto mb-4">
+              <PredictSysLogo size="xl" className="mx-auto opacity-50" />
+            </div>
             <h3 className="text-xl font-semibold mb-2">{t("dashboard.noProjects")}</h3>
             <p className="text-muted-foreground mb-6 max-w-md mx-auto">
               {t("dashboard.noProjectsDesc")}
@@ -142,9 +143,7 @@ const Dashboard = () => {
                 >
                   <div className="p-6">
                     <div className="flex items-start justify-between mb-4">
-                      <div className="w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center">
-                        <Brain className="w-6 h-6 text-primary-foreground" />
-                      </div>
+                      <PredictSysLogo size="lg" />
                       <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
                         <span className={`text-xs px-2 py-1 rounded-full ${statusInfo.color}`}>
                           {statusInfo.label}
@@ -205,9 +204,7 @@ const Dashboard = () => {
             onClick={() => navigate("/guia-rapido")}
           >
             <div className="flex items-start gap-4">
-              <div className="w-12 h-12 bg-primary/10 rounded-xl flex items-center justify-center flex-shrink-0">
-                <Brain className="w-6 h-6 text-primary" />
-              </div>
+              <PredictSysLogo size="lg" className="flex-shrink-0" />
               <div>
                 <h3 className="font-semibold mb-1">{t("dashboard.quickGuide")}</h3>
                 <p className="text-sm text-muted-foreground">
