@@ -1656,7 +1656,11 @@
     "moveUser": "Mover Usuário",
     "userMoved": "Usuário movido com sucesso!",
     "sandboxOrg": "Organização Sandbox",
-    "sandboxDescription": "Esta é a organização de testes e trials. Usuários novos sem organização são alocados aqui com status pendente até serem aprovados."
+    "sandboxDescription": "Esta é a organização de testes e trials. Usuários novos sem organização são alocados aqui com status pendente até serem aprovados.",
+    "email": "E-mail",
+    "unknownUser": "Usuário desconhecido",
+    "usersRefreshed": "Lista de usuários atualizada!",
+    "multipleUsersFound": "Múltiplos usuários encontrados. Refine a busca."
   },
   "adminAnalytics": {
     "title": "PredictSys Analytics",
