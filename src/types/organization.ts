@@ -2,6 +2,7 @@
 
 export type AppRole = 'super_admin' | 'org_admin' | 'analyst' | 'viewer';
 export type OrgPlan = 'trial' | 'standard' | 'enterprise';
+export type UserStatus = 'active' | 'pending' | 'blocked';
 
 export interface Organization {
   id: string;
@@ -22,6 +23,7 @@ export interface OrganizationUser {
   organization_id: string;
   user_id: string;
   role: AppRole;
+  status: UserStatus;
   created_at: string;
 }
 
@@ -46,8 +48,16 @@ export const ROLE_LABELS: Record<AppRole, { pt: string; en: string; es: string }
   viewer: { pt: 'Visualizador', en: 'Viewer', es: 'Visualizador' },
 };
 
+export const STATUS_LABELS: Record<UserStatus, { pt: string; en: string; es: string }> = {
+  active: { pt: 'Ativo', en: 'Active', es: 'Activo' },
+  pending: { pt: 'Pendente', en: 'Pending', es: 'Pendiente' },
+  blocked: { pt: 'Bloqueado', en: 'Blocked', es: 'Bloqueado' },
+};
+
 export const PLAN_LABELS: Record<OrgPlan, { pt: string; en: string; es: string }> = {
   trial: { pt: 'Trial', en: 'Trial', es: 'Trial' },
   standard: { pt: 'Standard', en: 'Standard', es: 'Standard' },
   enterprise: { pt: 'Enterprise', en: 'Enterprise', es: 'Enterprise' },
 };
+
+export const SANDBOX_ORG_ID = 'b0000000-0000-0000-0000-000000000001';

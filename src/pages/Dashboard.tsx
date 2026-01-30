@@ -3,8 +3,10 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "react-router-dom";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { useOrganization } from "@/contexts/OrganizationContext";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   PlusCircle,
   Calendar,
@@ -12,6 +14,9 @@ import {
   ArrowRight,
   Loader2,
   BookOpen,
+  Lock,
+  Clock,
+  Ban,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
@@ -33,6 +38,7 @@ const Dashboard = () => {
   const navigate = useNavigate();
   const { toast } = useToast();
   const { t, i18n } = useTranslation();
+  const { isPendingAccess, isBlockedAccess, currentOrganization } = useOrganization();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -90,6 +96,36 @@ const Dashboard = () => {
       <Header />
 
       <main className="container mx-auto px-4 py-8">
+        {/* Pending Access Banner */}
+        {isPendingAccess && (
+          <Alert variant="default" className="mb-6 border-amber-500 bg-amber-50 dark:bg-amber-950/20">
+            <Lock className="h-5 w-5 text-amber-600" />
+            <AlertTitle className="text-amber-800 dark:text-amber-400 flex items-center gap-2">
+              <Clock className="h-4 w-4" />
+              {t('access.pendingTitle')}
+            </AlertTitle>
+            <AlertDescription className="text-amber-700 dark:text-amber-300 mt-2">
+              <p>{t('access.pendingDescription')}</p>
+              {currentOrganization && (
+                <p className="mt-1 font-medium">
+                  {t('access.pendingOrg', { org: currentOrganization.name })}
+                </p>
+              )}
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Blocked Access Banner */}
+        {isBlockedAccess && (
+          <Alert variant="destructive" className="mb-6">
+            <Ban className="h-5 w-5" />
+            <AlertTitle>{t('access.blockedTitle')}</AlertTitle>
+            <AlertDescription className="mt-2">
+              {t('access.blockedDescription')}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Hero Section */}
         <div className="mb-8 flex items-center justify-between">
           <div>
@@ -103,6 +139,7 @@ const Dashboard = () => {
           <Button
             onClick={() => navigate("/projeto/novo/wizard")}
             className="bg-gradient-primary hover:shadow-hover transition-all"
+            disabled={isPendingAccess || isBlockedAccess}
           >
             <PlusCircle className="w-4 h-4 mr-2" />
             {t("dashboard.newProject")}

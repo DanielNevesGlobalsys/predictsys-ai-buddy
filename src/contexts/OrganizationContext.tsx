@@ -1,15 +1,18 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
-import { Organization, OrganizationUser, AppRole } from '@/types/organization';
+import { Organization, OrganizationUser, AppRole, UserStatus, SANDBOX_ORG_ID } from '@/types/organization';
 
 interface OrganizationContextType {
   organizations: Organization[];
   currentOrganization: Organization | null;
   currentRole: AppRole | null;
+  currentStatus: UserStatus | null;
   userOrganizations: OrganizationUser[];
   isSuperAdmin: boolean;
   isOrgAdmin: boolean;
   isLoading: boolean;
+  isPendingAccess: boolean;
+  isBlockedAccess: boolean;
   setCurrentOrganization: (org: Organization | null) => void;
   refreshOrganizations: () => Promise<void>;
 }
@@ -33,6 +36,7 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
   const [userOrganizations, setUserOrganizations] = useState<OrganizationUser[]>([]);
   const [currentOrganization, setCurrentOrganizationState] = useState<Organization | null>(null);
   const [currentRole, setCurrentRole] = useState<AppRole | null>(null);
+  const [currentStatus, setCurrentStatus] = useState<UserStatus | null>(null);
   const [isSuperAdmin, setIsSuperAdmin] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -100,9 +104,10 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
         setCurrentOrganizationState(selectedOrg);
         localStorage.setItem('currentOrganizationId', selectedOrg.id);
 
-        // Set current role for the selected org
+        // Set current role and status for the selected org
         const userOrgRole = typedOrgUsers.find(ou => ou.organization_id === selectedOrg!.id);
         setCurrentRole(userOrgRole?.role || null);
+        setCurrentStatus(userOrgRole?.status || null);
       }
     } catch (error) {
       console.error('Error loading organizations:', error);
@@ -117,9 +122,11 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
       localStorage.setItem('currentOrganizationId', org.id);
       const userOrgRole = userOrganizations.find(ou => ou.organization_id === org.id);
       setCurrentRole(userOrgRole?.role || null);
+      setCurrentStatus(userOrgRole?.status || null);
     } else {
       localStorage.removeItem('currentOrganizationId');
       setCurrentRole(null);
+      setCurrentStatus(null);
     }
   }, [userOrganizations]);
 
@@ -138,6 +145,7 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
         setUserOrganizations([]);
         setCurrentOrganizationState(null);
         setCurrentRole(null);
+        setCurrentStatus(null);
         setIsSuperAdmin(false);
       }
     });
@@ -146,6 +154,8 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
   }, [loadOrganizations]);
 
   const isOrgAdmin = currentRole === 'org_admin' || isSuperAdmin;
+  const isPendingAccess = currentStatus === 'pending';
+  const isBlockedAccess = currentStatus === 'blocked';
 
   return (
     <OrganizationContext.Provider
@@ -153,10 +163,13 @@ export const OrganizationProvider: React.FC<OrganizationProviderProps> = ({ chil
         organizations,
         currentOrganization,
         currentRole,
+        currentStatus,
         userOrganizations,
         isSuperAdmin,
         isOrgAdmin,
         isLoading,
+        isPendingAccess,
+        isBlockedAccess,
         setCurrentOrganization,
         refreshOrganizations,
       }}
