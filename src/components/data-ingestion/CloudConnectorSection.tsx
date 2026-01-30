@@ -10,6 +10,7 @@ import { Cloud, Zap, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCirc
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
+import DatabricksSourceModeSelector from "./DatabricksSourceModeSelector";
 
 interface CloudConnectorSectionProps {
   projectData: ProjectData;
@@ -549,66 +550,53 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
       case "databricks":
         return (
           <>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.host")}</Label>
-              <Input
-                value={formData.host || ""}
-                onChange={(e) => handleInputChange("host", e.target.value)}
-                placeholder={t("dataIngestion.cloud.databricks.hostPlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("dataIngestion.cloud.databricks.hostHint")}
-              </p>
+            {/* Connection Settings */}
+            <div className="space-y-4 pb-4 border-b border-border">
+              <h4 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                {t("dataIngestion.cloud.databricks.connectionSettings")}
+              </h4>
+              <div className="space-y-2">
+                <Label>{t("dataIngestion.cloud.databricks.host")}</Label>
+                <Input
+                  value={formData.host || ""}
+                  onChange={(e) => handleInputChange("host", e.target.value)}
+                  placeholder={t("dataIngestion.cloud.databricks.hostPlaceholder")}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t("dataIngestion.cloud.databricks.hostHint")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>{t("dataIngestion.cloud.databricks.httpPath")}</Label>
+                <Input
+                  value={formData.http_path || ""}
+                  onChange={(e) => handleInputChange("http_path", e.target.value)}
+                  placeholder={t("dataIngestion.cloud.databricks.httpPathPlaceholder")}
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t("dataIngestion.cloud.databricks.httpPathHint")}
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>{t("dataIngestion.cloud.databricks.accessToken")}</Label>
+                <Input
+                  type={showPassword ? "text" : "password"}
+                  value={formData.access_token || ""}
+                  onChange={(e) => handleInputChange("access_token", e.target.value)}
+                  placeholder="dapi..."
+                />
+                <p className="text-xs text-muted-foreground">
+                  {t("dataIngestion.cloud.databricks.accessTokenHint")}
+                </p>
+              </div>
             </div>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.httpPath")}</Label>
-              <Input
-                value={formData.http_path || ""}
-                onChange={(e) => handleInputChange("http_path", e.target.value)}
-                placeholder={t("dataIngestion.cloud.databricks.httpPathPlaceholder")}
+
+            {/* Source Mode Selector */}
+            <div className="pt-4">
+              <DatabricksSourceModeSelector
+                formData={formData}
+                onFormDataChange={handleInputChange}
               />
-              <p className="text-xs text-muted-foreground">
-                {t("dataIngestion.cloud.databricks.httpPathHint")}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.accessToken")}</Label>
-              <Input
-                type={showPassword ? "text" : "password"}
-                value={formData.access_token || ""}
-                onChange={(e) => handleInputChange("access_token", e.target.value)}
-                placeholder="dapi..."
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("dataIngestion.cloud.databricks.accessTokenHint")}
-              </p>
-            </div>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.catalog")} <span className="text-muted-foreground text-xs">({t("common.optional") || "opcional"})</span></Label>
-              <Input
-                value={formData.catalog || ""}
-                onChange={(e) => handleInputChange("catalog", e.target.value)}
-                placeholder={t("dataIngestion.cloud.databricks.catalogPlaceholder")}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.schema")} <span className="text-muted-foreground text-xs">({t("common.optional") || "opcional"})</span></Label>
-              <Input
-                value={formData.schema || ""}
-                onChange={(e) => handleInputChange("schema", e.target.value)}
-                placeholder={t("dataIngestion.cloud.databricks.schemaPlaceholder")}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>{t("dataIngestion.cloud.databricks.tableName")}</Label>
-              <Input
-                value={formData.table_name || ""}
-                onChange={(e) => handleInputChange("table_name", e.target.value)}
-                placeholder={t("dataIngestion.cloud.databricks.tableNamePlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">
-                {t("dataIngestion.cloud.databricks.tableNameHint")}
-              </p>
             </div>
           </>
         );

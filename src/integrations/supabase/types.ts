@@ -82,6 +82,10 @@ export type Database = {
           last_sync_at: string | null
           name: string
           organization_id: string | null
+          source_mode: string | null
+          source_sql: string | null
+          source_sql_hash: string | null
+          source_table_full_name: string | null
           source_type: string
           sync_message: string | null
           sync_status: string | null
@@ -98,6 +102,10 @@ export type Database = {
           last_sync_at?: string | null
           name: string
           organization_id?: string | null
+          source_mode?: string | null
+          source_sql?: string | null
+          source_sql_hash?: string | null
+          source_table_full_name?: string | null
           source_type: string
           sync_message?: string | null
           sync_status?: string | null
@@ -114,6 +122,10 @@ export type Database = {
           last_sync_at?: string | null
           name?: string
           organization_id?: string | null
+          source_mode?: string | null
+          source_sql?: string | null
+          source_sql_hash?: string | null
+          source_table_full_name?: string | null
           source_type?: string
           sync_message?: string | null
           sync_status?: string | null
@@ -877,6 +889,69 @@ export type Database = {
             foreignKeyName: "project_columns_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_data_contract: {
+        Row: {
+          created_at: string
+          data_source_id: string | null
+          id: string
+          locked: boolean
+          locked_at: string | null
+          locked_reason: string | null
+          project_id: string
+          row_count_estimate: number | null
+          schema_snapshot: Json | null
+          source_definition: string
+          source_definition_hash: string | null
+          source_mode: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          data_source_id?: string | null
+          id?: string
+          locked?: boolean
+          locked_at?: string | null
+          locked_reason?: string | null
+          project_id: string
+          row_count_estimate?: number | null
+          schema_snapshot?: Json | null
+          source_definition: string
+          source_definition_hash?: string | null
+          source_mode?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          data_source_id?: string | null
+          id?: string
+          locked?: boolean
+          locked_at?: string | null
+          locked_reason?: string | null
+          project_id?: string
+          row_count_estimate?: number | null
+          schema_snapshot?: Json | null
+          source_definition?: string
+          source_definition_hash?: string | null
+          source_mode?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_data_contract_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_data_contract_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
             referencedRelation: "projects"
             referencedColumns: ["id"]
           },
