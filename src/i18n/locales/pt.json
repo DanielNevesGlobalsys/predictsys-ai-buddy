@@ -54,6 +54,15 @@
     "passwordPlaceholder": "••••••••",
     "namePlaceholder": "Seu Nome"
   },
+  "access": {
+    "pendingTitle": "Acesso Pendente",
+    "pendingDescription": "Seu cadastro foi realizado com sucesso, mas um administrador precisa liberar seu acesso à organização.",
+    "pendingOrg": "Organização: {{org}}",
+    "blockedTitle": "Acesso Bloqueado",
+    "blockedDescription": "Seu acesso a esta organização foi bloqueado. Entre em contato com um administrador.",
+    "noOrgTitle": "Sem Organização",
+    "noOrgDescription": "Você não está associado a nenhuma organização. Entre em contato com um administrador."
+  },
   "header": {
     "openChatbot": "Abrir Lys (ajuda)",
     "toggleTheme": "Alternar tema (claro/escuro)"
@@ -1566,6 +1575,7 @@
     "totalProjects": "Total de Projetos",
     "organizations": "Organizações",
     "searchOrgs": "Buscar organizações...",
+    "searchUsers": "Buscar usuários...",
     "newOrg": "Nova Organização",
     "newOrgDescription": "Crie uma nova organização para agrupar projetos e usuários.",
     "editOrg": "Editar Organização",
@@ -1602,6 +1612,7 @@
     "userNameOrEmail": "Nome ou E-mail do Usuário",
     "userNamePlaceholder": "Digite o nome do usuário cadastrado",
     "role": "Papel",
+    "status": "Status",
     "userName": "Nome",
     "addedAt": "Adicionado em",
     "changeRole": "Alterar Papel",
@@ -1622,7 +1633,30 @@
     "removeUserError": "Erro ao remover usuário",
     "analytics": "PredictSys Analytics",
     "analyticsTitle": "PredictSys Analytics",
-    "analyticsSubtitle": "Painel de métricas da plataforma"
+    "analyticsSubtitle": "Painel de métricas da plataforma",
+    "activeUsers": "Usuários Ativos",
+    "pendingUsers": "Usuários Pendentes",
+    "blockedUsers": "Usuários Bloqueados",
+    "pendingUsersAlert": "{{count}} usuário(s) aguardando aprovação",
+    "pendingUsersDescription": "Revise e aprove ou bloqueie os usuários pendentes para liberar o acesso à plataforma.",
+    "approveUser": "Aprovar Usuário",
+    "approveUserConfirm": "Deseja aprovar \"{{name}}\" para acessar a organização?",
+    "blockUser": "Bloquear Usuário",
+    "blockUserConfirm": "Deseja bloquear \"{{name}}\"? O usuário perderá acesso à organização.",
+    "unblockUser": "Desbloquear Usuário",
+    "userApproved": "Usuário aprovado com sucesso!",
+    "userBlocked": "Usuário bloqueado com sucesso!",
+    "approve": "Aprovar",
+    "block": "Bloquear",
+    "remove": "Remover",
+    "moveToOrg": "Mover para Organização",
+    "moveToOrgDescription": "Mova \"{{name}}\" para outra organização.",
+    "selectOrg": "Selecionar Organização",
+    "selectOrgPlaceholder": "Selecione a organização de destino",
+    "moveUser": "Mover Usuário",
+    "userMoved": "Usuário movido com sucesso!",
+    "sandboxOrg": "Organização Sandbox",
+    "sandboxDescription": "Esta é a organização de testes e trials. Usuários novos sem organização são alocados aqui com status pendente até serem aprovados."
   },
   "adminAnalytics": {
     "title": "PredictSys Analytics",
