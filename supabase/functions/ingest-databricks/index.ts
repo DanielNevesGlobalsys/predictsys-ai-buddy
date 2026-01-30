@@ -19,6 +19,55 @@ interface ColumnInfo {
 /**
  * Execute a SQL statement on Databricks and wait for results
  */
+/**
+ * Poll for statement completion
+ */
+async function pollStatementStatus(
+  host: string,
+  statementId: string,
+  accessToken: string,
+  maxRetries: number = 60,
+  intervalMs: number = 2000
+): Promise<any> {
+  const statusUrl = `https://${host}/api/2.0/sql/statements/${statementId}`;
+  
+  for (let i = 0; i < maxRetries; i++) {
+    const response = await fetch(statusUrl, {
+      method: 'GET',
+      headers: {
+        'Authorization': `Bearer ${accessToken}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`Failed to poll statement status: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const state = data.status?.state;
+    
+    console.log(`[ingest-databricks] Poll ${i + 1}/${maxRetries}: state=${state}`);
+    
+    if (state === 'SUCCEEDED') {
+      return data;
+    }
+    
+    if (state === 'FAILED' || state === 'CANCELED' || state === 'CLOSED') {
+      throw new Error(`Query ${state.toLowerCase()}: ${data.status?.error?.message || 'Unknown error'}`);
+    }
+    
+    // Wait before next poll
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  
+  throw new Error('Query timed out after maximum retries');
+}
+
+/**
+ * Execute a SQL statement on Databricks and wait for results
+ */
 async function executeDatabricksQuery(
   host: string,
   httpPath: string,
@@ -35,8 +84,8 @@ async function executeDatabricksQuery(
   const requestBody: Record<string, any> = {
     statement: sqlQuery,
     warehouse_id: warehouseId,
-    wait_timeout: "120s",
-    on_wait_timeout: "CANCEL"
+    wait_timeout: "50s", // Max allowed by Databricks API (5-50 seconds)
+    on_wait_timeout: "CONTINUE" // Continue execution, we'll poll for results
   };
   
   if (catalog && catalog.trim()) {
@@ -64,13 +113,13 @@ async function executeDatabricksQuery(
     throw new Error(`Databricks query failed: ${response.status} - ${errorText}`);
   }
 
-  const data = await response.json();
+  let data = await response.json();
+  const statementId = data.statement_id;
   
   // Check if we need to poll for results
   if (data.status?.state === 'PENDING' || data.status?.state === 'RUNNING') {
-    // Poll until complete (simplified - in production use statement_id to poll)
-    console.log(`[ingest-databricks] Query is ${data.status.state}, waiting...`);
-    throw new Error('Query is still running. Please try with a smaller dataset.');
+    console.log(`[ingest-databricks] Query is ${data.status.state}, polling for completion...`);
+    data = await pollStatementStatus(host, statementId, accessToken);
   }
   
   if (data.status?.state === 'FAILED') {
