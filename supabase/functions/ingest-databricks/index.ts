@@ -8,7 +8,14 @@ const corsHeaders = {
 
 // Limits for processing
 const MAX_ROWS_TO_FETCH = 100000;
-const FETCH_BATCH_SIZE = 10000;
+const PREVIEW_TIMEOUT_SECONDS = 30;
+
+// Forbidden SQL keywords for validation
+const FORBIDDEN_KEYWORDS = [
+  'INSERT', 'UPDATE', 'DELETE', 'MERGE', 'DROP',
+  'CREATE', 'ALTER', 'TRUNCATE', 'GRANT', 'REVOKE',
+  'EXECUTE', 'EXEC'
+];
 
 interface ColumnInfo {
   column_name: string;
@@ -17,8 +24,48 @@ interface ColumnInfo {
 }
 
 /**
- * Execute a SQL statement on Databricks and wait for results
+ * Validate SQL query for safety
  */
+function validateSQL(sql: string): { valid: boolean; error?: string } {
+  const trimmedSQL = sql.trim().toUpperCase();
+  
+  // Must start with SELECT
+  if (!trimmedSQL.startsWith("SELECT")) {
+    return { valid: false, error: "SQL deve começar com SELECT" };
+  }
+  
+  // Check for forbidden keywords
+  for (const keyword of FORBIDDEN_KEYWORDS) {
+    const regex = new RegExp(`\\b${keyword}\\b`, 'i');
+    if (regex.test(sql)) {
+      return { valid: false, error: `Palavra-chave proibida encontrada: ${keyword}` };
+    }
+  }
+  
+  return { valid: true };
+}
+
+/**
+ * Generate SHA256 hash for SQL
+ */
+async function hashSQL(sql: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(sql);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Wrap user SQL in safe subquery for preview
+ */
+function wrapSQLForPreview(userSQL: string, limit: number = 500): string {
+  return `SELECT * FROM (
+  ${userSQL.replace(/;+\s*$/, '')}
+) AS base_query
+LIMIT ${limit}`;
+}
+
 /**
  * Poll for statement completion
  */
@@ -224,7 +271,13 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    const { project_id, data_source_id, table_name: requestTableName } = await req.json();
+    const { 
+      project_id, 
+      data_source_id, 
+      table_name: requestTableName,
+      source_mode: requestSourceMode,
+      source_sql: requestSourceSQL
+    } = await req.json();
 
     console.log(`[ingest-databricks] Starting ingestion for project: ${project_id}, data source: ${data_source_id}`);
 
@@ -256,37 +309,80 @@ serve(async (req) => {
     }
 
     const connectionConfig = dataSource.connection_config as Record<string, any>;
-    const { host, http_path, access_token, catalog, schema, table_name: configTableName } = connectionConfig;
+    const { 
+      host, 
+      http_path, 
+      access_token, 
+      catalog, 
+      schema, 
+      table_name: configTableName,
+      source_mode: configSourceMode,
+      source_sql: configSourceSQL
+    } = connectionConfig;
 
-    // Use table_name from request or from config
-    const tableName = requestTableName || configTableName;
+    // Determine source mode and query
+    const sourceMode = requestSourceMode || configSourceMode || dataSource.source_mode || 'table';
+    let sourceDefinition: string;
+    let displayName: string;
+    let dataQuery: string;
 
-    if (!tableName) {
-      throw new Error('Table name is required. Please specify the table to import in the connection settings.');
+    if (sourceMode === 'sql') {
+      // SQL mode - use custom SQL
+      const sourceSQL = requestSourceSQL || configSourceSQL || dataSource.source_sql;
+      
+      if (!sourceSQL) {
+        throw new Error('SQL query is required for SQL source mode');
+      }
+      
+      // Validate SQL
+      const validation = validateSQL(sourceSQL);
+      if (!validation.valid) {
+        throw new Error(`SQL inválido: ${validation.error}`);
+      }
+      
+      sourceDefinition = sourceSQL;
+      displayName = 'Custom SQL Query';
+      
+      // Wrap SQL for safe execution with limit
+      dataQuery = wrapSQLForPreview(sourceSQL, MAX_ROWS_TO_FETCH);
+      
+      console.log(`[ingest-databricks] Using SQL mode with query: ${sourceSQL.substring(0, 100)}...`);
+    } else {
+      // Table mode - use table name
+      const tableName = requestTableName || configTableName;
+      
+      if (!tableName) {
+        throw new Error('Table name is required. Please specify the table to import in the connection settings.');
+      }
+      
+      sourceDefinition = tableName;
+      displayName = tableName;
+      dataQuery = `SELECT * FROM ${tableName} LIMIT ${MAX_ROWS_TO_FETCH}`;
+      
+      console.log(`[ingest-databricks] Using table mode with table: ${tableName}`);
     }
 
     // Clean host
     const cleanHost = host.replace(/^https?:\/\//, '').replace(/\/$/, '');
 
-    console.log(`[ingest-databricks] Connecting to ${cleanHost}, table: ${tableName}`);
+    console.log(`[ingest-databricks] Connecting to ${cleanHost}`);
 
-    // First, get row count
+    // Get row count (for table mode only, SQL mode we estimate from results)
     let totalRows = 0;
-    const countQuery = `SELECT COUNT(*) AS cnt FROM ${tableName}`;
-    try {
-      const countResult = await executeDatabricksQuery(cleanHost, http_path, access_token, countQuery, catalog, schema);
-      if (countResult.rows.length > 0) {
-        totalRows = parseInt(countResult.rows[0][0]) || 0;
+    if (sourceMode === 'table') {
+      const countQuery = `SELECT COUNT(*) AS cnt FROM ${sourceDefinition}`;
+      try {
+        const countResult = await executeDatabricksQuery(cleanHost, http_path, access_token, countQuery, catalog, schema);
+        if (countResult.rows.length > 0) {
+          totalRows = parseInt(countResult.rows[0][0]) || 0;
+        }
+      } catch (error) {
+        console.warn('[ingest-databricks] Could not get row count:', error);
       }
-    } catch (error) {
-      console.warn('[ingest-databricks] Could not get row count:', error);
     }
-    console.log(`[ingest-databricks] Total rows in table: ${totalRows}`);
+    console.log(`[ingest-databricks] Total rows estimated: ${totalRows}`);
 
-    // Fetch data with limit
-    const fetchLimit = Math.min(totalRows || MAX_ROWS_TO_FETCH, MAX_ROWS_TO_FETCH);
-    const dataQuery = `SELECT * FROM ${tableName} LIMIT ${fetchLimit}`;
-    
+    // Execute main query
     const { columns, rows, rowCount } = await executeDatabricksQuery(
       cleanHost, http_path, access_token, dataQuery, catalog, schema
     );
@@ -298,7 +394,7 @@ serve(async (req) => {
     console.log(`[ingest-databricks] Retrieved ${sampleRows} rows, ${columnsCount} columns`);
 
     if (sampleRows === 0) {
-      throw new Error(`No data found in table '${tableName}'`);
+      throw new Error(`No data found for source: ${displayName}`);
     }
 
     // Infer column types
@@ -313,8 +409,8 @@ serve(async (req) => {
 
     // Generate storage path
     const timestamp = Date.now();
-    const safeTableName = tableName.replace(/[^a-zA-Z0-9_]/g, '_');
-    const storagePath = `${project_id}/databricks_${safeTableName}_${timestamp}.csv`;
+    const safeName = displayName.replace(/[^a-zA-Z0-9_]/g, '_').substring(0, 50);
+    const storagePath = `${project_id}/databricks_${safeName}_${timestamp}.csv`;
 
     // Convert to CSV and upload
     const { fileSizeBytes } = await convertToCSVAndUpload(supabase, columns, rows, storagePath);
@@ -339,7 +435,7 @@ serve(async (req) => {
       .insert({
         project_id,
         user_id: projectData?.user_id,
-        name: `${dataSource.name} - ${tableName}`,
+        name: `${dataSource.name} - ${displayName}`,
         storage_path: storagePath,
         source_type: 'cloud',
         total_rows: totalRows,
@@ -350,7 +446,8 @@ serve(async (req) => {
         source_metadata: {
           connector_type: 'databricks',
           host: cleanHost,
-          table_name: tableName,
+          source_mode: sourceMode,
+          source_definition: sourceDefinition,
           catalog: catalog || null,
           schema: schema || null,
           data_source_id,
@@ -362,6 +459,43 @@ serve(async (req) => {
     if (datasetError) {
       console.error('[ingest-databricks] Error creating dataset:', datasetError);
       throw new Error(`Failed to create dataset: ${datasetError.message}`);
+    }
+
+    // Create or update project_data_contract
+    const sourceDefinitionHash = await hashSQL(sourceDefinition);
+    const { data: existingContract } = await supabase
+      .from('project_data_contract')
+      .select('id, locked')
+      .eq('project_id', project_id)
+      .single();
+
+    if (existingContract) {
+      if (!existingContract.locked) {
+        await supabase
+          .from('project_data_contract')
+          .update({
+            data_source_id,
+            source_mode: sourceMode,
+            source_definition: sourceDefinition,
+            source_definition_hash: sourceDefinitionHash,
+            schema_snapshot: columnInfos,
+            row_count_estimate: totalRows
+          })
+          .eq('id', existingContract.id);
+      }
+    } else {
+      await supabase
+        .from('project_data_contract')
+        .insert({
+          project_id,
+          data_source_id,
+          source_mode: sourceMode,
+          source_definition: sourceDefinition,
+          source_definition_hash: sourceDefinitionHash,
+          schema_snapshot: columnInfos,
+          row_count_estimate: totalRows,
+          locked: false
+        });
     }
 
     // Delete existing columns and insert new ones
@@ -383,6 +517,20 @@ serve(async (req) => {
       console.error('[ingest-databricks] Error inserting columns:', columnsError);
     }
 
+    // Update data source with source mode info
+    await supabase
+      .from("data_sources")
+      .update({
+        last_sync_at: new Date().toISOString(),
+        sync_status: "success",
+        sync_message: `Successfully ingested ${totalRows} rows from Databricks`,
+        source_mode: sourceMode,
+        source_sql: sourceMode === 'sql' ? sourceDefinition : null,
+        source_sql_hash: sourceMode === 'sql' ? sourceDefinitionHash : null,
+        source_table_full_name: sourceMode === 'table' ? sourceDefinition : null
+      })
+      .eq("id", data_source_id);
+
     // Update ingestion log
     await supabase
       .from("project_data_ingestion_logs")
@@ -390,19 +538,13 @@ serve(async (req) => {
         status: "success",
         rows_read: totalRows,
         rows_sampled: sampleRows,
-        completed_at: new Date().toISOString()
+        completed_at: new Date().toISOString(),
+        metadata: {
+          source_mode: sourceMode,
+          source_definition: sourceDefinition
+        }
       })
       .eq("id", logData.id);
-
-    // Update data source
-    await supabase
-      .from("data_sources")
-      .update({
-        last_sync_at: new Date().toISOString(),
-        sync_status: "success",
-        sync_message: `Successfully ingested ${totalRows} rows from Databricks`
-      })
-      .eq("id", data_source_id);
 
     // Update project
     await supabase
@@ -427,7 +569,8 @@ serve(async (req) => {
         rows_sampled: sampleRows,
         columns_count: columnsCount,
         storage_path: storagePath,
-        message: `Successfully ingested data from ${tableName}`
+        source_mode: sourceMode,
+        message: `Successfully ingested data from ${displayName}`
       }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },

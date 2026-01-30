@@ -1369,7 +1369,8 @@
         "schemaPlaceholder": "Ex: default, meu_schema",
         "tableName": "Nome da Tabela",
         "tableNamePlaceholder": "Ex: vendas, clientes, catalogo.schema.tabela",
-        "tableNameHint": "Nome completo da tabela. Pode incluir formato catalogo.schema.tabela."
+        "tableNameHint": "Nome completo da tabela. Pode incluir formato catalogo.schema.tabela.",
+        "connectionSettings": "Configurações de Conexão"
       },
       "azure": {
         "serverName": "Nome do servidor",
@@ -1396,6 +1397,34 @@
       },
       "errors": {
         "nameRequired": "O nome da conexão é obrigatório"
+      }
+    },
+    "databricksSource": {
+      "title": "Fonte de Dados / Regra de Negócio",
+      "description": "A fonte de dados definida aqui será utilizada em todas as etapas do projeto: EDA, treinamento, previsões, deploy e dashboards.",
+      "sourceMode": "Modo de Fonte de Dados",
+      "modeTable": "Tabela (Simples)",
+      "modeTableDesc": "Selecione uma tabela existente no seu Databricks",
+      "modeSQL": "SQL (Regra de Negócio)",
+      "modeSQLDesc": "Defina uma query SQL personalizada como fonte",
+      "catalog": "Catálogo",
+      "selectCatalog": "Selecione o catálogo",
+      "schema": "Schema",
+      "selectSchema": "Selecione o schema",
+      "table": "Tabela",
+      "selectTable": "Selecione a tabela",
+      "generatedQuery": "Query gerada automaticamente:",
+      "sqlQuery": "Query SQL (Regra de Negócio)",
+      "sqlOnlySelect": "⚠️ Somente SELECT é permitido",
+      "sqlDefinesDataset": "⚠️ Este SQL define o conjunto de dados oficial do projeto",
+      "sqlImpactWarning": "⚠️ Alterar esta regra impacta EDA, modelo, previsões e dashboards",
+      "previewSQL": "Pré-visualizar SQL (primeiras 10 linhas)",
+      "previewResults": "Preview: {{count}} colunas detectadas",
+      "locked": "Fonte de dados bloqueada",
+      "lockedReason": "A fonte de dados não pode ser alterada após o primeiro treinamento do modelo.",
+      "errors": {
+        "mustStartWithSelect": "A query deve começar com SELECT",
+        "forbiddenKeyword": "Palavra-chave proibida: {{keyword}}. Use apenas SELECT para leitura de dados."
       }
     },
     "import": {
