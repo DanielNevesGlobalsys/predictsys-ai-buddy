@@ -1,9 +1,9 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { 
   ArrowLeft, Plus, Users, MoreVertical, Pencil, Trash2, UserPlus, 
-  CheckCircle, Ban, ArrowRightLeft, Search, Shield, AlertCircle 
+  CheckCircle, Ban, ArrowRightLeft, Search, Shield, AlertCircle, Mail, RefreshCw
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -67,11 +67,12 @@ import {
 interface UserWithProfile {
   id: string;
   user_id: string;
+  organization_id: string;
   role: AppRole;
   status: UserStatus;
   created_at: string;
   profile: { full_name: string } | null;
-  email: string;
+  email: string | null;
 }
 
 const AdminOrgUsers = () => {
@@ -84,6 +85,7 @@ const AdminOrgUsers = () => {
   const [organization, setOrganization] = useState<Organization | null>(null);
   const [users, setUsers] = useState<UserWithProfile[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
   
   // Modal states
@@ -108,17 +110,7 @@ const AdminOrgUsers = () => {
   const targetOrgId = orgId || currentOrganization?.id;
   const isSandbox = targetOrgId === SANDBOX_ORG_ID;
 
-  useEffect(() => {
-    if (!isSuperAdmin && !isOrgAdmin) {
-      navigate('/dashboard');
-      return;
-    }
-    if (targetOrgId) {
-      loadOrganizationAndUsers();
-    }
-  }, [isSuperAdmin, isOrgAdmin, targetOrgId, navigate]);
-
-  const loadOrganizationAndUsers = async () => {
+  const loadOrganizationAndUsers = useCallback(async () => {
     if (!targetOrgId) return;
 
     try {
@@ -134,11 +126,26 @@ const AdminOrgUsers = () => {
       if (orgError) throw orgError;
       setOrganization(org as unknown as Organization);
 
-      // Load users with profiles
+      // Try to use edge function for complete user data with emails
+      try {
+        const { data: edgeFnData, error: edgeFnError } = await supabase.functions.invoke('get-org-users', {
+          body: { organization_id: targetOrgId },
+        });
+
+        if (!edgeFnError && edgeFnData?.users) {
+          setUsers(edgeFnData.users as UserWithProfile[]);
+          return;
+        }
+      } catch (e) {
+        console.warn('Edge function not available, falling back to direct query:', e);
+      }
+
+      // Fallback: Load users with profiles directly (without emails)
       const { data: orgUsers, error: usersError } = await supabase
         .from('organization_users' as any)
         .select('*')
-        .eq('organization_id', targetOrgId);
+        .eq('organization_id', targetOrgId)
+        .order('created_at', { ascending: false });
 
       if (usersError) throw usersError;
 
@@ -154,11 +161,12 @@ const AdminOrgUsers = () => {
         usersWithProfiles.push({
           id: orgUser.id,
           user_id: orgUser.user_id,
+          organization_id: orgUser.organization_id,
           role: orgUser.role as AppRole,
           status: (orgUser.status || 'active') as UserStatus,
           created_at: orgUser.created_at,
           profile: profile,
-          email: profile?.full_name || 'Usuário',
+          email: null, // Email not available without edge function
         });
       }
 
@@ -173,6 +181,33 @@ const AdminOrgUsers = () => {
     } finally {
       setIsLoading(false);
     }
+  }, [targetOrgId, t, toast]);
+
+  useEffect(() => {
+    if (!isSuperAdmin && !isOrgAdmin) {
+      navigate('/dashboard');
+      return;
+    }
+    if (targetOrgId) {
+      loadOrganizationAndUsers();
+    }
+  }, [isSuperAdmin, isOrgAdmin, targetOrgId, navigate, loadOrganizationAndUsers]);
+
+  // Reload when currentOrganization changes (if no orgId in URL)
+  useEffect(() => {
+    if (!orgId && currentOrganization?.id) {
+      loadOrganizationAndUsers();
+    }
+  }, [currentOrganization?.id, orgId, loadOrganizationAndUsers]);
+
+  const handleRefresh = async () => {
+    setIsRefreshing(true);
+    await loadOrganizationAndUsers();
+    setIsRefreshing(false);
+    toast({
+      title: t('common.success'),
+      description: t('admin.usersRefreshed'),
+    });
   };
 
   const handleInviteUser = async () => {
@@ -188,14 +223,27 @@ const AdminOrgUsers = () => {
     try {
       setIsSaving(true);
 
-      // For now, we'll look up the user by email in profiles
-      const { data: existingUser } = await supabase
+      // Search for user by email - we need to find them in profiles via their name
+      // or use the edge function if available
+      const { data: profiles } = await supabase
         .from('profiles')
-        .select('id')
-        .eq('full_name', inviteEmail)
-        .single();
+        .select('id, full_name')
+        .or(`full_name.ilike.%${inviteEmail}%`);
 
-      if (!existingUser) {
+      let userId: string | null = null;
+
+      if (profiles && profiles.length === 1) {
+        userId = profiles[0].id;
+      } else if (profiles && profiles.length > 1) {
+        toast({
+          title: t('common.error'),
+          description: t('admin.multipleUsersFound'),
+          variant: 'destructive',
+        });
+        return;
+      }
+
+      if (!userId) {
         toast({
           title: t('common.error'),
           description: t('admin.userNotFound'),
@@ -205,14 +253,14 @@ const AdminOrgUsers = () => {
       }
 
       // Check if already a member
-      const existingMemberRes = await (supabase as any)
+      const { data: existingMember } = await (supabase as any)
         .from('organization_users')
         .select('id')
         .eq('organization_id', targetOrgId)
-        .eq('user_id', existingUser.id)
-        .single();
+        .eq('user_id', userId)
+        .maybeSingle();
 
-      if (existingMemberRes.data) {
+      if (existingMember) {
         toast({
           title: t('common.error'),
           description: t('admin.userAlreadyMember'),
@@ -223,7 +271,7 @@ const AdminOrgUsers = () => {
 
       const { error } = await (supabase as any).from('organization_users').insert({
         organization_id: targetOrgId,
-        user_id: existingUser.id,
+        user_id: userId,
         role: inviteRole,
         status: 'active',
       });
@@ -457,6 +505,8 @@ const AdminOrgUsers = () => {
   );
 
   const pendingCount = users.filter(u => u.status === 'pending').length;
+  const activeCount = users.filter(u => u.status === 'active').length;
+  const blockedCount = users.filter(u => u.status === 'blocked').length;
 
   if (!isSuperAdmin && !isOrgAdmin) {
     return null;
@@ -516,9 +566,7 @@ const AdminOrgUsers = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-green-600">
-                {users.filter(u => u.status === 'active').length}
-              </div>
+              <div className="text-2xl font-bold text-green-600">{activeCount}</div>
             </CardContent>
           </Card>
           <Card>
@@ -528,9 +576,7 @@ const AdminOrgUsers = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-amber-600">
-                {users.filter(u => u.status === 'pending').length}
-              </div>
+              <div className="text-2xl font-bold text-amber-600">{pendingCount}</div>
             </CardContent>
           </Card>
           <Card>
@@ -540,9 +586,7 @@ const AdminOrgUsers = () => {
               </CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="text-2xl font-bold text-red-600">
-                {users.filter(u => u.status === 'blocked').length}
-              </div>
+              <div className="text-2xl font-bold text-red-600">{blockedCount}</div>
             </CardContent>
           </Card>
         </div>
@@ -570,6 +614,14 @@ const AdminOrgUsers = () => {
                     className="pl-9"
                   />
                 </div>
+                <Button 
+                  variant="outline" 
+                  size="icon" 
+                  onClick={handleRefresh}
+                  disabled={isRefreshing}
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                </Button>
                 <Button onClick={() => setIsInviteModalOpen(true)}>
                   <UserPlus className="w-4 h-4 mr-2" />
                   {t('admin.addUser')}
@@ -587,6 +639,7 @@ const AdminOrgUsers = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>{t('admin.userName')}</TableHead>
+                    <TableHead>{t('admin.email')}</TableHead>
                     <TableHead>{t('admin.role')}</TableHead>
                     <TableHead>{t('admin.status')}</TableHead>
                     <TableHead>{t('admin.addedAt')}</TableHead>
@@ -597,7 +650,13 @@ const AdminOrgUsers = () => {
                   {filteredUsers.map((user) => (
                     <TableRow key={user.id}>
                       <TableCell className="font-medium">
-                        {user.profile?.full_name || 'Usuário'}
+                        {user.profile?.full_name || t('admin.unknownUser')}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        <div className="flex items-center gap-2">
+                          <Mail className="w-4 h-4" />
+                          {user.email || '-'}
+                        </div>
                       </TableCell>
                       <TableCell>
                         <Badge variant={getRoleBadgeVariant(user.role)}>
@@ -664,7 +723,7 @@ const AdminOrgUsers = () => {
                   ))}
                   {filteredUsers.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-muted-foreground">
+                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">
                         {t('admin.noUsersFound')}
                       </TableCell>
                     </TableRow>
