@@ -690,7 +690,10 @@
     "features": "Variáveis Preditoras (Features)",
     "featuresDesc": "Selecione as colunas que serão usadas para fazer a previsão. Geralmente, quanto mais relevantes, melhor o modelo.",
     "selectTargetFirst": "Selecione primeiro a variável alvo",
-    "selectedCount": "{{count}} variável(is) selecionada(s)"
+    "selectedCount": "{{count}} variável(is) selecionada(s)",
+    "engineeredFeatures": "Features criadas (Feature Engineering)",
+    "createdFeature": "Feature",
+    "featureError": "Erro"
   },
   "stepTraining": {
     "title": "Treinamento de Modelos",

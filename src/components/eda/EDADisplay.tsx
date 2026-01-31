@@ -56,11 +56,13 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
   const [projectColumns, setProjectColumns] = useState<{ column_name: string; inferred_type: string }[]>([]);
+  const [enabledFeatureNames, setEnabledFeatureNames] = useState<string[]>([]);
 
   useEffect(() => {
     checkProjectDataset();
     loadEDAStats();
     loadProjectColumns();
+    loadEnabledFeatures();
   }, [projectId]);
 
   const loadProjectColumns = async () => {
@@ -76,6 +78,22 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       }
     } catch (error) {
       console.error("Error loading project columns:", error);
+    }
+  };
+
+  const loadEnabledFeatures = async () => {
+    try {
+      const { data, error } = await supabase
+        .from("project_features")
+        .select("name")
+        .eq("project_id", projectId)
+        .eq("enabled", true);
+      
+      if (!error && data) {
+        setEnabledFeatureNames(data.map(f => f.name));
+      }
+    } catch (error) {
+      console.error("Error loading enabled features:", error);
     }
   };
 
@@ -301,13 +319,20 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
           projectId={projectId}
           columns={projectColumns}
           onFeaturesChanged={() => {
-            // Features changed, user should recalculate EDA
+            // Features changed, user should recalculate EDA to include new features
+            loadEnabledFeatures();
           }}
         />
       )}
 
       {/* Numeric Section */}
-      {numericStats.length > 0 && <EDANumericSection stats={numericStats} totalRows={projectInfo.rows} />}
+      {numericStats.length > 0 && (
+        <EDANumericSection 
+          stats={numericStats} 
+          totalRows={projectInfo.rows} 
+          featureNames={enabledFeatureNames}
+        />
+      )}
 
       {/* Categorical Section */}
       {categoricalStats.length > 0 && <EDACategoricalSection stats={categoricalStats} totalRows={projectInfo.rows} />}
