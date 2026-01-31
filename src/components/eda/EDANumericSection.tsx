@@ -28,7 +28,7 @@ import {
   ResponsiveContainer,
   Cell,
 } from "recharts";
-import { TrendingUp, AlertTriangle, Info } from "lucide-react";
+import { TrendingUp, AlertTriangle, Info, Sparkles } from "lucide-react";
 import {
   Tooltip as UITooltip,
   TooltipContent,
@@ -50,9 +50,10 @@ interface NumericStat {
 interface EDANumericSectionProps {
   stats: NumericStat[];
   totalRows: number;
+  featureNames?: string[];
 }
 
-const EDANumericSection = ({ stats, totalRows }: EDANumericSectionProps) => {
+const EDANumericSection = ({ stats, totalRows, featureNames = [] }: EDANumericSectionProps) => {
   const { t } = useTranslation();
   const [selectedColumn, setSelectedColumn] = useState<string>(
     stats[0]?.column_name || ""
@@ -157,41 +158,54 @@ const EDANumericSection = ({ stats, totalRows }: EDANumericSectionProps) => {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {sortedStats.map((stat) => (
-                <TableRow 
-                  key={stat.id}
-                  className={selectedColumn === stat.column_name ? "bg-muted/50" : ""}
-                  onClick={() => setSelectedColumn(stat.column_name)}
-                  style={{ cursor: "pointer" }}
-                >
-                  <TableCell className="font-medium">{stat.column_name}</TableCell>
-                  <TableCell className="text-right">{formatNumber(stat.min_value)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(stat.max_value)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(stat.mean_value)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(stat.median_value)}</TableCell>
-                  <TableCell className="text-right">{formatNumber(stat.std_value)}</TableCell>
-                  <TableCell className="text-right">
-                    <span className={stat.null_count > totalRows * 0.1 ? "text-destructive font-medium" : ""}>
-                      {stat.null_count}
-                    </span>
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex gap-1">
-                      {hasOutlierWarning(stat) && (
-                        <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-600">
-                          <AlertTriangle className="w-3 h-3 mr-1" />
-                          {t("eda.numeric.outliers")}
-                        </Badge>
-                      )}
-                      {stat.null_count > totalRows * 0.2 && (
-                        <Badge variant="outline" className="text-xs border-destructive text-destructive">
-                          {t("eda.numeric.highMissing")}
-                        </Badge>
-                      )}
-                    </div>
-                  </TableCell>
-                </TableRow>
-              ))}
+              {sortedStats.map((stat) => {
+                const isFeature = featureNames.includes(stat.column_name);
+                return (
+                  <TableRow 
+                    key={stat.id}
+                    className={`${selectedColumn === stat.column_name ? "bg-muted/50" : ""} ${isFeature ? "bg-secondary/5" : ""}`}
+                    onClick={() => setSelectedColumn(stat.column_name)}
+                    style={{ cursor: "pointer" }}
+                  >
+                    <TableCell className="font-medium">
+                      <div className="flex items-center gap-2">
+                        {stat.column_name}
+                        {isFeature && (
+                          <Badge variant="secondary" className="text-xs">
+                            <Sparkles className="w-3 h-3 mr-1" />
+                            Feature
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                    <TableCell className="text-right">{formatNumber(stat.min_value)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(stat.max_value)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(stat.mean_value)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(stat.median_value)}</TableCell>
+                    <TableCell className="text-right">{formatNumber(stat.std_value)}</TableCell>
+                    <TableCell className="text-right">
+                      <span className={stat.null_count > totalRows * 0.1 ? "text-destructive font-medium" : ""}>
+                        {stat.null_count}
+                      </span>
+                    </TableCell>
+                    <TableCell>
+                      <div className="flex gap-1">
+                        {hasOutlierWarning(stat) && (
+                          <Badge variant="outline" className="text-xs border-yellow-500 text-yellow-600">
+                            <AlertTriangle className="w-3 h-3 mr-1" />
+                            {t("eda.numeric.outliers")}
+                          </Badge>
+                        )}
+                        {stat.null_count > totalRows * 0.2 && (
+                          <Badge variant="outline" className="text-xs border-destructive text-destructive">
+                            {t("eda.numeric.highMissing")}
+                          </Badge>
+                        )}
+                      </div>
+                    </TableCell>
+                  </TableRow>
+                );
+              })}
             </TableBody>
           </Table>
         </div>

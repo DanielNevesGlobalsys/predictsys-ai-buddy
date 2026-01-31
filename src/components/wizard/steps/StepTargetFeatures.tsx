@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -11,9 +12,10 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2 } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { ProjectData } from "../WizardContainer";
+import type { FeatureExpression } from "@/lib/featureEngineering";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -27,6 +29,9 @@ interface StepTargetFeaturesProps {
 interface ColumnInfo {
   name: string;
   type: string;
+  isFeature?: boolean;
+  featureLabel?: string;
+  featureHasError?: boolean;
 }
 
 const StepTargetFeatures = ({
@@ -60,8 +65,9 @@ const StepTargetFeatures = ({
 
   useEffect(() => {
     if (columns.length > 0 && selectedFeatures.length === 0) {
+      // Select all features (original + engineered) by default
       const features = columns
-        .filter((c) => c.name !== targetColumn)
+        .filter((c) => c.name !== targetColumn && !c.featureHasError)
         .map((c) => c.name);
       setSelectedFeatures(features);
     }
@@ -70,27 +76,63 @@ const StepTargetFeatures = ({
   const loadColumns = async () => {
     setLoadingColumns(true);
     try {
-      const { data, error } = await supabase
+      // Load original columns
+      const { data: colData, error: colError } = await supabase
         .from("project_columns")
         .select("column_name, inferred_type")
         .eq("project_id", projectData.id)
         .order("column_index");
 
-      if (error) {
-        console.error("Error loading columns:", error);
+      if (colError) {
+        console.error("Error loading columns:", colError);
         return;
       }
 
-      if (data && data.length > 0) {
-        const cols = data.map((col) => ({
-          name: col.column_name,
-          type: col.inferred_type,
-        }));
-        setColumns(cols);
+      // Load enabled project features (feature engineering)
+      const { data: featureData, error: featureError } = await supabase
+        .from("project_features")
+        .select("name, label, enabled, expression")
+        .eq("project_id", projectData.id)
+        .eq("enabled", true);
 
-        if (projectData.target_column && cols.some((c) => c.name === projectData.target_column)) {
-          setTargetColumn(projectData.target_column);
+      if (featureError) {
+        console.error("Error loading features:", featureError);
+      }
+
+      const cols: ColumnInfo[] = [];
+      
+      // Add original columns
+      if (colData && colData.length > 0) {
+        for (const col of colData) {
+          cols.push({
+            name: col.column_name,
+            type: col.inferred_type,
+            isFeature: false,
+          });
         }
+      }
+
+      // Add engineered features as columns (they produce numeric values)
+      if (featureData && featureData.length > 0) {
+        for (const feature of featureData) {
+          // Validate feature expression
+          const expr = feature.expression as FeatureExpression | null;
+          const hasError = !expr || !expr.type;
+          
+          cols.push({
+            name: feature.name,
+            type: "numérico",
+            isFeature: true,
+            featureLabel: feature.label,
+            featureHasError: hasError,
+          });
+        }
+      }
+
+      setColumns(cols);
+
+      if (projectData.target_column && cols.some((c) => c.name === projectData.target_column)) {
+        setTargetColumn(projectData.target_column);
       }
     } catch (err) {
       console.error("Error loading columns:", err);
@@ -229,31 +271,89 @@ const StepTargetFeatures = ({
             {t("stepVariables.featuresDesc")}
           </p>
 
-          <div className="bg-muted/30 rounded-xl p-4 space-y-3 max-h-64 overflow-y-auto">
+        <div className="bg-muted/30 rounded-xl p-4 space-y-3 max-h-64 overflow-y-auto">
             {availableFeatures.length > 0 ? (
-              availableFeatures.map((col) => (
-                <div
-                  key={col.name}
-                  className="flex items-center justify-between p-3 bg-background rounded-lg hover:bg-muted/50 transition-colors"
-                >
-                  <div className="flex items-center gap-3">
-                    <Checkbox
-                      id={col.name}
-                      checked={selectedFeatures.includes(col.name)}
-                      onCheckedChange={() => toggleFeature(col.name)}
-                    />
-                    <label
-                      htmlFor={col.name}
-                      className="font-medium cursor-pointer"
-                    >
-                      {col.name}
-                    </label>
+              <>
+                {/* Original columns first */}
+                {availableFeatures.filter(col => !col.isFeature).map((col) => (
+                  <div
+                    key={col.name}
+                    className="flex items-center justify-between p-3 bg-background rounded-lg hover:bg-muted/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Checkbox
+                        id={col.name}
+                        checked={selectedFeatures.includes(col.name)}
+                        onCheckedChange={() => toggleFeature(col.name)}
+                      />
+                      <label
+                        htmlFor={col.name}
+                        className="font-medium cursor-pointer"
+                      >
+                        {col.name}
+                      </label>
+                    </div>
+                    <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
+                      {col.type}
+                    </span>
                   </div>
-                  <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
-                    {col.type}
-                  </span>
-                </div>
-              ))
+                ))}
+                
+                {/* Engineered features section */}
+                {availableFeatures.filter(col => col.isFeature).length > 0 && (
+                  <>
+                    <div className="flex items-center gap-2 pt-2 pb-1 px-1">
+                      <Sparkles className="w-4 h-4 text-secondary" />
+                      <span className="text-sm font-medium text-secondary">
+                        {t("stepVariables.engineeredFeatures", "Features criadas")}
+                      </span>
+                    </div>
+                    {availableFeatures.filter(col => col.isFeature).map((col) => (
+                      <div
+                        key={col.name}
+                        className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
+                          col.featureHasError 
+                            ? "bg-destructive/10 border border-destructive/30" 
+                            : "bg-secondary/5 border border-secondary/20 hover:bg-secondary/10"
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <Checkbox
+                            id={col.name}
+                            checked={selectedFeatures.includes(col.name)}
+                            onCheckedChange={() => toggleFeature(col.name)}
+                            disabled={col.featureHasError}
+                          />
+                          <div className="flex flex-col">
+                            <label
+                              htmlFor={col.name}
+                              className={`font-medium cursor-pointer ${col.featureHasError ? "text-muted-foreground" : ""}`}
+                            >
+                              {col.featureLabel || col.name}
+                            </label>
+                            <span className="text-xs text-muted-foreground font-mono">
+                              {col.name}
+                            </span>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {col.featureHasError ? (
+                            <Badge variant="destructive" className="text-xs">
+                              <AlertCircle className="w-3 h-3 mr-1" />
+                              {t("stepVariables.featureError", "Erro")}
+                            </Badge>
+                          ) : (
+                            <Badge variant="secondary" className="text-xs">
+                              <Sparkles className="w-3 h-3 mr-1" />
+                              {t("stepVariables.createdFeature", "Feature")}
+                            </Badge>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </>
             ) : (
               <p className="text-center text-muted-foreground py-4">
                 {t("stepVariables.selectTargetFirst")}
