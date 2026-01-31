@@ -1261,6 +1261,8 @@
   },
   "organization": {
     "select": "Select organization",
+    "selectRequired": "Select an Organization",
+    "selectToViewProjects": "Select an organization in the dropdown above to view projects.",
     "settings": "Organization Settings",
     "adminPanel": "Admin Panel",
     "overview": "Overview",
