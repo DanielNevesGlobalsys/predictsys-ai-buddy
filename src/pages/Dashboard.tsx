@@ -17,6 +17,7 @@ import {
   Lock,
   Clock,
   Ban,
+  Building2,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import ProjectCardMenu from "@/components/project/ProjectCardMenu";
@@ -51,12 +52,23 @@ const Dashboard = () => {
 
   useEffect(() => {
     loadProjects();
-  }, []);
+  }, [currentOrganization?.id]);
 
   const loadProjects = async () => {
+    // Reset loading state when organization changes
+    setLoading(true);
+    setProjects([]);
+
+    // If no organization is selected, don't fetch projects
+    if (!currentOrganization?.id) {
+      setLoading(false);
+      return;
+    }
+
     const { data, error } = await supabase
       .from("projects")
       .select("*")
+      .eq("organization_id", currentOrganization.id)
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -151,6 +163,16 @@ const Dashboard = () => {
           <div className="flex items-center justify-center py-12">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
           </div>
+        ) : !currentOrganization ? (
+          <Card className="bg-gradient-card shadow-card p-12 text-center">
+            <div className="mx-auto mb-4">
+              <Building2 className="w-16 h-16 mx-auto text-muted-foreground opacity-60" />
+            </div>
+            <h3 className="text-xl font-semibold mb-2">{t("organization.selectRequired")}</h3>
+            <p className="text-muted-foreground mb-6 max-w-md mx-auto">
+              {t("organization.selectToViewProjects")}
+            </p>
+          </Card>
         ) : projects.length === 0 ? (
           <Card className="bg-gradient-card shadow-card p-12 text-center">
             <div className="mx-auto mb-4">

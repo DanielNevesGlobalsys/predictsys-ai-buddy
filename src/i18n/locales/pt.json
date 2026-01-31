@@ -1553,6 +1553,8 @@
   },
   "organization": {
     "select": "Selecionar organização",
+    "selectRequired": "Selecione uma Organização",
+    "selectToViewProjects": "Selecione uma organização no seletor acima para visualizar os projetos.",
     "settings": "Configurações da Organização",
     "adminPanel": "Painel de Admin",
     "overview": "Visão Geral",
