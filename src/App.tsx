@@ -21,6 +21,7 @@ import OrgSettings from "./pages/OrgSettings";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import WizardContainer from "./components/wizard/WizardContainer";
+import { ExecutiveHome, ExecutiveProject } from "./pages/executive";
 
 const queryClient = new QueryClient();
 
@@ -121,6 +122,23 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <ProjectDetails />
+                </ProtectedRoute>
+              } 
+            />
+            {/* Executive App (Mobile-First) */}
+            <Route 
+              path="/executivo" 
+              element={
+                <ProtectedRoute>
+                  <ExecutiveHome />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
+              path="/executivo/projeto/:projectId" 
+              element={
+                <ProtectedRoute>
+                  <ExecutiveProject />
                 </ProtectedRoute>
               } 
             />
