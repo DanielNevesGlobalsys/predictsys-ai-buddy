@@ -15,9 +15,9 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon.ico', 'pwa/icon-192.png', 'pwa/icon-512.png', 'pwa/apple-touch-icon-180.png'],
+      includeAssets: ['favicon.svg', 'pwa/icon-192.png', 'pwa/icon-512.png', 'pwa/apple-touch-icon-180.png'],
       manifest: {
-        id: 'predictsys-ai-app-v2',
+        id: 'predictsys-ai-app-v3',
         name: 'PredictSys AI',
         short_name: 'PredictSys',
         description: 'IA traduzindo dados em decisões de negócio',
@@ -25,35 +25,35 @@ export default defineConfig(({ mode }) => ({
         background_color: '#0f172a',
         display: 'standalone',
         orientation: 'portrait',
-        scope: '/',
+        scope: '/app/',
         start_url: '/app',
         icons: [
           {
-            src: '/pwa/icon-192.png',
+            src: '/pwa/icon-192.png?v=20260204',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-512.png',
+            src: '/pwa/icon-512.png?v=20260204',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-192-maskable.png',
+            src: '/pwa/icon-192-maskable.png?v=20260204',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/icon-512-maskable.png',
+            src: '/pwa/icon-512-maskable.png?v=20260204',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/apple-touch-icon-180.png',
+            src: '/pwa/apple-touch-icon-180.png?v=20260204',
             sizes: '180x180',
             type: 'image/png',
             purpose: 'any'

@@ -8,8 +8,9 @@ import {
   ChevronLeft 
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import { supabase } from '@/integrations/supabase/client';
 import logoBox from '@/assets/logo-box.svg';
+
+const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
 
 interface OnboardingStep {
   icon: React.ReactNode;
@@ -63,20 +64,11 @@ const AppOnboarding = () => {
     }
   };
 
-  const handleFinish = async () => {
-    try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
-        await supabase
-          .from('profiles')
-          .update({ onboarding_done: true })
-          .eq('id', session.user.id);
-      }
-    } catch (error) {
-      console.error('Error updating onboarding status:', error);
-    }
-    
-    navigate('/app/home', { replace: true });
+  const handleFinish = () => {
+    // Save onboarding as seen in localStorage
+    localStorage.setItem(ONBOARDING_KEY, 'true');
+    // Navigate to login
+    navigate('/app/login', { replace: true });
   };
 
   const isLastStep = currentStep === steps.length - 1;
@@ -173,7 +165,7 @@ const AppOnboarding = () => {
             className="flex-1 h-14 text-base bg-primary hover:bg-primary/90"
           >
             {isLastStep ? (
-              'Entrar no App'
+              'Continuar'
             ) : (
               <>
                 Próximo

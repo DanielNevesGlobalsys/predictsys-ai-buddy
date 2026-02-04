@@ -3,50 +3,51 @@ import { useNavigate } from 'react-router-dom';
 import { supabase } from '@/integrations/supabase/client';
 import logoBox from '@/assets/logo-box.svg';
 
+const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
+
 /**
  * Splash screen only for APP mode (/app/* routes or standalone PWA)
  * Flow:
  * 1. Show animated splash (1.5s)
- * 2. Check auth status
- * 3. If not logged in -> /app/login (app-specific login)
- * 4. If logged in but no onboarding -> /app/bem-vindo
- * 5. If logged in with onboarding done -> /app/home
+ * 2. Check if onboarding was seen (localStorage)
+ * 3. If not seen -> /app/bem-vindo (onboarding)
+ * 4. If seen, check auth:
+ *    - Not logged in -> /app/login
+ *    - Logged in -> /app/home
  */
 const AppSplash = () => {
   const navigate = useNavigate();
   const [isAnimating, setIsAnimating] = useState(true);
 
   useEffect(() => {
-    const checkAuthAndRedirect = async () => {
+    const checkAndRedirect = async () => {
       // Wait for animation to complete
       await new Promise((resolve) => setTimeout(resolve, 1500));
       setIsAnimating(false);
 
+      // Check if onboarding was already seen (localStorage)
+      const onboardingSeen = localStorage.getItem(ONBOARDING_KEY) === 'true';
+
+      if (!onboardingSeen) {
+        // First time user - show onboarding
+        navigate('/app/bem-vindo', { replace: true });
+        return;
+      }
+
+      // Onboarding was seen, check auth status
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session) {
-        // Not logged in - go to app login (NOT web /auth)
+        // Not logged in - go to app login
         navigate('/app/login', { replace: true });
         return;
       }
 
-      // Check if onboarding is done
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('onboarding_done')
-        .eq('id', session.user.id)
-        .maybeSingle();
-
-      const onboardingDone = profile?.onboarding_done ?? false;
-      
-      if (!onboardingDone) {
-        navigate('/app/bem-vindo', { replace: true });
-      } else {
-        navigate('/app/home', { replace: true });
-      }
+      // Logged in - go to app home
+      navigate('/app/home', { replace: true });
     };
 
-    checkAuthAndRedirect();
+    checkAndRedirect();
   }, [navigate]);
 
   return (
