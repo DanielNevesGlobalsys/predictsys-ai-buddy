@@ -10,4 +10,3 @@ export { default as AppLys } from './AppLys';
 export { default as AppSettings } from './AppSettings';
 export { default as AppDocs } from './AppDocs';
 export { default as AppQuickGuide } from './AppQuickGuide';
-export { default as AppInstall } from './AppInstall';

@@ -7,7 +7,6 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { OrganizationProvider } from "@/contexts/OrganizationContext";
 import "@/i18n";
 import Favicon from "@/components/Favicon";
-import PwaInstallGate from "@/components/PwaInstallGate";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -35,8 +34,7 @@ import {
   AppLys,
   AppSettings,
   AppDocs,
-  AppQuickGuide,
-  AppInstall
+  AppQuickGuide
 } from "./pages/app";
 
 const queryClient = new QueryClient();
@@ -50,7 +48,6 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <OrganizationProvider>
-          <PwaInstallGate>
             <Routes>
               {/* ========================================
                   WEB MODE - Desktop/Full Experience
@@ -170,9 +167,6 @@ const App = () => (
                 APP MODE - Mobile-First / PWA Experience
                 ======================================== */}
             
-            {/* App Install Gate - Forces installation on mobile */}
-            <Route path="/app/install" element={<AppInstall />} />
-            
             {/* App Entry Point (Splash Screen) */}
             <Route path="/app" element={<AppSplash />} />
             
@@ -271,10 +265,9 @@ const App = () => (
             <Route path="/executivo/impacto" element={<Navigate to="/app/impacto" replace />} />
             <Route path="/bem-vindo" element={<Navigate to="/app/bem-vindo" replace />} />
             
-              {/* Catch-all */}
-              <Route path="*" element={<NotFound />} />
-            </Routes>
-          </PwaInstallGate>
+            {/* Catch-all */}
+            <Route path="*" element={<NotFound />} />
+          </Routes>
         </OrganizationProvider>
       </BrowserRouter>
     </TooltipProvider>
