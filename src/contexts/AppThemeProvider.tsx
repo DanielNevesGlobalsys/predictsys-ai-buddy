@@ -1,31 +1,66 @@
-import { ReactNode, useEffect } from 'react';
+import { ReactNode, useEffect, useState, createContext, useContext } from 'react';
+
+const APP_THEME_KEY = 'predictsys_app_theme';
+
+interface AppThemeContextType {
+  theme: 'dark' | 'light';
+  setTheme: (theme: 'dark' | 'light') => void;
+}
+
+const AppThemeContext = createContext<AppThemeContextType | undefined>(undefined);
 
 /**
- * App-specific theme provider that forces dark mode for the PWA/App experience.
- * This is separate from the web ThemeProvider to ensure the app is always dark.
+ * App-specific theme provider for PWA/App experience.
+ * Reads and persists theme preference to localStorage.
+ * Default is 'dark' if no preference is saved.
  */
 export function AppThemeProvider({ children }: { children: ReactNode }) {
+  const [theme, setThemeState] = useState<'dark' | 'light'>(() => {
+    // Initialize from localStorage or default to dark
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem(APP_THEME_KEY);
+      return saved === 'light' ? 'light' : 'dark';
+    }
+    return 'dark';
+  });
+
+  const setTheme = (newTheme: 'dark' | 'light') => {
+    setThemeState(newTheme);
+    localStorage.setItem(APP_THEME_KEY, newTheme);
+  };
+
+  // Apply theme to document on mount and when theme changes
   useEffect(() => {
-    // Force dark mode for app
     const root = document.documentElement;
-    root.classList.remove('light');
-    root.classList.add('dark');
     
-    // Update theme-color meta tag for app bar
-    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
-    if (themeColorMeta) {
-      themeColorMeta.setAttribute('content', '#0f172a');
+    if (theme === 'dark') {
+      root.classList.remove('light');
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
     }
     
-    // Also set localStorage to prevent flash on reload
-    localStorage.setItem('predictsys-theme', 'dark');
-    
-    return () => {
-      // Cleanup not needed as app stays dark
-    };
-  }, []);
+    // Update theme-color meta tag based on theme
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', theme === 'dark' ? '#0f172a' : '#ffffff');
+    }
+  }, [theme]);
 
-  return <>{children}</>;
+  return (
+    <AppThemeContext.Provider value={{ theme, setTheme }}>
+      {children}
+    </AppThemeContext.Provider>
+  );
+}
+
+export function useAppTheme() {
+  const context = useContext(AppThemeContext);
+  if (context === undefined) {
+    throw new Error('useAppTheme must be used within an AppThemeProvider');
+  }
+  return context;
 }
 
 /**
