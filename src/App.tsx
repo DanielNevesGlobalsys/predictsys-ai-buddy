@@ -2,7 +2,7 @@ import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { BrowserRouter, Routes, Route } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { OrganizationProvider } from "@/contexts/OrganizationContext";
 import "@/i18n";
@@ -21,14 +21,17 @@ import OrgSettings from "./pages/OrgSettings";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import WizardContainer from "./components/wizard/WizardContainer";
+
+// App mode (mobile-first executive experience)
 import { 
-  ExecutiveHome, 
-  ExecutiveProject, 
-  SplashScreen, 
-  Onboarding,
-  ProjectsList,
-  ImpactOverview
-} from "./pages/executive";
+  AppSplash,
+  AppOnboarding,
+  AppHome,
+  AppProjects,
+  AppProject,
+  AppImpact,
+  AppLys
+} from "./pages/app";
 
 const queryClient = new QueryClient();
 
@@ -42,25 +45,17 @@ const App = () => (
       <BrowserRouter>
         <OrganizationProvider>
           <Routes>
-            {/* Splash Screen - Entry point */}
-            <Route path="/" element={<SplashScreen />} />
+            {/* ========================================
+                WEB MODE - Desktop/Full Experience
+                ======================================== */}
             
-            {/* Onboarding */}
-            <Route 
-              path="/bem-vindo" 
-              element={
-                <ProtectedRoute>
-                  <Onboarding />
-                </ProtectedRoute>
-              } 
-            />
-            
-            {/* Landing page for marketing */}
-            <Route path="/home" element={<Landing />} />
+            {/* Landing page (marketing) */}
+            <Route path="/" element={<Landing />} />
             
             {/* Auth */}
             <Route path="/auth" element={<Auth />} />
             
+            {/* Main Dashboard */}
             <Route 
               path="/dashboard" 
               element={
@@ -69,6 +64,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Quick Guide */}
             <Route 
               path="/guia-rapido" 
               element={
@@ -77,6 +74,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Global Chat */}
             <Route 
               path="/chatbot" 
               element={
@@ -85,6 +84,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Documentation */}
             <Route 
               path="/documentacao" 
               element={
@@ -93,6 +94,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Admin */}
             <Route 
               path="/admin" 
               element={
@@ -117,6 +120,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Org Settings */}
             <Route 
               path="/org/settings" 
               element={
@@ -125,6 +130,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Project Wizard */}
             <Route 
               path="/projeto/novo/wizard" 
               element={
@@ -141,6 +148,8 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
+            
+            {/* Project Details */}
             <Route 
               path="/projeto/:projectId" 
               element={
@@ -149,39 +158,82 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
-            {/* Executive App (Mobile-First) */}
+
+            {/* ========================================
+                APP MODE - Mobile-First / PWA Experience
+                ======================================== */}
+            
+            {/* App Entry Point (Splash Screen) */}
+            <Route path="/app" element={<AppSplash />} />
+            
+            {/* App Onboarding */}
             <Route 
-              path="/executivo" 
+              path="/app/bem-vindo" 
               element={
                 <ProtectedRoute>
-                  <ExecutiveHome />
+                  <AppOnboarding />
                 </ProtectedRoute>
               } 
             />
+            
+            {/* App Home */}
             <Route 
-              path="/executivo/projetos" 
+              path="/app/home" 
               element={
                 <ProtectedRoute>
-                  <ProjectsList />
+                  <AppHome />
                 </ProtectedRoute>
               } 
             />
+            
+            {/* App Projects List */}
             <Route 
-              path="/executivo/projeto/:projectId" 
+              path="/app/projetos" 
               element={
                 <ProtectedRoute>
-                  <ExecutiveProject />
+                  <AppProjects />
                 </ProtectedRoute>
               } 
             />
+            
+            {/* App Project Detail */}
             <Route 
-              path="/executivo/impacto" 
+              path="/app/projeto/:projectId" 
               element={
                 <ProtectedRoute>
-                  <ImpactOverview />
+                  <AppProject />
                 </ProtectedRoute>
               } 
             />
+            
+            {/* App Impact Overview */}
+            <Route 
+              path="/app/impacto" 
+              element={
+                <ProtectedRoute>
+                  <AppImpact />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* App Lys Chat */}
+            <Route 
+              path="/app/lys" 
+              element={
+                <ProtectedRoute>
+                  <AppLys />
+                </ProtectedRoute>
+              } 
+            />
+
+            {/* ========================================
+                LEGACY REDIRECTS (old /executivo routes)
+                ======================================== */}
+            <Route path="/executivo" element={<Navigate to="/app/home" replace />} />
+            <Route path="/executivo/projetos" element={<Navigate to="/app/projetos" replace />} />
+            <Route path="/executivo/projeto/:projectId" element={<Navigate to="/app/projeto/:projectId" replace />} />
+            <Route path="/executivo/impacto" element={<Navigate to="/app/impacto" replace />} />
+            <Route path="/bem-vindo" element={<Navigate to="/app/bem-vindo" replace />} />
             
             {/* Catch-all */}
             <Route path="*" element={<NotFound />} />
