@@ -29,31 +29,31 @@ export default defineConfig(({ mode }) => ({
         start_url: '/app',
         icons: [
           {
-            src: '/pwa/icon-192.png?v=20260204b',
+            src: '/pwa/icon-192.png?v=20260204c',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-512.png?v=20260204b',
+            src: '/pwa/icon-512.png?v=20260204c',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-192-maskable.png?v=20260204b',
+            src: '/pwa/icon-192-maskable.png?v=20260204c',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/icon-512-maskable.png?v=20260204b',
+            src: '/pwa/icon-512-maskable.png?v=20260204c',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/apple-touch-icon-180.png?v=20260204b',
+            src: '/pwa/apple-touch-icon-180.png?v=20260204c',
             sizes: '180x180',
             type: 'image/png',
             purpose: 'any'
