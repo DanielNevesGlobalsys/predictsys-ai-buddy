@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import { 
   AlertTriangle, 
   TrendingUp, 
@@ -8,21 +7,22 @@ import {
   Percent,
   ChevronRight,
   Sparkles,
-  Building2
+  RefreshCw,
+  Clock
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
+import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useOrganization } from '@/contexts/OrganizationContext';
 import { supabase } from '@/integrations/supabase/client';
-import OrganizationSelector from '@/components/layout/OrganizationSelector';
+import AppShell from '@/components/executive/AppShell';
 
 interface OrgSummary {
   revenueAtRisk: number;
   incrementalRevenue: number;
   customersImpacted: number;
   roiPercent: number;
+  lastUpdate: Date | null;
 }
 
 interface ProjectSummary {
@@ -35,27 +35,28 @@ interface ProjectSummary {
 }
 
 const ExecutiveHome = () => {
-  const { t } = useTranslation();
   const navigate = useNavigate();
   const { currentOrganization, isLoading: orgLoading } = useOrganization();
   
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [orgSummary, setOrgSummary] = useState<OrgSummary>({
     revenueAtRisk: 0,
     incrementalRevenue: 0,
     customersImpacted: 0,
     roiPercent: 0,
+    lastUpdate: null,
   });
   const [projects, setProjects] = useState<ProjectSummary[]>([]);
   
   const narratives = [
     {
       title: "Insight do Mês",
-      text: "A base de clientes premium apresenta 23% mais propensão a churn em relação ao mês anterior. Recomendamos ações proativas.",
+      text: "A base de clientes premium apresenta 23% mais propensão a churn em relação ao mês anterior.",
     },
     {
       title: "Oportunidade Detectada",
-      text: "O segmento 'Alto Valor' tem potencial de R$ 2.4M em receita incremental com campanhas direcionadas.",
+      text: "O segmento 'Alto Valor' tem potencial de R$ 2.4M em receita incremental.",
     },
     {
       title: "Ação Sugerida",
@@ -63,118 +64,120 @@ const ExecutiveHome = () => {
     },
   ];
 
-  useEffect(() => {
-    const fetchData = async () => {
-      if (!currentOrganization?.id) {
-        setLoading(false);
-        return;
-      }
-      
+  const fetchData = useCallback(async (isRefresh = false) => {
+    if (!currentOrganization?.id) {
+      setLoading(false);
+      return;
+    }
+    
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
       setLoading(true);
+    }
+    
+    try {
+      const { data: projectsData } = await supabase
+        .from('projects')
+        .select('id, name, problem_type, status')
+        .eq('organization_id', currentOrganization.id)
+        .order('updated_at', { ascending: false })
+        .limit(5);
       
-      try {
-        // Fetch projects for this organization (top 5)
-        const { data: projectsData } = await supabase
-          .from('projects')
-          .select('id, name, problem_type, status')
-          .eq('organization_id', currentOrganization.id)
-          .order('updated_at', { ascending: false })
-          .limit(5);
+      const projectSummaries: ProjectSummary[] = [];
+      let totalRevAtRisk = 0;
+      let totalIncRevenue = 0;
+      let totalCustomers = 0;
+      let totalROIPercent = 0;
+      let projectsWithROI = 0;
+      
+      for (const project of projectsData || []) {
+        const { count: predictionsCount } = await supabase
+          .from('predictions')
+          .select('*', { count: 'exact', head: true })
+          .eq('project_id', project.id)
+          .eq('is_latest', true);
         
-        // For each project, get prediction stats and business impact
-        const projectSummaries: ProjectSummary[] = [];
-        let totalRevAtRisk = 0;
-        let totalIncRevenue = 0;
-        let totalCustomers = 0;
-        let totalROIPercent = 0;
-        let projectsWithROI = 0;
+        const { count: highRiskCount } = await supabase
+          .from('predictions')
+          .select('*', { count: 'exact', head: true })
+          .eq('project_id', project.id)
+          .eq('is_latest', true)
+          .gte('probability_event', 0.7);
         
-        for (const project of projectsData || []) {
-          // Get prediction counts
-          const { count: predictionsCount } = await supabase
-            .from('predictions')
-            .select('*', { count: 'exact', head: true })
-            .eq('project_id', project.id)
-            .eq('is_latest', true);
-          
-          // Get high risk count (probability > 0.7)
-          const { count: highRiskCount } = await supabase
-            .from('predictions')
-            .select('*', { count: 'exact', head: true })
-            .eq('project_id', project.id)
-            .eq('is_latest', true)
-            .gte('probability_event', 0.7);
-          
-          // Get business config for revenue calculations
-          const { data: configData } = await supabase
-            .from('project_business_config')
-            .select('average_sale_value, average_margin_percent')
-            .eq('project_id', project.id)
-            .maybeSingle();
-          
-          // Get completed actions ROI
-          const { data: actionsData } = await supabase
-            .from('project_actions')
-            .select('target_customers, observed_conversion_percent, expected_conversion_percent')
-            .eq('project_id', project.id)
-            .eq('status', 'completed');
-          
-          const avgSaleValue = configData?.average_sale_value || 0;
-          const marginPercent = configData?.average_margin_percent || 0;
-          
-          // Calculate revenue at risk (high risk * avg sale value)
-          const revAtRisk = (highRiskCount || 0) * avgSaleValue;
-          totalRevAtRisk += revAtRisk;
-          
-          // Calculate incremental revenue from completed actions
-          let projectIncRevenue = 0;
-          let projectCustomers = 0;
-          let projectCost = 0;
-          
-          for (const action of actionsData || []) {
-            if (action.observed_conversion_percent !== null) {
-              const baseConv = action.expected_conversion_percent || 0;
-              const obsConv = action.observed_conversion_percent || 0;
-              const incCustomers = Math.round(((obsConv - baseConv) / 100) * (action.target_customers || 0));
-              projectIncRevenue += incCustomers * avgSaleValue * (marginPercent / 100);
-              projectCustomers += action.target_customers || 0;
-            }
+        const { data: configData } = await supabase
+          .from('project_business_config')
+          .select('average_sale_value, average_margin_percent')
+          .eq('project_id', project.id)
+          .maybeSingle();
+        
+        const { data: actionsData } = await supabase
+          .from('project_actions')
+          .select('target_customers, observed_conversion_percent, expected_conversion_percent')
+          .eq('project_id', project.id)
+          .eq('status', 'completed');
+        
+        const avgSaleValue = configData?.average_sale_value || 0;
+        const marginPercent = configData?.average_margin_percent || 0;
+        
+        const revAtRisk = (highRiskCount || 0) * avgSaleValue;
+        totalRevAtRisk += revAtRisk;
+        
+        let projectIncRevenue = 0;
+        let projectCustomers = 0;
+        let projectCost = 0;
+        
+        for (const action of actionsData || []) {
+          if (action.observed_conversion_percent !== null) {
+            const baseConv = action.expected_conversion_percent || 0;
+            const obsConv = action.observed_conversion_percent || 0;
+            const incCustomers = Math.round(((obsConv - baseConv) / 100) * (action.target_customers || 0));
+            projectIncRevenue += incCustomers * avgSaleValue * (marginPercent / 100);
+            projectCustomers += action.target_customers || 0;
           }
-          
-          totalIncRevenue += projectIncRevenue;
-          totalCustomers += projectCustomers;
-          
-          if (projectCost > 0) {
-            totalROIPercent += ((projectIncRevenue - projectCost) / projectCost) * 100;
-            projectsWithROI++;
-          }
-          
-          projectSummaries.push({
-            id: project.id,
-            name: project.name,
-            problem_type: project.problem_type,
-            status: project.status,
-            predictions_count: predictionsCount || 0,
-            high_risk_count: highRiskCount || 0,
-          });
         }
         
-        setProjects(projectSummaries);
-        setOrgSummary({
-          revenueAtRisk: totalRevAtRisk,
-          incrementalRevenue: totalIncRevenue,
-          customersImpacted: totalCustomers,
-          roiPercent: projectsWithROI > 0 ? totalROIPercent / projectsWithROI : 0,
+        totalIncRevenue += projectIncRevenue;
+        totalCustomers += projectCustomers;
+        
+        if (projectCost > 0) {
+          totalROIPercent += ((projectIncRevenue - projectCost) / projectCost) * 100;
+          projectsWithROI++;
+        }
+        
+        projectSummaries.push({
+          id: project.id,
+          name: project.name,
+          problem_type: project.problem_type,
+          status: project.status,
+          predictions_count: predictionsCount || 0,
+          high_risk_count: highRiskCount || 0,
         });
-      } catch (error) {
-        console.error('Error fetching executive data:', error);
-      } finally {
-        setLoading(false);
       }
-    };
-    
-    fetchData();
+      
+      setProjects(projectSummaries);
+      setOrgSummary({
+        revenueAtRisk: totalRevAtRisk,
+        incrementalRevenue: totalIncRevenue,
+        customersImpacted: totalCustomers,
+        roiPercent: projectsWithROI > 0 ? totalROIPercent / projectsWithROI : 0,
+        lastUpdate: new Date(),
+      });
+    } catch (error) {
+      console.error('Error fetching executive data:', error);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
   }, [currentOrganization?.id]);
+
+  useEffect(() => {
+    fetchData();
+  }, [fetchData]);
+
+  const handleRefresh = () => {
+    fetchData(true);
+  };
 
   const formatCurrency = (value: number) => {
     if (Math.abs(value) >= 1000000) {
@@ -209,10 +212,10 @@ const ExecutiveHome = () => {
 
   const getStatusBadge = (status: string) => {
     const colors: Record<string, string> = {
-      draft: 'bg-gray-500',
-      data_ready: 'bg-blue-500',
-      trained: 'bg-green-500',
-      deployed: 'bg-purple-500',
+      draft: 'bg-muted text-muted-foreground',
+      data_ready: 'bg-blue-500/10 text-blue-600',
+      trained: 'bg-green-500/10 text-green-600',
+      deployed: 'bg-purple-500/10 text-purple-600',
     };
     const labels: Record<string, string> = {
       draft: 'Rascunho',
@@ -221,7 +224,7 @@ const ExecutiveHome = () => {
       deployed: 'Em Produção',
     };
     return (
-      <Badge className={`${colors[status] || 'bg-gray-500'} text-white text-xs`}>
+      <Badge variant="secondary" className={colors[status] || 'bg-muted'}>
         {labels[status] || status}
       </Badge>
     );
@@ -236,37 +239,39 @@ const ExecutiveHome = () => {
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b">
-        <div className="px-4 py-3 flex items-center justify-between">
-          <h1 className="text-xl font-bold">Painel Executivo</h1>
-          <OrganizationSelector />
-        </div>
-      </header>
-
-      <main className="p-4 pb-20 space-y-6 max-w-lg mx-auto">
-        {/* Organization context */}
-        {currentOrganization && (
+    <AppShell>
+      <div className="p-4 pb-8 space-y-6 max-w-lg mx-auto">
+        {/* Last update info + refresh */}
+        <div className="flex items-center justify-between">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Building2 className="w-4 h-4" />
-            <span>{currentOrganization.name}</span>
+            <Clock className="w-4 h-4" />
+            <span>
+              {orgSummary.lastUpdate 
+                ? `Atualizado ${orgSummary.lastUpdate.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`
+                : 'Atualizando...'}
+            </span>
           </div>
-        )}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="p-2 rounded-lg hover:bg-muted transition-colors"
+          >
+            <RefreshCw className={`w-5 h-5 ${refreshing ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
 
         {!currentOrganization ? (
           <Card className="p-8 text-center">
-            <Building2 className="w-12 h-12 mx-auto text-muted-foreground mb-4" />
             <h3 className="text-lg font-semibold mb-2">Selecione uma Organização</h3>
             <p className="text-muted-foreground">
-              Use o seletor acima para escolher a organização que deseja visualizar.
+              Use o ícone de perfil para acessar suas configurações.
             </p>
           </Card>
         ) : loading ? (
           <div className="space-y-4">
-            <Skeleton className="h-32 w-full" />
-            <Skeleton className="h-32 w-full" />
-            <Skeleton className="h-48 w-full" />
+            <Skeleton className="h-32 w-full rounded-xl" />
+            <Skeleton className="h-32 w-full rounded-xl" />
+            <Skeleton className="h-48 w-full rounded-xl" />
           </div>
         ) : (
           <>
@@ -278,9 +283,9 @@ const ExecutiveHome = () => {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <AlertTriangle className="w-5 h-5 text-red-600" />
-                      <span className="text-sm text-muted-foreground">Receita em Risco</span>
+                      <span className="text-xs text-muted-foreground">Receita em Risco</span>
                     </div>
-                    <p className="text-2xl font-bold text-red-600">
+                    <p className="text-xl font-bold text-red-600">
                       {orgSummary.revenueAtRisk > 0 ? formatCurrency(orgSummary.revenueAtRisk) : '—'}
                     </p>
                   </CardContent>
@@ -290,9 +295,9 @@ const ExecutiveHome = () => {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <TrendingUp className="w-5 h-5 text-green-600" />
-                      <span className="text-sm text-muted-foreground">Receita Incremental</span>
+                      <span className="text-xs text-muted-foreground">Receita Incremental</span>
                     </div>
-                    <p className="text-2xl font-bold text-green-600">
+                    <p className="text-xl font-bold text-green-600">
                       {orgSummary.incrementalRevenue > 0 ? formatCurrency(orgSummary.incrementalRevenue) : '—'}
                     </p>
                   </CardContent>
@@ -302,9 +307,9 @@ const ExecutiveHome = () => {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <Users className="w-5 h-5 text-purple-600" />
-                      <span className="text-sm text-muted-foreground">Clientes Impactados</span>
+                      <span className="text-xs text-muted-foreground">Clientes Impactados</span>
                     </div>
-                    <p className="text-2xl font-bold text-purple-600">
+                    <p className="text-xl font-bold text-purple-600">
                       {orgSummary.customersImpacted > 0 ? formatNumber(orgSummary.customersImpacted) : '—'}
                     </p>
                   </CardContent>
@@ -314,9 +319,9 @@ const ExecutiveHome = () => {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 mb-2">
                       <Percent className="w-5 h-5 text-blue-600" />
-                      <span className="text-sm text-muted-foreground">ROI Médio</span>
+                      <span className="text-xs text-muted-foreground">ROI Médio</span>
                     </div>
-                    <p className="text-2xl font-bold text-blue-600">
+                    <p className="text-xl font-bold text-blue-600">
                       {orgSummary.roiPercent !== 0 ? `${orgSummary.roiPercent.toFixed(0)}%` : '—'}
                     </p>
                   </CardContent>
@@ -326,19 +331,27 @@ const ExecutiveHome = () => {
 
             {/* Projects Section */}
             <section>
-              <h2 className="text-lg font-semibold mb-3">Projetos</h2>
+              <div className="flex items-center justify-between mb-3">
+                <h2 className="text-lg font-semibold">Projetos</h2>
+                <button 
+                  onClick={() => navigate('/executivo/projetos')}
+                  className="text-sm text-primary font-medium"
+                >
+                  Ver todos
+                </button>
+              </div>
               {projects.length === 0 ? (
                 <Card className="p-6 text-center">
                   <p className="text-muted-foreground">
-                    Nenhum projeto encontrado nesta organização.
+                    Nenhum projeto encontrado.
                   </p>
                 </Card>
               ) : (
                 <div className="space-y-3">
-                  {projects.map((project) => (
+                  {projects.slice(0, 3).map((project) => (
                     <Card 
                       key={project.id}
-                      className="cursor-pointer hover:shadow-md transition-shadow active:scale-[0.99]"
+                      className="cursor-pointer hover:shadow-md transition-all active:scale-[0.99]"
                       onClick={() => navigate(`/executivo/projeto/${project.id}`)}
                     >
                       <CardContent className="p-4">
@@ -398,8 +411,8 @@ const ExecutiveHome = () => {
             </section>
           </>
         )}
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 };
 
