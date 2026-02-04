@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 
+const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
+
 const AppSettings = () => {
   const navigate = useNavigate();
-  const { currentOrganization } = useOrganization();
+  const { currentOrganization, setCurrentOrganization } = useOrganization();
   const [user, setUser] = useState<{ email?: string; full_name?: string } | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -37,13 +39,17 @@ const AppSettings = () => {
   }, []);
 
   const handleLogout = async () => {
-    // Clear any local state
+    // Clear organization selection
+    setCurrentOrganization(null);
     localStorage.removeItem('currentOrganizationId');
+    
+    // Clear onboarding seen flag - so next login shows full flow again
+    localStorage.removeItem(ONBOARDING_KEY);
     
     // Sign out from Supabase
     await supabase.auth.signOut();
     
-    // Navigate to app splash (will then redirect to app login)
+    // Navigate to app splash (will then redirect to onboarding → login)
     navigate('/app', { replace: true });
   };
 
