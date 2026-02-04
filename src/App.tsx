@@ -7,6 +7,7 @@ import { ThemeProvider } from "@/contexts/ThemeContext";
 import { OrganizationProvider } from "@/contexts/OrganizationContext";
 import "@/i18n";
 import Favicon from "@/components/Favicon";
+import PwaInstallGate from "@/components/PwaInstallGate";
 import Landing from "./pages/Landing";
 import Auth from "./pages/Auth";
 import Dashboard from "./pages/Dashboard";
@@ -48,13 +49,14 @@ const App = () => (
       <Sonner />
       <BrowserRouter>
         <OrganizationProvider>
-          <Routes>
-            {/* ========================================
-                WEB MODE - Desktop/Full Experience
-                ======================================== */}
-            
-            {/* Landing page (marketing) */}
-            <Route path="/" element={<Landing />} />
+          <PwaInstallGate>
+            <Routes>
+              {/* ========================================
+                  WEB MODE - Desktop/Full Experience
+                  ======================================== */}
+              
+              {/* Landing page (marketing) */}
+              <Route path="/" element={<Landing />} />
             
             {/* Auth */}
             <Route path="/auth" element={<Auth />} />
@@ -265,9 +267,10 @@ const App = () => (
             <Route path="/executivo/impacto" element={<Navigate to="/app/impacto" replace />} />
             <Route path="/bem-vindo" element={<Navigate to="/app/bem-vindo" replace />} />
             
-            {/* Catch-all */}
-            <Route path="*" element={<NotFound />} />
-          </Routes>
+              {/* Catch-all */}
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </PwaInstallGate>
         </OrganizationProvider>
       </BrowserRouter>
     </TooltipProvider>
