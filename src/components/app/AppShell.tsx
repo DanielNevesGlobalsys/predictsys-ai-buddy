@@ -1,8 +1,17 @@
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { Home, FolderKanban, TrendingUp, MessageCircle, ChevronLeft } from 'lucide-react';
+import { Home, FolderKanban, TrendingUp, MessageCircle, ChevronLeft, Settings, FileText, BookOpen, LogOut } from 'lucide-react';
 import { useOrganization } from '@/contexts/OrganizationContext';
+import { supabase } from '@/integrations/supabase/client';
 import logoBox from '@/assets/logo-box.svg';
+import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 
 interface AppShellProps {
   children: ReactNode;
@@ -21,6 +30,40 @@ const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: Ap
   const navigate = useNavigate();
   const location = useLocation();
   const { currentOrganization } = useOrganization();
+  const [userName, setUserName] = useState<string>('');
+
+  // Force dark mode for app
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.remove('light');
+    root.classList.add('dark');
+    localStorage.setItem('predictsys-theme', 'dark');
+    
+    // Update theme-color meta
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', '#0f172a');
+    }
+  }, []);
+
+  // Fetch user info for avatar
+  useEffect(() => {
+    const fetchUser = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('full_name')
+          .eq('id', user.id)
+          .single();
+        
+        if (profile?.full_name) {
+          setUserName(profile.full_name);
+        }
+      }
+    };
+    fetchUser();
+  }, []);
 
   const navItems: NavItem[] = [
     { path: '/app/home', label: 'Resumo', icon: <Home className="w-5 h-5" /> },
@@ -36,10 +79,25 @@ const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: Ap
     return location.pathname.startsWith(path);
   };
 
+  const getInitials = (name: string) => {
+    if (!name) return 'U';
+    return name
+      .split(' ')
+      .map(n => n[0])
+      .slice(0, 2)
+      .join('')
+      .toUpperCase();
+  };
+
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/auth');
+  };
+
   return (
     <div className="min-h-screen bg-background flex flex-col">
       {/* Top Header */}
-      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b safe-area-top">
+      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b border-border safe-area-top">
         <div className="flex items-center justify-between px-4 h-14">
           {/* Left: Back button or Logo */}
           <div className="flex items-center gap-3">
@@ -63,13 +121,37 @@ const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: Ap
             )}
           </div>
 
-          {/* Right: Access to full dashboard */}
-          <button
-            onClick={() => navigate('/dashboard')}
-            className="text-xs text-muted-foreground hover:text-foreground transition-colors px-3 py-1.5 rounded-md hover:bg-muted"
-          >
-            Painel completo
-          </button>
+          {/* Right: User Avatar Menu */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="focus:outline-none">
+                <Avatar className="h-9 w-9 cursor-pointer hover:ring-2 hover:ring-primary/50 transition-all">
+                  <AvatarFallback className="bg-primary text-primary-foreground text-sm">
+                    {getInitials(userName)}
+                  </AvatarFallback>
+                </Avatar>
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-48">
+              <DropdownMenuItem onClick={() => navigate('/app/settings')}>
+                <Settings className="w-4 h-4 mr-2" />
+                Configurações
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate('/app/docs')}>
+                <FileText className="w-4 h-4 mr-2" />
+                Documentação
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => navigate('/app/guia-rapido')}>
+                <BookOpen className="w-4 h-4 mr-2" />
+                Guia Rápido
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={handleLogout} className="text-destructive focus:text-destructive">
+                <LogOut className="w-4 h-4 mr-2" />
+                Sair
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
 
@@ -80,7 +162,7 @@ const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: Ap
 
       {/* Bottom Navigation */}
       {!hideBottomNav && (
-        <nav className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur border-t safe-area-bottom z-50">
+        <nav className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur border-t border-border safe-area-bottom z-50">
           <div className="flex items-center justify-around h-16 max-w-md mx-auto">
             {navItems.map((item) => {
               const active = isActive(item.path);

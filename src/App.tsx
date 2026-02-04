@@ -30,7 +30,10 @@ import {
   AppProjects,
   AppProject,
   AppImpact,
-  AppLys
+  AppLys,
+  AppSettings,
+  AppDocs,
+  AppQuickGuide
 } from "./pages/app";
 
 const queryClient = new QueryClient();
@@ -222,6 +225,36 @@ const App = () => (
               element={
                 <ProtectedRoute>
                   <AppLys />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* App Settings */}
+            <Route 
+              path="/app/settings" 
+              element={
+                <ProtectedRoute>
+                  <AppSettings />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* App Docs */}
+            <Route 
+              path="/app/docs" 
+              element={
+                <ProtectedRoute>
+                  <AppDocs />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* App Quick Guide */}
+            <Route 
+              path="/app/guia-rapido" 
+              element={
+                <ProtectedRoute>
+                  <AppQuickGuide />
                 </ProtectedRoute>
               } 
             />

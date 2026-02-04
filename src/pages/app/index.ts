@@ -6,3 +6,6 @@ export { default as AppProjects } from './AppProjects';
 export { default as AppProject } from './AppProject';
 export { default as AppImpact } from './AppImpact';
 export { default as AppLys } from './AppLys';
+export { default as AppSettings } from './AppSettings';
+export { default as AppDocs } from './AppDocs';
+export { default as AppQuickGuide } from './AppQuickGuide';
