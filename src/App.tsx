@@ -21,7 +21,14 @@ import OrgSettings from "./pages/OrgSettings";
 import NotFound from "./pages/NotFound";
 import ProtectedRoute from "./components/ProtectedRoute";
 import WizardContainer from "./components/wizard/WizardContainer";
-import { ExecutiveHome, ExecutiveProject } from "./pages/executive";
+import { 
+  ExecutiveHome, 
+  ExecutiveProject, 
+  SplashScreen, 
+  Onboarding,
+  ProjectsList,
+  ImpactOverview
+} from "./pages/executive";
 
 const queryClient = new QueryClient();
 
@@ -35,8 +42,25 @@ const App = () => (
       <BrowserRouter>
         <OrganizationProvider>
           <Routes>
-            <Route path="/" element={<Landing />} />
+            {/* Splash Screen - Entry point */}
+            <Route path="/" element={<SplashScreen />} />
+            
+            {/* Onboarding */}
+            <Route 
+              path="/bem-vindo" 
+              element={
+                <ProtectedRoute>
+                  <Onboarding />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* Landing page for marketing */}
+            <Route path="/home" element={<Landing />} />
+            
+            {/* Auth */}
             <Route path="/auth" element={<Auth />} />
+            
             <Route 
               path="/dashboard" 
               element={
@@ -135,6 +159,14 @@ const App = () => (
               } 
             />
             <Route 
+              path="/executivo/projetos" 
+              element={
+                <ProtectedRoute>
+                  <ProjectsList />
+                </ProtectedRoute>
+              } 
+            />
+            <Route 
               path="/executivo/projeto/:projectId" 
               element={
                 <ProtectedRoute>
@@ -142,7 +174,16 @@ const App = () => (
                 </ProtectedRoute>
               } 
             />
-            {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+            <Route 
+              path="/executivo/impacto" 
+              element={
+                <ProtectedRoute>
+                  <ImpactOverview />
+                </ProtectedRoute>
+              } 
+            />
+            
+            {/* Catch-all */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </OrganizationProvider>
