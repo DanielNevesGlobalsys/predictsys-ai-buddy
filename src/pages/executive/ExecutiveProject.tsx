@@ -1,10 +1,8 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useTranslation } from 'react-i18next';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { 
-  ArrowLeft, 
   Target, 
   Calendar, 
   Users,
@@ -22,7 +20,8 @@ import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Separator } from '@/components/ui/separator';
 import { supabase } from '@/integrations/supabase/client';
-import type { ProjectAction, BusinessConfig, ROICalculation } from '@/components/business-impact/types';
+import AppShell from '@/components/executive/AppShell';
+import type { ProjectAction, BusinessConfig } from '@/components/business-impact/types';
 import { ACTION_TYPES, ACTION_STATUSES } from '@/components/business-impact/types';
 
 interface ProjectData {
@@ -43,7 +42,6 @@ interface SituationData {
 }
 
 const ExecutiveProject = () => {
-  const { t } = useTranslation();
   const { projectId } = useParams();
   const navigate = useNavigate();
   
@@ -239,53 +237,35 @@ const ExecutiveProject = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-background">
-        <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b">
-          <div className="px-4 py-3 flex items-center gap-3">
-            <Skeleton className="h-8 w-8" />
-            <Skeleton className="h-6 w-48" />
-          </div>
-        </header>
-        <main className="p-4 space-y-4">
-          <Skeleton className="h-32 w-full" />
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-48 w-full" />
-        </main>
-      </div>
+      <AppShell showBackButton title="Carregando..." hideBottomNav>
+        <div className="p-4 space-y-4">
+          <Skeleton className="h-32 w-full rounded-xl" />
+          <Skeleton className="h-24 w-full rounded-xl" />
+          <Skeleton className="h-48 w-full rounded-xl" />
+        </div>
+      </AppShell>
     );
   }
 
   if (!project) {
     return (
-      <div className="min-h-screen bg-background flex items-center justify-center p-4">
-        <Card className="p-6 text-center max-w-sm">
-          <h3 className="text-lg font-semibold mb-2">Projeto não encontrado</h3>
-          <p className="text-muted-foreground mb-4">
-            O projeto solicitado não existe ou você não tem permissão para acessá-lo.
-          </p>
-          <Button onClick={() => navigate('/executivo')}>Voltar</Button>
-        </Card>
-      </div>
+      <AppShell showBackButton title="Erro" hideBottomNav>
+        <div className="flex items-center justify-center p-8">
+          <Card className="p-6 text-center max-w-sm">
+            <h3 className="text-lg font-semibold mb-2">Projeto não encontrado</h3>
+            <p className="text-muted-foreground mb-4">
+              O projeto solicitado não existe ou você não tem permissão para acessá-lo.
+            </p>
+            <Button onClick={() => navigate('/executivo')}>Voltar</Button>
+          </Card>
+        </div>
+      </AppShell>
     );
   }
 
   return (
-    <div className="min-h-screen bg-background">
-      {/* Header */}
-      <header className="sticky top-0 z-50 bg-background/95 backdrop-blur border-b">
-        <div className="px-4 py-3 flex items-center gap-3">
-          <Button 
-            variant="ghost" 
-            size="icon" 
-            onClick={() => navigate('/executivo')}
-          >
-            <ArrowLeft className="w-5 h-5" />
-          </Button>
-          <h1 className="text-lg font-semibold truncate">{project.name}</h1>
-        </div>
-      </header>
-
-      <main className="p-4 pb-20 space-y-6 max-w-lg mx-auto">
+    <AppShell showBackButton title={project.name} hideBottomNav>
+      <div className="p-4 pb-8 space-y-6 max-w-lg mx-auto">
         {/* Project Context */}
         <section>
           <h2 className="text-lg font-semibold mb-3">Contexto do Projeto</h2>
@@ -529,8 +509,8 @@ const ExecutiveProject = () => {
             </CardContent>
           </Card>
         </section>
-      </main>
-    </div>
+      </div>
+    </AppShell>
   );
 };
 
