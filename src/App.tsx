@@ -35,7 +35,8 @@ import {
   AppLys,
   AppSettings,
   AppDocs,
-  AppQuickGuide
+  AppQuickGuide,
+  AppInstall
 } from "./pages/app";
 
 const queryClient = new QueryClient();
@@ -168,6 +169,9 @@ const App = () => (
             {/* ========================================
                 APP MODE - Mobile-First / PWA Experience
                 ======================================== */}
+            
+            {/* App Install Gate - Forces installation on mobile */}
+            <Route path="/app/install" element={<AppInstall />} />
             
             {/* App Entry Point (Splash Screen) */}
             <Route path="/app" element={<AppSplash />} />
