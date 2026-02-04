@@ -74,14 +74,15 @@ export const PwaInstallGate = ({ children }: PwaInstallGateProps) => {
       
       setIsMobile(mobile);
       
-      // If in standalone mode on mobile, redirect to app
+      // If in standalone mode on mobile, redirect to app welcome
       if (mobile && standalone && !isAppRoute) {
         navigate("/app/bem-vindo", { replace: true });
         return;
       }
       
-      // Block if: mobile + not standalone + not in /app/* routes
-      if (mobile && !standalone && !isAppRoute) {
+      // Block if: mobile + not standalone (regardless of route)
+      // User MUST install PWA to use on mobile
+      if (mobile && !standalone) {
         setIsBlocked(true);
       } else {
         setIsBlocked(false);
