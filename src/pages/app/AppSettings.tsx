@@ -37,8 +37,14 @@ const AppSettings = () => {
   }, []);
 
   const handleLogout = async () => {
+    // Clear any local state
+    localStorage.removeItem('currentOrganizationId');
+    
+    // Sign out from Supabase
     await supabase.auth.signOut();
-    navigate('/auth');
+    
+    // Navigate to app splash (will then redirect to app login)
+    navigate('/app', { replace: true });
   };
 
   const getInitials = (name: string) => {

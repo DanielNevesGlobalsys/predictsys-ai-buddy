@@ -5,6 +5,12 @@ import logoBox from '@/assets/logo-box.svg';
 
 /**
  * Splash screen only for APP mode (/app/* routes or standalone PWA)
+ * Flow:
+ * 1. Show animated splash (1.5s)
+ * 2. Check auth status
+ * 3. If not logged in -> /app/login (app-specific login)
+ * 4. If logged in but no onboarding -> /app/bem-vindo
+ * 5. If logged in with onboarding done -> /app/home
  */
 const AppSplash = () => {
   const navigate = useNavigate();
@@ -19,7 +25,8 @@ const AppSplash = () => {
       const { data: { session } } = await supabase.auth.getSession();
       
       if (!session) {
-        navigate('/auth', { replace: true });
+        // Not logged in - go to app login (NOT web /auth)
+        navigate('/app/login', { replace: true });
         return;
       }
 
