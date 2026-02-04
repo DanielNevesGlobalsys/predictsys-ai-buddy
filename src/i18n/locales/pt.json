@@ -151,6 +151,7 @@
       "timeSeries": "Séries Temporais",
       "next30Days": "Próximos 30 dias",
       "next60Days": "Próximos 60 dias",
+      "next90Days": "Próximos 90 dias",
       "next6Months": "Próximos 6 meses",
       "next12Months": "Próximos 12 meses"
     },
@@ -171,6 +172,7 @@
       "horizon": "Horizonte",
       "next30Days": "Próximos 30 dias",
       "next60Days": "Próximos 60 dias",
+      "next90Days": "Próximos 90 dias",
       "next6Months": "Próximos 6 meses",
       "next12Months": "Próximos 12 meses",
       "filterBy": "Filtrar por",
@@ -242,6 +244,7 @@
       "noData": "Nenhuma projeção disponível",
       "next30Days": "30 dias",
       "next60Days": "60 dias",
+      "next90Days": "90 dias",
       "next6Months": "6 meses",
       "next12Months": "12 meses",
       "expectedEvents": "Eventos esperados",

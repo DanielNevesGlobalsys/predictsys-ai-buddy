@@ -102,7 +102,7 @@ export function BusinessDashboardFilters({ filters, onFilterChange, availableSeg
       {/* Horizon */}
       <Select 
         value={String(filters.horizon)} 
-        onValueChange={(value) => onFilterChange({ horizon: Number(value) as 30 | 60 | 180 | 365 })}
+        onValueChange={(value) => onFilterChange({ horizon: Number(value) as 30 | 60 | 90 | 180 | 365 })}
       >
         <SelectTrigger className="w-[160px]">
           <SelectValue placeholder={t('businessDashboard.filters.horizon')} />
@@ -110,6 +110,7 @@ export function BusinessDashboardFilters({ filters, onFilterChange, availableSeg
         <SelectContent>
           <SelectItem value="30">{t('businessDashboard.filters.next30Days')}</SelectItem>
           <SelectItem value="60">{t('businessDashboard.filters.next60Days')}</SelectItem>
+          <SelectItem value="90">{t('businessDashboard.filters.next90Days')}</SelectItem>
           <SelectItem value="180">{t('businessDashboard.filters.next6Months')}</SelectItem>
           <SelectItem value="365">{t('businessDashboard.filters.next12Months')}</SelectItem>
         </SelectContent>

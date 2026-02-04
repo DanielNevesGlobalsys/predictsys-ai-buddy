@@ -36,7 +36,7 @@ export interface Prediction {
 export interface DashboardFilters {
   dataset: 'latest' | 'all';
   dateRange: { from: Date | null; to: Date | null };
-  horizon: 30 | 60 | 180 | 365;
+  horizon: 30 | 60 | 90 | 180 | 365;
   segmentField: string | null;
   segmentValue: string | null;
   viewMode: 'risk' | 'opportunity';
