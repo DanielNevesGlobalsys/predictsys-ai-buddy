@@ -90,8 +90,17 @@ export const AppInstall = () => {
     }
   };
 
-  const showIOSInstructions = isIOS() || (isSafari() && !deferredPrompt);
-  const showAndroidInstructions = !isIOS() && !deferredPrompt;
+  const isIOSDevice = isIOS();
+  const showIOSInstructions = isIOSDevice;
+  const showAndroidInstructions = !isIOSDevice;
+  const canUseNativePrompt = !!deferredPrompt;
+
+  const handleInstallButtonClick = async () => {
+    if (deferredPrompt) {
+      await handleInstallClick();
+    }
+    // If no native prompt, button still visible but instructions will guide user
+  };
 
   return (
     <div className="fixed inset-0 z-[9999] bg-gradient-to-br from-[#1e3a5f] via-[#0f2744] to-[#0a1929] flex flex-col items-center justify-center p-6 text-white">
@@ -119,17 +128,17 @@ export const AppInstall = () => {
         </div>
       )}
 
-      {/* Install button (Android/Chrome) */}
-      {deferredPrompt && (
-        <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300">
+      {/* Install button - Always visible on Android, uses native prompt when available */}
+      {!isIOSDevice && (
+        <div className="animate-in fade-in slide-in-from-bottom-4 duration-700 delay-300 mb-6">
           <Button
             size="lg"
-            onClick={handleInstallClick}
+            onClick={handleInstallButtonClick}
             disabled={isInstalling}
-            className="bg-white text-[#1e3a5f] hover:bg-white/90 font-semibold px-8 py-6 text-lg rounded-xl shadow-xl"
+            className="bg-white text-primary hover:bg-white/90 font-semibold px-8 py-6 text-lg rounded-xl shadow-xl"
           >
             <Download className="w-5 h-5 mr-2" />
-            {isInstalling ? "Instalando..." : "Instalar agora"}
+            {isInstalling ? "Instalando..." : canUseNativePrompt ? "Instalar agora" : "Como instalar"}
           </Button>
         </div>
       )}
