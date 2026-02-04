@@ -25,6 +25,7 @@ import WizardContainer from "./components/wizard/WizardContainer";
 // App mode (mobile-first executive experience)
 import { 
   AppSplash,
+  AppLogin,
   AppOnboarding,
   AppHome,
   AppProjects,
@@ -168,6 +169,9 @@ const App = () => (
             
             {/* App Entry Point (Splash Screen) */}
             <Route path="/app" element={<AppSplash />} />
+            
+            {/* App Login (dedicated, not using web /auth) */}
+            <Route path="/app/login" element={<AppLogin />} />
             
             {/* App Onboarding */}
             <Route 

@@ -15,12 +15,13 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'favicon.ico', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon-180.png'],
+      includeAssets: ['favicon.svg', 'favicon.ico', 'pwa/icon-192.png', 'pwa/icon-512.png', 'pwa/apple-touch-icon-180.png'],
       manifest: {
+        id: 'predictsys-ai-app-v2',
         name: 'PredictSys AI',
         short_name: 'PredictSys',
         description: 'IA traduzindo dados em decisões de negócio',
-        theme_color: '#0f172a',
+        theme_color: '#1e3a5f',
         background_color: '#0f172a',
         display: 'standalone',
         orientation: 'portrait',
@@ -28,19 +29,31 @@ export default defineConfig(({ mode }) => ({
         start_url: '/app',
         icons: [
           {
-            src: '/icons/icon-192.png',
+            src: '/pwa/icon-192.png',
             sizes: '192x192',
             type: 'image/png',
-            purpose: 'any maskable'
+            purpose: 'any'
           },
           {
-            src: '/icons/icon-512.png',
+            src: '/pwa/icon-512.png',
             sizes: '512x512',
             type: 'image/png',
-            purpose: 'any maskable'
+            purpose: 'any'
           },
           {
-            src: '/icons/apple-touch-icon-180.png',
+            src: '/pwa/icon-192-maskable.png',
+            sizes: '192x192',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/pwa/icon-512-maskable.png',
+            sizes: '512x512',
+            type: 'image/png',
+            purpose: 'maskable'
+          },
+          {
+            src: '/pwa/apple-touch-icon-180.png',
             sizes: '180x180',
             type: 'image/png',
             purpose: 'any'
@@ -62,7 +75,11 @@ export default defineConfig(({ mode }) => ({
               }
             }
           }
-        ]
+        ],
+        // Force cache update on new manifest
+        cleanupOutdatedCaches: true,
+        skipWaiting: true,
+        clientsClaim: true
       }
     })
   ].filter(Boolean),

@@ -1,5 +1,6 @@
 // App module exports (mobile-first executive experience)
 export { default as AppSplash } from './AppSplash';
+export { default as AppLogin } from './AppLogin';
 export { default as AppOnboarding } from './AppOnboarding';
 export { default as AppHome } from './AppHome';
 export { default as AppProjects } from './AppProjects';
