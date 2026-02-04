@@ -18,13 +18,14 @@ import { z } from 'zod';
 import { useTranslation } from 'react-i18next';
 import logoBox from '@/assets/logo-box.svg';
 
-const THEME_KEY = 'predictsys_app_theme';
-const LOCALE_KEY = 'predictsys_app_locale';
+const APP_THEME_KEY = 'predictsys_app_theme';
+const APP_LOCALE_KEY = 'predictsys_app_locale';
 
 /**
  * App-specific Login page (PWA mode)
  * Features: language switcher, theme toggle
  * Always redirects to /app/home after successful login
+ * Theme choice persists and applies to entire app
  */
 const AppLogin = () => {
   const navigate = useNavigate();
@@ -44,18 +45,27 @@ const AppLogin = () => {
 
   // Initialize theme and locale from localStorage
   useEffect(() => {
-    const savedTheme = localStorage.getItem(THEME_KEY) || 'dark';
-    const savedLocale = localStorage.getItem(LOCALE_KEY) || 'pt';
+    const savedTheme = localStorage.getItem(APP_THEME_KEY) || 'dark';
+    const savedLocale = localStorage.getItem(APP_LOCALE_KEY) || 'pt';
     
     setIsDark(savedTheme === 'dark');
     setCurrentLocale(savedLocale);
     i18n.changeLanguage(savedLocale);
     
     // Apply theme to document
+    const root = document.documentElement;
     if (savedTheme === 'dark') {
-      document.documentElement.classList.add('dark');
+      root.classList.remove('light');
+      root.classList.add('dark');
     } else {
-      document.documentElement.classList.remove('dark');
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+    
+    // Update meta theme-color
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', savedTheme === 'dark' ? '#0f172a' : '#ffffff');
     }
   }, [i18n]);
 
@@ -71,18 +81,27 @@ const AppLogin = () => {
   const toggleTheme = () => {
     const newTheme = isDark ? 'light' : 'dark';
     setIsDark(!isDark);
-    localStorage.setItem(THEME_KEY, newTheme);
+    localStorage.setItem(APP_THEME_KEY, newTheme);
     
+    const root = document.documentElement;
     if (newTheme === 'dark') {
-      document.documentElement.classList.add('dark');
+      root.classList.remove('light');
+      root.classList.add('dark');
     } else {
-      document.documentElement.classList.remove('dark');
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+    
+    // Update meta theme-color
+    const themeColorMeta = document.querySelector('meta[name="theme-color"]');
+    if (themeColorMeta) {
+      themeColorMeta.setAttribute('content', newTheme === 'dark' ? '#0f172a' : '#ffffff');
     }
   };
 
   const changeLocale = (locale: string) => {
     setCurrentLocale(locale);
-    localStorage.setItem(LOCALE_KEY, locale);
+    localStorage.setItem(APP_LOCALE_KEY, locale);
     i18n.changeLanguage(locale);
   };
 
@@ -115,7 +134,7 @@ const AppLogin = () => {
         description: 'Bem-vindo de volta.',
       });
       
-      // Always redirect to app home
+      // Always redirect to app home (not web routes)
       navigate('/app/home', { replace: true });
     } catch (error) {
       if (error instanceof z.ZodError) {
@@ -190,7 +209,7 @@ const AppLogin = () => {
 
   return (
     <div 
-      className={`min-h-screen flex flex-col items-center justify-center p-4 ${isDark ? 'dark' : ''}`}
+      className="min-h-screen flex flex-col items-center justify-center p-4"
       style={{
         background: isDark 
           ? 'linear-gradient(135deg, hsl(222 47% 11%) 0%, hsl(215 90% 25%) 50%, hsl(189 85% 30%) 100%)'

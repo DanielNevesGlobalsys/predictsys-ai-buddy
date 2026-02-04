@@ -4,6 +4,7 @@ import { supabase } from '@/integrations/supabase/client';
 import logoBox from '@/assets/logo-box.svg';
 
 const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
+const APP_THEME_KEY = 'predictsys_app_theme';
 
 /**
  * Splash screen only for APP mode (/app/* routes or standalone PWA)
@@ -18,6 +19,20 @@ const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
 const AppSplash = () => {
   const navigate = useNavigate();
   const [isAnimating, setIsAnimating] = useState(true);
+
+  // Apply saved theme immediately to prevent flash
+  useEffect(() => {
+    const savedTheme = localStorage.getItem(APP_THEME_KEY) || 'dark';
+    const root = document.documentElement;
+    
+    if (savedTheme === 'dark') {
+      root.classList.remove('light');
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+  }, []);
 
   useEffect(() => {
     const checkAndRedirect = async () => {
@@ -50,11 +65,16 @@ const AppSplash = () => {
     checkAndRedirect();
   }, [navigate]);
 
+  // Get theme for styling
+  const isDark = (localStorage.getItem(APP_THEME_KEY) || 'dark') === 'dark';
+
   return (
     <div 
       className="fixed inset-0 flex items-center justify-center"
       style={{
-        background: 'linear-gradient(135deg, hsl(222 47% 11%) 0%, hsl(215 90% 25%) 50%, hsl(189 85% 30%) 100%)',
+        background: isDark
+          ? 'linear-gradient(135deg, hsl(222 47% 11%) 0%, hsl(215 90% 25%) 50%, hsl(189 85% 30%) 100%)'
+          : 'linear-gradient(135deg, hsl(210 40% 98%) 0%, hsl(210 40% 96%) 50%, hsl(210 40% 94%) 100%)',
       }}
     >
       {/* Glow effect behind logo */}

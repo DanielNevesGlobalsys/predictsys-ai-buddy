@@ -13,6 +13,9 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 
+const APP_THEME_KEY = 'predictsys_app_theme';
+const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
+
 interface AppShellProps {
   children: ReactNode;
   showBackButton?: boolean;
@@ -29,20 +32,26 @@ interface NavItem {
 const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: AppShellProps) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const { currentOrganization } = useOrganization();
+  const { currentOrganization, setCurrentOrganization } = useOrganization();
   const [userName, setUserName] = useState<string>('');
 
-  // Force dark mode for app
+  // Apply saved theme on mount (reads from localStorage)
   useEffect(() => {
+    const savedTheme = localStorage.getItem(APP_THEME_KEY) || 'dark';
     const root = document.documentElement;
-    root.classList.remove('light');
-    root.classList.add('dark');
-    localStorage.setItem('predictsys-theme', 'dark');
+    
+    if (savedTheme === 'dark') {
+      root.classList.remove('light');
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
     
     // Update theme-color meta
     const themeColorMeta = document.querySelector('meta[name="theme-color"]');
     if (themeColorMeta) {
-      themeColorMeta.setAttribute('content', '#0f172a');
+      themeColorMeta.setAttribute('content', savedTheme === 'dark' ? '#0f172a' : '#ffffff');
     }
   }, []);
 
@@ -90,8 +99,21 @@ const AppShell = ({ children, showBackButton, title, hideBottomNav = false }: Ap
   };
 
   const handleLogout = async () => {
+    // Clear organization selection
+    setCurrentOrganization(null);
+    localStorage.removeItem('currentOrganizationId');
+    
+    // Clear onboarding seen flag so next login shows full flow
+    localStorage.removeItem(ONBOARDING_KEY);
+    
+    // DO NOT clear theme preference - user's visual preference persists
+    // localStorage.getItem(APP_THEME_KEY) stays
+    
+    // Sign out from Supabase
     await supabase.auth.signOut();
-    navigate('/auth');
+    
+    // Navigate to app welcome (not /auth, not /)
+    navigate('/app/bem-vindo', { replace: true });
   };
 
   return (

@@ -173,15 +173,8 @@ const App = () => (
             {/* App Login (dedicated, not using web /auth) */}
             <Route path="/app/login" element={<AppLogin />} />
             
-            {/* App Onboarding */}
-            <Route 
-              path="/app/bem-vindo" 
-              element={
-                <ProtectedRoute>
-                  <AppOnboarding />
-                </ProtectedRoute>
-              } 
-            />
+            {/* App Onboarding - No auth required (shown before login) */}
+            <Route path="/app/bem-vindo" element={<AppOnboarding />} />
             
             {/* App Home */}
             <Route 

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { 
   Sparkles, 
@@ -11,6 +11,7 @@ import { Button } from '@/components/ui/button';
 import logoBox from '@/assets/logo-box.svg';
 
 const ONBOARDING_KEY = 'predictsys_app_onboarding_seen';
+const APP_THEME_KEY = 'predictsys_app_theme';
 
 interface OnboardingStep {
   icon: React.ReactNode;
@@ -23,6 +24,22 @@ const AppOnboarding = () => {
   const [currentStep, setCurrentStep] = useState(0);
   const [isTransitioning, setIsTransitioning] = useState(false);
   const [slideDirection, setSlideDirection] = useState<'left' | 'right'>('left');
+  const [isDark, setIsDark] = useState(true);
+
+  // Apply saved theme on mount
+  useEffect(() => {
+    const savedTheme = localStorage.getItem(APP_THEME_KEY) || 'dark';
+    setIsDark(savedTheme === 'dark');
+    
+    const root = document.documentElement;
+    if (savedTheme === 'dark') {
+      root.classList.remove('light');
+      root.classList.add('dark');
+    } else {
+      root.classList.remove('dark');
+      root.classList.add('light');
+    }
+  }, []);
 
   const steps: OnboardingStep[] = [
     {
@@ -78,7 +95,9 @@ const AppOnboarding = () => {
     <div 
       className="fixed inset-0 flex flex-col"
       style={{
-        background: 'linear-gradient(180deg, hsl(222 47% 11%) 0%, hsl(222 47% 8%) 100%)',
+        background: isDark
+          ? 'linear-gradient(180deg, hsl(222 47% 11%) 0%, hsl(222 47% 8%) 100%)'
+          : 'linear-gradient(180deg, hsl(210 40% 98%) 0%, hsl(210 40% 96%) 100%)',
       }}
     >
       {/* Header with logo */}
@@ -87,7 +106,7 @@ const AppOnboarding = () => {
           src={logoBox}
           alt="PredictSys AI"
           className="w-16 h-16"
-          style={{ filter: 'drop-shadow(0 0 10px hsl(189 85% 52% / 0.3))' }}
+          style={{ filter: isDark ? 'drop-shadow(0 0 10px hsl(189 85% 52% / 0.3))' : 'none' }}
         />
       </header>
 
@@ -109,12 +128,12 @@ const AppOnboarding = () => {
           </div>
 
           {/* Title */}
-          <h2 className="text-2xl font-bold text-white mb-4 leading-tight">
+          <h2 className={`text-2xl font-bold mb-4 leading-tight ${isDark ? 'text-white' : 'text-slate-900'}`}>
             {currentStepData.title}
           </h2>
 
           {/* Description */}
-          <p className="text-muted-foreground text-lg leading-relaxed">
+          <p className={`text-lg leading-relaxed ${isDark ? 'text-muted-foreground' : 'text-slate-600'}`}>
             {currentStepData.description}
           </p>
         </div>
@@ -165,7 +184,7 @@ const AppOnboarding = () => {
             className="flex-1 h-14 text-base bg-primary hover:bg-primary/90"
           >
             {isLastStep ? (
-              'Continuar'
+              'Entrar'
             ) : (
               <>
                 Próximo
@@ -179,7 +198,7 @@ const AppOnboarding = () => {
         {!isLastStep && (
           <button
             onClick={handleFinish}
-            className="w-full mt-4 text-muted-foreground text-sm hover:text-white transition-colors"
+            className={`w-full mt-4 text-sm hover:underline transition-colors ${isDark ? 'text-muted-foreground hover:text-white' : 'text-slate-500 hover:text-slate-900'}`}
           >
             Pular introdução
           </button>

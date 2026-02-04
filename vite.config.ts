@@ -15,9 +15,9 @@ export default defineConfig(({ mode }) => ({
     mode === "development" && componentTagger(),
     VitePWA({
       registerType: 'autoUpdate',
-      includeAssets: ['favicon.svg', 'pwa/icon-192.png', 'pwa/icon-512.png', 'pwa/apple-touch-icon-180.png'],
+      includeAssets: ['favicon.svg', 'pwa/*.png'],
       manifest: {
-        id: 'predictsys-ai-app-v3',
+        id: 'predictsys-ai-app-v4',
         name: 'PredictSys AI',
         short_name: 'PredictSys',
         description: 'IA traduzindo dados em decisões de negócio',
@@ -29,31 +29,31 @@ export default defineConfig(({ mode }) => ({
         start_url: '/app',
         icons: [
           {
-            src: '/pwa/icon-192.png?v=20260204',
+            src: '/pwa/icon-192.png?v=20260204b',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-512.png?v=20260204',
+            src: '/pwa/icon-512.png?v=20260204b',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'any'
           },
           {
-            src: '/pwa/icon-192-maskable.png?v=20260204',
+            src: '/pwa/icon-192-maskable.png?v=20260204b',
             sizes: '192x192',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/icon-512-maskable.png?v=20260204',
+            src: '/pwa/icon-512-maskable.png?v=20260204b',
             sizes: '512x512',
             type: 'image/png',
             purpose: 'maskable'
           },
           {
-            src: '/pwa/apple-touch-icon-180.png?v=20260204',
+            src: '/pwa/apple-touch-icon-180.png?v=20260204b',
             sizes: '180x180',
             type: 'image/png',
             purpose: 'any'
@@ -61,7 +61,7 @@ export default defineConfig(({ mode }) => ({
         ]
       },
       workbox: {
-        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024, // 5 MiB
+        maximumFileSizeToCacheInBytes: 5 * 1024 * 1024,
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
         runtimeCaching: [
           {
@@ -71,12 +71,11 @@ export default defineConfig(({ mode }) => ({
               cacheName: 'supabase-cache',
               expiration: {
                 maxEntries: 50,
-                maxAgeSeconds: 60 * 60 // 1 hour
+                maxAgeSeconds: 60 * 60
               }
             }
           }
         ],
-        // Force cache update on new manifest
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true
