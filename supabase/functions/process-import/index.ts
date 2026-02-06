@@ -767,9 +767,9 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       "upload",
       { 
         original_path: job.storage_path, 
-        rows_estimated: true,
-        delimiter: job.delimiter,
-        encoding: job.encoding,
+        rows_estimated: !isParquet, // Parquet gives exact count
+        file_type: isParquet ? "parquet" : (job.file_name.split('.').pop()?.toLowerCase() || "csv"),
+        ...(isParquet ? {} : { delimiter: job.delimiter, encoding: job.encoding }),
       },
     );
 
@@ -894,6 +894,21 @@ function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>
       continue;
     }
 
+    // Check if values are already native numbers (e.g. from Parquet)
+    const nativeNumberCount = values.filter((v) => typeof v === "number").length;
+    if (nativeNumberCount >= values.length * 0.8) {
+      types[header] = "numérico";
+      continue;
+    }
+
+    // Check if values are native booleans
+    const nativeBoolCount = values.filter((v) => typeof v === "boolean").length;
+    if (nativeBoolCount >= values.length * 0.8) {
+      types[header] = "categórico";
+      continue;
+    }
+
+    // String-based inference
     const numericCount = values.filter((v) => {
       const str = String(v).replace(",", ".").trim();
       return !isNaN(Number(str)) && str !== "";

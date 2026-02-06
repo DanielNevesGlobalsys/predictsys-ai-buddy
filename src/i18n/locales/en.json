@@ -1145,7 +1145,7 @@
       "errors": { "nameRequired": "Connection name is required" }
     },
     "import": {
-      "largeImportTitle": "Import Large CSV",
+      "largeImportTitle": "Import Large Dataset",
       "largeImportDesc": "The file will be processed in the background. You'll receive a notification when processing is complete.",
       "maxFileSize": "Maximum file size: 10 GB.",
       "processingWarning": "Large files may take several minutes to process.",
