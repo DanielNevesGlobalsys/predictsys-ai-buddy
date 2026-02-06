@@ -192,11 +192,13 @@
     "kpis": {
       "entitiesWithPrediction": "Entidades com previsão",
       "entitiesDescription": "Total de clientes/entidades no período",
+      "regressionEntitiesDesc": "Total de registros com valor previsto",
       "highRisk": "Alto risco",
       "highOpportunity": "Alta oportunidade",
       "ofTotal": "do total",
       "expectedEvents": "Eventos esperados",
       "projectedValue": "Valor projetado",
+      "projectedValueDesc": "Soma do valor previsto no horizonte selecionado",
       "conversionRate": "taxa estimada",
       "totalProjected": "Total projetado no horizonte",
       "financialImpact": "Impacto financeiro",
@@ -213,14 +215,18 @@
     },
     "segmentation": {
       "title": "Segmentação por Probabilidade",
+      "regressionTitle": "Segmentação por Valor Previsto",
       "classificationDesc": "Distribuição das entidades por faixa de probabilidade",
-      "regressionDesc": "Distribuição das entidades por quintis de valor",
+      "regressionDesc": "Distribuição das entidades por faixa de valor previsto",
       "noData": "Nenhuma previsão disponível",
       "band": "Faixa",
+      "range": "Faixa de valor",
       "records": "Registros",
       "avgValue": "Valor Médio",
+      "avgPredicted": "Previsão Média",
       "riskInterpretation": "{{percent}}% da base está em alta probabilidade. Priorize ações nessas faixas.",
-      "opportunityInterpretation": "{{percent}}% da base tem alta probabilidade de conversão."
+      "opportunityInterpretation": "{{percent}}% da base tem alta probabilidade de conversão.",
+      "regressionInterpretation": "{{percent}}% da base concentra os maiores valores previstos. Priorize ações nesses segmentos."
     },
     "groupSegmentation": {
       "title": "Segmentação por Grupos",
@@ -286,6 +292,8 @@
       "count": "Qtd",
       "avgProb": "Prob. Média",
       "avgProbability": "Probabilidade Média",
+      "avgValue": "Valor Médio",
+      "avgVal": "Valor Médio",
       "highProbPercent": "% Alta Probabilidade",
       "highRisk": "% Alto Risco",
       "highOpp": "% Alta Oportunidade",

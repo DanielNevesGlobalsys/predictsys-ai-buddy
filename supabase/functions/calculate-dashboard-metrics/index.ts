@@ -218,40 +218,96 @@ serve(async (req) => {
       - Last Update: ${lastUpdateDate}`);
 
     // =====================================================
-    // 4. Calcular Segmentação por Probabilidade
+    // 4. Calcular Segmentação por Probabilidade / Valor
     // =====================================================
     
-    const buckets = [
-      { bucket: '0-20%', min: 0, max: 0.2, count: 0, sumValue: 0, sumProb: 0 },
-      { bucket: '20-40%', min: 0.2, max: 0.4, count: 0, sumValue: 0, sumProb: 0 },
-      { bucket: '40-60%', min: 0.4, max: 0.6, count: 0, sumValue: 0, sumProb: 0 },
-      { bucket: '60-80%', min: 0.6, max: 0.8, count: 0, sumValue: 0, sumProb: 0 },
-      { bucket: '80-100%', min: 0.8, max: 1.0, count: 0, sumValue: 0, sumProb: 0 }
-    ];
+    let probabilityBuckets;
 
-    predictions.forEach(p => {
-      if (!isClassification) return; // Só para classificação
+    if (isClassification) {
+      const buckets = [
+        { bucket: '0-20%', min: 0, max: 0.2, count: 0, sumValue: 0, sumProb: 0 },
+        { bucket: '20-40%', min: 0.2, max: 0.4, count: 0, sumValue: 0, sumProb: 0 },
+        { bucket: '40-60%', min: 0.4, max: 0.6, count: 0, sumValue: 0, sumProb: 0 },
+        { bucket: '60-80%', min: 0.6, max: 0.8, count: 0, sumValue: 0, sumProb: 0 },
+        { bucket: '80-100%', min: 0.8, max: 1.0, count: 0, sumValue: 0, sumProb: 0 }
+      ];
 
-      const prob = p.probability_event ?? 0;
-      const value = p.potential_value ?? p.predicted_value ?? 0;
+      predictions.forEach(p => {
+        const prob = p.probability_event ?? 0;
+        const value = p.potential_value ?? p.predicted_value ?? 0;
 
-      for (const bucket of buckets) {
-        if (prob >= bucket.min && (prob < bucket.max || (bucket.max === 1.0 && prob <= 1.0))) {
-          bucket.count++;
-          bucket.sumValue += value;
-          bucket.sumProb += prob;
-          break;
+        for (const bucket of buckets) {
+          if (prob >= bucket.min && (prob < bucket.max || (bucket.max === 1.0 && prob <= 1.0))) {
+            bucket.count++;
+            bucket.sumValue += value;
+            bucket.sumProb += prob;
+            break;
+          }
         }
-      }
-    });
+      });
 
-    const probabilityBuckets = buckets.map(b => ({
-      bucket: b.bucket,
-      count: b.count,
-      avg_value: b.count > 0 ? b.sumValue / b.count : 0,
-      expected_events: b.sumProb,
-      percent: predictions.length > 0 ? (b.count / predictions.length) * 100 : 0
-    }));
+      probabilityBuckets = buckets.map(b => ({
+        bucket: b.bucket,
+        count: b.count,
+        avg_value: b.count > 0 ? b.sumValue / b.count : 0,
+        expected_events: b.sumProb,
+        percent: predictions.length > 0 ? (b.count / predictions.length) * 100 : 0
+      }));
+    } else {
+      // Regression: segment by predicted value quintiles
+      const values = predictions
+        .map(p => p.predicted_value ?? 0)
+        .sort((a, b) => a - b);
+      
+      if (values.length > 0) {
+        const minVal = values[0];
+        const maxVal = values[values.length - 1];
+        const range = maxVal - minVal;
+        
+        if (range === 0) {
+          // All same value
+          probabilityBuckets = [{
+            bucket: `R$ ${minVal.toFixed(0)}`,
+            count: values.length,
+            avg_value: minVal,
+            expected_events: 0,
+            percent: 100
+          }];
+        } else {
+          const quintileSize = range / 5;
+          const regBuckets = [];
+          
+          for (let i = 0; i < 5; i++) {
+            const bucketMin = minVal + (quintileSize * i);
+            const bucketMax = i === 4 ? maxVal + 0.01 : minVal + (quintileSize * (i + 1));
+            const inBucket = predictions.filter(p => {
+              const v = p.predicted_value ?? 0;
+              return v >= bucketMin && (i === 4 ? v <= maxVal : v < bucketMax);
+            });
+            
+            const formatVal = (v: number) => {
+              if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+              if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
+              return v.toFixed(0);
+            };
+            
+            regBuckets.push({
+              bucket: `R$ ${formatVal(bucketMin)} - ${formatVal(i === 4 ? maxVal : bucketMax)}`,
+              count: inBucket.length,
+              avg_value: inBucket.length > 0 
+                ? inBucket.reduce((s, p) => s + (p.predicted_value ?? 0), 0) / inBucket.length 
+                : 0,
+              expected_events: 0,
+              percent: predictions.length > 0 ? (inBucket.length / predictions.length) * 100 : 0
+            });
+          }
+          
+          probabilityBuckets = regBuckets;
+        }
+      } else {
+        probabilityBuckets = [];
+      }
+    }
 
     console.log(`[Dashboard Metrics] Probability buckets calculated:`, 
       probabilityBuckets.map(b => `${b.bucket}: ${b.count}`).join(', '));

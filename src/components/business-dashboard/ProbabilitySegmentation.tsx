@@ -38,6 +38,14 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
   const getInterpretation = () => {
     if (bands.length === 0) return '';
     
+    if (!isClassification) {
+      const topBands = bands.slice(-2);
+      const topCount = topBands.reduce((sum, b) => sum + b.count, 0);
+      const totalCount = bands.reduce((sum, b) => sum + b.count, 0);
+      const topPercent = totalCount > 0 ? (topCount / totalCount) * 100 : 0;
+      return t('businessDashboard.segmentation.regressionInterpretation', { percent: topPercent.toFixed(1) });
+    }
+    
     const highBands = bands.filter(b => b.min >= 0.6);
     const highCount = highBands.reduce((sum, b) => sum + b.count, 0);
     const highPercent = bands.length > 0 
@@ -50,13 +58,21 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
     return t('businessDashboard.segmentation.opportunityInterpretation', { percent: highPercent.toFixed(1) });
   };
 
+  // For regression, hide probability segmentation if no probability data
+  if (!isClassification && bands.every(b => b.count === 0)) {
+    return null;
+  }
+
   if (bands.length === 0) {
     return (
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
             <Layers className="w-5 h-5" />
-            {t('businessDashboard.segmentation.title')}
+            {isClassification 
+              ? t('businessDashboard.segmentation.title')
+              : t('businessDashboard.segmentation.regressionTitle')
+            }
           </CardTitle>
         </CardHeader>
         <CardContent>
@@ -73,7 +89,10 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
       <CardHeader>
         <CardTitle className="flex items-center gap-2">
           <Layers className="w-5 h-5" />
-          {t('businessDashboard.segmentation.title')}
+          {isClassification 
+            ? t('businessDashboard.segmentation.title')
+            : t('businessDashboard.segmentation.regressionTitle')
+          }
         </CardTitle>
         <CardDescription>
           {isClassification 
@@ -93,12 +112,12 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
                 <YAxis 
                   dataKey="name" 
                   type="category" 
-                  width={60}
+                  width={80}
                   tick={{ fontSize: 12 }}
                 />
                 <Tooltip 
                   formatter={(value: number) => [value, t('businessDashboard.segmentation.records')]}
-                  labelFormatter={(label) => `${t('businessDashboard.segmentation.band')}: ${label}`}
+                  labelFormatter={(label) => `${isClassification ? t('businessDashboard.segmentation.band') : t('businessDashboard.segmentation.range')}: ${label}`}
                 />
                 <Bar dataKey="value" radius={[0, 4, 4, 0]}>
                   {chartData.map((entry, index) => (
@@ -114,12 +133,20 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>{t('businessDashboard.segmentation.band')}</TableHead>
+                  <TableHead>
+                    {isClassification 
+                      ? t('businessDashboard.segmentation.band')
+                      : t('businessDashboard.segmentation.range')
+                    }
+                  </TableHead>
                   <TableHead className="text-right">{t('businessDashboard.segmentation.records')}</TableHead>
                   <TableHead className="text-right">%</TableHead>
-                  {isClassification && (
-                    <TableHead className="text-right">{t('businessDashboard.segmentation.avgValue')}</TableHead>
-                  )}
+                  <TableHead className="text-right">
+                    {isClassification 
+                      ? t('businessDashboard.segmentation.avgValue')
+                      : t('businessDashboard.segmentation.avgPredicted')
+                    }
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -136,9 +163,7 @@ export function ProbabilitySegmentation({ bands, problemType, viewMode }: Probab
                     </TableCell>
                     <TableCell className="text-right">{band.count.toLocaleString()}</TableCell>
                     <TableCell className="text-right">{band.percent.toFixed(1)}%</TableCell>
-                    {isClassification && (
-                      <TableCell className="text-right">{formatCurrency(band.avgPotentialValue)}</TableCell>
-                    )}
+                    <TableCell className="text-right">{formatCurrency(band.avgPotentialValue)}</TableCell>
                   </TableRow>
                 ))}
               </TableBody>

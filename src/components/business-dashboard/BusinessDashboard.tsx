@@ -335,6 +335,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         filters={filters}
         onFilterChange={updateFilters}
         availableSegmentFields={data.availableSegmentFields}
+        problemType={problemType}
       />
       
       {/* KPI Cards - Now using display KPIs that reflect simulation */}

@@ -13,9 +13,11 @@ interface BusinessDashboardFiltersProps {
   filters: DashboardFilters;
   onFilterChange: (filters: Partial<DashboardFilters>) => void;
   availableSegmentFields: string[];
+  problemType?: string;
 }
 
-export function BusinessDashboardFilters({ filters, onFilterChange, availableSegmentFields }: BusinessDashboardFiltersProps) {
+export function BusinessDashboardFilters({ filters, onFilterChange, availableSegmentFields, problemType = 'classification' }: BusinessDashboardFiltersProps) {
+  const isClassification = problemType === 'classification';
   const { t, i18n } = useTranslation();
   
   const getLocale = () => {
@@ -136,25 +138,27 @@ export function BusinessDashboardFilters({ filters, onFilterChange, availableSeg
         </Select>
       )}
       
-      {/* View Mode Toggle */}
-      <div className="flex items-center border border-border rounded-lg overflow-hidden">
-        <Button 
-          variant={filters.viewMode === 'risk' ? 'default' : 'ghost'}
-          size="sm"
-          className="rounded-none"
-          onClick={() => onFilterChange({ viewMode: 'risk' })}
-        >
-          {t('businessDashboard.filters.riskView')}
-        </Button>
-        <Button 
-          variant={filters.viewMode === 'opportunity' ? 'default' : 'ghost'}
-          size="sm"
-          className="rounded-none"
-          onClick={() => onFilterChange({ viewMode: 'opportunity' })}
-        >
-          {t('businessDashboard.filters.opportunityView')}
-        </Button>
-      </div>
+      {/* View Mode Toggle - only for classification */}
+      {isClassification && (
+        <div className="flex items-center border border-border rounded-lg overflow-hidden">
+          <Button 
+            variant={filters.viewMode === 'risk' ? 'default' : 'ghost'}
+            size="sm"
+            className="rounded-none"
+            onClick={() => onFilterChange({ viewMode: 'risk' })}
+          >
+            {t('businessDashboard.filters.riskView')}
+          </Button>
+          <Button 
+            variant={filters.viewMode === 'opportunity' ? 'default' : 'ghost'}
+            size="sm"
+            className="rounded-none"
+            onClick={() => onFilterChange({ viewMode: 'opportunity' })}
+          >
+            {t('businessDashboard.filters.opportunityView')}
+          </Button>
+        </div>
+      )}
       
       {/* Reset */}
       <Button variant="ghost" size="icon" onClick={resetFilters}>
