@@ -11,7 +11,8 @@ import {
   Info,
   TrendingUp,
   CheckCircle,
-  AlertCircle
+  AlertCircle,
+  BarChart3
 } from 'lucide-react';
 import type { KPIData, DashboardFilters } from './types';
 import { cn } from '@/lib/utils';
@@ -33,8 +34,8 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
   };
   
   const formatCurrency = (num: number) => {
-    if (num >= 1000000) return `R$ ${(num / 1000000).toFixed(1)}M`;
-    if (num >= 1000) return `R$ ${(num / 1000).toFixed(1)}K`;
+    if (Math.abs(num) >= 1000000) return `R$ ${(num / 1000000).toFixed(1)}M`;
+    if (Math.abs(num) >= 1000) return `R$ ${(num / 1000).toFixed(1)}K`;
     return `R$ ${num.toLocaleString('pt-BR', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
   };
   
@@ -47,7 +48,18 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
   
   const healthBadge = getHealthBadge();
 
-  const classificationCards = [
+  type CardDef = {
+    title: string;
+    value: string;
+    description: string;
+    icon: typeof Users;
+    color: string;
+    bgColor: string;
+    badge?: typeof healthBadge;
+    show?: boolean;
+  };
+
+  const classificationCards: CardDef[] = [
     {
       title: t('businessDashboard.kpis.entitiesWithPrediction'),
       value: formatNumber(kpis.totalEntities),
@@ -108,7 +120,7 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
     }
   ].filter(card => card.show !== false);
 
-  const regressionCards = [
+  const regressionCards: CardDef[] = [
     {
       title: t('businessDashboard.kpis.entitiesWithPrediction'),
       value: formatNumber(kpis.totalEntities),
@@ -119,11 +131,19 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
     },
     {
       title: t('businessDashboard.kpis.projectedValue'),
-      value: formatCurrency(kpis.expectedEvents),
+      value: formatCurrency(kpis.predictedTotalValue),
       description: t('businessDashboard.kpis.projectedValueDesc'),
       icon: TrendingUp,
       color: 'text-green-600',
       bgColor: 'bg-green-600/10',
+    },
+    {
+      title: t('businessDashboard.kpis.avgPredicted'),
+      value: formatCurrency(kpis.predictedAvgValue),
+      description: t('businessDashboard.kpis.avgPredictedDesc'),
+      icon: BarChart3,
+      color: 'text-secondary',
+      bgColor: 'bg-secondary/10',
     },
     {
       title: t('businessDashboard.kpis.financialImpact'),
@@ -163,9 +183,7 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
   return (
     <div className={cn(
       "grid gap-4",
-      isClassification 
-        ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-6" 
-        : "grid-cols-2 md:grid-cols-3 lg:grid-cols-5"
+      "grid-cols-2 md:grid-cols-3 lg:grid-cols-6"
     )}>
       {cards.map((card, index) => (
         <Card key={index} className="p-4 hover:shadow-md transition-shadow">

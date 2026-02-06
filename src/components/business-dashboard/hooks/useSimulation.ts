@@ -3,8 +3,9 @@ import { supabase } from '@/integrations/supabase/client';
 import type { Prediction, KPIData } from '../types';
 
 export interface SimulationParams {
-  threshold: number; // 0.5 to 0.95
+  threshold: number; // 0.5 to 0.95 (classification)
   percentActioned: number; // 5 to 100
+  topPercent: number; // 5 to 100 (regression: top X% by value)
 }
 
 export interface SimulationResults {
@@ -14,6 +15,10 @@ export interface SimulationResults {
   financialImpact: number;
   costTotal: number;
   netROI: number;
+  // Regression-specific
+  valuePotential: number;
+  expectedRevenue: number;
+  estimatedProfit: number;
 }
 
 export interface BusinessConfig {
@@ -43,9 +48,12 @@ export function useSimulation({ projectId, predictions, baseKpis, problemType }:
   const [params, setParams] = useState<SimulationParams>({
     threshold: 0.7,
     percentActioned: 20,
+    topPercent: 20,
   });
   const [businessConfig, setBusinessConfig] = useState<BusinessConfig>(DEFAULT_CONFIG);
   const [loadingConfig, setLoadingConfig] = useState(true);
+
+  const isClassification = problemType === 'classification';
 
   // Fetch business config
   useEffect(() => {
@@ -81,7 +89,7 @@ export function useSimulation({ projectId, predictions, baseKpis, problemType }:
 
   // Calculate simulation results based on params
   const simulationResults = useMemo<SimulationResults>(() => {
-    if (problemType !== 'classification' || predictions.length === 0) {
+    if (predictions.length === 0) {
       return {
         entitiesToAction: 0,
         expectedEventsCaptured: 0,
@@ -89,75 +97,118 @@ export function useSimulation({ projectId, predictions, baseKpis, problemType }:
         financialImpact: 0,
         costTotal: 0,
         netROI: 0,
+        valuePotential: 0,
+        expectedRevenue: 0,
+        estimatedProfit: 0,
       };
     }
 
-    // Sort predictions by probability descending
-    const sorted = [...predictions]
-      .filter(p => p.probability_event !== null)
-      .sort((a, b) => (b.probability_event || 0) - (a.probability_event || 0));
+    if (isClassification) {
+      // ===== CLASSIFICATION SIMULATION =====
+      const sorted = [...predictions]
+        .filter(p => p.probability_event !== null)
+        .sort((a, b) => (b.probability_event || 0) - (a.probability_event || 0));
 
-    // Filter by threshold
-    const aboveThreshold = sorted.filter(p => (p.probability_event || 0) >= params.threshold);
+      const aboveThreshold = sorted.filter(p => (p.probability_event || 0) >= params.threshold);
+      const maxEntitiesToAction = Math.ceil((params.percentActioned / 100) * sorted.length);
+      const actioned = aboveThreshold.slice(0, maxEntitiesToAction);
 
-    // Calculate max entities to action based on percentage
-    const maxEntitiesToAction = Math.ceil((params.percentActioned / 100) * sorted.length);
-    
-    // Take minimum of threshold-filtered and percentage-limited
-    const actioned = aboveThreshold.slice(0, maxEntitiesToAction);
+      const expectedEventsCaptured = actioned.reduce((sum, p) => sum + (p.probability_event || 0), 0);
+      const totalExpected = sorted.reduce((sum, p) => sum + (p.probability_event || 0), 0);
+      const captureRate = totalExpected > 0 ? (expectedEventsCaptured / totalExpected) * 100 : 0;
 
-    // Calculate expected events captured (sum of probabilities)
-    const expectedEventsCaptured = actioned.reduce((sum, p) => sum + (p.probability_event || 0), 0);
+      const grossRevenue = expectedEventsCaptured * businessConfig.average_sale_value;
+      const financialImpact = grossRevenue * (businessConfig.average_margin_percent / 100);
+      const costTotal = actioned.length * businessConfig.cost_per_contact;
+      const netROI = financialImpact - costTotal;
 
-    // Total expected events in entire base
-    const totalExpected = sorted.reduce((sum, p) => sum + (p.probability_event || 0), 0);
-    const captureRate = totalExpected > 0 ? (expectedEventsCaptured / totalExpected) * 100 : 0;
+      return {
+        entitiesToAction: actioned.length,
+        expectedEventsCaptured: Math.round(expectedEventsCaptured),
+        captureRate,
+        financialImpact,
+        costTotal,
+        netROI,
+        valuePotential: 0,
+        expectedRevenue: 0,
+        estimatedProfit: 0,
+      };
+    } else {
+      // ===== REGRESSION SIMULATION =====
+      // Sort by predicted_value descending (top value first)
+      const sorted = [...predictions]
+        .filter(p => p.predicted_value !== null)
+        .sort((a, b) => (b.predicted_value || 0) - (a.predicted_value || 0));
 
-    // Calculate financial impact using business config
-    // Impact = expectedEvents * average_sale_value * margin_percent
-    const grossRevenue = expectedEventsCaptured * businessConfig.average_sale_value;
-    const financialImpact = grossRevenue * (businessConfig.average_margin_percent / 100);
-    
-    // Calculate costs
-    const costTotal = actioned.length * businessConfig.cost_per_contact;
-    
-    // Net ROI = Impact - Costs
-    const netROI = financialImpact - costTotal;
+      // Top X%
+      const topCount = Math.ceil((params.topPercent / 100) * sorted.length);
+      const topEntities = sorted.slice(0, topCount);
 
-    return {
-      entitiesToAction: actioned.length,
-      expectedEventsCaptured: Math.round(expectedEventsCaptured),
-      captureRate,
-      financialImpact,
-      costTotal,
-      netROI,
-    };
-  }, [predictions, params.threshold, params.percentActioned, problemType, businessConfig]);
+      // Value potential = sum of predicted values in top X%
+      const valuePotential = topEntities.reduce((sum, p) => sum + (p.predicted_value || 0), 0);
+      const totalValue = sorted.reduce((sum, p) => sum + (p.predicted_value || 0), 0);
+      const captureRate = totalValue > 0 ? (valuePotential / totalValue) * 100 : 0;
+
+      // Expected revenue = value_potential * baseline_conversion (if applicable)
+      const conversionRate = businessConfig.baseline_conversion_percent / 100;
+      const expectedRevenue = valuePotential * conversionRate;
+
+      // Estimated profit = expected_revenue * margin - cost * contacts
+      const costTotal = topEntities.length * businessConfig.cost_per_contact;
+      const estimatedProfit = (expectedRevenue * (businessConfig.average_margin_percent / 100)) - costTotal;
+
+      return {
+        entitiesToAction: topEntities.length,
+        expectedEventsCaptured: 0,
+        captureRate,
+        financialImpact: valuePotential,
+        costTotal,
+        netROI: estimatedProfit,
+        valuePotential,
+        expectedRevenue,
+        estimatedProfit,
+      };
+    }
+  }, [predictions, params.threshold, params.percentActioned, params.topPercent, problemType, businessConfig, isClassification]);
 
   // Simulated KPIs - adjusted based on simulation params
   const simulatedKpis = useMemo<KPIData>(() => {
-    return {
-      ...baseKpis,
-      // Override with simulation values
-      highProbabilityCount: simulationResults.entitiesToAction,
-      highProbabilityPercent: baseKpis.totalEntities > 0 
-        ? (simulationResults.entitiesToAction / baseKpis.totalEntities) * 100 
-        : 0,
-      expectedEvents: simulationResults.expectedEventsCaptured,
-      expectedEventsPercent: baseKpis.totalEntities > 0
-        ? (simulationResults.expectedEventsCaptured / baseKpis.totalEntities) * 100
-        : 0,
-      financialImpact: simulationResults.netROI,
-    };
-  }, [baseKpis, simulationResults]);
+    if (isClassification) {
+      return {
+        ...baseKpis,
+        highProbabilityCount: simulationResults.entitiesToAction,
+        highProbabilityPercent: baseKpis.totalEntities > 0 
+          ? (simulationResults.entitiesToAction / baseKpis.totalEntities) * 100 
+          : 0,
+        expectedEvents: simulationResults.expectedEventsCaptured,
+        expectedEventsPercent: baseKpis.totalEntities > 0
+          ? (simulationResults.expectedEventsCaptured / baseKpis.totalEntities) * 100
+          : 0,
+        financialImpact: simulationResults.netROI,
+      };
+    } else {
+      return {
+        ...baseKpis,
+        predictedTotalValue: simulationResults.valuePotential,
+        predictedAvgValue: simulationResults.entitiesToAction > 0 
+          ? simulationResults.valuePotential / simulationResults.entitiesToAction 
+          : 0,
+        financialImpact: simulationResults.estimatedProfit,
+      };
+    }
+  }, [baseKpis, simulationResults, isClassification]);
 
   const updateParams = useCallback((newParams: Partial<SimulationParams>) => {
     setParams(prev => ({ ...prev, ...newParams }));
   }, []);
 
   const resetParams = useCallback(() => {
-    setParams({ threshold: 0.7, percentActioned: 20 });
+    setParams({ threshold: 0.7, percentActioned: 20, topPercent: 20 });
   }, []);
+
+  const isSimulationActive = isClassification
+    ? (params.threshold !== 0.7 || params.percentActioned !== 20)
+    : (params.topPercent !== 20);
 
   return {
     params,
@@ -167,6 +218,6 @@ export function useSimulation({ projectId, predictions, baseKpis, problemType }:
     simulatedKpis,
     businessConfig,
     loadingConfig,
-    isSimulationActive: params.threshold !== 0.7 || params.percentActioned !== 20,
+    isSimulationActive,
   };
 }

@@ -17,6 +17,8 @@ interface DashboardMetricsResponse {
     high_risk_or_opportunity: number;
     expected_events: number;
     financial_impact: number;
+    predicted_total_value: number;
+    predicted_avg_value: number;
     coverage: number;
     last_update: string | null;
   };
@@ -24,6 +26,7 @@ interface DashboardMetricsResponse {
     bucket: string;
     count: number;
     avg_value: number;
+    total_value?: number;
     expected_events: number;
     percent: number;
   }>;
@@ -43,6 +46,20 @@ interface UseDashboardMetricsResult {
   error: string | null;
   refetch: () => Promise<void>;
 }
+
+const DEFAULT_KPIS: KPIData = {
+  totalEntities: 0,
+  highProbabilityCount: 0,
+  highProbabilityPercent: 0,
+  expectedEvents: 0,
+  expectedEventsPercent: 0,
+  financialImpact: 0,
+  coveragePercent: 0,
+  lastUpdateDate: null,
+  daysSinceUpdate: null,
+  predictedTotalValue: 0,
+  predictedAvgValue: 0,
+};
 
 export function useDashboardMetrics(
   projectId: string,
@@ -90,7 +107,9 @@ export function useDashboardMetrics(
         entities: result?.summary_cards?.entities_with_prediction,
         highRisk: result?.summary_cards?.high_risk_or_opportunity,
         expected: result?.summary_cards?.expected_events,
-        impact: result?.summary_cards?.financial_impact
+        impact: result?.summary_cards?.financial_impact,
+        predTotal: result?.summary_cards?.predicted_total_value,
+        predAvg: result?.summary_cards?.predicted_avg_value,
       });
 
       setData(result);
@@ -106,55 +125,35 @@ export function useDashboardMetrics(
     fetchMetrics();
   }, [fetchMetrics]);
 
-  // =====================================================
-  // Transformar resposta para tipos do frontend
-  // =====================================================
-
+  // Transform response to frontend types
   const kpis: KPIData = data?.summary_cards
     ? {
-        // Entidades com previsão = COUNT(DISTINCT entity_id) com filtros
         totalEntities: data.summary_cards.entities_with_prediction,
-        
-        // Alto risco/oportunidade = COUNT onde prob >= 0.7
         highProbabilityCount: data.summary_cards.high_risk_or_opportunity,
         highProbabilityPercent: data.summary_cards.entities_with_prediction > 0
           ? (data.summary_cards.high_risk_or_opportunity / data.summary_cards.entities_with_prediction) * 100
           : 0,
-        
-        // Eventos esperados = SUM(probability)
         expectedEvents: Math.round(data.summary_cards.expected_events),
         expectedEventsPercent: data.summary_cards.entities_with_prediction > 0
           ? (data.summary_cards.expected_events / data.summary_cards.entities_with_prediction) * 100
           : 0,
-        
-        // Impacto financeiro = SUM(probability * potential_value)
         financialImpact: data.summary_cards.financial_impact,
-        
-        // Cobertura = entities_filtered / entities_total
         coveragePercent: data.summary_cards.coverage * 100,
-        
-        // Última atualização
         lastUpdateDate: data.summary_cards.last_update,
         daysSinceUpdate: data.summary_cards.last_update
           ? Math.floor((Date.now() - new Date(data.summary_cards.last_update).getTime()) / (1000 * 60 * 60 * 24))
-          : null
+          : null,
+        predictedTotalValue: data.summary_cards.predicted_total_value || 0,
+        predictedAvgValue: data.summary_cards.predicted_avg_value || 0,
       }
-    : {
-        totalEntities: 0,
-        highProbabilityCount: 0,
-        highProbabilityPercent: 0,
-        expectedEvents: 0,
-        expectedEventsPercent: 0,
-        financialImpact: 0,
-        coveragePercent: 0,
-        lastUpdateDate: null,
-        daysSinceUpdate: null
-      };
+    : DEFAULT_KPIS;
 
-  // Transformar buckets para SegmentationBand
+  // Transform buckets to SegmentationBand
   const segmentationBands: SegmentationBand[] = data?.probability_buckets
     ? data.probability_buckets.map((bucket, index) => {
-        const ranges = [
+        // For classification, use fixed probability ranges
+        const isClassification = (data.problem_type || 'classification') === 'classification';
+        const classificationRanges = [
           { min: 0, max: 0.2 },
           { min: 0.2, max: 0.4 },
           { min: 0.4, max: 0.6 },
@@ -163,19 +162,18 @@ export function useDashboardMetrics(
         ];
         return {
           range: bucket.bucket,
-          min: ranges[index]?.min ?? 0,
-          max: ranges[index]?.max ?? 1,
+          min: isClassification ? (classificationRanges[index]?.min ?? 0) : index,
+          max: isClassification ? (classificationRanges[index]?.max ?? 1) : index + 1,
           count: bucket.count,
           percent: bucket.percent,
-          avgPotentialValue: bucket.avg_value > 0 ? bucket.avg_value : null
+          avgPotentialValue: bucket.avg_value > 0 ? bucket.avg_value : null,
+          totalValue: bucket.total_value || 0,
         };
       })
     : [];
 
-  // Extrair campos de segmento disponíveis
   const availableSegmentFields = data?.segments?.map(s => s.field) ?? [];
   
-  // Mapa de valores por campo
   const availableSegmentValues: Record<string, string[]> = {};
   data?.segments?.forEach(s => {
     availableSegmentValues[s.field] = s.values;
