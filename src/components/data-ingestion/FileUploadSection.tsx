@@ -157,6 +157,14 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
       return;
     }
     
+    // Parquet files always go through async import (cannot be parsed in-memory)
+    const fileExt = file.name.split('.').pop()?.toLowerCase();
+    if (fileExt === 'parquet') {
+      setLargeFiles([file]);
+      setShowLargeImportModal(true);
+      return;
+    }
+
     if (file.size > MAX_FILE_SIZE) {
       // Large file - use async import flow
       // All supported formats can use large import
@@ -257,15 +265,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         return;
       }
 
-      // Parquet files: skip edge function parsing, route directly to large import flow
-      const fileExt = file.name.split('.').pop()?.toLowerCase();
-      if (fileExt === 'parquet') {
-        // Parquet files need async import (cannot be parsed in-memory)
-        setUploadStatus("idle");
-        setLargeFiles([file]);
-        setShowLargeImportModal(true);
-        return;
-      }
+
 
       // Now call the parse-file edge function
       setUploadStatus("processing");
