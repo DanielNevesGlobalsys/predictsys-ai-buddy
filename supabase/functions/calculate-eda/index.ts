@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature, type RawRecord } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
@@ -171,10 +172,11 @@ function addCategoricalValue(acc: CategoricalAccumulator, raw: string | null | u
 async function resolveDatasetFilePaths(
   supabase: any,
   project: any,
-): Promise<{ paths: string[]; delimiter: string; encoding: string }> {
+): Promise<{ paths: string[]; delimiter: string; encoding: string; fileType: string }> {
   const projectId = project.id;
   let delimiter = ",";
   let encoding = "UTF-8";
+  let fileType = "csv";
 
   // First, try to get from project_datasets (source of truth for new imports)
   const { data: datasets } = await supabase
@@ -200,12 +202,22 @@ async function resolveDatasetFilePaths(
       metadata.file_paths.length > 0
     ) {
       console.log(`[calculate-eda] Found ${metadata.file_paths.length} file paths in metadata`);
-      return { paths: metadata.file_paths, delimiter, encoding };
+      // Detect file type from first path
+      const firstPath = metadata.file_paths[0];
+      if (/\.(parquet|parq|pq)$/i.test(firstPath)) fileType = "parquet";
+      return { paths: metadata.file_paths, delimiter, encoding, fileType };
     }
 
     // storage_path might be a folder (batch) or a single file
     const storagePath = dataset.storage_path;
     if (storagePath) {
+      // Detect file type from storage path
+      if (/\.(parquet|parq|pq)$/i.test(storagePath)) {
+        fileType = "parquet";
+        console.log(`[calculate-eda] Detected Parquet file: ${storagePath}`);
+        return { paths: [storagePath], delimiter, encoding, fileType };
+      }
+
       // Check if it looks like a folder (no file extension) by listing contents
       const isLikelyFolder = !storagePath.match(/\.[a-zA-Z0-9]{2,5}$/);
       
@@ -216,27 +228,38 @@ async function resolveDatasetFilePaths(
           .list(storagePath, { limit: 100 });
 
         if (!listError && files && files.length > 0) {
-          const csvFiles = files
-            .filter((f: any) => f.name && !f.name.startsWith(".") && f.name.toLowerCase().endsWith(".csv"))
+          // Support both CSV and Parquet files in folders
+          const dataFiles = files
+            .filter((f: any) => f.name && !f.name.startsWith(".") && 
+              (/\.(csv|parquet|parq|pq)$/i.test(f.name)))
             .map((f: any) => `${storagePath}/${f.name}`)
             .sort();
 
-          if (csvFiles.length > 0) {
-            console.log(`[calculate-eda] Listed ${csvFiles.length} CSV files in folder: ${storagePath}`);
-            return { paths: csvFiles, delimiter, encoding };
+          if (dataFiles.length > 0) {
+            // Detect type from first file
+            if (/\.(parquet|parq|pq)$/i.test(dataFiles[0])) fileType = "parquet";
+            console.log(`[calculate-eda] Listed ${dataFiles.length} data files in folder: ${storagePath} (type: ${fileType})`);
+            return { paths: dataFiles, delimiter, encoding, fileType };
           }
         }
       }
 
       // Treat as single file
       console.log(`[calculate-eda] Using single file: ${storagePath}`);
-      return { paths: [storagePath], delimiter, encoding };
+      return { paths: [storagePath], delimiter, encoding, fileType };
     }
   }
 
   // Fallback to project.dataset_filename
   if (project.dataset_filename) {
     const filename = project.dataset_filename;
+
+    // Detect Parquet
+    if (/\.(parquet|parq|pq)$/i.test(filename)) {
+      fileType = "parquet";
+      console.log(`[calculate-eda] Detected Parquet from dataset_filename: ${filename}`);
+      return { paths: [filename], delimiter, encoding, fileType };
+    }
     
     // Same logic: check if it's a folder
     const isLikelyFolder = !filename.match(/\.[a-zA-Z0-9]{2,5}$/);
@@ -247,23 +270,25 @@ async function resolveDatasetFilePaths(
         .list(filename, { limit: 100 });
 
       if (!listError && files && files.length > 0) {
-        const csvFiles = files
-          .filter((f: any) => f.name && !f.name.startsWith(".") && f.name.toLowerCase().endsWith(".csv"))
+        const dataFiles = files
+          .filter((f: any) => f.name && !f.name.startsWith(".") && 
+            (/\.(csv|parquet|parq|pq)$/i.test(f.name)))
           .map((f: any) => `${filename}/${f.name}`)
           .sort();
 
-        if (csvFiles.length > 0) {
-          console.log(`[calculate-eda] Listed ${csvFiles.length} CSV files from project.dataset_filename folder`);
-          return { paths: csvFiles, delimiter, encoding };
+        if (dataFiles.length > 0) {
+          if (/\.(parquet|parq|pq)$/i.test(dataFiles[0])) fileType = "parquet";
+          console.log(`[calculate-eda] Listed ${dataFiles.length} data files from project.dataset_filename folder`);
+          return { paths: dataFiles, delimiter, encoding, fileType };
         }
       }
     }
 
     console.log(`[calculate-eda] Using project.dataset_filename as single file: ${filename}`);
-    return { paths: [filename], delimiter, encoding };
+    return { paths: [filename], delimiter, encoding, fileType };
   }
 
-  return { paths: [], delimiter, encoding };
+  return { paths: [], delimiter, encoding, fileType };
 }
 
 async function createSignedDatasetUrl(supabase: any, storagePath: string): Promise<string | null> {
@@ -532,9 +557,238 @@ async function processFileStreaming(
 }
 
 /**
- * Compute EDA from multiple files with global limits
- * Now supports feature engineering - computed features are included in stats
+ * Compute EDA from Parquet files using hyparquet.
+ * Downloads the file, reads it into memory, and computes stats from native types.
  */
+async function computeEDAFromParquetFiles(
+  supabase: any,
+  projectId: string,
+  filePaths: string[],
+  columnsToProcess: Array<{ column_name: string; inferred_type: string; is_feature?: boolean }>,
+  enabledFeatures: ProjectFeature[] = [],
+): Promise<{
+  delimiter: string;
+  rowsProcessed: number;
+  numericStats: NumericStats[];
+  categoricalStats: CategoricalStats[];
+  filesProcessed: number;
+} | null> {
+  console.log(`[calculate-eda] Processing ${filePaths.length} Parquet file(s)`);
+
+  const originalColumns = columnsToProcess.filter((c) => !c.is_feature);
+  const featureColumns = columnsToProcess.filter((c) => c.is_feature);
+  const numericColumns = originalColumns.filter((c) => c.inferred_type === "numérico");
+  const categoricalColumns = originalColumns.filter((c) => c.inferred_type !== "numérico");
+
+  // Initialize accumulators
+  const numericAccByName = new Map<string, NumericAccumulator>();
+  const catAccByName = new Map<string, CategoricalAccumulator>();
+  const featureAccByName = new Map<string, NumericAccumulator>();
+
+  for (const c of numericColumns) numericAccByName.set(c.column_name, createNumericAccumulator());
+  for (const c of categoricalColumns) catAccByName.set(c.column_name, createCategoricalAccumulator());
+  for (const fc of featureColumns) featureAccByName.set(fc.column_name, createNumericAccumulator());
+
+  let totalRowsProcessed = 0;
+  let filesProcessed = 0;
+
+  for (const filePath of filePaths) {
+    if (totalRowsProcessed >= MAX_ROWS_TO_PROCESS) break;
+
+    console.log(`[calculate-eda] Processing Parquet file: ${filePath}`);
+
+    const signedUrl = await createSignedDatasetUrl(supabase, filePath);
+    if (!signedUrl) {
+      console.warn(`[calculate-eda] Could not get signed URL for: ${filePath}`);
+      continue;
+    }
+
+    try {
+      const res = await fetch(signedUrl);
+      if (!res.ok) {
+        console.error(`[calculate-eda] Failed to fetch Parquet file ${filePath}: HTTP ${res.status}`);
+        continue;
+      }
+
+      const arrayBuffer = await res.arrayBuffer();
+      console.log(`[calculate-eda] Downloaded Parquet: ${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+
+      let allRows: Record<string, unknown>[] = [];
+
+      await parquetRead({
+        file: arrayBuffer,
+        rowFormat: 'object',
+        onComplete: (data: Record<string, unknown>[]) => {
+          allRows = data;
+        },
+      });
+
+      console.log(`[calculate-eda] Parquet rows loaded: ${allRows.length}`);
+
+      // Process rows up to limit
+      const rowsToProcess = allRows.slice(0, MAX_ROWS_TO_PROCESS - totalRowsProcessed);
+
+      for (const row of rowsToProcess) {
+        // Process numeric columns
+        for (const c of numericColumns) {
+          const acc = numericAccByName.get(c.column_name);
+          if (!acc) continue;
+
+          const val = row[c.column_name];
+          if (val === null || val === undefined) {
+            acc.nullCount += 1;
+            continue;
+          }
+
+          let num: number;
+          if (typeof val === 'number') {
+            num = val;
+          } else if (typeof val === 'bigint') {
+            num = Number(val);
+          } else {
+            const str = String(val).replace(",", ".").trim();
+            num = parseFloat(str);
+          }
+
+          if (Number.isFinite(num)) {
+            addNumericValue(acc, num);
+          } else {
+            acc.nullCount += 1;
+          }
+        }
+
+        // Process categorical columns
+        for (const c of categoricalColumns) {
+          const acc = catAccByName.get(c.column_name);
+          if (!acc) continue;
+
+          const val = row[c.column_name];
+          addCategoricalValue(acc, val !== null && val !== undefined ? String(val) : null);
+        }
+
+        // Process feature engineering
+        if (enabledFeatures.length > 0) {
+          const rawRecord: RawRecord = {};
+          for (const key of Object.keys(row)) {
+            rawRecord[key] = row[key] !== undefined ? row[key] : null;
+          }
+          const featureValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+          for (const [featureName, featureValue] of Object.entries(featureValues)) {
+            const acc = featureAccByName.get(featureName);
+            if (!acc) continue;
+            if (featureValue === null || featureValue === undefined) {
+              acc.nullCount += 1;
+              continue;
+            }
+            const num = typeof featureValue === "number" ? featureValue : parseFloat(String(featureValue));
+            if (Number.isFinite(num)) {
+              addNumericValue(acc, num);
+            } else {
+              acc.nullCount += 1;
+            }
+          }
+        }
+
+        totalRowsProcessed++;
+      }
+
+      filesProcessed++;
+      console.log(`[calculate-eda] Processed ${rowsToProcess.length} rows from Parquet file`);
+    } catch (e) {
+      console.error(`[calculate-eda] Error processing Parquet file ${filePath}:`, e);
+      continue;
+    }
+  }
+
+  if (filesProcessed === 0) {
+    console.error(`[calculate-eda] Failed to process any Parquet files`);
+    return null;
+  }
+
+  // Build final stats (same logic as CSV path)
+  const numericStats: NumericStats[] = [];
+  for (const c of numericColumns) {
+    const acc = numericAccByName.get(c.column_name);
+    if (!acc || acc.count === 0) {
+      numericStats.push({
+        project_id: projectId,
+        column_name: c.column_name,
+        min_value: null, max_value: null, mean_value: null, median_value: null, std_value: null,
+        null_count: acc?.nullCount ?? totalRowsProcessed,
+      });
+      continue;
+    }
+    const mean = acc.mean;
+    const variance = acc.count >= 2 ? acc.M2 / (acc.count - 1) : 0;
+    const std = variance > 0 ? Math.sqrt(variance) : null;
+    const median = calculateMedianFromSample(acc.sample);
+    numericStats.push({
+      project_id: projectId,
+      column_name: c.column_name,
+      min_value: Number.isFinite(acc.min) ? Math.round(acc.min * 10000) / 10000 : null,
+      max_value: Number.isFinite(acc.max) ? Math.round(acc.max * 10000) / 10000 : null,
+      mean_value: Number.isFinite(mean) ? Math.round(mean * 10000) / 10000 : null,
+      median_value: median !== null ? Math.round(median * 10000) / 10000 : null,
+      std_value: std !== null && Number.isFinite(std) ? Math.round(std * 10000) / 10000 : null,
+      null_count: acc.nullCount,
+    });
+  }
+
+  // Feature stats
+  for (const [featureName, acc] of featureAccByName.entries()) {
+    if (!acc || acc.count === 0) {
+      numericStats.push({
+        project_id: projectId, column_name: featureName,
+        min_value: null, max_value: null, mean_value: null, median_value: null, std_value: null,
+        null_count: acc?.nullCount ?? totalRowsProcessed,
+      });
+      continue;
+    }
+    const mean = acc.mean;
+    const variance = acc.count >= 2 ? acc.M2 / (acc.count - 1) : 0;
+    const std = variance > 0 ? Math.sqrt(variance) : null;
+    const median = calculateMedianFromSample(acc.sample);
+    numericStats.push({
+      project_id: projectId, column_name: featureName,
+      min_value: Number.isFinite(acc.min) ? Math.round(acc.min * 10000) / 10000 : null,
+      max_value: Number.isFinite(acc.max) ? Math.round(acc.max * 10000) / 10000 : null,
+      mean_value: Number.isFinite(mean) ? Math.round(mean * 10000) / 10000 : null,
+      median_value: median !== null ? Math.round(median * 10000) / 10000 : null,
+      std_value: std !== null && Number.isFinite(std) ? Math.round(std * 10000) / 10000 : null,
+      null_count: acc.nullCount,
+    });
+  }
+
+  // Categorical stats
+  const categoricalStats: CategoricalStats[] = [];
+  for (const c of categoricalColumns) {
+    const acc = catAccByName.get(c.column_name);
+    if (!acc) {
+      categoricalStats.push({ project_id: projectId, column_name: c.column_name, distinct_count: 0, top_categories: [] });
+      continue;
+    }
+    const sortedTop = [...acc.counts.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10)
+      .map(([category, count]) => ({ category, count }));
+    categoricalStats.push({
+      project_id: projectId, column_name: c.column_name,
+      distinct_count: acc.counts.size, top_categories: sortedTop,
+    });
+  }
+
+  console.log(`[calculate-eda] Parquet EDA completed: rows=${totalRowsProcessed}, numeric=${numericStats.length}, categorical=${categoricalStats.length}`);
+
+  return {
+    delimiter: "N/A",
+    rowsProcessed: totalRowsProcessed,
+    numericStats,
+    categoricalStats,
+    filesProcessed,
+  };
+}
+
+
 async function computeEDAFromFiles(
   supabase: any,
   projectId: string,
@@ -751,7 +1005,7 @@ Deno.serve(async (req) => {
       });
     }
 
-    const { paths: filePaths, delimiter, encoding } = await resolveDatasetFilePaths(supabase, project);
+    const { paths: filePaths, delimiter, encoding, fileType } = await resolveDatasetFilePaths(supabase, project);
     
     if (filePaths.length === 0) {
       console.error("[calculate-eda] Nenhum arquivo de dataset encontrado");
@@ -764,7 +1018,8 @@ Deno.serve(async (req) => {
       );
     }
 
-    console.log(`[calculate-eda] Found ${filePaths.length} file(s) to process, delimiter="${delimiter}", encoding="${encoding}"`);
+    const isParquet = fileType === "parquet";
+    console.log(`[calculate-eda] Found ${filePaths.length} file(s) to process, type="${fileType}", delimiter="${delimiter}", encoding="${encoding}"`);
 
     // Get column metadata from project_columns (populated by process-import)
     const { data: columns, error: columnsError } = await supabase
@@ -829,13 +1084,27 @@ Deno.serve(async (req) => {
       `${columnsToProcess.filter((c: any) => c.inferred_type === "numérico").length} numeric, ` +
       `${columnsToProcess.filter((c: any) => c.inferred_type !== "numérico").length} categorical`);
 
-    const eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess, delimiter, encoding, enabledFeatures);
+    let eda: {
+      delimiter: string;
+      rowsProcessed: number;
+      numericStats: NumericStats[];
+      categoricalStats: CategoricalStats[];
+      filesProcessed: number;
+    } | null;
+
+    if (isParquet) {
+      eda = await computeEDAFromParquetFiles(supabase, project_id, filePaths, columnsToProcess, enabledFeatures);
+    } else {
+      eda = await computeEDAFromFiles(supabase, project_id, filePaths, columnsToProcess, delimiter, encoding, enabledFeatures);
+    }
 
     if (!eda) {
       console.error(`[calculate-eda] Falha ao processar arquivos do dataset`);
       return new Response(
         JSON.stringify({
-          error: "Falha ao processar amostra do CSV. Verifique se os arquivos estão acessíveis e bem formatados.",
+          error: isParquet 
+            ? "Falha ao processar arquivo Parquet. Verifique se o arquivo está acessível e bem formatado."
+            : "Falha ao processar amostra do CSV. Verifique se os arquivos estão acessíveis e bem formatados.",
         }),
         { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );

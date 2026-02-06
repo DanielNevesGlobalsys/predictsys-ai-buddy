@@ -1443,7 +1443,7 @@
       }
     },
     "import": {
-      "largeImportTitle": "Importar CSV grande",
+      "largeImportTitle": "Importar dataset grande",
       "largeImportDesc": "O arquivo será processado em background. Você receberá uma notificação quando o processo for concluído.",
       "maxFileSize": "Tamanho máximo do arquivo: 10 GB.",
       "processingWarning": "Arquivos grandes podem levar vários minutos para serem processados.",
@@ -1460,8 +1460,8 @@
       "uploading": "Enviando...",
       "startImport": "Iniciar importação",
       "importStarted": "Importação iniciada!",
-      "importStartedDesc": "Você pode acompanhar o progresso na seção 'Importações de CSV'.",
-      "jobsTitle": "Importações de CSV",
+      "importStartedDesc": "Você pode acompanhar o progresso na seção 'Importações'.",
+      "jobsTitle": "Importações",
       "jobsDesc": "Acompanhe suas importações de arquivos grandes.",
       "noJobs": "Nenhuma importação encontrada",
       "rows": "linhas",
@@ -1487,7 +1487,11 @@
         "unexpected": "Ocorreu um erro inesperado.",
         "fetchJobsFailed": "Erro ao carregar importações.",
         "retryFailed": "Erro ao tentar novamente."
-      }
+      },
+      "parquetInfoBanner": "Parquet detectado: o schema e os tipos serão extraídos automaticamente. Delimitador e encoding não se aplicam.",
+      "processing": "Processando...",
+      "done": "Concluído!",
+      "uploadCompletedProcessing": "Upload concluído. Processando dados no servidor..."
     },
     "batchImport": {
       "title": "Importar arquivo grande",

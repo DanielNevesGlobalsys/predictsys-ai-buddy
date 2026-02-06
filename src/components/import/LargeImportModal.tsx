@@ -51,7 +51,9 @@ const LargeImportModal = ({
 }: LargeImportModalProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
-  const [datasetName, setDatasetName] = useState(file.name);
+  const [datasetName, setDatasetName] = useState(
+    file.name.replace(/\.(parquet|parq|pq|csv|xlsx|xls|json)$/i, "")
+  );
   const [delimiter, setDelimiter] = useState(",");
   const [encoding, setEncoding] = useState("UTF-8");
   const [isUploading, setIsUploading] = useState(false);
@@ -525,10 +527,12 @@ const LargeImportModal = ({
               </div>
             </>
           ) : (
-            <div className="flex items-start gap-3 p-3 bg-secondary/10 border border-secondary/20 rounded-lg">
-              <Info className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5" />
+            <div className="flex items-start gap-3 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+              <Info className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
               <div className="text-sm text-muted-foreground">
-                O schema do Parquet será extraído automaticamente. Delimitador e encoding não se aplicam a este formato binário.
+                {t("dataIngestion.import.parquetInfoBanner", {
+                  defaultValue: "Parquet detectado: o schema e os tipos serão extraídos automaticamente. Delimitador e encoding não se aplicam."
+                })}
               </div>
             </div>
           )}
