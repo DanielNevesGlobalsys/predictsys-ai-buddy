@@ -67,6 +67,18 @@ serve(async (req) => {
       });
     }
 
+    // Reject binary formats that cannot be parsed as CSV/text
+    const fileExtension = job.file_name.split('.').pop()?.toLowerCase();
+    if (fileExtension === 'parquet' || fileExtension === 'parq' || fileExtension === 'pq') {
+      const errMsg = "Arquivos Parquet não são suportados. Por favor, converta para CSV antes de importar (ex: pandas df.to_csv()).";
+      console.error(`[process-import] Rejecting Parquet file: ${job.file_name}`);
+      await updateJobError(supabase, job_id, errMsg);
+      return new Response(JSON.stringify({ success: false, message: errMsg }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     if (job.file_size_bytes > MAX_FILE_SIZE_BYTES) {
       const maxGB = (MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
       await updateJobError(supabase, job_id, `Arquivo excede o limite de ${maxGB} GB.`);
