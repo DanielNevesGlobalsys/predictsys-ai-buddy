@@ -299,9 +299,10 @@ serve(async (req) => {
       const text = await file.text();
       parsedData = parseJSON(text, maxSampleRows);
     } else if (fileName.endsWith('.parquet')) {
-      // Parquet parsing requires specialized handling
-      // For now, return an error suggesting conversion
-      throw new Error("Parquet files require conversion. Please convert to CSV or use a database connector for large datasets.");
+      return new Response(
+        JSON.stringify({ success: false, message: "Parquet files require async import. Please use the large file import flow or convert to CSV." }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
+      );
     } else {
       throw new Error(`Unsupported file format: ${fileName}`);
     }
