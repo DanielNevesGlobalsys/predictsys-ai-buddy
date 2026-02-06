@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, Loader2, FileWarning, Sparkles } from "lucide-react";
+import { Upload, Loader2, FileWarning, Sparkles, Info } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildSafeObjectName } from "@/lib/storageObjectName";
@@ -63,15 +63,17 @@ const LargeImportModal = ({
   const [delimiterAutoDetected, setDelimiterAutoDetected] = useState(false);
   const [serverProgress, setServerProgress] = useState(0);
 
+  const isParquet = /\.(parquet|parq|pq)$/i.test(file.name);
+
   const lastBytesRef = useRef(0);
   const lastTimeRef = useRef(Date.now());
   const speedHistoryRef = useRef<number[]>([]);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const jobIdRef = useRef<string | null>(null);
 
-  // Auto-detect delimiter when modal opens
+  // Auto-detect delimiter when modal opens (skip for Parquet)
   useEffect(() => {
-    if (open && file) {
+    if (open && file && !isParquet) {
       setIsDetectingDelimiter(true);
       setDelimiterAutoDetected(false);
       
@@ -88,7 +90,7 @@ const LargeImportModal = ({
           setIsDetectingDelimiter(false);
         });
     }
-  }, [open, file]);
+  }, [open, file, isParquet]);
 
   // Cleanup polling on unmount
   useEffect(() => {
@@ -468,57 +470,68 @@ const LargeImportModal = ({
             />
           </div>
 
-          {/* Delimiter */}
-          <div className="space-y-2">
-            <div className="flex items-center gap-2">
-              <Label>{t("dataIngestion.import.delimiter")}</Label>
-              {isDetectingDelimiter && (
-                <span className="text-xs text-muted-foreground flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" />
-                  {t("dataIngestion.import.detectingDelimiter")}
-                </span>
-              )}
-              {delimiterAutoDetected && !isDetectingDelimiter && (
-                <span className="text-xs text-primary flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" />
-                  {t("dataIngestion.import.delimiterAutoDetected")}
-                </span>
-              )}
-            </div>
-            <Select 
-              value={delimiter} 
-              onValueChange={(val) => {
-                setDelimiter(val);
-                setDelimiterAutoDetected(false);
-              }} 
-              disabled={isUploading || isDetectingDelimiter}
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value=",">{t("dataIngestion.import.delimiterComma")}</SelectItem>
-                <SelectItem value=";">{t("dataIngestion.import.delimiterSemicolon")}</SelectItem>
-                <SelectItem value="\t">{t("dataIngestion.import.delimiterTab")}</SelectItem>
-                <SelectItem value="|">{t("dataIngestion.import.delimiterPipe")}</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+          {!isParquet ? (
+            <>
+              {/* Delimiter */}
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <Label>{t("dataIngestion.import.delimiter")}</Label>
+                  {isDetectingDelimiter && (
+                    <span className="text-xs text-muted-foreground flex items-center gap-1">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      {t("dataIngestion.import.detectingDelimiter")}
+                    </span>
+                  )}
+                  {delimiterAutoDetected && !isDetectingDelimiter && (
+                    <span className="text-xs text-primary flex items-center gap-1">
+                      <Sparkles className="w-3 h-3" />
+                      {t("dataIngestion.import.delimiterAutoDetected")}
+                    </span>
+                  )}
+                </div>
+                <Select 
+                  value={delimiter} 
+                  onValueChange={(val) => {
+                    setDelimiter(val);
+                    setDelimiterAutoDetected(false);
+                  }} 
+                  disabled={isUploading || isDetectingDelimiter}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value=",">{t("dataIngestion.import.delimiterComma")}</SelectItem>
+                    <SelectItem value=";">{t("dataIngestion.import.delimiterSemicolon")}</SelectItem>
+                    <SelectItem value="\t">{t("dataIngestion.import.delimiterTab")}</SelectItem>
+                    <SelectItem value="|">{t("dataIngestion.import.delimiterPipe")}</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
 
-          {/* Encoding */}
-          <div className="space-y-2">
-            <Label>{t("dataIngestion.import.encoding")}</Label>
-            <Select value={encoding} onValueChange={setEncoding} disabled={isUploading}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="UTF-8">UTF-8</SelectItem>
-                <SelectItem value="ISO-8859-1">ISO-8859-1 (Latin-1)</SelectItem>
-                <SelectItem value="Windows-1252">Windows-1252</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
+              {/* Encoding */}
+              <div className="space-y-2">
+                <Label>{t("dataIngestion.import.encoding")}</Label>
+                <Select value={encoding} onValueChange={setEncoding} disabled={isUploading}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="UTF-8">UTF-8</SelectItem>
+                    <SelectItem value="ISO-8859-1">ISO-8859-1 (Latin-1)</SelectItem>
+                    <SelectItem value="Windows-1252">Windows-1252</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </>
+          ) : (
+            <div className="flex items-start gap-3 p-3 bg-secondary/10 border border-secondary/20 rounded-lg">
+              <Info className="w-5 h-5 text-secondary flex-shrink-0 mt-0.5" />
+              <div className="text-sm text-muted-foreground">
+                O schema do Parquet será extraído automaticamente. Delimitador e encoding não se aplicam a este formato binário.
+              </div>
+            </div>
+          )}
 
           {/* Upload progress with detailed stats */}
           {isUploading && (
