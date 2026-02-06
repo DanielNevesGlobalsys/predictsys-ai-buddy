@@ -8,7 +8,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
 import DatasetSelector from "./DatasetSelector";
-import { BatchImportModal, ImportJobsModal } from "@/components/import";
+import { BatchImportModal, ImportJobsModal, LargeImportModal } from "@/components/import";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 
@@ -30,11 +30,12 @@ const SAMPLE_SIZE = 100000; // Max rows for EDA sampling
 
 const SUPPORTED_FORMATS = [
   { ext: ".csv", icon: FileSpreadsheet, label: "CSV" },
+  { ext: ".parquet", icon: Table, label: "Parquet" },
   { ext: ".xlsx", icon: FileSpreadsheet, label: "Excel" },
   { ext: ".json", icon: FileJson, label: "JSON" },
 ];
 
-const UNSUPPORTED_BINARY_FORMATS = [".parquet", ".parq", ".pq"];
+const PARQUET_EXTENSIONS = [".parquet", ".parq", ".pq"];
 
 const inferColumnType = (values: string[]): string => {
   const nonEmpty = values.filter(v => v !== null && v !== undefined && String(v).trim() !== "");
@@ -76,6 +77,9 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
   const [showLargeImportModal, setShowLargeImportModal] = useState(false);
   const [showImportJobsModal, setShowImportJobsModal] = useState(false);
   const [largeFiles, setLargeFiles] = useState<File[]>([]);
+  // Parquet async import modal
+  const [showParquetModal, setShowParquetModal] = useState(false);
+  const [parquetFile, setParquetFile] = useState<File | null>(null);
 
   useEffect(() => {
     if (projectData.dataset_filename) {
@@ -142,14 +146,19 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     setErrorMessage("");
     setUploadStatus("idle");
     
-    // Check for unsupported binary formats (Parquet, etc.)
-    const fileExtWithDot = "." + (file.name.split('.').pop()?.toLowerCase() || "");
-    if (UNSUPPORTED_BINARY_FORMATS.includes(fileExtWithDot)) {
-      setErrorMessage(
-        "Arquivos Parquet não são suportados diretamente. Por favor, converta para CSV antes de importar. " +
-        "Você pode usar Python (pandas: df.to_csv()) ou ferramentas online para a conversão."
-      );
-      setUploadStatus("error");
+    const ext = getFileExtension(file.name);
+    
+    // Parquet files always go through async import (binary format)
+    if (PARQUET_EXTENSIONS.includes(ext)) {
+      if (file.size > MAX_LARGE_FILE_SIZE) {
+        setErrorMessage(t("dataIngestion.import.fileTooLargeMax", { 
+          maxSize: (MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)
+        }));
+        setUploadStatus("error");
+        return;
+      }
+      setParquetFile(file);
+      setShowParquetModal(true);
       return;
     }
     
@@ -161,7 +170,6 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     
     // Check file size and route to appropriate flow
     if (file.size > MAX_LARGE_FILE_SIZE) {
-      // File too large even for async import
       setErrorMessage(t("dataIngestion.import.fileTooLargeMax", { 
         maxSize: (MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)
       }));
@@ -170,8 +178,6 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     }
 
     if (file.size > MAX_FILE_SIZE) {
-      // Large file - use async import flow
-      // All supported formats can use large import
       setLargeFiles([file]);
       setShowLargeImportModal(true);
       return;
@@ -457,7 +463,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         {uploadStatus !== "uploading" && uploadStatus !== "processing" && (
           <input
             type="file"
-            accept=".csv,.parquet,.xlsx,.json"
+            accept=".csv,.parquet,.parq,.pq,.xlsx,.json"
             onChange={handleFileSelect}
             className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
           />
@@ -546,6 +552,17 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
           open={showLargeImportModal}
           onOpenChange={setShowLargeImportModal}
           initialFiles={largeFiles}
+          projectId={projectData.id}
+          onImportStarted={handleImportStarted}
+        />
+      )}
+
+      {/* Parquet Import Modal (single file, async) */}
+      {parquetFile && projectData.id && (
+        <LargeImportModal
+          open={showParquetModal}
+          onOpenChange={setShowParquetModal}
+          file={parquetFile}
           projectId={projectData.id}
           onImportStarted={handleImportStarted}
         />
