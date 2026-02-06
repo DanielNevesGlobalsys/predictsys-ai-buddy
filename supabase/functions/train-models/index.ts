@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
@@ -524,6 +525,72 @@ function parseCSVLine(line: string, delim: string): string[] {
   return result;
 }
 
+// ==================== PARQUET READING ====================
+
+function isParquetFile(path: string, metadata?: Record<string, any>): boolean {
+  if (metadata?.file_type === "parquet") return true;
+  const lower = path.toLowerCase();
+  return lower.endsWith(".parquet") || lower.endsWith(".parq") || lower.endsWith(".pq");
+}
+
+interface ParquetReadResult {
+  headers: string[];
+  rows: Record<string, any>[];
+}
+
+async function readParquetFromStorage(
+  supabase: any,
+  filePaths: string[],
+  maxRows: number
+): Promise<ParquetReadResult> {
+  const allRows: Record<string, any>[] = [];
+  let headers: string[] = [];
+
+  for (const filePath of filePaths) {
+    if (allRows.length >= maxRows) break;
+
+    const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+      .from("datasets")
+      .createSignedUrl(filePath, 3600);
+
+    if (signedUrlError || !signedUrlData?.signedUrl) {
+      console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
+      continue;
+    }
+
+    const response = await fetch(signedUrlData.signedUrl);
+    if (!response.ok) {
+      console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
+      continue;
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    console.log(`  Parquet baixado: ${(arrayBuffer.byteLength / (1024 * 1024)).toFixed(2)} MB`);
+
+    await parquetRead({
+      file: arrayBuffer,
+      onComplete: (data: any[]) => {
+        if (!data || data.length === 0) return;
+
+        // Extract headers from first row keys
+        if (headers.length === 0 && data.length > 0) {
+          headers = Object.keys(data[0]);
+          console.log(`  Parquet headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+        }
+
+        for (const row of data) {
+          if (allRows.length >= maxRows) break;
+          allRows.push(row);
+        }
+      },
+    });
+
+    console.log(`  Arquivo processado: ${allRows.length.toLocaleString()} linhas acumuladas`);
+  }
+
+  return { headers, rows: allRows };
+}
+
 // ==================== MAIN HANDLER ====================
 
 serve(async (req) => {
@@ -711,7 +778,7 @@ serve(async (req) => {
       .update({ status: "training" })
       .eq("id", project_id);
 
-    console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
+    console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}`);
 
     if (filePaths.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
@@ -747,242 +814,382 @@ serve(async (req) => {
     filePaths = expandedFilePaths;
     console.log(`Arquivos resolvidos para processar: ${filePaths.length}`);
 
-    // Stream data from files with stratified sampling
-    let sampledLines: string[] = [];
+    // Detect if files are Parquet
+    const useParquet = filePaths.some(p => isParquetFile(p, sourceMetadata));
+    console.log(`[AutoML] Formato detectado: ${useParquet ? "Parquet" : "CSV"}`);
+
+    // ==================== DATA READING (PARQUET vs CSV) ====================
     let headers: string[] = [];
-    let isFirstFile = true;
-    let totalBytesRead = 0;
-    let totalLinesRead = 0;
-    let reachedReadLimit = false;
-
-    console.log(`[AutoML] Iniciando leitura...`);
-
-    for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
-      const filePath = filePaths[fileIndex];
-      console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
-      
-      try {
-        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-          .from("datasets")
-          .createSignedUrl(filePath, 3600);
-
-        if (signedUrlError || !signedUrlData?.signedUrl) {
-          console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
-          continue;
-        }
-
-        const response = await fetch(signedUrlData.signedUrl);
-        if (!response.ok || !response.body) {
-          console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
-          continue;
-        }
-
-        const reader = response.body.getReader();
-        const encoding = sourceMetadata.encoding || "utf-8";
-        const decoder = new TextDecoder(encoding);
-        let bytesRead = 0;
-        let buffer = "";
-        let fileLinesCount = 0;
-        let isFirstLineOfFile = true;
-        let lastProgressLog = 0;
-        let shouldStopReading = false;
-        
-        while (!shouldStopReading) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          bytesRead += value?.length || 0;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lineBreaks = buffer.split(/\r?\n/);
-          
-          for (let i = 0; i < lineBreaks.length - 1; i++) {
-            const line = lineBreaks[i].trim();
-            if (!line) continue;
-            
-            fileLinesCount++;
-            
-            if (isFirstFile && isFirstLineOfFile) {
-              headers = parseCSVLine(line, delimiter);
-              console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
-              isFirstLineOfFile = false;
-            } else if (!isFirstFile && isFirstLineOfFile) {
-              const possibleHeaders = parseCSVLine(line, delimiter);
-              const matchesHeaders = possibleHeaders.length === headers.length && 
-                possibleHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
-              
-              if (matchesHeaders) {
-                isFirstLineOfFile = false;
-                continue;
-              }
-              isFirstLineOfFile = false;
-              
-              totalLinesRead++;
-              sampledLines.push(line);
-            } else {
-              totalLinesRead++;
-              sampledLines.push(line);
-            }
-            
-            // Check early stop for large datasets
-            if (!useFullDataset && totalLinesRead >= effectiveMaxRowsToRead) {
-              shouldStopReading = true;
-              reachedReadLimit = true;
-              console.log(`  Early stop: lidas ${totalLinesRead.toLocaleString()} linhas`);
-              break;
-            }
-          }
-          
-          buffer = lineBreaks[lineBreaks.length - 1];
-          
-          const mbRead = bytesRead / (1024 * 1024);
-          if (mbRead - lastProgressLog >= 50) {
-            console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesRead.toLocaleString()} linhas lidas`);
-            lastProgressLog = mbRead;
-          }
-        }
-
-        if (shouldStopReading) {
-          try { await reader.cancel(); } catch (_) { /* ignore */ }
-        }
-
-        isFirstFile = false;
-        totalBytesRead += bytesRead;
-
-        console.log(`  Arquivo: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
-
-      } catch (err) {
-        console.error(`Erro processando ${filePath}:`, err);
-        continue;
-      }
-    }
-
-    // ==================== APPLY FINAL SAMPLING IF NEEDED ====================
-    let finalSampledLines: string[];
-    
-    if (useFullDataset || sampledLines.length <= effectiveTargetSampleSize) {
-      // Use all lines read
-      finalSampledLines = sampledLines;
-      console.log(`\n[AutoML] Usando todas as ${sampledLines.length.toLocaleString()} linhas lidas`);
-    } else {
-      // Random sample down to TARGET_SAMPLE_SIZE
-      console.log(`\n[AutoML] Amostrando de ${sampledLines.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
-      const shuffledLines = shuffle(sampledLines);
-      finalSampledLines = shuffledLines.slice(0, effectiveTargetSampleSize);
-    }
-
-    console.log(`\n=== Resumo da leitura ===`);
-    console.log(`Total de arquivos: ${filePaths.length}`);
-    console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
-    console.log(`Linhas lidas: ${totalLinesRead.toLocaleString()}`);
-    console.log(`Linhas na amostra final: ${finalSampledLines.length.toLocaleString()}`);
-
-    if (headers.length === 0 || finalSampledLines.length === 0) {
-      return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Find target column index
-    const targetIndex = headers.indexOf(target_column);
-    if (targetIndex === -1) {
-      console.error(`Coluna alvo "${target_column}" não encontrada.`);
-      return new Response(JSON.stringify({ 
-        error: `Coluna alvo "${target_column}" não encontrada no dataset.` 
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get numeric feature columns
-    const numericColumns = columns.filter(c => 
-      (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
-    );
-    const featureIndices = numericColumns.map(c => headers.indexOf(c.column_name)).filter(i => i !== -1);
-    const baseFeatureNames = featureIndices.map(i => headers[i]);
-    
-    // Add engineered feature names
-    const engineeredFeatureNames = enabledFeatures.map(f => f.name);
-    const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
-
-    if (baseFeatureNames.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
-    console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
-    console.log(`Total features: ${allFeatureNames.length}`);
-
-    // Check if target is categorical
-    const targetColumnInfo = columns.find(c => c.column_name === target_column);
-    const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" || 
-                                 targetColumnInfo?.inferred_type === "categorico" ||
-                                 targetColumnInfo?.inferred_type === "texto";
-    
-    console.log(`\nFeatures: ${baseFeatureNames.length} base + ${engineeredFeatureNames.length} engineered = ${allFeatureNames.length} total`);
-    console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
-
-    // Parse data with engineered features
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
-    
-    for (let i = 0; i < finalSampledLines.length; i++) {
-      const values = parseCSVLine(finalSampledLines[i], delimiter);
+    let totalLinesRead = 0;
+
+    if (useParquet) {
+      // ========== PARQUET PATH ==========
+      console.log(`[AutoML] Iniciando leitura Parquet...`);
       
-      if (isTargetCategorical) {
-        const targetVal = values[targetIndex]?.trim() || "";
-        if (targetVal && !labelMap.has(targetVal)) {
-          labelMap.set(targetVal, labelMap.size);
+      const parquetResult = await readParquetFromStorage(
+        supabase,
+        filePaths,
+        useFullDataset ? totalDatasetRows + 1000 : effectiveMaxRowsToRead
+      );
+      
+      headers = parquetResult.headers;
+      totalLinesRead = parquetResult.rows.length;
+      
+      console.log(`\n=== Resumo da leitura Parquet ===`);
+      console.log(`Total de arquivos: ${filePaths.length}`);
+      console.log(`Linhas lidas: ${totalLinesRead.toLocaleString()}`);
+
+      if (headers.length === 0 || totalLinesRead === 0) {
+        return new Response(JSON.stringify({ error: "Não foi possível ler dados do arquivo Parquet" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Find target column index
+      const targetIndex = headers.indexOf(target_column);
+      if (targetIndex === -1) {
+        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.join(", ")}`);
+        return new Response(JSON.stringify({ 
+          error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
+          available_columns: headers.slice(0, 20)
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Get numeric feature columns
+      const numericColumns = columns.filter(c => 
+        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+      );
+      const baseFeatureNames = numericColumns.map(c => c.column_name).filter(n => headers.includes(n));
+      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+
+      if (baseFeatureNames.length === 0) {
+        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Check if target is categorical
+      const targetColumnInfo = columns.find(c => c.column_name === target_column);
+      const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" || 
+                                    targetColumnInfo?.inferred_type === "categorico" ||
+                                    targetColumnInfo?.inferred_type === "texto";
+
+      console.log(`Features base: ${baseFeatureNames.length}, Engenharia: ${engineeredFeatureNames.length}`);
+      console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
+
+      // Apply sampling if needed
+      let rowsToProcess = parquetResult.rows;
+      if (!useFullDataset && rowsToProcess.length > effectiveTargetSampleSize) {
+        console.log(`[AutoML] Amostrando de ${rowsToProcess.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
+        rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+      }
+
+      // Parse rows into X and y
+      for (const row of rowsToProcess) {
+        const targetVal = row[target_column];
+        
+        if (isTargetCategorical) {
+          const tv = String(targetVal ?? "").trim();
+          if (tv && !labelMap.has(tv)) {
+            labelMap.set(tv, labelMap.size);
+          }
+        }
+
+        // Build raw record for feature engineering
+        const rawRecord: Record<string, string | number | null> = {};
+        for (const h of headers) {
+          rawRecord[h] = row[h] ?? null;
+        }
+
+        // Get base features - Parquet provides native types
+        const baseFeatures = baseFeatureNames.map(name => {
+          const val = row[name];
+          if (val === null || val === undefined) return NaN;
+          if (typeof val === "number") return val;
+          if (typeof val === "bigint") return Number(val);
+          const parsed = parseFloat(String(val).replace(",", "."));
+          return parsed;
+        });
+
+        // Apply engineered features
+        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        const engineeredFeatures = engineeredFeatureNames.map(name => {
+          const val = engineeredValues[name];
+          return typeof val === "number" ? val : 0;
+        });
+
+        const allFeatures = [...baseFeatures, ...engineeredFeatures];
+
+        let targetNumeric: number;
+        if (isTargetCategorical) {
+          const tv = String(targetVal ?? "").trim();
+          targetNumeric = labelMap.get(tv) ?? -1;
+        } else {
+          if (typeof targetVal === "number") {
+            targetNumeric = targetVal;
+          } else if (typeof targetVal === "bigint") {
+            targetNumeric = Number(targetVal);
+          } else {
+            targetNumeric = parseFloat(String(targetVal ?? "").replace(",", "."));
+          }
+        }
+
+        if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
+          X.push(allFeatures);
+          y.push(targetNumeric);
         }
       }
+
+      // Free memory
+      parquetResult.rows.length = 0;
+
+      // Store feature names for later use
+      (globalThis as any).__featureNames = allFeatureNames;
+      (globalThis as any).__isTargetCategorical = isTargetCategorical;
+
+    } else {
+      // ========== CSV PATH (original logic) ==========
+      let sampledLines: string[] = [];
+      let isFirstFile = true;
+      let totalBytesRead = 0;
+      let reachedReadLimit = false;
+
+      console.log(`[AutoML] Iniciando leitura CSV... Delimiter: ${delimiter}`);
+
+      for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
+        const filePath = filePaths[fileIndex];
+        console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
+        
+        try {
+          const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+            .from("datasets")
+            .createSignedUrl(filePath, 3600);
+
+          if (signedUrlError || !signedUrlData?.signedUrl) {
+            console.error(`Erro ao criar URL assinada para ${filePath}:`, signedUrlError);
+            continue;
+          }
+
+          const response = await fetch(signedUrlData.signedUrl);
+          if (!response.ok || !response.body) {
+            console.error(`Erro ao baixar ${filePath}: HTTP ${response.status}`);
+            continue;
+          }
+
+          const reader = response.body.getReader();
+          const encoding = sourceMetadata.encoding || "utf-8";
+          const decoder = new TextDecoder(encoding);
+          let bytesRead = 0;
+          let buffer = "";
+          let fileLinesCount = 0;
+          let isFirstLineOfFile = true;
+          let lastProgressLog = 0;
+          let shouldStopReading = false;
+          
+          while (!shouldStopReading) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            bytesRead += value?.length || 0;
+            buffer += decoder.decode(value, { stream: true });
+
+            const lineBreaks = buffer.split(/\r?\n/);
+            
+            for (let i = 0; i < lineBreaks.length - 1; i++) {
+              const line = lineBreaks[i].trim();
+              if (!line) continue;
+              
+              fileLinesCount++;
+              
+              if (isFirstFile && isFirstLineOfFile) {
+                headers = parseCSVLine(line, delimiter);
+                console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+                isFirstLineOfFile = false;
+              } else if (!isFirstFile && isFirstLineOfFile) {
+                const possibleHeaders = parseCSVLine(line, delimiter);
+                const matchesHeaders = possibleHeaders.length === headers.length && 
+                  possibleHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
+                
+                if (matchesHeaders) {
+                  isFirstLineOfFile = false;
+                  continue;
+                }
+                isFirstLineOfFile = false;
+                
+                totalLinesRead++;
+                sampledLines.push(line);
+              } else {
+                totalLinesRead++;
+                sampledLines.push(line);
+              }
+              
+              // Check early stop for large datasets
+              if (!useFullDataset && totalLinesRead >= effectiveMaxRowsToRead) {
+                shouldStopReading = true;
+                reachedReadLimit = true;
+                console.log(`  Early stop: lidas ${totalLinesRead.toLocaleString()} linhas`);
+                break;
+              }
+            }
+            
+            buffer = lineBreaks[lineBreaks.length - 1];
+            
+            const mbRead = bytesRead / (1024 * 1024);
+            if (mbRead - lastProgressLog >= 50) {
+              console.log(`  Progresso: ${mbRead.toFixed(1)} MB, ${totalLinesRead.toLocaleString()} linhas lidas`);
+              lastProgressLog = mbRead;
+            }
+          }
+
+          if (shouldStopReading) {
+            try { await reader.cancel(); } catch (_) { /* ignore */ }
+          }
+
+          isFirstFile = false;
+          totalBytesRead += bytesRead;
+
+          console.log(`  Arquivo: ${(bytesRead / (1024 * 1024)).toFixed(2)} MB, ${fileLinesCount} linhas`);
+
+        } catch (err) {
+          console.error(`Erro processando ${filePath}:`, err);
+          continue;
+        }
+      }
+
+      // Apply final sampling
+      let finalSampledLines: string[];
       
-      // Build raw record for feature engineering
-      const rawRecord: Record<string, string | number | null> = {};
-      headers.forEach((h, idx) => {
-        rawRecord[h] = values[idx] || null;
-      });
-      
-      // Get base features
-      const baseFeatures = featureIndices.map(idx => {
-        const val = values[idx]?.replace(",", ".") || "";
-        return parseFloat(val);
-      });
-      
-      // Apply engineered features
-      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-      const engineeredFeatures = engineeredFeatureNames.map(name => {
-        const val = engineeredValues[name];
-        return typeof val === "number" ? val : 0;
-      });
-      
-      // Combine all features
-      const allFeatures = [...baseFeatures, ...engineeredFeatures];
-      
-      let targetNumeric: number;
-      if (isTargetCategorical) {
-        const targetVal = values[targetIndex]?.trim() || "";
-        targetNumeric = labelMap.get(targetVal) ?? -1;
+      if (useFullDataset || sampledLines.length <= effectiveTargetSampleSize) {
+        finalSampledLines = sampledLines;
+        console.log(`\n[AutoML] Usando todas as ${sampledLines.length.toLocaleString()} linhas lidas`);
       } else {
-        targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+        console.log(`\n[AutoML] Amostrando de ${sampledLines.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
+        const shuffledLines = shuffle(sampledLines);
+        finalSampledLines = shuffledLines.slice(0, effectiveTargetSampleSize);
+      }
+
+      console.log(`\n=== Resumo da leitura CSV ===`);
+      console.log(`Total de arquivos: ${filePaths.length}`);
+      console.log(`Total de bytes: ${(totalBytesRead / (1024 * 1024)).toFixed(2)} MB`);
+      console.log(`Linhas lidas: ${totalLinesRead.toLocaleString()}`);
+      console.log(`Linhas na amostra final: ${finalSampledLines.length.toLocaleString()}`);
+
+      if (headers.length === 0 || finalSampledLines.length === 0) {
+        return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Find target column index
+      const targetIndex = headers.indexOf(target_column);
+      if (targetIndex === -1) {
+        console.error(`Coluna alvo "${target_column}" não encontrada.`);
+        return new Response(JSON.stringify({ 
+          error: `Coluna alvo "${target_column}" não encontrada no dataset.` 
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Get numeric feature columns
+      const numericColumns = columns.filter(c => 
+        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+      );
+      const featureIndices = numericColumns.map(c => headers.indexOf(c.column_name)).filter(i => i !== -1);
+      const baseFeatureNames = featureIndices.map(i => headers[i]);
+      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+
+      if (baseFeatureNames.length === 0) {
+        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+      console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
+      console.log(`Total features: ${allFeatureNames.length}`);
+
+      // Check if target is categorical
+      const targetColumnInfo = columns.find(c => c.column_name === target_column);
+      const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" || 
+                                    targetColumnInfo?.inferred_type === "categorico" ||
+                                    targetColumnInfo?.inferred_type === "texto";
+
+      console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
+
+      // Parse data with engineered features
+      for (let i = 0; i < finalSampledLines.length; i++) {
+        const values = parseCSVLine(finalSampledLines[i], delimiter);
+        
+        if (isTargetCategorical) {
+          const targetVal = values[targetIndex]?.trim() || "";
+          if (targetVal && !labelMap.has(targetVal)) {
+            labelMap.set(targetVal, labelMap.size);
+          }
+        }
+        
+        // Build raw record for feature engineering
+        const rawRecord: Record<string, string | number | null> = {};
+        headers.forEach((h, idx) => {
+          rawRecord[h] = values[idx] || null;
+        });
+        
+        // Get base features
+        const baseFeatures = featureIndices.map(idx => {
+          const val = values[idx]?.replace(",", ".") || "";
+          return parseFloat(val);
+        });
+        
+        // Apply engineered features
+        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        const engineeredFeatures = engineeredFeatureNames.map(name => {
+          const val = engineeredValues[name];
+          return typeof val === "number" ? val : 0;
+        });
+        
+        const allFeatures = [...baseFeatures, ...engineeredFeatures];
+        
+        let targetNumeric: number;
+        if (isTargetCategorical) {
+          const targetVal = values[targetIndex]?.trim() || "";
+          targetNumeric = labelMap.get(targetVal) ?? -1;
+        } else {
+          targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+        }
+        
+        if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
+          X.push(allFeatures);
+          y.push(targetNumeric);
+        }
+        
+        finalSampledLines[i] = "";
       }
       
-      if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
-        X.push(allFeatures);
-        y.push(targetNumeric);
-      }
-      
-      finalSampledLines[i] = "";
+      sampledLines.length = 0;
+      finalSampledLines.length = 0;
+
+      // Store feature names for later use
+      (globalThis as any).__featureNames = allFeatureNames;
+      (globalThis as any).__isTargetCategorical = isTargetCategorical;
     }
     
-    sampledLines.length = 0;
-    finalSampledLines.length = 0;
-    
+    // Retrieve shared variables set by either branch
+    const allFeatureNames: string[] = (globalThis as any).__featureNames;
+    const isTargetCategorical: boolean = (globalThis as any).__isTargetCategorical;
+
     if (isTargetCategorical && labelMap.size > 0) {
       console.log(`Label encoding: ${JSON.stringify(Object.fromEntries(labelMap))}`);
     }
