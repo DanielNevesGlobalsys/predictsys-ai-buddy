@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { parquetMetadataAsync, parquetRead } from "https://esm.sh/hyparquet@1.7.1";
+import { parquetMetadataAsync, parquetRead } from "npm:hyparquet@1.7.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
