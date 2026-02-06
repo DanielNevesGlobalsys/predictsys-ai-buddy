@@ -94,17 +94,23 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Verify user belongs to this organization
+    // Verify user belongs to this organization (super_admins can act on any org)
     const { data: belongsToOrg } = await supabaseAdmin.rpc("user_belongs_to_org", {
       _user_id: userId,
       _org_id: organizationId,
     });
 
     if (!belongsToOrg) {
-      return new Response(
-        JSON.stringify({ error: "User does not belong to this organization" }),
-        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      const { data: isSuperAdmin } = await supabaseAdmin.rpc("is_super_admin", {
+        _user_id: userId,
+      });
+
+      if (!isSuperAdmin) {
+        return new Response(
+          JSON.stringify({ error: "User does not belong to this organization" }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
     }
 
     // Extract client info
