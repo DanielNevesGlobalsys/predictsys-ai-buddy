@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { parquetMetadataAsync, parquetRead } from "npm:hyparquet@1.24.1";
+import { parquetRead } from "npm:hyparquet@1.24.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -68,17 +68,7 @@ serve(async (req) => {
       });
     }
 
-    // Reject binary formats that cannot be parsed as CSV/text
-    const fileExtension = job.file_name.split('.').pop()?.toLowerCase();
-    if (fileExtension === 'parquet' || fileExtension === 'parq' || fileExtension === 'pq') {
-      const errMsg = "Arquivos Parquet não são suportados. Por favor, converta para CSV antes de importar (ex: pandas df.to_csv()).";
-      console.error(`[process-import] Rejecting Parquet file: ${job.file_name}`);
-      await updateJobError(supabase, job_id, errMsg);
-      return new Response(JSON.stringify({ success: false, message: errMsg }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
+
 
     if (job.file_size_bytes > MAX_FILE_SIZE_BYTES) {
       const maxGB = (MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0);
@@ -686,12 +676,30 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
   console.log(`[process-import] Job ${job_id} set to processing`);
 
   try {
-    // Progress callback
-    const progressCallback = async (progress: number, rows: number) => {
-      await updateJobProgress(supabase, job_id, progress, rows);
+    // Detect file format
+    const fileExtension = job.file_name.split('.').pop()?.toLowerCase();
+    const isParquet = fileExtension === 'parquet' || fileExtension === 'parq' || fileExtension === 'pq';
+
+    let result: {
+      success: boolean;
+      headers: string[];
+      estimatedRowCount: number;
+      sampleRows: Record<string, unknown>[];
+      error?: string;
     };
 
-    const result = await processFileSampling(supabase, job, true, null, progressCallback);
+    if (isParquet) {
+      console.log(`[process-import] Processing Parquet file: ${job.file_name}`);
+      result = await processParquetFile(supabase, job, async (progress: number, rows: number) => {
+        await updateJobProgress(supabase, job_id, progress, rows);
+      });
+    } else {
+      // Progress callback
+      const progressCallback = async (progress: number, rows: number) => {
+        await updateJobProgress(supabase, job_id, progress, rows);
+      };
+      result = await processFileSampling(supabase, job, true, null, progressCallback);
+    }
 
     if (!result.success) {
       await updateJobError(supabase, job_id, result.error || "Erro ao processar arquivo");
@@ -914,4 +922,156 @@ function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>
   }
 
   return types;
+}
+
+/**
+ * Process a Parquet file using hyparquet.
+ * Downloads the file from storage, reads schema + sample rows using parquetRead.
+ */
+async function processParquetFile(
+  supabase: any,
+  job: ImportJob,
+  onProgress?: (progress: number, rowsRead: number) => Promise<void>,
+): Promise<{
+  success: boolean;
+  headers: string[];
+  estimatedRowCount: number;
+  sampleRows: Record<string, unknown>[];
+  error?: string;
+}> {
+  try {
+    // Generate signed URL for the file
+    const { data: urlData, error: urlError } = await supabase.storage
+      .from("big_imports")
+      .createSignedUrl(job.storage_path, 60 * 60);
+
+    if (urlError || !urlData?.signedUrl) {
+      return {
+        success: false,
+        headers: [],
+        estimatedRowCount: 0,
+        sampleRows: [],
+        error: `Falha ao gerar URL assinada: ${urlError?.message || "erro desconhecido"}`,
+      };
+    }
+
+    if (onProgress) await onProgress(5, 0);
+    console.log(`[process-import] Downloading Parquet file: ${job.file_name} (${(job.file_size_bytes / 1024 / 1024).toFixed(2)} MB)`);
+
+    // Download entire file as ArrayBuffer (Parquet needs random access)
+    // For very large files, only download first portion for metadata + sample
+    const maxDownloadBytes = Math.min(job.file_size_bytes, SAMPLE_BYTES_LIMIT);
+    
+    let res: Response;
+    let isPartial = false;
+    
+    if (job.file_size_bytes > SAMPLE_BYTES_LIMIT) {
+      // For large Parquet files, download the full file since Parquet footer is at end
+      // But cap at a reasonable limit for edge function memory
+      const edgeFunctionMemoryLimit = 400 * 1024 * 1024; // ~400MB safe limit
+      if (job.file_size_bytes > edgeFunctionMemoryLimit) {
+        return {
+          success: false,
+          headers: [],
+          estimatedRowCount: 0,
+          sampleRows: [],
+          error: `Arquivo Parquet muito grande para processamento direto (${(job.file_size_bytes / 1024 / 1024).toFixed(0)} MB). Limite: ${(edgeFunctionMemoryLimit / 1024 / 1024).toFixed(0)} MB. Converta para CSV para arquivos maiores.`,
+        };
+      }
+      res = await fetch(urlData.signedUrl);
+    } else {
+      res = await fetch(urlData.signedUrl);
+    }
+
+    if (!res.ok) {
+      return {
+        success: false,
+        headers: [],
+        estimatedRowCount: 0,
+        sampleRows: [],
+        error: `Falha ao baixar arquivo Parquet: HTTP ${res.status}`,
+      };
+    }
+
+    if (onProgress) await onProgress(30, 0);
+
+    const arrayBuffer = await res.arrayBuffer();
+    console.log(`[process-import] Parquet file downloaded: ${(arrayBuffer.byteLength / 1024 / 1024).toFixed(2)} MB`);
+
+    if (onProgress) await onProgress(40, 0);
+
+    // Read Parquet data using hyparquet
+    let allRows: Record<string, unknown>[] = [];
+    let headers: string[] = [];
+
+    await parquetRead({
+      file: arrayBuffer,
+      rowFormat: 'object',
+      onComplete: (data: Record<string, unknown>[]) => {
+        allRows = data;
+      },
+    });
+
+    if (onProgress) await onProgress(70, allRows.length);
+
+    if (allRows.length === 0) {
+      return {
+        success: false,
+        headers: [],
+        estimatedRowCount: 0,
+        sampleRows: [],
+        error: "Arquivo Parquet vazio ou não foi possível ler os dados.",
+      };
+    }
+
+    // Extract headers from the first row's keys
+    headers = Object.keys(allRows[0]);
+    const totalRows = allRows.length;
+
+    // Sample rows (take up to SAMPLE_SIZE)
+    const sampleRows = allRows.slice(0, SAMPLE_SIZE);
+
+    // Convert any non-primitive values to strings for compatibility
+    const cleanedSampleRows = sampleRows.map(row => {
+      const clean: Record<string, unknown> = {};
+      for (const key of headers) {
+        const val = row[key];
+        if (val === null || val === undefined) {
+          clean[key] = null;
+        } else if (typeof val === 'bigint') {
+          clean[key] = Number(val);
+        } else if (val instanceof Date) {
+          clean[key] = val.toISOString();
+        } else if (typeof val === 'object') {
+          clean[key] = JSON.stringify(val);
+        } else {
+          clean[key] = val;
+        }
+      }
+      return clean;
+    });
+
+    if (onProgress) await onProgress(85, totalRows);
+
+    console.log(
+      `[process-import] Parquet parsed: ${totalRows} total rows, ${headers.length} columns, ${cleanedSampleRows.length} sample rows`
+    );
+
+    return {
+      success: true,
+      headers,
+      estimatedRowCount: totalRows,
+      sampleRows: cleanedSampleRows,
+    };
+  } catch (e) {
+    const errorMessage = e instanceof Error ? e.message : "Erro ao processar arquivo Parquet";
+    console.error(`[process-import] Parquet processing error:`, e);
+    return {
+      success: false,
+      headers: [],
+      estimatedRowCount: 0,
+      sampleRows: [],
+      error: errorMessage,
+    };
+  }
 }
