@@ -195,6 +195,13 @@ async function resolveDatasetFilePaths(
     if (metadata?.delimiter) delimiter = metadata.delimiter;
     if (metadata?.encoding) encoding = metadata.encoding;
 
+    // Detect file type from metadata or original_path
+    if (metadata?.file_type === "parquet") {
+      fileType = "parquet";
+    } else if (metadata?.original_path && /\.(parquet|parq|pq)$/i.test(metadata.original_path)) {
+      fileType = "parquet";
+    }
+
     // Check if it's a batch with explicit file paths in metadata
     if (
       metadata?.file_paths &&
@@ -244,8 +251,8 @@ async function resolveDatasetFilePaths(
         }
       }
 
-      // Treat as single file
-      console.log(`[calculate-eda] Using single file: ${storagePath}`);
+      // Treat as single file - fileType may already be set from metadata
+      console.log(`[calculate-eda] Using single file: ${storagePath} (type: ${fileType})`);
       return { paths: [storagePath], delimiter, encoding, fileType };
     }
   }
@@ -1060,6 +1067,88 @@ Deno.serve(async (req) => {
       columns && columns.length > 0
         ? columns.map((c: any) => ({ column_name: c.column_name, inferred_type: c.inferred_type, is_feature: false }))
         : [];
+
+    // If no columns found AND we have a Parquet file, auto-discover from the file
+    if (columnsToProcess.length === 0 && isParquet && filePaths.length > 0) {
+      console.log(`[calculate-eda] No project_columns found, auto-discovering from Parquet file...`);
+      const signedUrl = await createSignedDatasetUrl(supabase, filePaths[0]);
+      if (signedUrl) {
+        try {
+          const res = await fetch(signedUrl);
+          if (res.ok) {
+            const arrayBuffer = await res.arrayBuffer();
+            let sampleRows: Record<string, unknown>[] = [];
+            await parquetRead({
+              file: arrayBuffer,
+              rowFormat: 'object',
+              onComplete: (data: Record<string, unknown>[]) => {
+                sampleRows = data.slice(0, 500); // Only need a few rows for type inference
+              },
+            });
+
+            if (sampleRows.length > 0) {
+              const discoveredHeaders = Object.keys(sampleRows[0]);
+              console.log(`[calculate-eda] Discovered ${discoveredHeaders.length} columns from Parquet`);
+
+              // Infer types from actual values
+              for (const header of discoveredHeaders) {
+                const values = sampleRows
+                  .map(r => r[header])
+                  .filter(v => v !== null && v !== undefined);
+
+                let inferredType = "texto";
+                if (values.length > 0) {
+                  const numericCount = values.filter(v => typeof v === 'number' || typeof v === 'bigint').length;
+                  const boolCount = values.filter(v => typeof v === 'boolean').length;
+                  if (numericCount >= values.length * 0.7) {
+                    inferredType = "numérico";
+                  } else if (boolCount >= values.length * 0.7) {
+                    inferredType = "categórico";
+                  } else {
+                    // String-based numeric check
+                    const strNumCount = values.filter(v => {
+                      const s = String(v).replace(",", ".").trim();
+                      return s !== "" && !isNaN(Number(s));
+                    }).length;
+                    if (strNumCount >= values.length * 0.7) {
+                      inferredType = "numérico";
+                    } else {
+                      const uniqueValues = new Set(values.map(v => String(v)));
+                      if (uniqueValues.size <= Math.min(20, values.length * 0.1)) {
+                        inferredType = "categórico";
+                      }
+                    }
+                  }
+                }
+                columnsToProcess.push({ column_name: header, inferred_type: inferredType, is_feature: false });
+              }
+
+              // Also persist these columns to project_columns for future use
+              await supabase.from("project_columns").delete().eq("project_id", project_id);
+              const columnInserts = discoveredHeaders.map((name, index) => ({
+                project_id: project_id,
+                column_name: name,
+                column_index: index,
+                inferred_type: columnsToProcess.find((c: any) => c.column_name === name)?.inferred_type || "texto",
+              }));
+              const { error: insertColErr } = await supabase.from("project_columns").insert(columnInserts);
+              if (insertColErr) {
+                console.error("[calculate-eda] Failed to persist discovered columns:", insertColErr);
+              } else {
+                console.log(`[calculate-eda] Persisted ${columnInserts.length} discovered columns to project_columns`);
+              }
+
+              // Also update project dataset columns_count
+              await supabase.from("projects").update({ dataset_columns: discoveredHeaders.length }).eq("id", project_id);
+              await supabase.from("project_datasets").update({ columns_count: discoveredHeaders.length })
+                .eq("project_id", project_id).eq("is_active", true);
+            }
+          }
+        } catch (e) {
+          console.error("[calculate-eda] Error auto-discovering Parquet columns:", e);
+        }
+      }
+    }
 
     // Add feature columns as numeric (features always produce numeric values)
     for (const feature of enabledFeatures) {

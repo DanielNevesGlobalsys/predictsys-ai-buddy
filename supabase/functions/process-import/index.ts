@@ -676,9 +676,11 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
   console.log(`[process-import] Job ${job_id} set to processing`);
 
   try {
-    // Detect file format
+    // Detect file format - check both file_name and storage_path for extension
     const fileExtension = job.file_name.split('.').pop()?.toLowerCase();
-    const isParquet = fileExtension === 'parquet' || fileExtension === 'parq' || fileExtension === 'pq';
+    const storageExtension = job.storage_path.split('.').pop()?.toLowerCase();
+    const isParquet = ['parquet', 'parq', 'pq'].includes(fileExtension || '') || 
+                      ['parquet', 'parq', 'pq'].includes(storageExtension || '');
 
     let result: {
       success: boolean;
@@ -689,7 +691,7 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
     };
 
     if (isParquet) {
-      console.log(`[process-import] Processing Parquet file: ${job.file_name}`);
+      console.log(`[process-import] Processing Parquet file: ${job.file_name} (detected from ${storageExtension === 'parquet' ? 'storage_path' : 'file_name'})`);
       result = await processParquetFile(supabase, job, async (progress: number, rows: number) => {
         await updateJobProgress(supabase, job_id, progress, rows);
       });
@@ -768,7 +770,7 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       { 
         original_path: job.storage_path, 
         rows_estimated: !isParquet, // Parquet gives exact count
-        file_type: isParquet ? "parquet" : (job.file_name.split('.').pop()?.toLowerCase() || "csv"),
+        file_type: isParquet ? "parquet" : (fileExtension || "csv"),
         ...(isParquet ? {} : { delimiter: job.delimiter, encoding: job.encoding }),
       },
     );
