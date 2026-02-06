@@ -30,10 +30,11 @@ const SAMPLE_SIZE = 100000; // Max rows for EDA sampling
 
 const SUPPORTED_FORMATS = [
   { ext: ".csv", icon: FileSpreadsheet, label: "CSV" },
-  { ext: ".parquet", icon: Table, label: "Parquet" },
   { ext: ".xlsx", icon: FileSpreadsheet, label: "Excel" },
   { ext: ".json", icon: FileJson, label: "JSON" },
 ];
+
+const UNSUPPORTED_BINARY_FORMATS = [".parquet", ".parq", ".pq"];
 
 const inferColumnType = (values: string[]): string => {
   const nonEmpty = values.filter(v => v !== null && v !== undefined && String(v).trim() !== "");
@@ -141,6 +142,17 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     setErrorMessage("");
     setUploadStatus("idle");
     
+    // Check for unsupported binary formats (Parquet, etc.)
+    const fileExtWithDot = "." + (file.name.split('.').pop()?.toLowerCase() || "");
+    if (UNSUPPORTED_BINARY_FORMATS.includes(fileExtWithDot)) {
+      setErrorMessage(
+        "Arquivos Parquet não são suportados diretamente. Por favor, converta para CSV antes de importar. " +
+        "Você pode usar Python (pandas: df.to_csv()) ou ferramentas online para a conversão."
+      );
+      setUploadStatus("error");
+      return;
+    }
+    
     if (!isValidFormat(file.name)) {
       setErrorMessage(t("dataIngestion.file.errors.invalidFormat"));
       setUploadStatus("error");
@@ -154,14 +166,6 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         maxSize: (MAX_LARGE_FILE_SIZE / 1024 / 1024 / 1024).toFixed(0)
       }));
       setUploadStatus("error");
-      return;
-    }
-    
-    // Parquet files always go through async import (cannot be parsed in-memory)
-    const fileExt = file.name.split('.').pop()?.toLowerCase();
-    if (fileExt === 'parquet') {
-      setLargeFiles([file]);
-      setShowLargeImportModal(true);
       return;
     }
 
