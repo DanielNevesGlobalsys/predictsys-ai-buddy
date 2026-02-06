@@ -569,7 +569,8 @@ async function readParquetFromStorage(
 
     await parquetRead({
       file: arrayBuffer,
-      onComplete: (data: any[]) => {
+      rowFormat: 'object',
+      onComplete: (data: Record<string, unknown>[]) => {
         if (!data || data.length === 0) return;
 
         // Extract headers from first row keys
