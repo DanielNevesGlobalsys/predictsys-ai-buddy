@@ -47,7 +47,7 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
   
   const healthBadge = getHealthBadge();
 
-  const cards = [
+  const classificationCards = [
     {
       title: t('businessDashboard.kpis.entitiesWithPrediction'),
       value: formatNumber(kpis.totalEntities),
@@ -65,16 +65,11 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
       icon: viewMode === 'risk' ? AlertTriangle : TrendingUp,
       color: viewMode === 'risk' ? 'text-destructive' : 'text-green-600',
       bgColor: viewMode === 'risk' ? 'bg-destructive/10' : 'bg-green-600/10',
-      show: isClassification
     },
     {
-      title: isClassification 
-        ? t('businessDashboard.kpis.expectedEvents')
-        : t('businessDashboard.kpis.projectedValue'),
+      title: t('businessDashboard.kpis.expectedEvents'),
       value: formatNumber(kpis.expectedEvents),
-      description: isClassification 
-        ? `${kpis.expectedEventsPercent.toFixed(1)}% ${t('businessDashboard.kpis.conversionRate')}`
-        : t('businessDashboard.kpis.totalProjected'),
+      description: `${kpis.expectedEventsPercent.toFixed(1)}% ${t('businessDashboard.kpis.conversionRate')}`,
       icon: Target,
       color: 'text-secondary',
       bgColor: 'bg-secondary/10'
@@ -113,8 +108,65 @@ export function BusinessKPICards({ kpis, problemType, viewMode }: BusinessKPICar
     }
   ].filter(card => card.show !== false);
 
+  const regressionCards = [
+    {
+      title: t('businessDashboard.kpis.entitiesWithPrediction'),
+      value: formatNumber(kpis.totalEntities),
+      description: t('businessDashboard.kpis.regressionEntitiesDesc'),
+      icon: Users,
+      color: 'text-primary',
+      bgColor: 'bg-primary/10'
+    },
+    {
+      title: t('businessDashboard.kpis.projectedValue'),
+      value: formatCurrency(kpis.expectedEvents),
+      description: t('businessDashboard.kpis.projectedValueDesc'),
+      icon: TrendingUp,
+      color: 'text-green-600',
+      bgColor: 'bg-green-600/10',
+    },
+    {
+      title: t('businessDashboard.kpis.financialImpact'),
+      value: formatCurrency(kpis.financialImpact),
+      description: t('businessDashboard.kpis.estimatedImpact'),
+      icon: DollarSign,
+      color: 'text-accent',
+      bgColor: 'bg-accent/10',
+    },
+    {
+      title: t('businessDashboard.kpis.baseCoverage'),
+      value: `${kpis.coveragePercent.toFixed(0)}%`,
+      description: kpis.coveragePercent < 60 
+        ? t('businessDashboard.kpis.lowCoverageWarning')
+        : t('businessDashboard.kpis.coverageOk'),
+      icon: Database,
+      color: kpis.coveragePercent < 60 ? 'text-yellow-600' : 'text-green-600',
+      bgColor: kpis.coveragePercent < 60 ? 'bg-yellow-600/10' : 'bg-green-600/10'
+    },
+    {
+      title: t('businessDashboard.kpis.dataUpdate'),
+      value: kpis.daysSinceUpdate !== null 
+        ? kpis.daysSinceUpdate === 0 
+          ? t('businessDashboard.kpis.today')
+          : `${kpis.daysSinceUpdate}d`
+        : '-',
+      description: t('businessDashboard.kpis.lastUpdate'),
+      icon: Clock,
+      color: 'text-muted-foreground',
+      bgColor: 'bg-muted',
+      badge: healthBadge
+    }
+  ];
+
+  const cards = isClassification ? classificationCards : regressionCards;
+
   return (
-    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+    <div className={cn(
+      "grid gap-4",
+      isClassification 
+        ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-6" 
+        : "grid-cols-2 md:grid-cols-3 lg:grid-cols-5"
+    )}>
       {cards.map((card, index) => (
         <Card key={index} className="p-4 hover:shadow-md transition-shadow">
           <div className="flex items-start justify-between mb-3">

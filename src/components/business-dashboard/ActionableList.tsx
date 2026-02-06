@@ -22,7 +22,9 @@ export function ActionableList({ predictions, problemType, viewMode }: Actionabl
   const { t } = useTranslation();
   const isClassification = problemType === 'classification';
   
-  const [sortBy, setSortBy] = useState<'probability' | 'value' | 'combined'>('probability');
+  const [sortBy, setSortBy] = useState<'probability' | 'value' | 'combined'>(
+    isClassification ? 'probability' : 'value'
+  );
   const [showHighOnly, setShowHighOnly] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   
@@ -175,7 +177,9 @@ export function ActionableList({ predictions, problemType, viewMode }: Actionabl
                     <TableHead>{t('businessDashboard.actionableList.segment')}</TableHead>
                     <TableHead>{t('businessDashboard.actionableList.region')}</TableHead>
                     <TableHead className="text-right">{t('businessDashboard.actionableList.potentialValue')}</TableHead>
-                    <TableHead>{t('businessDashboard.actionableList.band')}</TableHead>
+                    {isClassification && (
+                      <TableHead>{t('businessDashboard.actionableList.band')}</TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -191,15 +195,17 @@ export function ActionableList({ predictions, problemType, viewMode }: Actionabl
                       <TableCell>{p.segment || '-'}</TableCell>
                       <TableCell>{p.region || p.state || '-'}</TableCell>
                       <TableCell className="text-right">{formatCurrency(p.potential_value)}</TableCell>
-                      <TableCell>
-                        <span className={`px-2 py-1 rounded text-xs ${
-                          (p.probability_event || 0) >= 0.6 
-                            ? 'bg-destructive/10 text-destructive' 
-                            : 'bg-muted text-muted-foreground'
-                        }`}>
-                          {getProbabilityBand(p.probability_event)}
-                        </span>
-                      </TableCell>
+                      {isClassification && (
+                        <TableCell>
+                          <span className={`px-2 py-1 rounded text-xs ${
+                            (p.probability_event || 0) >= 0.6 
+                              ? 'bg-destructive/10 text-destructive' 
+                              : 'bg-muted text-muted-foreground'
+                          }`}>
+                            {getProbabilityBand(p.probability_event)}
+                          </span>
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>

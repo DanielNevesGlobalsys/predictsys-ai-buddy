@@ -72,14 +72,24 @@ export function CohortComparison({ predictions, problemType, availableFields, vi
           : null,
         highProbabilityPercent: data.count > 0 ? (data.highProbCount / data.count) * 100 : 0
       }))
-      .sort((a, b) => (b.avgProbability || 0) - (a.avgProbability || 0))
+      .sort((a, b) => {
+        if (isClassification) return (b.avgProbability || 0) - (a.avgProbability || 0);
+        return (b.avgValue || 0) - (a.avgValue || 0);
+      })
       .slice(0, 10);
-  }, [predictions, groupField]);
+  }, [predictions, groupField, isClassification]);
   
+  const formatCurrency = (val: number) => {
+    if (val >= 1000000) return `R$ ${(val / 1000000).toFixed(1)}M`;
+    if (val >= 1000) return `R$ ${(val / 1000).toFixed(1)}K`;
+    return `R$ ${val.toFixed(0)}`;
+  };
+
   const chartData = cohortData.map(c => ({
     name: c.cohort.length > 12 ? c.cohort.slice(0, 12) + '...' : c.cohort,
     fullName: c.cohort,
     avgProbability: isClassification ? (c.avgProbability || 0) * 100 : 0,
+    avgValue: !isClassification ? (c.avgValue || 0) : 0,
     highProbPercent: c.highProbabilityPercent,
     count: c.count
   }));
@@ -149,35 +159,55 @@ export function CohortComparison({ predictions, problemType, availableFields, vi
                     textAnchor="end"
                     height={60}
                   />
-                  <YAxis 
-                    tickFormatter={(val) => `${val}%`}
-                    domain={[0, 100]}
-                  />
+                  {isClassification ? (
+                    <YAxis 
+                      tickFormatter={(val) => `${val}%`}
+                      domain={[0, 100]}
+                    />
+                  ) : (
+                    <YAxis 
+                      tickFormatter={(val) => formatCurrency(val)}
+                    />
+                  )}
                   <Tooltip 
                     formatter={(value: number, name: string) => {
                       if (name === 'avgProbability') {
                         return [`${value.toFixed(1)}%`, t('businessDashboard.cohortComparison.avgProbability')];
+                      }
+                      if (name === 'avgValue') {
+                        return [formatCurrency(value), t('businessDashboard.cohortComparison.avgValue')];
                       }
                       return [`${value.toFixed(1)}%`, t('businessDashboard.cohortComparison.highProbPercent')];
                     }}
                     labelFormatter={(_, payload) => payload?.[0]?.payload?.fullName || ''}
                   />
                   <Legend />
-                  <Bar 
-                    dataKey="avgProbability" 
-                    fill="hsl(var(--primary))" 
-                    name={t('businessDashboard.cohortComparison.avgProbability')}
-                    radius={[4, 4, 0, 0]}
-                  />
-                  <Bar 
-                    dataKey="highProbPercent" 
-                    fill="hsl(var(--chart-3))" 
-                    name={viewMode === 'risk' 
-                      ? t('businessDashboard.cohortComparison.highRisk')
-                      : t('businessDashboard.cohortComparison.highOpp')
-                    }
-                    radius={[4, 4, 0, 0]}
-                  />
+                  {isClassification ? (
+                    <>
+                      <Bar 
+                        dataKey="avgProbability" 
+                        fill="hsl(var(--primary))" 
+                        name={t('businessDashboard.cohortComparison.avgProbability')}
+                        radius={[4, 4, 0, 0]}
+                      />
+                      <Bar 
+                        dataKey="highProbPercent" 
+                        fill="hsl(var(--chart-3))" 
+                        name={viewMode === 'risk' 
+                          ? t('businessDashboard.cohortComparison.highRisk')
+                          : t('businessDashboard.cohortComparison.highOpp')
+                        }
+                        radius={[4, 4, 0, 0]}
+                      />
+                    </>
+                  ) : (
+                    <Bar 
+                      dataKey="avgValue" 
+                      fill="hsl(var(--primary))" 
+                      name={t('businessDashboard.cohortComparison.avgValue')}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  )}
                 </BarChart>
               </ResponsiveContainer>
             </div>
@@ -189,13 +219,20 @@ export function CohortComparison({ predictions, problemType, availableFields, vi
                   <TableRow>
                     <TableHead>{t('businessDashboard.cohortComparison.cohort')}</TableHead>
                     <TableHead className="text-right">{t('businessDashboard.cohortComparison.count')}</TableHead>
-                    <TableHead className="text-right">{t('businessDashboard.cohortComparison.avgProb')}</TableHead>
                     <TableHead className="text-right">
-                      {viewMode === 'risk' 
-                        ? t('businessDashboard.cohortComparison.highRiskShort')
-                        : t('businessDashboard.cohortComparison.highOppShort')
+                      {isClassification 
+                        ? t('businessDashboard.cohortComparison.avgProb')
+                        : t('businessDashboard.cohortComparison.avgVal')
                       }
                     </TableHead>
+                    {isClassification && (
+                      <TableHead className="text-right">
+                        {viewMode === 'risk' 
+                          ? t('businessDashboard.cohortComparison.highRiskShort')
+                          : t('businessDashboard.cohortComparison.highOppShort')
+                        }
+                      </TableHead>
+                    )}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -206,11 +243,16 @@ export function CohortComparison({ predictions, problemType, availableFields, vi
                       </TableCell>
                       <TableCell className="text-right">{c.count.toLocaleString()}</TableCell>
                       <TableCell className="text-right">
-                        {c.avgProbability !== null ? `${(c.avgProbability * 100).toFixed(1)}%` : '-'}
+                        {isClassification
+                          ? (c.avgProbability !== null ? `${(c.avgProbability * 100).toFixed(1)}%` : '-')
+                          : (c.avgValue !== null ? formatCurrency(c.avgValue) : '-')
+                        }
                       </TableCell>
-                      <TableCell className="text-right">
-                        {c.highProbabilityPercent.toFixed(1)}%
-                      </TableCell>
+                      {isClassification && (
+                        <TableCell className="text-right">
+                          {c.highProbabilityPercent.toFixed(1)}%
+                        </TableCell>
+                      )}
                     </TableRow>
                   ))}
                 </TableBody>
