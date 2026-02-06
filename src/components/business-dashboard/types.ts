@@ -52,6 +52,9 @@ export interface KPIData {
   coveragePercent: number;
   lastUpdateDate: string | null;
   daysSinceUpdate: number | null;
+  // Regression-specific fields
+  predictedTotalValue: number;
+  predictedAvgValue: number;
 }
 
 export interface SegmentationBand {
@@ -61,6 +64,7 @@ export interface SegmentationBand {
   count: number;
   percent: number;
   avgPotentialValue: number | null;
+  totalValue?: number;
 }
 
 export interface GroupSegmentation {

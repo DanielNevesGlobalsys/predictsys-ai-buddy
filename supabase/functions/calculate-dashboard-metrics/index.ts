@@ -1,39 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-/**
- * Edge Function: calculate-dashboard-metrics
- * 
- * Calcula todas as métricas do dashboard de negócio usando agregações SQL.
- * Evita trazer milhões de linhas para o front, fazendo os cálculos no banco.
- * 
- * Responde ao POST com:
- * {
- *   project_id: string,
- *   mode: "risk" | "opportunity",
- *   horizon: 30 | 60 | 180 | 365,
- *   segment_field?: string,
- *   segment_value?: string
- * }
- * 
- * Retorna:
- * {
- *   summary_cards: { ... },
- *   probability_buckets: [ ... ],
- *   segments: [ ... ]
- * }
- */
-
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
-// Limiar para alto risco/oportunidade
 const HIGH_THRESHOLD = 0.7;
 
 serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
@@ -54,44 +29,13 @@ serve(async (req) => {
       );
     }
 
-    // Criar cliente Supabase
     const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
     const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
     const supabase = createClient(supabaseUrl, supabaseKey);
 
     console.log(`[Dashboard Metrics] Project: ${project_id}, Mode: ${mode}, Horizon: ${horizon}d, Segment: ${segment_field}=${segment_value || 'all'}`);
 
-    // =====================================================
-    // 1. Identificar o último batch do projeto
-    // =====================================================
-    const { data: latestBatchData, error: batchError } = await supabase
-      .from('predictions')
-      .select('batch_id')
-      .eq('project_id', project_id)
-      .eq('is_latest', true)
-      .not('batch_id', 'is', null)
-      .limit(1)
-      .maybeSingle();
-
-    if (batchError) {
-      console.error('[Dashboard Metrics] Error fetching batch:', batchError);
-    }
-
-    const latestBatchId = latestBatchData?.batch_id || null;
-    console.log(`[Dashboard Metrics] Latest batch_id: ${latestBatchId || 'using is_latest filter'}`);
-
-    // =====================================================
-    // 2. Construir condições WHERE base
-    // =====================================================
-    // Base: project_id + is_latest + horizon
-    // O horizonte é usado para filtrar previsões que estão dentro do horizonte selecionado
-    
-    // =====================================================
-    // 3. Calcular Summary Cards via SQL
-    // =====================================================
-    
-    // Query para KPIs principais - usa RPC para agregação
-    // Construir query com filtros
+    // Build query
     let query = supabase
       .from('predictions')
       .select('id, entity_id, probability_event, predicted_value, potential_value, prediction_date, problem_type, horizon_days')
@@ -99,7 +43,6 @@ serve(async (req) => {
       .eq('is_latest', true)
       .lte('horizon_days', horizon);
 
-    // Filtrar por segmento se especificado - cast para any para evitar erro de tipo
     if (segment_field && segment_value) {
       query = (query as any).eq(segment_field, segment_value);
     }
@@ -114,92 +57,78 @@ serve(async (req) => {
       );
     }
 
-    console.log(`[Dashboard Metrics] Total predictions fetched (with horizon filter): ${predictions?.length || 0}`);
+    console.log(`[Dashboard Metrics] Total predictions fetched: ${predictions?.length || 0}`);
 
-    // Se não há previsões, retornar valores zerados
     if (!predictions || predictions.length === 0) {
       return new Response(JSON.stringify({
         horizon,
         mode,
         segment: segment_value || 'all',
+        problem_type: 'classification',
         summary_cards: {
           entities_with_prediction: 0,
           high_risk_or_opportunity: 0,
           expected_events: 0,
           financial_impact: 0,
+          predicted_total_value: 0,
+          predicted_avg_value: 0,
           coverage: 0,
           last_update: null
         },
-        probability_buckets: [
-          { bucket: '0-20%', count: 0, avg_value: 0, expected_events: 0 },
-          { bucket: '20-40%', count: 0, avg_value: 0, expected_events: 0 },
-          { bucket: '40-60%', count: 0, avg_value: 0, expected_events: 0 },
-          { bucket: '60-80%', count: 0, avg_value: 0, expected_events: 0 },
-          { bucket: '80-100%', count: 0, avg_value: 0, expected_events: 0 }
-        ],
+        probability_buckets: [],
         segments: []
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       });
     }
 
-    // Detectar tipo de problema
+    // Detect problem type
     const problemType = predictions[0]?.problem_type || 'classification';
     const isClassification = problemType === 'classification';
 
-    // =====================================================
-    // Calcular KPIs
-    // =====================================================
-
-    // Contagem de entidades únicas
+    // Calculate KPIs
     const uniqueEntities = new Set(predictions.map(p => p.entity_id));
     const entitiesWithPrediction = uniqueEntities.size;
 
-    // Alto risco/oportunidade (prob >= 0.7)
     let highRiskOrOpportunity = 0;
     let expectedEvents = 0;
     let financialImpact = 0;
     let lastUpdateDate: string | null = null;
-
-    // Para regressão, valores acumulados
     let totalPredictedValue = 0;
+    const allPredictedValues: number[] = [];
 
     predictions.forEach(p => {
       if (isClassification) {
         const prob = p.probability_event ?? 0;
-        
-        // Alto risco/oportunidade
         if (prob >= HIGH_THRESHOLD) {
           highRiskOrOpportunity++;
         }
-        
-        // Eventos esperados = soma das probabilidades
         expectedEvents += prob;
-        
-        // Impacto financeiro = prob * valor potencial
         const value = p.potential_value ?? p.predicted_value ?? 0;
         financialImpact += prob * value;
       } else {
-        // Regressão
+        // Regression
         const value = p.predicted_value ?? 0;
         totalPredictedValue += value;
-        financialImpact += value;
+        allPredictedValues.push(value);
       }
 
-      // Última atualização
       if (!lastUpdateDate || (p.prediction_date && p.prediction_date > lastUpdateDate)) {
         lastUpdateDate = p.prediction_date;
       }
     });
 
-    // Para regressão, eventos esperados = total de valor previsto
+    // For regression, financial impact = total predicted value
     if (!isClassification) {
+      financialImpact = totalPredictedValue;
       expectedEvents = totalPredictedValue;
     }
 
-    // =====================================================
-    // Cobertura da base - buscar total sem filtros
-    // =====================================================
+    const predictedAvgValue = allPredictedValues.length > 0
+      ? totalPredictedValue / allPredictedValues.length
+      : 0;
+
+    // Coverage
     const { count: totalBaseCount } = await supabase
       .from('predictions')
       .select('id', { count: 'exact', head: true })
@@ -209,18 +138,9 @@ serve(async (req) => {
     const totalBase = totalBaseCount || entitiesWithPrediction;
     const coverage = totalBase > 0 ? entitiesWithPrediction / totalBase : 1;
 
-    console.log(`[Dashboard Metrics] KPIs calculated:
-      - Entities: ${entitiesWithPrediction}
-      - High ${mode}: ${highRiskOrOpportunity}
-      - Expected Events: ${expectedEvents.toFixed(2)}
-      - Financial Impact: ${financialImpact.toFixed(2)}
-      - Coverage: ${(coverage * 100).toFixed(1)}%
-      - Last Update: ${lastUpdateDate}`);
+    console.log(`[Dashboard Metrics] KPIs: Entities=${entitiesWithPrediction}, HighRisk=${highRiskOrOpportunity}, Expected=${expectedEvents.toFixed(2)}, Impact=${financialImpact.toFixed(2)}, Coverage=${(coverage * 100).toFixed(1)}%, PredTotal=${totalPredictedValue.toFixed(2)}, PredAvg=${predictedAvgValue.toFixed(2)}`);
 
-    // =====================================================
-    // 4. Calcular Segmentação por Probabilidade / Valor
-    // =====================================================
-    
+    // Calculate segmentation buckets
     let probabilityBuckets;
 
     if (isClassification) {
@@ -235,7 +155,6 @@ serve(async (req) => {
       predictions.forEach(p => {
         const prob = p.probability_event ?? 0;
         const value = p.potential_value ?? p.predicted_value ?? 0;
-
         for (const bucket of buckets) {
           if (prob >= bucket.min && (prob < bucket.max || (bucket.max === 1.0 && prob <= 1.0))) {
             bucket.count++;
@@ -250,76 +169,86 @@ serve(async (req) => {
         bucket: b.bucket,
         count: b.count,
         avg_value: b.count > 0 ? b.sumValue / b.count : 0,
+        total_value: b.sumValue,
         expected_events: b.sumProb,
         percent: predictions.length > 0 ? (b.count / predictions.length) * 100 : 0
       }));
     } else {
-      // Regression: segment by predicted value quintiles
-      const values = predictions
-        .map(p => p.predicted_value ?? 0)
-        .sort((a, b) => a - b);
-      
+      // Regression: quantile-based bins (p25/p50/p75/p90/p95)
+      const values = allPredictedValues.sort((a, b) => a - b);
+
       if (values.length > 0) {
+        const getQuantile = (arr: number[], q: number) => {
+          const pos = (arr.length - 1) * q;
+          const base = Math.floor(pos);
+          const rest = pos - base;
+          if (arr[base + 1] !== undefined) {
+            return arr[base] + rest * (arr[base + 1] - arr[base]);
+          }
+          return arr[base];
+        };
+
+        const p25 = getQuantile(values, 0.25);
+        const p50 = getQuantile(values, 0.50);
+        const p75 = getQuantile(values, 0.75);
+        const p90 = getQuantile(values, 0.90);
         const minVal = values[0];
         const maxVal = values[values.length - 1];
-        const range = maxVal - minVal;
-        
-        if (range === 0) {
-          // All same value
-          probabilityBuckets = [{
-            bucket: `R$ ${minVal.toFixed(0)}`,
-            count: values.length,
-            avg_value: minVal,
+
+        // Build quantile-based bins
+        const quantileBins = [
+          { label: 'Até P25', min: minVal, max: p25 },
+          { label: 'P25–P50', min: p25, max: p50 },
+          { label: 'P50–P75', min: p50, max: p75 },
+          { label: 'P75–P90', min: p75, max: p90 },
+          { label: 'Acima P90', min: p90, max: maxVal + 0.01 },
+        ];
+
+        const formatVal = (v: number) => {
+          if (Math.abs(v) >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
+          if (Math.abs(v) >= 1000) return `${(v / 1000).toFixed(1)}K`;
+          return v.toFixed(0);
+        };
+
+        // Deduplicate bins with same min/max (happens when many values are identical)
+        const seenBuckets = new Set<string>();
+        probabilityBuckets = [];
+
+        for (let i = 0; i < quantileBins.length; i++) {
+          const bin = quantileBins[i];
+          const bucketKey = `${bin.min.toFixed(2)}-${bin.max.toFixed(2)}`;
+          if (seenBuckets.has(bucketKey) && i > 0) continue;
+          seenBuckets.add(bucketKey);
+
+          const isLast = i === quantileBins.length - 1;
+          const inBucket = predictions.filter(p => {
+            const v = p.predicted_value ?? 0;
+            if (isLast) return v >= bin.min && v <= maxVal;
+            return v >= bin.min && v < bin.max;
+          });
+
+          const totalVal = inBucket.reduce((s, p) => s + (p.predicted_value ?? 0), 0);
+
+          probabilityBuckets.push({
+            bucket: `R$ ${formatVal(bin.min)} – ${formatVal(isLast ? maxVal : bin.max)}`,
+            count: inBucket.length,
+            avg_value: inBucket.length > 0 ? totalVal / inBucket.length : 0,
+            total_value: totalVal,
             expected_events: 0,
-            percent: 100
-          }];
-        } else {
-          const quintileSize = range / 5;
-          const regBuckets = [];
-          
-          for (let i = 0; i < 5; i++) {
-            const bucketMin = minVal + (quintileSize * i);
-            const bucketMax = i === 4 ? maxVal + 0.01 : minVal + (quintileSize * (i + 1));
-            const inBucket = predictions.filter(p => {
-              const v = p.predicted_value ?? 0;
-              return v >= bucketMin && (i === 4 ? v <= maxVal : v < bucketMax);
-            });
-            
-            const formatVal = (v: number) => {
-              if (v >= 1000000) return `${(v / 1000000).toFixed(1)}M`;
-              if (v >= 1000) return `${(v / 1000).toFixed(1)}K`;
-              return v.toFixed(0);
-            };
-            
-            regBuckets.push({
-              bucket: `R$ ${formatVal(bucketMin)} - ${formatVal(i === 4 ? maxVal : bucketMax)}`,
-              count: inBucket.length,
-              avg_value: inBucket.length > 0 
-                ? inBucket.reduce((s, p) => s + (p.predicted_value ?? 0), 0) / inBucket.length 
-                : 0,
-              expected_events: 0,
-              percent: predictions.length > 0 ? (inBucket.length / predictions.length) * 100 : 0
-            });
-          }
-          
-          probabilityBuckets = regBuckets;
+            percent: predictions.length > 0 ? (inBucket.length / predictions.length) * 100 : 0
+          });
         }
       } else {
         probabilityBuckets = [];
       }
     }
 
-    console.log(`[Dashboard Metrics] Probability buckets calculated:`, 
-      probabilityBuckets.map(b => `${b.bucket}: ${b.count}`).join(', '));
+    console.log(`[Dashboard Metrics] Buckets:`, probabilityBuckets.map(b => `${b.bucket}: ${b.count}`).join(', '));
 
-    // =====================================================
-    // 5. Listar segmentos disponíveis
-    // =====================================================
-    
+    // Segments
     const segmentFields = ['segment', 'age_group', 'region', 'state', 'city', 'product_category', 'channel', 'campaign', 'cohort'];
     const availableSegments: { field: string; values: string[] }[] = [];
 
-    // Buscar valores únicos para cada campo de segmento
     for (const field of segmentFields) {
       const { data: segData } = await supabase
         .from('predictions')
@@ -332,15 +261,11 @@ serve(async (req) => {
       if (segData && segData.length > 0) {
         const uniqueValues = [...new Set(segData.map(s => s[field as keyof typeof s]).filter(Boolean))] as string[];
         if (uniqueValues.length > 0) {
-          availableSegments.push({ field, values: uniqueValues.slice(0, 50) }); // Limitar a 50 valores por campo
+          availableSegments.push({ field, values: uniqueValues.slice(0, 50) });
         }
       }
     }
 
-    // =====================================================
-    // 6. Montar resposta final
-    // =====================================================
-    
     const response = {
       horizon,
       mode,
@@ -351,6 +276,8 @@ serve(async (req) => {
         high_risk_or_opportunity: highRiskOrOpportunity,
         expected_events: Math.round(expectedEvents * 100) / 100,
         financial_impact: Math.round(financialImpact * 100) / 100,
+        predicted_total_value: Math.round(totalPredictedValue * 100) / 100,
+        predicted_avg_value: Math.round(predictedAvgValue * 100) / 100,
         coverage,
         last_update: lastUpdateDate
       },
