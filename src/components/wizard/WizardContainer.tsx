@@ -17,6 +17,7 @@ import { trackEvent } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useOrganization } from "@/contexts/OrganizationContext";
 import PredictSysLogo from "@/components/PredictSysLogo";
+import { WizardContextProgress } from "./WizardContextProgress";
 
 export interface ProjectData {
   id?: string;
@@ -330,7 +331,10 @@ const WizardContainer = () => {
               </p>
             </div>
           </div>
-          <GlobalControls />
+          <div className="flex items-center gap-3">
+            <GlobalControls />
+            <WizardContextProgress projectId={projectData.id} />
+          </div>
         </div>
       </header>
 

@@ -80,6 +80,77 @@ function deepMerge(target: Record<string, any>, source: Record<string, any>): Re
   return result;
 }
 
+/**
+ * Preserve a snapshot of the previous stage data in a `_history` array.
+ * Keeps at most MAX_HISTORY entries per stage.
+ */
+const MAX_HISTORY = 5;
+const MAX_CONTEXT_BYTES = 512 * 1024; // 512KB limit
+
+function appendHistory(
+  currentContext: Record<string, any>,
+  stage: string,
+  previousBlock: Record<string, any>
+): Record<string, any> {
+  // Only save history if the block had meaningful data
+  const hasData = Object.values(previousBlock).some(
+    (v) => v !== "" && v !== null && !(Array.isArray(v) && v.length === 0) && !(typeof v === "object" && !Array.isArray(v) && Object.keys(v).length === 0)
+  );
+  if (!hasData) return currentContext;
+
+  const historyKey = `${stage}_history`;
+  const existingHistory: any[] = Array.isArray(currentContext[historyKey])
+    ? currentContext[historyKey]
+    : [];
+
+  const snapshot = {
+    ...previousBlock,
+    _saved_at: new Date().toISOString(),
+  };
+
+  const newHistory = [snapshot, ...existingHistory].slice(0, MAX_HISTORY);
+  return { ...currentContext, [historyKey]: newHistory };
+}
+
+/**
+ * Compact the context if it exceeds MAX_CONTEXT_BYTES.
+ * Trims history arrays and large text fields.
+ */
+function compactIfNeeded(context: Record<string, any>): Record<string, any> {
+  const serialized = JSON.stringify(context);
+  if (serialized.length <= MAX_CONTEXT_BYTES) return context;
+
+  console.log(`[append-project-context] Context size ${serialized.length} exceeds limit, compacting...`);
+  const result = { ...context };
+
+  // 1. Trim all history arrays to 2 entries
+  for (const key of Object.keys(result)) {
+    if (key.endsWith("_history") && Array.isArray(result[key])) {
+      result[key] = result[key].slice(0, 2);
+    }
+  }
+
+  // 2. Trim segment_insights arrays
+  if (result.predictions?.segment_insights?.length > 5) {
+    result.predictions = {
+      ...result.predictions,
+      segment_insights: result.predictions.segment_insights.slice(0, 5),
+    };
+  }
+
+  // 3. Truncate long text fields
+  if (result.storyline?.executive_summary?.length > 2000) {
+    result.storyline = {
+      ...result.storyline,
+      executive_summary: result.storyline.executive_summary.substring(0, 2000) + "...",
+    };
+  }
+
+  const compactedSize = JSON.stringify(result).length;
+  console.log(`[append-project-context] Compacted to ${compactedSize} bytes`);
+  return result;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -137,10 +208,16 @@ serve(async (req) => {
 
     const currentContext = existing?.context as Record<string, any> || { ...DEFAULT_CONTEXT };
 
-    // Deep merge: only update the stage block, preserve everything else
+    // Save history of the previous stage block before merging
     const stageBlock = currentContext[stage] || {};
+    const contextWithHistory = appendHistory(currentContext, stage, stageBlock);
+
+    // Deep merge: only update the stage block, preserve everything else
     const mergedStage = deepMerge(stageBlock, payload);
-    const updatedContext = { ...currentContext, [stage]: mergedStage };
+    let updatedContext = { ...contextWithHistory, [stage]: mergedStage };
+
+    // Compact if context is too large
+    updatedContext = compactIfNeeded(updatedContext);
 
     // Determine status
     const newStatus = status_update || STATUS_MAP[stage as Stage] || existing?.status || "draft";
