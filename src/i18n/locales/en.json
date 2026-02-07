@@ -1542,5 +1542,29 @@
       "data_retention_cleanup": "Automatic data cleanup",
       "config_updated": "Configuration updated"
     }
+  },
+  "lysSuggestions": {
+    "title": "Lys Suggestions",
+    "description": "Lys suggests options based on the EDA. You can always adjust manually.",
+    "generate": "Generate suggestions",
+    "regenerate": "Regenerate",
+    "generating": "Analyzing...",
+    "highConfidence": "High confidence",
+    "mediumConfidence": "Medium confidence",
+    "lowConfidence": "Low confidence",
+    "featuresRecommended": "recommended features",
+    "excluded": "excluded",
+    "apply": "Apply suggestion",
+    "applied": "Applied",
+    "noSuggestions": "No suggestions available for this dataset.",
+    "noSuggestionsDesc": "Lys could not find clear target candidates in this dataset.",
+    "errorGenerating": "Error generating suggestions",
+    "suggestionApplied": "Suggestion applied!",
+    "suggestionAppliedDesc": "Target, problem type and features have been configured. Review and adjust if needed.",
+    "needOneFeature": "Select at least 1 feature.",
+    "settingsSaved": "Settings saved!",
+    "settingsSavedDesc": "Target, features and configurations have been persisted.",
+    "excludedTitle": "Automatically excluded",
+    "excludedReason": "ID columns, high cardinality, high null percentage or date columns were excluded to avoid data leakage."
   }
 }

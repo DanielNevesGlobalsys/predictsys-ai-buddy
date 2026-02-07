@@ -1542,5 +1542,29 @@
       "data_retention_cleanup": "Limpieza automática de datos",
       "config_updated": "Configuración actualizada"
     }
+  },
+  "lysSuggestions": {
+    "title": "Sugerencias de Lys",
+    "description": "Lys sugiere opciones basadas en el EDA. Siempre puedes ajustar manualmente.",
+    "generate": "Generar sugerencias",
+    "regenerate": "Regenerar",
+    "generating": "Analizando...",
+    "highConfidence": "Alta confianza",
+    "mediumConfidence": "Confianza media",
+    "lowConfidence": "Confianza baja",
+    "featuresRecommended": "features recomendadas",
+    "excluded": "excluidas",
+    "apply": "Aplicar sugerencia",
+    "applied": "Aplicada",
+    "noSuggestions": "No hay sugerencias disponibles para este dataset.",
+    "noSuggestionsDesc": "Lys no encontró candidatos claros para target en este dataset.",
+    "errorGenerating": "Error al generar sugerencias",
+    "suggestionApplied": "¡Sugerencia aplicada!",
+    "suggestionAppliedDesc": "Target, tipo de problema y features fueron configurados. Revisa y ajusta si es necesario.",
+    "needOneFeature": "Seleccione al menos 1 feature.",
+    "settingsSaved": "¡Configuración guardada!",
+    "settingsSavedDesc": "Target, features y configuraciones fueron persistidos.",
+    "excludedTitle": "Excluidas automáticamente",
+    "excludedReason": "Columnas de ID, alta cardinalidad, muchos nulos o fechas fueron excluidas para evitar data leakage."
   }
 }
