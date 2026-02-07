@@ -1860,7 +1860,31 @@
       "anonymization_enabled": "Anonimização habilitada",
       "anonymization_disabled": "Anonimização desabilitada",
       "data_retention_cleanup": "Limpeza automática de dados",
-      "config_updated": "Configuração atualizada"
+    "config_updated": "Configuração atualizada"
     }
+  },
+  "lysSuggestions": {
+    "title": "Sugestões da Lys",
+    "description": "A Lys sugere opções com base no EDA. Você sempre pode ajustar manualmente.",
+    "generate": "Gerar sugestões",
+    "regenerate": "Regenerar",
+    "generating": "Analisando...",
+    "highConfidence": "Alta confiança",
+    "mediumConfidence": "Confiança média",
+    "lowConfidence": "Confiança baixa",
+    "featuresRecommended": "features recomendadas",
+    "excluded": "excluídas",
+    "apply": "Aplicar sugestão",
+    "applied": "Aplicada",
+    "noSuggestions": "Nenhuma sugestão disponível para este dataset.",
+    "noSuggestionsDesc": "A Lys não encontrou candidatos claros para target neste dataset.",
+    "errorGenerating": "Erro ao gerar sugestões",
+    "suggestionApplied": "Sugestão aplicada!",
+    "suggestionAppliedDesc": "Target, tipo de problema e features foram configurados. Revise e ajuste se necessário.",
+    "needOneFeature": "Selecione ao menos 1 feature.",
+    "settingsSaved": "Configuração salva!",
+    "settingsSavedDesc": "Target, features e configurações foram persistidos.",
+    "excludedTitle": "Excluídas automaticamente",
+    "excludedReason": "Colunas de ID, com alta cardinalidade, muitos nulos ou datas foram excluídas para evitar data leakage."
   }
 }

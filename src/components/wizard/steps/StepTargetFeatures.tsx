@@ -12,10 +12,14 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Bot, Save } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
+import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import type { FeatureExpression } from "@/lib/featureEngineering";
+import LysSuggestionCards, { type TargetSuggestion } from "./LysSuggestionCards";
+import ExcludedFeaturesList from "./ExcludedFeaturesList";
+import { useProjectSettings } from "@/hooks/useProjectSettings";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -43,18 +47,53 @@ const StepTargetFeatures = ({
   onConfigChange,
 }: StepTargetFeaturesProps) => {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loadingColumns, setLoadingColumns] = useState(true);
   const [targetColumn, setTargetColumn] = useState(projectData.target_column || "");
   const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  const [excludedColumns, setExcludedColumns] = useState<string[]>([]);
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
+
+  // Lys suggestions state
+  const [suggestions, setSuggestions] = useState<TargetSuggestion[]>([]);
+  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
+  const [appliedSuggestionId, setAppliedSuggestionId] = useState<string | null>(null);
+  const [suggestionsGenerated, setSuggestionsGenerated] = useState(false);
+
+  // Project settings persistence
+  const { settings, loadSettings, saveSettings } = useProjectSettings(projectData.id);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
+      loadSettings().then((loaded) => {
+        if (loaded) {
+          setSettingsLoaded(true);
+        }
+      });
     }
   }, [projectData.id]);
+
+  // Restore from persisted settings
+  useEffect(() => {
+    if (settings && settingsLoaded && columns.length > 0) {
+      if (settings.target_column && columns.some((c) => c.name === settings.target_column)) {
+        setTargetColumn(settings.target_column);
+      }
+      if (settings.feature_columns && settings.feature_columns.length > 0) {
+        setSelectedFeatures(settings.feature_columns);
+      }
+      if (settings.excluded_columns) {
+        setExcludedColumns(settings.excluded_columns);
+      }
+      if (settings.target_suggestion_meta?.chosen_suggestion_id) {
+        setAppliedSuggestionId(settings.target_suggestion_meta.chosen_suggestion_id as string);
+      }
+    }
+  }, [settings, settingsLoaded, columns]);
 
   // Store initial target on mount
   useEffect(() => {
@@ -64,19 +103,17 @@ const StepTargetFeatures = ({
   }, [projectData.target_column]);
 
   useEffect(() => {
-    if (columns.length > 0 && selectedFeatures.length === 0) {
-      // Select all features (original + engineered) by default
+    if (columns.length > 0 && selectedFeatures.length === 0 && !settingsLoaded) {
       const features = columns
         .filter((c) => c.name !== targetColumn && !c.featureHasError)
         .map((c) => c.name);
       setSelectedFeatures(features);
     }
-  }, [columns, targetColumn]);
+  }, [columns, targetColumn, settingsLoaded]);
 
   const loadColumns = async () => {
     setLoadingColumns(true);
     try {
-      // Load original columns
       const { data: colData, error: colError } = await supabase
         .from("project_columns")
         .select("column_name, inferred_type")
@@ -88,7 +125,6 @@ const StepTargetFeatures = ({
         return;
       }
 
-      // Load enabled project features (feature engineering)
       const { data: featureData, error: featureError } = await supabase
         .from("project_features")
         .select("name, label, enabled, expression")
@@ -100,8 +136,7 @@ const StepTargetFeatures = ({
       }
 
       const cols: ColumnInfo[] = [];
-      
-      // Add original columns
+
       if (colData && colData.length > 0) {
         for (const col of colData) {
           cols.push({
@@ -112,13 +147,10 @@ const StepTargetFeatures = ({
         }
       }
 
-      // Add engineered features as columns (they produce numeric values)
       if (featureData && featureData.length > 0) {
         for (const feature of featureData) {
-          // Validate feature expression
           const expr = feature.expression as FeatureExpression | null;
           const hasError = !expr || !expr.type;
-          
           cols.push({
             name: feature.name,
             type: "numérico",
@@ -141,7 +173,6 @@ const StepTargetFeatures = ({
   };
 
   const handleTargetChange = (value: string) => {
-    // Check if target changed from initial
     if (initialTargetRef.current && value !== initialTargetRef.current && !hasChangedConfig.current) {
       hasChangedConfig.current = true;
       onConfigChange?.();
@@ -154,6 +185,7 @@ const StepTargetFeatures = ({
       }
       return newFeatures;
     });
+    setAppliedSuggestionId(null);
   };
 
   const toggleFeature = (columnName: string) => {
@@ -164,9 +196,116 @@ const StepTargetFeatures = ({
     );
   };
 
+  const handleGenerateSuggestions = async () => {
+    if (!projectData.id) return;
+    setLoadingSuggestions(true);
+    setSuggestionsGenerated(false);
+    try {
+      const { data, error } = await supabase.functions.invoke("ai-suggest-targets", {
+        body: { project_id: projectData.id },
+      });
+
+      if (error) throw error;
+
+      const result = data as { suggestions: TargetSuggestion[] };
+      setSuggestions(result.suggestions || []);
+      setSuggestionsGenerated(true);
+
+      if (result.suggestions.length === 0) {
+        toast({
+          title: t("lysSuggestions.noSuggestions", "Nenhuma sugestão"),
+          description: t("lysSuggestions.noSuggestionsDesc", "A Lys não encontrou candidatos claros para target neste dataset."),
+        });
+      }
+    } catch (err: any) {
+      console.error("Error generating suggestions:", err);
+      toast({
+        title: t("common.error"),
+        description: err.message || t("lysSuggestions.errorGenerating", "Erro ao gerar sugestões"),
+        variant: "destructive",
+      });
+    }
+    setLoadingSuggestions(false);
+  };
+
+  const handleApplySuggestion = (suggestion: TargetSuggestion) => {
+    // Set target
+    setTargetColumn(suggestion.target_column);
+    setAppliedSuggestionId(suggestion.id);
+
+    // Set features (recommended) and excluded
+    setSelectedFeatures(suggestion.recommended_features);
+    setExcludedColumns(suggestion.excluded_features);
+
+    // Check if target changed from initial
+    if (
+      initialTargetRef.current &&
+      suggestion.target_column !== initialTargetRef.current &&
+      !hasChangedConfig.current
+    ) {
+      hasChangedConfig.current = true;
+      onConfigChange?.();
+    }
+
+    toast({
+      title: t("lysSuggestions.suggestionApplied", "Sugestão aplicada!"),
+      description: t("lysSuggestions.suggestionAppliedDesc", "Target, tipo de problema e features foram configurados. Revise e ajuste se necessário."),
+    });
+  };
+
+  const handleSaveSettings = async () => {
+    if (!projectData.id || !targetColumn) return;
+
+    // Validate: target cannot be in features
+    const cleanFeatures = selectedFeatures.filter((f) => f !== targetColumn);
+    if (cleanFeatures.length === 0) {
+      toast({
+        title: t("common.error"),
+        description: t("lysSuggestions.needOneFeature", "Selecione ao menos 1 feature."),
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Determine problem_type from suggestion or project data
+    const appliedSug = suggestions.find((s) => s.id === appliedSuggestionId);
+    const problemType = appliedSug?.problem_type || projectData.problem_type;
+
+    // Warn if classification with high unique count
+    const targetCol = columns.find((c) => c.name === targetColumn);
+    if (problemType === "classification" && targetCol) {
+      // We can't easily check unique_count from columns, but the suggestion warnings should cover it
+    }
+
+    const saved = await saveSettings({
+      target_column: targetColumn,
+      problem_type: problemType,
+      feature_columns: cleanFeatures,
+      excluded_columns: excludedColumns,
+      suggestion: appliedSug || null,
+    });
+
+    if (saved) {
+      toast({
+        title: t("lysSuggestions.settingsSaved", "Configuração salva!"),
+        description: t("lysSuggestions.settingsSavedDesc", "Target, features e configurações foram persistidos."),
+      });
+    }
+  };
+
   const handleNext = async () => {
     if (targetColumn) {
-      await saveProject({ target_column: targetColumn }, 5);
+      // Save settings before moving forward
+      await handleSaveSettings();
+
+      // Determine problem_type from applied suggestion
+      const appliedSug = suggestions.find((s) => s.id === appliedSuggestionId);
+      const updateData: Partial<ProjectData> = { target_column: targetColumn };
+      if (appliedSug) {
+        updateData.problem_type = appliedSug.problem_type;
+      }
+
+      await saveProject(updateData, 5);
     } else {
       onNext();
     }
@@ -217,6 +356,53 @@ const StepTargetFeatures = ({
           <p className="text-muted-foreground">
             {t("stepVariables.subtitle")}
           </p>
+        </div>
+
+        {/* Lys Suggestions Section */}
+        <div className="space-y-4 p-5 border border-secondary/30 rounded-xl bg-secondary/5">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Bot className="w-5 h-5 text-secondary" />
+              <h3 className="font-semibold text-sm">
+                {t("lysSuggestions.title", "Sugestões da Lys")}
+              </h3>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleGenerateSuggestions}
+              disabled={loadingSuggestions}
+            >
+              {loadingSuggestions ? (
+                <>
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  {t("lysSuggestions.generating", "Analisando...")}
+                </>
+              ) : (
+                <>
+                  <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                  {suggestionsGenerated
+                    ? t("lysSuggestions.regenerate", "Regenerar")
+                    : t("lysSuggestions.generate", "Gerar sugestões")}
+                </>
+              )}
+            </Button>
+          </div>
+
+          <p className="text-xs text-muted-foreground">
+            {t(
+              "lysSuggestions.description",
+              "A Lys sugere opções com base no EDA. Você sempre pode ajustar manualmente."
+            )}
+          </p>
+
+          {suggestionsGenerated && (
+            <LysSuggestionCards
+              suggestions={suggestions}
+              onApply={handleApplySuggestion}
+              appliedId={appliedSuggestionId}
+            />
+          )}
         </div>
 
         {/* Target selection */}
@@ -271,7 +457,7 @@ const StepTargetFeatures = ({
             {t("stepVariables.featuresDesc")}
           </p>
 
-        <div className="bg-muted/30 rounded-xl p-4 space-y-3 max-h-64 overflow-y-auto">
+          <div className="bg-muted/30 rounded-xl p-4 space-y-3 max-h-64 overflow-y-auto">
             {availableFeatures.length > 0 ? (
               <>
                 {/* Original columns first */}
@@ -298,7 +484,7 @@ const StepTargetFeatures = ({
                     </span>
                   </div>
                 ))}
-                
+
                 {/* Engineered features section */}
                 {availableFeatures.filter(col => col.isFeature).length > 0 && (
                   <>
@@ -312,8 +498,8 @@ const StepTargetFeatures = ({
                       <div
                         key={col.name}
                         className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
-                          col.featureHasError 
-                            ? "bg-destructive/10 border border-destructive/30" 
+                          col.featureHasError
+                            ? "bg-destructive/10 border border-destructive/30"
                             : "bg-secondary/5 border border-secondary/20 hover:bg-secondary/10"
                         }`}
                       >
@@ -361,6 +547,11 @@ const StepTargetFeatures = ({
             )}
           </div>
 
+          {/* Excluded features collapsible */}
+          {excludedColumns.length > 0 && (
+            <ExcludedFeaturesList excludedColumns={excludedColumns} />
+          )}
+
           {selectedFeatures.length > 0 && (
             <p className="text-sm text-accent">
               {t("stepVariables.selectedCount", { count: selectedFeatures.length })}
@@ -373,13 +564,25 @@ const StepTargetFeatures = ({
           <Button variant="outline" onClick={onBack} disabled={loading}>
             {t("common.back")}
           </Button>
-          <Button
-            onClick={handleNext}
-            disabled={loading || !targetColumn}
-            className="bg-gradient-primary hover:shadow-hover transition-all"
-          >
-            {loading ? t("common.loading") : t("common.next")}
-          </Button>
+          <div className="flex gap-2">
+            {targetColumn && (
+              <Button
+                variant="outline"
+                onClick={handleSaveSettings}
+                disabled={loading || !targetColumn}
+              >
+                <Save className="w-4 h-4 mr-1.5" />
+                {t("common.save")}
+              </Button>
+            )}
+            <Button
+              onClick={handleNext}
+              disabled={loading || !targetColumn}
+              className="bg-gradient-primary hover:shadow-hover transition-all"
+            >
+              {loading ? t("common.loading") : t("common.next")}
+            </Button>
+          </div>
         </div>
       </div>
     </Card>

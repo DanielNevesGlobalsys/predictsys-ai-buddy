@@ -1111,6 +1111,45 @@ export type Database = {
           },
         ]
       }
+      project_eda_snapshots: {
+        Row: {
+          created_at: string
+          eda_json: Json
+          id: string
+          org_id: string | null
+          project_id: string
+        }
+        Insert: {
+          created_at?: string
+          eda_json: Json
+          id?: string
+          org_id?: string | null
+          project_id: string
+        }
+        Update: {
+          created_at?: string
+          eda_json?: Json
+          id?: string
+          org_id?: string | null
+          project_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_eda_snapshots_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_eda_snapshots_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_feature_importances: {
         Row: {
           created_at: string
@@ -1436,6 +1475,54 @@ export type Database = {
             foreignKeyName: "project_prediction_schedules_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_settings: {
+        Row: {
+          excluded_columns: Json | null
+          feature_columns: Json | null
+          org_id: string | null
+          problem_type: string | null
+          project_id: string
+          target_column: string | null
+          target_suggestion_meta: Json | null
+          updated_at: string
+        }
+        Insert: {
+          excluded_columns?: Json | null
+          feature_columns?: Json | null
+          org_id?: string | null
+          problem_type?: string | null
+          project_id: string
+          target_column?: string | null
+          target_suggestion_meta?: Json | null
+          updated_at?: string
+        }
+        Update: {
+          excluded_columns?: Json | null
+          feature_columns?: Json | null
+          org_id?: string | null
+          problem_type?: string | null
+          project_id?: string
+          target_column?: string | null
+          target_suggestion_meta?: Json | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_settings_org_id_fkey"
+            columns: ["org_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_settings_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
             referencedRelation: "projects"
             referencedColumns: ["id"]
           },
