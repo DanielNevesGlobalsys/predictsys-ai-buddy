@@ -796,6 +796,55 @@ export type Database = {
           },
         ]
       }
+      project_ai_memory: {
+        Row: {
+          eda_snapshot_id: string | null
+          id: string
+          memory_json: Json
+          organization_id: string
+          project_id: string
+          updated_at: string
+        }
+        Insert: {
+          eda_snapshot_id?: string | null
+          id?: string
+          memory_json?: Json
+          organization_id: string
+          project_id: string
+          updated_at?: string
+        }
+        Update: {
+          eda_snapshot_id?: string | null
+          id?: string
+          memory_json?: Json
+          organization_id?: string
+          project_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_ai_memory_eda_snapshot_id_fkey"
+            columns: ["eda_snapshot_id"]
+            isOneToOne: false
+            referencedRelation: "project_eda_snapshots"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_ai_memory_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_ai_memory_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_business_config: {
         Row: {
           average_margin_percent: number | null
@@ -1518,6 +1567,76 @@ export type Database = {
           },
           {
             foreignKeyName: "project_prediction_schedules_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_problem_inference: {
+        Row: {
+          confidence: number
+          created_at: string
+          dataset_id: string | null
+          id: string
+          inference_version: string
+          narrative: string
+          organization_id: string
+          problem_type: string
+          project_id: string
+          suggested_predictors: Json
+          suggested_problem_labels: Json
+          suggested_targets: Json
+          updated_at: string
+        }
+        Insert: {
+          confidence?: number
+          created_at?: string
+          dataset_id?: string | null
+          id?: string
+          inference_version?: string
+          narrative?: string
+          organization_id: string
+          problem_type?: string
+          project_id: string
+          suggested_predictors?: Json
+          suggested_problem_labels?: Json
+          suggested_targets?: Json
+          updated_at?: string
+        }
+        Update: {
+          confidence?: number
+          created_at?: string
+          dataset_id?: string | null
+          id?: string
+          inference_version?: string
+          narrative?: string
+          organization_id?: string
+          problem_type?: string
+          project_id?: string
+          suggested_predictors?: Json
+          suggested_problem_labels?: Json
+          suggested_targets?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_problem_inference_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_problem_inference_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_problem_inference_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"

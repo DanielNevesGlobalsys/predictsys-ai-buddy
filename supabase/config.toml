@@ -92,3 +92,6 @@ verify_jwt = false
 
 [functions.import-preview]
 verify_jwt = false
+
+[functions.infer-problem]
+verify_jwt = false
