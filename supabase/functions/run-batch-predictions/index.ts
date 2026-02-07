@@ -540,6 +540,81 @@ serve(async (req) => {
 
     console.log(`Successfully inserted ${predictions.length} predictions`);
 
+    // ── Append AI context for predictions stage ──
+    try {
+      const totalEntities = predictions.length;
+      const classificationPreds = predictions.filter(p => p.problem_type === "classification");
+      const regressionPreds = predictions.filter(p => p.problem_type === "regression");
+
+      const highRiskCount = classificationPreds.filter(p => (p.probability_event || 0) >= 0.7).length;
+      const avgProbability = classificationPreds.length > 0
+        ? classificationPreds.reduce((s, p) => s + (p.probability_event || 0), 0) / classificationPreds.length
+        : null;
+      const avgPredictedValue = regressionPreds.length > 0
+        ? regressionPreds.reduce((s, p) => s + (p.predicted_value || 0), 0) / regressionPreds.length
+        : null;
+
+      // Segment summary
+      const segmentMap = new Map<string, { count: number; highRisk: number }>();
+      predictions.forEach(p => {
+        const seg = p.segment || "sem_segmento";
+        if (!segmentMap.has(seg)) segmentMap.set(seg, { count: 0, highRisk: 0 });
+        const s = segmentMap.get(seg)!;
+        s.count++;
+        if ((p.probability_event || 0) >= 0.7) s.highRisk++;
+      });
+
+      const segmentInsights = Array.from(segmentMap.entries())
+        .sort((a, b) => b[1].highRisk - a[1].highRisk)
+        .slice(0, 10)
+        .map(([seg, info]) => ({
+          segment: seg,
+          count: info.count,
+          high_risk_count: info.highRisk,
+          high_risk_pct: info.count > 0 ? +(info.highRisk / info.count * 100).toFixed(1) : 0,
+        }));
+
+      const horizonData: Record<string, any> = {};
+      horizonData[String(horizon_days)] = {
+        total_entities: totalEntities,
+        high_risk_count: highRiskCount,
+        high_risk_pct: totalEntities > 0 ? +(highRiskCount / totalEntities * 100).toFixed(1) : 0,
+        avg_probability: avgProbability !== null ? +avgProbability.toFixed(4) : null,
+        avg_predicted_value: avgPredictedValue !== null ? +avgPredictedValue.toFixed(2) : null,
+        generated_at: new Date().toISOString(),
+      };
+
+      const contextPayload = {
+        horizons: horizonData,
+        segment_insights: segmentInsights,
+        last_batch_id: batchId,
+        last_batch_at: new Date().toISOString(),
+        model_used: productionModel.algorithm_name,
+      };
+
+      const appendRes = await fetch(
+        `${supabaseUrl}/functions/v1/append-project-context`,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": `Bearer ${supabaseServiceKey}`,
+            "apikey": supabaseServiceKey,
+          },
+          body: JSON.stringify({
+            project_id,
+            stage: "predictions",
+            payload: contextPayload,
+            status_update: "predictions_ready",
+          }),
+        }
+      );
+      const appendBody = await appendRes.text();
+      console.log(`[run-batch-predictions] AI context append status=${appendRes.status}`);
+    } catch (ctxErr) {
+      console.error("[run-batch-predictions] AI context append error (non-fatal):", ctxErr);
+    }
+
     return new Response(JSON.stringify({
       success: true,
       message: `${predictions.length} previsões geradas com sucesso`,

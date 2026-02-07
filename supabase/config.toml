@@ -86,3 +86,6 @@ verify_jwt = false
 
 [functions.append-project-context]
 verify_jwt = false
+
+[functions.generate-executive-summary]
+verify_jwt = false

@@ -1,9 +1,10 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { useSimulation } from './hooks/useSimulation';
+import { useProjectAIContext } from '@/hooks/useProjectAIContext';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
 import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessKPICards } from './BusinessKPICards';
@@ -14,6 +15,7 @@ import { ActionableList } from './ActionableList';
 import { CohortComparison } from './CohortComparison';
 import { SimulationPanel } from './SimulationPanel';
 import { BusinessAIInsights } from './BusinessAIInsights';
+import { ExecutiveNarrative } from './ExecutiveNarrative';
 import { DashboardPDFExport } from './DashboardPDFExport';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
 import { Button } from '@/components/ui/button';
@@ -36,6 +38,17 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
+  
+  // AI Context hook
+  const { context: aiContext, status: aiStatus, loadContext, loading: aiContextLoading } = useProjectAIContext(projectId);
+  
+  useEffect(() => {
+    loadContext();
+  }, [loadContext]);
+  
+  const handleRefreshContext = useCallback(() => {
+    loadContext();
+  }, [loadContext]);
   
   const { 
     data, 
@@ -264,6 +277,16 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         problemContext={problemContext}
         problemType={problemType}
         horizonDays={filters.horizon}
+      />
+      
+      {/* Executive Narrative from AI Context */}
+      <ExecutiveNarrative
+        projectId={projectId}
+        executiveSummary={aiContext.storyline?.executive_summary || ''}
+        lastUpdateReason={aiContext.storyline?.last_update_reason || ''}
+        generatedAt={(aiContext.storyline as any)?.generated_at || null}
+        contextStatus={aiStatus}
+        onRefresh={handleRefreshContext}
       />
       
       {/* Run predictions button + Export */}
