@@ -21,8 +21,9 @@ interface UseImportPreviewOptions {
 }
 
 const CSV_SLICE_BYTES = 2 * 1024 * 1024; // 2 MB for CSV/JSON
-const PARQUET_MAX_BYTES = 100 * 1024 * 1024; // 100 MB for Parquet via FormData
+const BINARY_MAX_BYTES = 100 * 1024 * 1024; // 100 MB for binary formats (Parquet, Excel)
 const PARQUET_EXTENSIONS = ["parquet", "parq", "pq"];
+const EXCEL_EXTENSIONS = ["xlsx", "xls"];
 
 export function useImportPreview({
   file,
@@ -60,18 +61,20 @@ export function useImportPreview({
       try {
         const ext = file.name.split(".").pop()?.toLowerCase() || "";
         const isParquet = PARQUET_EXTENSIONS.includes(ext);
+        const isExcel = EXCEL_EXTENSIONS.includes(ext);
+        const isBinaryFormat = isParquet || isExcel;
 
         let fileSlice: Blob;
 
-        if (isParquet) {
-          if (file.size > PARQUET_MAX_BYTES) {
+        if (isBinaryFormat) {
+          if (file.size > BINARY_MAX_BYTES) {
             setError(
-              `Preview indisponível para Parquet > ${(PARQUET_MAX_BYTES / 1024 / 1024).toFixed(0)} MB. O processamento completo continuará normalmente.`,
+              `Preview indisponível para arquivos > ${(BINARY_MAX_BYTES / 1024 / 1024).toFixed(0)} MB. O processamento completo continuará normalmente.`,
             );
             setLoading(false);
             return;
           }
-          // Send full file for Parquet (needs footer at end)
+          // Send full file for binary formats (needs complete structure)
           fileSlice = file;
         } else {
           // Send first 2 MB slice for CSV/JSON

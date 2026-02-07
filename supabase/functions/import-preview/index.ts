@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { parquetRead } from "npm:hyparquet@1.24.1";
+import * as XLSX from "https://esm.sh/xlsx@0.18.5";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -235,6 +236,56 @@ async function previewParquet(buffer: ArrayBuffer): Promise<PreviewResult> {
   };
 }
 
+// ── Excel helper ─────────────────────────────────────────────
+
+function previewExcel(buffer: ArrayBuffer): PreviewResult {
+  const warnings: string[] = [];
+
+  const workbook = XLSX.read(buffer, { type: "array" });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) throw new Error("Arquivo Excel vazio (sem abas).");
+
+  const sheet = workbook.Sheets[sheetName];
+  const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
+
+  if (jsonData.length === 0) throw new Error("Planilha Excel vazia.");
+
+  // First row is headers
+  const headers = (jsonData[0] as unknown[]).map(
+    (h, i) => String(h ?? `Column_${i + 1}`),
+  );
+  const dataRows = jsonData.slice(1);
+  const totalRows = dataRows.length;
+
+  if (workbook.SheetNames.length > 1) {
+    warnings.push(
+      `Apenas a primeira aba ("${sheetName}") foi lida. O arquivo tem ${workbook.SheetNames.length} abas.`,
+    );
+  }
+
+  const previewCount = Math.min(MAX_PREVIEW_ROWS, totalRows);
+  const sampledRows = dataRows.slice(0, previewCount);
+
+  // Convert to record objects
+  const previewRows: Record<string, unknown>[] = sampledRows.map((row) => {
+    const obj: Record<string, unknown> = {};
+    headers.forEach((header, i) => {
+      const val = (row as unknown[])[i];
+      obj[header] = val ?? null;
+    });
+    return obj;
+  });
+
+  const columns = inferTypes(headers, previewRows);
+
+  return {
+    columns,
+    previewRows,
+    totalRowsEstimate: totalRows,
+    warnings,
+  };
+}
+
 // ── Type inference ───────────────────────────────────────────
 
 function inferTypes(
@@ -324,6 +375,9 @@ serve(async (req) => {
     } else if (ext === "json") {
       const text = await file.text();
       result = previewJSON(text, originalSize || file.size);
+    } else if (["xlsx", "xls"].includes(ext)) {
+      const buffer = await file.arrayBuffer();
+      result = previewExcel(buffer);
     } else {
       // CSV and anything else text-based
       const text = await file.text();
