@@ -751,6 +751,51 @@ export type Database = {
           },
         ]
       }
+      project_ai_context: {
+        Row: {
+          context: Json
+          created_at: string | null
+          id: string
+          last_updated_at: string | null
+          organization_id: string
+          project_id: string
+          status: string
+        }
+        Insert: {
+          context?: Json
+          created_at?: string | null
+          id?: string
+          last_updated_at?: string | null
+          organization_id: string
+          project_id: string
+          status?: string
+        }
+        Update: {
+          context?: Json
+          created_at?: string | null
+          id?: string
+          last_updated_at?: string | null
+          organization_id?: string
+          project_id?: string
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_ai_context_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_ai_context_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_business_config: {
         Row: {
           average_margin_percent: number | null

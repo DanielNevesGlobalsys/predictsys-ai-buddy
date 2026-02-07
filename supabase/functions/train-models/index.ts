@@ -1391,6 +1391,61 @@ serve(async (req) => {
       .update({ status: "evaluated" })
       .eq("id", project_id);
 
+    // ---- Append AI Context (training stage) ----
+    try {
+      const isClassification = problem_type === "classification";
+      const primaryMetric = isClassification ? trainResult.metrics.AUC : trainResult.metrics["R²"];
+      const confidenceLevel = primaryMetric >= 0.8 ? "alto" : primaryMetric >= 0.6 ? "médio" : "baixo";
+      
+      const limitations: string[] = [];
+      if (classMinSamplesWarning) limitations.push("Amostra mínima por classe abaixo do ideal.");
+      if (isClassification && trainResult.metrics.AUC < 0.6) limitations.push("AUC baixo - modelo pode não ser discriminativo.");
+      if (!isClassification && trainResult.metrics["R²"] < 0.3) limitations.push("R² baixo - modelo explica pouca variância.");
+
+      const trainingPayload = {
+        model_type: strategy.name,
+        algorithm: strategy.algorithm,
+        metrics: trainResult.metrics,
+        limitations,
+        confidence_level: confidenceLevel,
+        sample_info: {
+          total_rows: totalDatasetRows,
+          sample_used: X.length,
+          train_rows: nTrain,
+          test_rows: nTest,
+        },
+        top_features: trainResult.featureImportances
+          .sort((a: any, b: any) => b.importance_value - a.importance_value)
+          .slice(0, 10)
+          .map((f: any) => ({ name: f.feature_name, importance: f.importance_value })),
+      };
+
+      const { data: existingCtx } = await supabase
+        .from("project_ai_context")
+        .select("id, context")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (existingCtx) {
+        const currentCtx = existingCtx.context as Record<string, any> || {};
+        await supabase.from("project_ai_context").update({
+          context: { ...currentCtx, training: trainingPayload },
+          status: "model_trained",
+          last_updated_at: new Date().toISOString(),
+        }).eq("id", existingCtx.id);
+      } else {
+        await supabase.from("project_ai_context").insert({
+          organization_id: project.organization_id,
+          project_id,
+          context: { training: trainingPayload },
+          status: "model_trained",
+        });
+      }
+      console.log("[train-models] AI context updated (training stage)");
+    } catch (ctxErr) {
+      console.error("[train-models] Failed to update AI context:", ctxErr);
+    }
+
     console.log(`\n========================================`);
     console.log(`[AutoML] Treinamento concluído com sucesso!`);
     console.log(`[AutoML] Modelo: ${strategy.name}`);
