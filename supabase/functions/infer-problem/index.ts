@@ -7,38 +7,195 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-// ── Column name pattern dictionaries ────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  INDUSTRY / VERTICAL DETECTION
+// ══════════════════════════════════════════════════════════════════════
+
+type IndustryLabel =
+  | "education"
+  | "retail_shopping"
+  | "healthcare"
+  | "logistics"
+  | "financial"
+  | "generic";
+
+interface IndustryInference {
+  label: IndustryLabel;
+  display_name: string;
+  confidence: number;
+  evidence: string[];
+}
+
+const INDUSTRY_KEYWORDS: Record<IndustryLabel, string[]> = {
+  education: [
+    "aluno", "alunos", "matricula", "matrícula", "rematricula", "rematrícula",
+    "curso", "disciplina", "professor", "turma", "semestre", "nota", "notas",
+    "cr", "coeficiente", "evasao", "evasão", "formatura", "campus",
+    "faculdade", "escola", "universidade", "bolsa", "bolsista", "frequencia",
+    "frequência", "aprovado", "reprovado", "trancamento", "diploma",
+    "student", "enrollment", "grade", "gpa", "dropout", "semester",
+  ],
+  retail_shopping: [
+    "loja", "lojista", "shopping", "venda", "vendas", "compra", "compras",
+    "produto", "categoria", "sku", "pdv", "checkout", "carrinho", "cart",
+    "cupom", "desconto", "promocao", "promoção", "faturamento", "ticket",
+    "receita", "estoque", "store", "retail", "order", "purchase", "price",
+    "revenue", "customer", "buyer", "mall", "contrato", "aluguel",
+  ],
+  healthcare: [
+    "paciente", "hospital", "clinica", "clínica", "medico", "médico",
+    "consulta", "internacao", "internação", "readmissao", "readmissão",
+    "diagnostico", "diagnóstico", "cid", "procedimento", "leito",
+    "prontuario", "prontuário", "alta", "obito", "óbito", "uti",
+    "patient", "hospital", "clinic", "diagnosis", "readmission",
+    "treatment", "prescription", "no_show", "noshow",
+  ],
+  logistics: [
+    "entrega", "frete", "transportadora", "rastreio", "tracking",
+    "lead_time", "leadtime", "rota", "destino", "origem", "cep",
+    "endereco", "endereço", "devolucao", "devolução", "ruptura",
+    "estoque", "armazem", "armazém", "shipping", "delivery",
+    "warehouse", "inventory", "supply", "fleet", "driver",
+  ],
+  financial: [
+    "credito", "crédito", "emprestimo", "empréstimo", "parcela",
+    "juros", "spread", "inadimplencia", "inadimplência", "score",
+    "rating", "pdd", "provisao", "provisão", "carteira", "portfolio",
+    "titulo", "título", "cobranca", "cobrança", "boleto", "pagamento",
+    "credit", "loan", "default", "delinquency", "interest",
+  ],
+  generic: [],
+};
+
+const INDUSTRY_DISPLAY: Record<IndustryLabel, string> = {
+  education: "Educação",
+  retail_shopping: "Varejo / Shopping",
+  healthcare: "Saúde",
+  logistics: "Logística",
+  financial: "Financeiro / Crédito",
+  generic: "Genérico",
+};
+
+function detectIndustry(columns: any[], catStats: Map<string, any>): IndustryInference {
+  const scores: Record<IndustryLabel, { score: number; evidence: string[] }> = {
+    education: { score: 0, evidence: [] },
+    retail_shopping: { score: 0, evidence: [] },
+    healthcare: { score: 0, evidence: [] },
+    logistics: { score: 0, evidence: [] },
+    financial: { score: 0, evidence: [] },
+    generic: { score: 0, evidence: [] },
+  };
+
+  // Scan column names
+  for (const col of columns) {
+    const lower = col.column_name.toLowerCase();
+    for (const [industry, keywords] of Object.entries(INDUSTRY_KEYWORDS)) {
+      if (industry === "generic") continue;
+      for (const kw of keywords) {
+        if (lower.includes(kw)) {
+          scores[industry as IndustryLabel].score += 1;
+          if (!scores[industry as IndustryLabel].evidence.includes(col.column_name)) {
+            scores[industry as IndustryLabel].evidence.push(col.column_name);
+          }
+        }
+      }
+    }
+  }
+
+  // Scan categorical sample values
+  for (const [colName, stat] of catStats) {
+    if (!stat.top_categories) continue;
+    const cats = stat.top_categories as Array<{ category: string }>;
+    for (const cat of cats) {
+      if (!cat.category) continue;
+      const lower = cat.category.toLowerCase();
+      for (const [industry, keywords] of Object.entries(INDUSTRY_KEYWORDS)) {
+        if (industry === "generic") continue;
+        for (const kw of keywords) {
+          if (lower.includes(kw)) {
+            scores[industry as IndustryLabel].score += 0.5;
+            if (!scores[industry as IndustryLabel].evidence.includes(colName)) {
+              scores[industry as IndustryLabel].evidence.push(colName);
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Find best industry
+  let bestLabel: IndustryLabel = "generic";
+  let bestScore = 0;
+  for (const [label, data] of Object.entries(scores)) {
+    if (label === "generic") continue;
+    if (data.score > bestScore) {
+      bestScore = data.score;
+      bestLabel = label as IndustryLabel;
+    }
+  }
+
+  // Confidence: normalize based on evidence count
+  const evidenceCount = scores[bestLabel].evidence.length;
+  let confidence = Math.min(1, bestScore / 8);
+  if (evidenceCount >= 5) confidence = Math.max(confidence, 0.8);
+  else if (evidenceCount >= 3) confidence = Math.max(confidence, 0.6);
+
+  if (confidence < 0.4) {
+    return {
+      label: "generic",
+      display_name: INDUSTRY_DISPLAY.generic,
+      confidence: 0.3,
+      evidence: [],
+    };
+  }
+
+  return {
+    label: bestLabel,
+    display_name: INDUSTRY_DISPLAY[bestLabel],
+    confidence: Math.round(confidence * 100) / 100,
+    evidence: scores[bestLabel].evidence.slice(0, 8),
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  COLUMN PATTERN DICTIONARIES
+// ══════════════════════════════════════════════════════════════════════
+
 const CHURN_PATTERNS = [
   "churn", "cancel", "cancelado", "cancelamento", "evasao", "evasão",
   "dropout", "quit", "inactive", "inativo", "desligado", "saida", "saída",
-  "status_ativo", "status_contrato", "ativo", "churned",
+  "status_ativo", "status_contrato", "ativo", "churned", "trancamento",
+  "desistencia", "desistência",
 ];
 
 const PROPENSITY_PATTERNS = [
   "compra", "purchase", "convert", "conversao", "conversão", "lead",
   "signup", "matricula", "matrícula", "captacao", "captação", "propensao",
-  "opt_in", "aceite", "contratou",
+  "opt_in", "aceite", "contratou", "rematricula", "rematrícula",
 ];
 
 const REVENUE_PATTERNS = [
   "revenue", "receita", "faturamento", "valor", "ticket", "ltv",
   "valor_compra", "sales", "vendas", "montante", "total_compras",
-  "valor_total", "amount", "price", "preco", "preço",
+  "valor_total", "amount", "price", "preco", "preço", "aluguel",
+  "mensalidade",
 ];
 
 const RISK_PATTERNS = [
   "delay", "atraso", "inadimplencia", "inadimplência", "default",
   "risco", "score", "fraude", "fraud", "irregularidade", "sinistro",
+  "pdd", "provisao", "provisão", "delinquency",
 ];
 
 const DEMAND_PATTERNS = [
   "demanda", "demand", "quantidade", "quantity", "volume", "ocupacao",
-  "ocupação", "estoque", "stock", "pedidos", "orders",
+  "ocupação", "estoque", "stock", "pedidos", "orders", "fluxo",
 ];
 
 const TIME_PATTERNS = [
   "dt_", "date", "created_at", "last_purchase", "data_compra",
   "data_", "timestamp", "updated_at", "first_", "last_", "ultima_",
+  "dt_nascimento", "data_matricula", "data_internacao", "data_entrega",
 ];
 
 const ID_PATTERNS = [
@@ -46,7 +203,61 @@ const ID_PATTERNS = [
   "hash", "token", "key", "chave",
 ];
 
-// ── Problem type enum ───────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  VERTICAL-SPECIFIC PROBLEM TEMPLATES
+// ══════════════════════════════════════════════════════════════════════
+
+interface VerticalProblem {
+  label: string;
+  patterns: string[];
+  type: "binary" | "class" | "regression";
+  summary: string;
+}
+
+const VERTICAL_PROBLEMS: Record<IndustryLabel, VerticalProblem[]> = {
+  education: [
+    { label: "Evasão de Alunos", patterns: ["evasao", "evasão", "dropout", "trancamento", "desistencia", "desistência", "cancelado"], type: "binary", summary: "Prever quais alunos têm maior risco de abandonar o curso, permitindo intervenções pedagógicas e financeiras preventivas." },
+    { label: "Rematrícula", patterns: ["rematricula", "rematrícula", "renovacao", "renovação", "matricula"], type: "binary", summary: "Prever a probabilidade de renovação de matrícula para planejar captação e retenção." },
+    { label: "Inadimplência Acadêmica", patterns: ["inadimplencia", "inadimplência", "default", "atraso", "pagamento"], type: "binary", summary: "Identificar alunos com risco de inadimplência para ações preventivas de cobrança." },
+    { label: "Performance Acadêmica", patterns: ["nota", "notas", "cr", "coeficiente", "media", "média", "gpa"], type: "regression", summary: "Estimar o desempenho acadêmico do aluno para intervenções pedagógicas personalizadas." },
+  ],
+  retail_shopping: [
+    { label: "Churn de Lojistas", patterns: ["churn", "cancel", "saida", "saída", "desligado", "inativo"], type: "binary", summary: "Prever quais lojistas têm risco de encerrar contrato, permitindo ações comerciais de retenção." },
+    { label: "Inadimplência de Lojistas", patterns: ["inadimplencia", "inadimplência", "atraso", "default"], type: "binary", summary: "Identificar lojistas com risco de atraso no aluguel para negociação preventiva." },
+    { label: "Previsão de Faturamento", patterns: ["faturamento", "receita", "vendas", "revenue", "ticket"], type: "regression", summary: "Estimar receita futura para planejamento financeiro e metas comerciais." },
+    { label: "Propensão à Compra", patterns: ["compra", "purchase", "conversao", "conversão", "lead"], type: "binary", summary: "Prever quais clientes têm maior propensão à compra para campanhas direcionadas." },
+  ],
+  healthcare: [
+    { label: "Readmissão Hospitalar", patterns: ["readmissao", "readmissão", "readmission", "reinternacao", "reinternação"], type: "binary", summary: "Prever quais pacientes têm risco de retorno não planejado ao hospital." },
+    { label: "No-show em Consultas", patterns: ["no_show", "noshow", "falta", "ausencia", "ausência"], type: "binary", summary: "Identificar pacientes com risco de não comparecer à consulta para ações de confirmação." },
+    { label: "Tempo de Internação", patterns: ["internacao", "internação", "permanencia", "permanência", "leito", "dias"], type: "regression", summary: "Estimar a duração da internação para otimização de leitos e recursos." },
+    { label: "Custo por Paciente", patterns: ["custo", "cost", "valor", "despesa", "gasto"], type: "regression", summary: "Prever o custo total do tratamento para planejamento financeiro hospitalar." },
+  ],
+  logistics: [
+    { label: "Atraso de Entrega", patterns: ["atraso", "delay", "atrasado", "pontualidade", "sla"], type: "binary", summary: "Prever entregas com risco de atraso para realocação de rotas e comunicação proativa." },
+    { label: "Lead Time", patterns: ["lead_time", "leadtime", "tempo_entrega", "prazo"], type: "regression", summary: "Estimar o tempo de entrega para melhorar promessas ao cliente e planejamento logístico." },
+    { label: "Devolução", patterns: ["devolucao", "devolução", "retorno", "return", "reversa"], type: "binary", summary: "Prever quais pedidos têm maior risco de devolução para otimização da cadeia reversa." },
+    { label: "Demanda / Estoque", patterns: ["demanda", "demand", "estoque", "stock", "ruptura"], type: "regression", summary: "Prever volumes futuros para evitar ruptura de estoque e otimizar reposição." },
+  ],
+  financial: [
+    { label: "Inadimplência / Default", patterns: ["inadimplencia", "inadimplência", "default", "atraso", "pdd"], type: "binary", summary: "Prever quais clientes têm maior risco de não pagar, permitindo ações de cobrança e provisionamento." },
+    { label: "Score de Crédito", patterns: ["score", "rating", "credito", "crédito", "risco"], type: "regression", summary: "Estimar o score de crédito para decisões de aprovação e precificação de risco." },
+    { label: "Churn Financeiro", patterns: ["churn", "cancel", "encerramento", "saida", "saída"], type: "binary", summary: "Prever quais clientes podem encerrar relacionamento bancário para ações de retenção." },
+    { label: "LTV / Valor do Cliente", patterns: ["ltv", "lifetime", "valor_cliente", "receita", "revenue"], type: "regression", summary: "Estimar o valor futuro do cliente para estratégias de cross-sell e up-sell." },
+  ],
+  generic: [
+    { label: "Churn / Evasão", patterns: CHURN_PATTERNS, type: "binary", summary: "Prever quais entidades têm maior risco de saída ou cancelamento." },
+    { label: "Propensão / Conversão", patterns: PROPENSITY_PATTERNS, type: "binary", summary: "Prever a probabilidade de conversão ou adesão." },
+    { label: "Previsão de Receita", patterns: REVENUE_PATTERNS, type: "regression", summary: "Estimar valores futuros para planejamento financeiro." },
+    { label: "Risco / Inadimplência", patterns: RISK_PATTERNS, type: "binary", summary: "Identificar registros com maior risco." },
+    { label: "Previsão de Demanda", patterns: DEMAND_PATTERNS, type: "regression", summary: "Estimar volumes futuros para otimização de recursos." },
+  ],
+};
+
+// ══════════════════════════════════════════════════════════════════════
+//  TYPES
+// ══════════════════════════════════════════════════════════════════════
+
 type ProblemType =
   | "classification_binary"
   | "classification_multiclass"
@@ -82,9 +293,13 @@ interface InferenceResult {
   suggested_predictors: SuggestedPredictor[];
   narrative: string;
   confidence: number;
+  industry: IndustryInference;
 }
 
-// ── Helpers ─────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ══════════════════════════════════════════════════════════════════════
+
 function matchesPatterns(name: string, patterns: string[]): boolean {
   const lower = name.toLowerCase();
   return patterns.some((p) => lower.includes(p));
@@ -102,7 +317,25 @@ function isDateColumn(name: string): boolean {
   return matchesPatterns(name, TIME_PATTERNS);
 }
 
-// ── Main Inference Engine ───────────────────────────────────────────
+function addLabel(labels: ProblemLabel[], set: Set<string>, label: string, relevance: number) {
+  if (!set.has(label)) {
+    set.add(label);
+    labels.push({ label, relevance });
+  }
+}
+
+function estimateDistinct(numStat: any, totalRows: number): number {
+  if (!numStat || numStat.max_value === null || numStat.min_value === null) return 0;
+  const range = numStat.max_value - numStat.min_value;
+  if (range === 0) return 1;
+  if (range === 1 && numStat.min_value === 0) return 2;
+  return Math.min(totalRows, Math.max(20, Math.ceil(range)));
+}
+
+// ══════════════════════════════════════════════════════════════════════
+//  MAIN INFERENCE ENGINE
+// ══════════════════════════════════════════════════════════════════════
+
 function runInference(
   columns: any[],
   numStats: Map<string, any>,
@@ -111,19 +344,25 @@ function runInference(
   projectName: string,
   businessGoal: string
 ): InferenceResult {
+  // ── Step 1: Detect industry vertical ──────────────────────────────
+  const industry = detectIndustry(columns, catStats);
+  console.log(`[infer-problem] Industry: ${industry.label} (${industry.confidence}), evidence: ${industry.evidence.join(", ")}`);
+
+  // Get vertical-specific problem templates
+  const verticalProblems = VERTICAL_PROBLEMS[industry.label] || VERTICAL_PROBLEMS.generic;
+
   const targets: SuggestedTarget[] = [];
   const predictors: SuggestedPredictor[] = [];
   const labels: ProblemLabel[] = [];
   const labelSet = new Set<string>();
 
-  // ── Pass 1: Identify targets ──────────────────────────────────────
+  // ── Step 2: Match columns against vertical problems ───────────────
   for (const col of columns) {
     const name = col.column_name;
     const type = col.inferred_type;
     const numStat = numStats.get(name);
     const catStat = catStats.get(name);
 
-    // Skip ID-like and date columns as targets
     const distinctCount = catStat?.distinct_count ||
       (numStat ? estimateDistinct(numStat, totalRows) : 0);
 
@@ -135,40 +374,44 @@ function runInference(
       ? numStat.null_count / Math.max(totalRows, 1)
       : 0;
 
-    // ── Binary classification (0/1, yes/no, true/false, status) ───
+    // ── Binary classification (2 distinct values) ───────────────────
     if (distinctCount === 2) {
-      const isChurn = matchesPatterns(name, CHURN_PATTERNS);
-      const isPropensity = matchesPatterns(name, PROPENSITY_PATTERNS);
-      const isRisk = matchesPatterns(name, RISK_PATTERNS);
+      let bestMatch: VerticalProblem | null = null;
+      let matchedGeneric = false;
+
+      // First try vertical-specific patterns
+      for (const vp of verticalProblems) {
+        if (vp.type === "binary" && matchesPatterns(name, vp.patterns)) {
+          bestMatch = vp;
+          break;
+        }
+      }
+
+      // Fallback to generic patterns
+      if (!bestMatch) {
+        for (const gp of VERTICAL_PROBLEMS.generic) {
+          if (gp.type === "binary" && matchesPatterns(name, gp.patterns)) {
+            bestMatch = gp;
+            matchedGeneric = true;
+            break;
+          }
+        }
+      }
 
       let businessLabel = "Classificação Binária";
       let summary = `Prever a probabilidade de cada registro pertencer a uma das duas classes de "${name}".`;
-      let why = `Coluna binária com apenas 2 valores e ${(nullRate * 100).toFixed(1)}% de nulos.`;
-      let confidence = 0.8;
+      let why = `Coluna binária com apenas 2 valores distintos e ${(nullRate * 100).toFixed(1)}% de nulos.`;
+      let confidence = 0.75;
 
-      if (isChurn) {
-        businessLabel = "Churn / Evasão";
-        summary = "Prever quais clientes/entidades têm maior risco de sair ou cancelar, permitindo ações preventivas de retenção.";
-        why = `Coluna "${name}" apresenta padrão típico de churn com 2 valores distintos.`;
-        confidence = 0.92;
-        addLabel(labels, labelSet, "Churn", 0.95);
-        addLabel(labels, labelSet, "Retenção", 0.8);
-      } else if (isPropensity) {
-        businessLabel = "Propensão";
-        summary = "Prever a probabilidade de conversão ou adesão, permitindo priorizar leads ou campanhas.";
-        why = `Coluna "${name}" indica evento de conversão com 2 valores distintos.`;
-        confidence = 0.88;
-        addLabel(labels, labelSet, "Propensão à Compra", 0.9);
-        addLabel(labels, labelSet, "Conversão", 0.85);
-      } else if (isRisk) {
-        businessLabel = "Risco / Inadimplência";
-        summary = "Identificar registros com maior risco de inadimplência, fraude ou irregularidade.";
-        why = `Coluna "${name}" apresenta padrão de risco/fraude com 2 classes.`;
-        confidence = 0.85;
-        addLabel(labels, labelSet, "Risco", 0.9);
-        addLabel(labels, labelSet, "Inadimplência", 0.8);
+      if (bestMatch) {
+        businessLabel = bestMatch.label;
+        summary = bestMatch.summary;
+        why = `Coluna "${name}" apresenta padrão de ${bestMatch.label.toLowerCase()} com 2 valores distintos.`;
+        confidence = matchedGeneric ? 0.82 : 0.90;
+        addLabel(labels, labelSet, bestMatch.label, matchedGeneric ? 0.85 : 0.95);
       }
 
+      // Check imbalance
       const caveats: string[] = [];
       if (catStat?.top_categories) {
         const topCats = catStat.top_categories as Array<{ category: string; count: number }>;
@@ -195,7 +438,7 @@ function runInference(
       });
     }
 
-    // ── Multiclass classification (3-20 classes) ────────────────
+    // ── Multiclass classification (3–20 classes) ────────────────────
     else if (
       (type === "categórico" || type === "texto" || type === "categorical") &&
       distinctCount >= 3 &&
@@ -217,29 +460,42 @@ function runInference(
       addLabel(labels, labelSet, "Segmentação", 0.7);
     }
 
-    // ── Regression (continuous numeric) ──────────────────────────
+    // ── Regression (continuous numeric) ─────────────────────────────
     else if (
       (type === "numérico" || type === "numeric") &&
       distinctCount > 20 &&
       numStat
     ) {
-      const isRevenue = matchesPatterns(name, REVENUE_PATTERNS);
-      const isDemand = matchesPatterns(name, DEMAND_PATTERNS);
+      let bestMatch: VerticalProblem | null = null;
+      let matchedGeneric = false;
+
+      // Try vertical-specific regression patterns
+      for (const vp of verticalProblems) {
+        if (vp.type === "regression" && matchesPatterns(name, vp.patterns)) {
+          bestMatch = vp;
+          break;
+        }
+      }
+
+      if (!bestMatch) {
+        for (const gp of VERTICAL_PROBLEMS.generic) {
+          if (gp.type === "regression" && matchesPatterns(name, gp.patterns)) {
+            bestMatch = gp;
+            matchedGeneric = true;
+            break;
+          }
+        }
+      }
+
       let confidence = distinctCount > 100 ? 0.8 : 0.65;
       let summary = `Regressão: Prever o valor de "${name}" para planejamento e otimização.`;
       let why = `Coluna numérica contínua com ${distinctCount} valores distintos (range: ${numStat.min_value?.toFixed(2)} a ${numStat.max_value?.toFixed(2)}).`;
 
-      if (isRevenue) {
-        summary = "Previsão de Receita/Valor: Estimar receita, ticket médio ou valor de transação para planejamento financeiro.";
-        why = `Coluna "${name}" apresenta padrão de variável financeira contínua.`;
-        confidence = 0.85;
-        addLabel(labels, labelSet, "Previsão de Receita", 0.9);
-        addLabel(labels, labelSet, "LTV", 0.7);
-      } else if (isDemand) {
-        summary = "Previsão de Demanda: Estimar volumes para otimização de estoque e capacidade.";
-        why = `Coluna "${name}" representa volume/demanda com variação contínua.`;
-        confidence = 0.82;
-        addLabel(labels, labelSet, "Previsão de Demanda", 0.85);
+      if (bestMatch) {
+        summary = `${bestMatch.label}: ${bestMatch.summary}`;
+        why = `Coluna "${name}" apresenta padrão de ${bestMatch.label.toLowerCase()} com variação contínua.`;
+        confidence = matchedGeneric ? 0.82 : 0.88;
+        addLabel(labels, labelSet, bestMatch.label, matchedGeneric ? 0.85 : 0.92);
       }
 
       const caveats: string[] = [];
@@ -263,7 +519,7 @@ function runInference(
   // Sort targets by confidence
   targets.sort((a, b) => b.confidence - a.confidence);
 
-  // ── Pass 2: Score predictors ──────────────────────────────────────
+  // ── Step 3: Score predictors ──────────────────────────────────────
   const targetNames = new Set(targets.map((t) => t.column));
 
   for (const col of columns) {
@@ -293,7 +549,7 @@ function runInference(
       reasons.push("dados completos");
     }
 
-    // Date columns are valuable but need transformation
+    // Date columns are valuable
     if (isDateColumn(name)) {
       score += 0.15;
       reasons.push("sinal temporal (recência/frequência)");
@@ -323,6 +579,12 @@ function runInference(
       reasons.push("variável financeira");
     }
 
+    // Demand columns
+    if (matchesPatterns(name, DEMAND_PATTERNS)) {
+      score += 0.1;
+      reasons.push("variável de volume/demanda");
+    }
+
     score = Math.max(0, Math.min(1, score));
 
     if (score > 0.2) {
@@ -338,7 +600,7 @@ function runInference(
   predictors.sort((a, b) => b.score - a.score);
   const topPredictors = predictors.slice(0, 15);
 
-  // ── Determine overall problem type ────────────────────────────────
+  // ── Step 4: Determine overall problem type ────────────────────────
   let problemType: ProblemType = "unknown";
   let overallConfidence = 0;
 
@@ -350,7 +612,7 @@ function runInference(
     else if (best.type === "regression") problemType = "regression";
   }
 
-  // ── Generate narrative ────────────────────────────────────────────
+  // ── Step 5: Generate narrative ────────────────────────────────────
   const narrative = generateNarrative(
     targets,
     topPredictors,
@@ -358,7 +620,8 @@ function runInference(
     totalRows,
     columns.length,
     projectName,
-    businessGoal
+    businessGoal,
+    industry
   );
 
   return {
@@ -368,23 +631,13 @@ function runInference(
     suggested_predictors: topPredictors,
     narrative,
     confidence: overallConfidence,
+    industry,
   };
 }
 
-function addLabel(labels: ProblemLabel[], set: Set<string>, label: string, relevance: number) {
-  if (!set.has(label)) {
-    set.add(label);
-    labels.push({ label, relevance });
-  }
-}
-
-function estimateDistinct(numStat: any, totalRows: number): number {
-  if (!numStat || numStat.max_value === null || numStat.min_value === null) return 0;
-  const range = numStat.max_value - numStat.min_value;
-  if (range === 0) return 1;
-  if (range === 1 && numStat.min_value === 0) return 2;
-  return Math.min(totalRows, Math.max(20, Math.ceil(range)));
-}
+// ══════════════════════════════════════════════════════════════════════
+//  NARRATIVE GENERATOR
+// ══════════════════════════════════════════════════════════════════════
 
 function generateNarrative(
   targets: SuggestedTarget[],
@@ -393,12 +646,22 @@ function generateNarrative(
   totalRows: number,
   totalCols: number,
   projectName: string,
-  businessGoal: string
+  businessGoal: string,
+  industry: IndustryInference
 ): string {
   const lines: string[] = [];
 
   lines.push(`## Análise do Dataset "${projectName}"`);
   lines.push("");
+
+  // Industry detection
+  if (industry.label !== "generic") {
+    lines.push(`**Segmento identificado:** ${industry.display_name} (confiança: ${(industry.confidence * 100).toFixed(0)}%)`);
+    if (industry.evidence.length > 0) {
+      lines.push(`Evidências: colunas ${industry.evidence.slice(0, 5).map(e => `\`${e}\``).join(", ")}`);
+    }
+    lines.push("");
+  }
 
   if (businessGoal) {
     lines.push(`**Objetivo declarado:** ${businessGoal}`);
@@ -410,19 +673,33 @@ function generateNarrative(
 
   // What seems predictable
   if (labels.length > 0) {
-    lines.push("### O que parece ser previsível aqui");
+    lines.push("### 🔍 O que parece ser previsível aqui");
     lines.push("");
     const topLabels = labels.slice(0, 3).map((l) => `**${l.label}**`).join(", ");
-    lines.push(`Os padrões dos dados sugerem problemas de ${topLabels}.`);
+    lines.push(`Com base nos padrões estatísticos do EDA, os dados sugerem problemas de ${topLabels}.`);
+
+    // Industry-specific didactic text
+    if (industry.label === "education") {
+      lines.push("Este dataset apresenta características típicas do setor educacional, onde modelos preditivos podem antecipar evasão, melhorar captação e otimizar a gestão acadêmica.");
+    } else if (industry.label === "retail_shopping") {
+      lines.push("Os dados possuem perfil de varejo/shopping, onde predições podem impactar retenção de lojistas, otimização de mix comercial e planejamento de receita.");
+    } else if (industry.label === "healthcare") {
+      lines.push("O perfil dos dados é compatível com o setor de saúde, onde modelos preditivos ajudam a reduzir readmissões, otimizar leitos e antecipar custos.");
+    } else if (industry.label === "logistics") {
+      lines.push("Os dados têm perfil logístico, onde predições podem melhorar pontualidade de entregas, reduzir devoluções e otimizar estoques.");
+    } else if (industry.label === "financial") {
+      lines.push("O dataset apresenta perfil financeiro/crédito, onde modelos preditivos auxiliam na gestão de risco, aprovação de crédito e prevenção de inadimplência.");
+    }
     lines.push("");
   }
 
   // Target suggestions
   if (targets.length > 0) {
-    lines.push("### Sugestões de variável alvo");
+    lines.push("### 🎯 Sugestões de variável alvo");
     lines.push("");
     for (const t of targets.slice(0, 3)) {
-      lines.push(`- **${t.column}** (${t.type === "binary" ? "classificação binária" : t.type === "class" ? "classificação" : "regressão"}, confiança: ${(t.confidence * 100).toFixed(0)}%)`);
+      const typeLabel = t.type === "binary" ? "classificação binária" : t.type === "class" ? "classificação multiclasse" : "regressão";
+      lines.push(`- **${t.column}** (${typeLabel}, confiança: ${(t.confidence * 100).toFixed(0)}%)`);
       lines.push(`  ${t.business_summary}`);
       if (t.caveats.length > 0) {
         lines.push(`  ⚠️ ${t.caveats[0]}`);
@@ -433,7 +710,7 @@ function generateNarrative(
 
   // Predictors
   if (predictors.length > 0) {
-    lines.push("### Principais colunas que ajudam na predição");
+    lines.push("### 📊 Principais colunas que ajudam na predição");
     lines.push("");
     for (const p of predictors.slice(0, 5)) {
       lines.push(`- **${p.column}** — ${p.reason}`);
@@ -443,7 +720,7 @@ function generateNarrative(
 
   // Business value
   if (targets.length > 0) {
-    lines.push("### Por que isso é útil pro negócio");
+    lines.push("### 💡 Por que isso é útil pro negócio");
     lines.push("");
     const best = targets[0];
     if (best.type === "binary" || best.type === "class") {
@@ -451,12 +728,17 @@ function generateNarrative(
     } else {
       lines.push("Com um modelo de regressão, é possível **estimar valores futuros** como receita, demanda ou volumes — permitindo planejamento financeiro, otimização de recursos e cenários de simulação.");
     }
+    lines.push("");
+    lines.push("⚠️ *Estas são inferências baseadas em evidência estatística, não verdades absolutas. Você pode revisar e ajustar qualquer sugestão.*");
   }
 
   return lines.join("\n");
 }
 
-// ── Main serve ──────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════════
+//  MAIN SERVE
+// ══════════════════════════════════════════════════════════════════════
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -531,16 +813,20 @@ serve(async (req) => {
       businessGoal
     );
 
-    console.log(`[infer-problem] Found ${result.suggested_targets.length} targets, ${result.suggested_predictors.length} predictors, type=${result.problem_type}`);
+    console.log(`[infer-problem] Industry=${result.industry.label} (${result.industry.confidence}), targets=${result.suggested_targets.length}, predictors=${result.suggested_predictors.length}, type=${result.problem_type}`);
 
     // ── Persist to project_problem_inference ─────────────────────────
     const inferenceRecord = {
       organization_id: orgId,
       project_id,
       dataset_id: dataset_id || datasetRes.data?.id || null,
-      inference_version: "v1",
+      inference_version: "v2",
       problem_type: result.problem_type,
-      suggested_problem_labels: result.suggested_problem_labels,
+      suggested_problem_labels: [
+        ...result.suggested_problem_labels,
+        // Include industry info in labels for frontend
+        { label: `__industry:${result.industry.label}:${result.industry.display_name}:${result.industry.confidence}`, relevance: 0 },
+      ],
       suggested_targets: result.suggested_targets,
       suggested_predictors: result.suggested_predictors,
       narrative: result.narrative,
@@ -574,12 +860,12 @@ serve(async (req) => {
 
         const memoryJson = (existingMemory?.memory_json as Record<string, any>) || {};
 
-        // Append to history
         const history = Array.isArray(memoryJson.history) ? memoryJson.history : [];
         history.unshift({
           timestamp: new Date().toISOString(),
-          inference_version: "v1",
+          inference_version: "v2",
           problem_type: result.problem_type,
+          industry: result.industry.label,
           top_target: result.suggested_targets[0]?.column || null,
           confidence: result.confidence,
           labels: result.suggested_problem_labels.map((l) => l.label),
@@ -587,6 +873,12 @@ serve(async (req) => {
 
         const updatedMemory = {
           ...memoryJson,
+          industry_inference: {
+            label: result.industry.label,
+            display_name: result.industry.display_name,
+            confidence: result.industry.confidence,
+            evidence: result.industry.evidence,
+          },
           problem_inference: {
             problem_type: result.problem_type,
             labels: result.suggested_problem_labels,
@@ -629,8 +921,11 @@ serve(async (req) => {
         },
         body: JSON.stringify({
           project_id,
+          organization_id: orgId,
           stage: "targeting",
           payload: {
+            inferred_industry: result.industry.label,
+            industry_confidence: result.industry.confidence,
             inferred_problem_type: result.problem_type,
             suggested_problems: result.suggested_problem_labels.map((l) => l.label),
             top_target_suggestion: result.suggested_targets[0]?.column || "",
@@ -642,8 +937,15 @@ serve(async (req) => {
       console.error("[infer-problem] Context append error:", ctxErr);
     }
 
+    // Build response with industry info included at top level
+    const responseData = {
+      inference: inserted || inferenceRecord,
+      industry: result.industry,
+      cached: false,
+    };
+
     return new Response(
-      JSON.stringify({ inference: inserted || inferenceRecord, cached: false }),
+      JSON.stringify(responseData),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {

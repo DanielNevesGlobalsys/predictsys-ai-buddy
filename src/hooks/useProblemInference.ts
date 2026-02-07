@@ -21,6 +21,13 @@ export interface ProblemLabel {
   relevance: number;
 }
 
+export interface IndustryInference {
+  label: string;
+  display_name: string;
+  confidence: number;
+  evidence: string[];
+}
+
 export interface ProblemInference {
   id?: string;
   project_id: string;
@@ -32,6 +39,24 @@ export interface ProblemInference {
   confidence: number;
   inference_version: string;
   created_at?: string;
+  industry?: IndustryInference;
+}
+
+function parseIndustryFromLabels(labels: ProblemLabel[]): IndustryInference | null {
+  for (const l of labels) {
+    if (l.label.startsWith("__industry:")) {
+      const parts = l.label.replace("__industry:", "").split(":");
+      if (parts.length >= 3) {
+        return {
+          label: parts[0],
+          display_name: parts[1],
+          confidence: parseFloat(parts[2]) || 0,
+          evidence: [],
+        };
+      }
+    }
+  }
+  return null;
 }
 
 export function useProblemInference(projectId: string | undefined) {
@@ -70,19 +95,30 @@ export function useProblemInference(projectId: string | undefined) {
         }
 
         const result = data?.inference as ProblemInference | null;
+        const industryFromResponse = data?.industry as IndustryInference | undefined;
+
         if (result) {
-          // Ensure arrays are properly parsed
+          const allLabels = Array.isArray(result.suggested_problem_labels)
+            ? result.suggested_problem_labels
+            : [];
+
+          // Extract industry from __industry: label or from response
+          const industryFromLabels = parseIndustryFromLabels(allLabels);
+          const industry = industryFromResponse || industryFromLabels || undefined;
+
+          // Filter out internal __industry labels
+          const cleanLabels = allLabels.filter((l) => !l.label.startsWith("__industry:"));
+
           const parsed: ProblemInference = {
             ...result,
-            suggested_problem_labels: Array.isArray(result.suggested_problem_labels)
-              ? result.suggested_problem_labels
-              : [],
+            suggested_problem_labels: cleanLabels,
             suggested_targets: Array.isArray(result.suggested_targets)
               ? result.suggested_targets
               : [],
             suggested_predictors: Array.isArray(result.suggested_predictors)
               ? result.suggested_predictors
               : [],
+            industry,
           };
           setInference(parsed);
           return parsed;
