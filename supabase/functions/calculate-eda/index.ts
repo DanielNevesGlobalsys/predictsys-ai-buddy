@@ -1237,6 +1237,65 @@ Deno.serve(async (req) => {
 
     await supabase.from("projects").update({ status: "eda_complete" }).eq("id", project_id);
 
+    // ---- Append AI Context (EDA stage) ----
+    try {
+      const edaWarnings: string[] = [];
+      const columnProfile: Record<string, any> = {};
+
+      for (const ns of numericStats) {
+        const nullPct = rowsProcessed > 0 ? (ns.null_count / rowsProcessed) : 0;
+        if (nullPct > 0.3) edaWarnings.push(`${ns.column_name}: ${(nullPct * 100).toFixed(0)}% nulos`);
+        columnProfile[ns.column_name] = {
+          type: "numeric",
+          min: ns.min_value,
+          max: ns.max_value,
+          mean: ns.mean_value,
+          null_pct: nullPct,
+        };
+      }
+      for (const cs of categoricalStats) {
+        const topCats = (cs.top_categories || []).slice(0, 5);
+        columnProfile[cs.column_name] = {
+          type: "categorical",
+          distinct: cs.distinct_count,
+          top: topCats.map((c: any) => c.category || c.value),
+        };
+      }
+
+      const edaContextPayload = {
+        summary: `EDA finalizada: ${rowsProcessed} linhas, ${numericStats.length} colunas numéricas, ${categoricalStats.length} categóricas (${filesProcessed} arquivo(s)).`,
+        column_profile: columnProfile,
+        warnings: edaWarnings,
+        hypotheses: [],
+      };
+
+      // Use service role to upsert directly (edge function already has service role)
+      const { data: existingCtx } = await supabase
+        .from("project_ai_context")
+        .select("id, context")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (existingCtx) {
+        const currentCtx = existingCtx.context as Record<string, any> || {};
+        await supabase.from("project_ai_context").update({
+          context: { ...currentCtx, eda: edaContextPayload },
+          status: "eda_ready",
+          last_updated_at: new Date().toISOString(),
+        }).eq("id", existingCtx.id);
+      } else {
+        await supabase.from("project_ai_context").insert({
+          organization_id: project.organization_id,
+          project_id,
+          context: { eda: edaContextPayload },
+          status: "eda_ready",
+        });
+      }
+      console.log("[calculate-eda] AI context updated (eda stage)");
+    } catch (ctxErr) {
+      console.error("[calculate-eda] Failed to update AI context:", ctxErr);
+    }
+
     return new Response(
       JSON.stringify({
         success: true,

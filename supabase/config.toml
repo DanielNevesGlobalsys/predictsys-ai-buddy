@@ -83,3 +83,6 @@ verify_jwt = false
 
 [functions.get-org-users]
 verify_jwt = false
+
+[functions.append-project-context]
+verify_jwt = false

@@ -20,6 +20,7 @@ import type { FeatureExpression } from "@/lib/featureEngineering";
 import LysSuggestionCards, { type TargetSuggestion } from "./LysSuggestionCards";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
+import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -64,6 +65,7 @@ const StepTargetFeatures = ({
 
   // Project settings persistence
   const { settings, loadSettings, saveSettings } = useProjectSettings(projectData.id);
+  const { appendContext } = useProjectAIContext(projectData.id);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   useEffect(() => {
@@ -286,6 +288,18 @@ const StepTargetFeatures = ({
     });
 
     if (saved) {
+      // Persist targeting stage in AI context
+      appendContext("targeting", {
+        selected_problem: problemType || "",
+        selected_target: targetColumn,
+        recommended_features: cleanFeatures,
+        excluded_features: excludedColumns,
+        justification: appliedSug?.reasoning || "Configuração manual pelo usuário.",
+        suggested_problems: suggestions.map((s) => `${s.target_column} (${s.problem_type})`),
+      }).catch((err) =>
+        console.error("Failed to persist targeting AI context:", err)
+      );
+
       toast({
         title: t("lysSuggestions.settingsSaved", "Configuração salva!"),
         description: t("lysSuggestions.settingsSavedDesc", "Target, features e configurações foram persistidos."),
