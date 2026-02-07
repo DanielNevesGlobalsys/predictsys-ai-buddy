@@ -16,6 +16,7 @@ import {
   Lightbulb,
   BarChart3,
   RefreshCw,
+  Building2,
 } from "lucide-react";
 import { useState } from "react";
 import type {
@@ -23,6 +24,8 @@ import type {
   SuggestedTarget,
   SuggestedPredictor,
 } from "@/hooks/useProblemInference";
+import IndustryBadge from "./IndustryBadge";
+import TargetCard from "./TargetCard";
 
 interface ProblemInferencePanelProps {
   inference: ProblemInference | null;
@@ -104,7 +107,7 @@ const ProblemInferencePanel = ({
       <p className="text-xs text-muted-foreground">
         {t(
           "inference.description",
-          "A Lys analisa o EDA e identifica problemas de negócio, targets e colunas preditoras — tudo por heurística, sem custo de IA."
+          "A Lys analisa o EDA, identifica o segmento de negócio e infere problemas previsíveis — tudo por heurística, sem custo de IA."
         )}
       </p>
 
@@ -119,6 +122,11 @@ const ProblemInferencePanel = ({
       {/* Inference Results */}
       {inference && (
         <div className="space-y-4">
+          {/* Industry detection */}
+          {inference.industry && inference.industry.label !== "generic" && (
+            <IndustryBadge industry={inference.industry} />
+          )}
+
           {/* Problem labels */}
           {inference.suggested_problem_labels.length > 0 && (
             <div className="space-y-2">
@@ -145,6 +153,19 @@ const ProblemInferencePanel = ({
             </div>
           )}
 
+          {/* Didactic summary */}
+          {inference.industry && inference.suggested_targets.length > 0 && (
+            <div className="p-3 bg-primary/5 border border-primary/15 rounded-lg">
+              <p className="text-xs text-foreground leading-relaxed">
+                {getDidacticText(
+                  inference.industry.label,
+                  inference.suggested_targets[0],
+                  t
+                )}
+              </p>
+            </div>
+          )}
+
           {/* Target suggestions */}
           {inference.suggested_targets.length > 0 && (
             <div className="space-y-2">
@@ -159,127 +180,22 @@ const ProblemInferencePanel = ({
               </div>
 
               <div className="grid gap-2">
-                {inference.suggested_targets.map((target) => {
-                  const isApplied = appliedTargetColumn === target.column;
-                  const isExpanded = expandedTarget === target.column;
-
-                  return (
-                    <Card
-                      key={target.column}
-                      className={`p-3 transition-all cursor-pointer ${
-                        isApplied
-                          ? "border-accent bg-accent/5 shadow-md"
-                          : "hover:border-primary/40 hover:shadow-sm"
-                      }`}
-                      onClick={() =>
-                        setExpandedTarget(isExpanded ? null : target.column)
-                      }
-                    >
-                      <div className="space-y-2">
-                        {/* Target header */}
-                        <div className="flex items-center justify-between gap-2">
-                          <div className="flex items-center gap-2 min-w-0">
-                            {target.type === "regression" ? (
-                              <TrendingUp className="w-4 h-4 text-secondary flex-shrink-0" />
-                            ) : (
-                              <Target className="w-4 h-4 text-primary flex-shrink-0" />
-                            )}
-                            <span className="font-semibold text-sm truncate">
-                              {target.column}
-                            </span>
-                            <Badge
-                              variant="secondary"
-                              className="text-xs flex-shrink-0"
-                            >
-                              {target.type === "binary"
-                                ? t("inference.binary", "Binária")
-                                : target.type === "class"
-                                ? t("inference.multiclass", "Multiclasse")
-                                : t("inference.regression", "Regressão")}
-                            </Badge>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <ConfidenceBadge confidence={target.confidence} />
-                            {isExpanded ? (
-                              <ChevronUp className="w-4 h-4 text-muted-foreground" />
-                            ) : (
-                              <ChevronDown className="w-4 h-4 text-muted-foreground" />
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Business summary (always visible) */}
-                        <p className="text-xs text-muted-foreground leading-relaxed">
-                          {target.business_summary}
-                        </p>
-
-                        {/* Expanded details */}
-                        {isExpanded && (
-                          <div className="space-y-2 pt-2 border-t border-border">
-                            {/* Why this target */}
-                            <div className="text-xs">
-                              <span className="font-medium">
-                                {t("inference.why", "Por que essa sugestão?")}
-                              </span>
-                              <p className="text-muted-foreground mt-0.5">
-                                {target.why_this_target}
-                              </p>
-                            </div>
-
-                            {/* Caveats */}
-                            {target.caveats.length > 0 && (
-                              <div className="space-y-1">
-                                {target.caveats.map((c, i) => (
-                                  <div
-                                    key={i}
-                                    className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400"
-                                  >
-                                    <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                                    <span>{c}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-
-                            {/* Apply button */}
-                            <Button
-                              size="sm"
-                              variant={isApplied ? "default" : "outline"}
-                              className={`w-full ${
-                                isApplied ? "bg-accent hover:bg-accent/90" : ""
-                              }`}
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                if (!isApplied) {
-                                  onApplyTarget(
-                                    target,
-                                    inference.suggested_predictors
-                                  );
-                                }
-                              }}
-                              disabled={isApplied}
-                            >
-                              {isApplied ? (
-                                <>
-                                  <Check className="w-3.5 h-3.5 mr-1.5" />
-                                  {t("inference.applied", "Aplicada")}
-                                </>
-                              ) : (
-                                <>
-                                  <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                                  {t(
-                                    "inference.applyTarget",
-                                    "Aplicar como target"
-                                  )}
-                                </>
-                              )}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </Card>
-                  );
-                })}
+                {inference.suggested_targets.map((target) => (
+                  <TargetCard
+                    key={target.column}
+                    target={target}
+                    isApplied={appliedTargetColumn === target.column}
+                    isExpanded={expandedTarget === target.column}
+                    onToggleExpand={() =>
+                      setExpandedTarget(
+                        expandedTarget === target.column ? null : target.column
+                      )
+                    }
+                    onApply={() =>
+                      onApplyTarget(target, inference.suggested_predictors)
+                    }
+                  />
+                ))}
               </div>
             </div>
           )}
@@ -290,10 +206,7 @@ const ProblemInferencePanel = ({
               <div className="flex items-center gap-2">
                 <BarChart3 className="w-4 h-4 text-secondary" />
                 <span className="text-sm font-medium">
-                  {t(
-                    "inference.topPredictors",
-                    "Melhores preditoras"
-                  )}
+                  {t("inference.topPredictors", "Melhores preditoras")}
                 </span>
                 <Badge variant="outline" className="text-xs">
                   {inference.suggested_predictors.length}{" "}
@@ -351,26 +264,29 @@ const ProblemInferencePanel = ({
   );
 };
 
-function ConfidenceBadge({ confidence }: { confidence: number }) {
-  if (confidence >= 0.8) {
-    return (
-      <Badge className="bg-accent/20 text-accent border-accent/30 text-xs">
-        {(confidence * 100).toFixed(0)}%
-      </Badge>
-    );
-  }
-  if (confidence >= 0.6) {
-    return (
-      <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-xs">
-        {(confidence * 100).toFixed(0)}%
-      </Badge>
-    );
-  }
-  return (
-    <Badge variant="outline" className="text-xs">
-      {(confidence * 100).toFixed(0)}%
-    </Badge>
-  );
+function getDidacticText(
+  industryLabel: string,
+  bestTarget: SuggestedTarget,
+  t: any
+): string {
+  const targetType = bestTarget.type === "regression" ? "regressão" : "classificação";
+
+  const industryTexts: Record<string, string> = {
+    education:
+      "Com base nos dados importados, identificamos um padrão típico do setor educacional. O modelo sugere prever eventos que impactam a jornada do aluno, permitindo ações preventivas pela instituição.",
+    retail_shopping:
+      "Os dados apresentam características de varejo/shopping. O modelo pode antecipar comportamentos de lojistas e clientes, viabilizando estratégias comerciais mais assertivas.",
+    healthcare:
+      "O perfil dos dados é compatível com o setor de saúde. Modelos preditivos aqui podem reduzir custos, melhorar a alocação de recursos e antecipar eventos clínicos.",
+    logistics:
+      "O dataset tem perfil logístico. Predições podem melhorar pontualidade, reduzir custos com devoluções e otimizar a cadeia de suprimentos.",
+    financial:
+      "Os dados apresentam perfil financeiro. Modelos preditivos auxiliam na gestão de risco, aprovação de crédito e prevenção de inadimplência.",
+    generic:
+      `Com base nos padrões estatísticos, o modelo sugere um problema de ${targetType} que pode ser usado para antecipar eventos e apoiar decisões de negócio.`,
+  };
+
+  return industryTexts[industryLabel] || industryTexts.generic;
 }
 
 export default ProblemInferencePanel;
