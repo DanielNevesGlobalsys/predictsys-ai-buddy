@@ -18,11 +18,14 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Upload, Loader2, FileWarning, Sparkles, Info } from "lucide-react";
+import { Upload, Loader2, FileWarning, Sparkles, Info, AlertTriangle } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { buildSafeObjectName } from "@/lib/storageObjectName";
 import { detectCSVDelimiter } from "@/lib/csvDelimiterDetector";
+import { useImportPreview } from "@/hooks/useImportPreview";
+import DataPreviewSection from "@/components/data-ingestion/DataPreviewSection";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface LargeImportModalProps {
   open: boolean;
@@ -72,6 +75,17 @@ const LargeImportModal = ({
   const speedHistoryRef = useRef<number[]>([]);
   const pollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const jobIdRef = useRef<string | null>(null);
+
+  // ─── Preview hook ──────────────────────────────────────────
+  const {
+    preview,
+    loading: previewLoading,
+    error: previewError,
+  } = useImportPreview({
+    file: open ? file : null,
+    delimiter: isParquet ? undefined : delimiter,
+    enabled: open && !isUploading,
+  });
 
   // Auto-detect delimiter when modal opens (skip for Parquet)
   useEffect(() => {
@@ -419,9 +433,16 @@ const LargeImportModal = ({
     }
   };
 
+  // Map preview columns to DataPreviewSection format
+  const previewColumns = preview?.columns.map((c) => ({
+    name: c.name,
+    type: c.type,
+    index: c.index,
+  })) || [];
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[500px]">
+      <DialogContent className="sm:max-w-[900px] max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Upload className="w-5 h-5" />
@@ -534,6 +555,65 @@ const LargeImportModal = ({
                   defaultValue: "Parquet detectado: o schema e os tipos serão extraídos automaticamente. Delimitador e encoding não se aplicam."
                 })}
               </div>
+            </div>
+          )}
+
+          {/* ─── Preview Section ────────────────────────────── */}
+          {!isUploading && (
+            <div className="space-y-3">
+              {previewLoading && (
+                <div className="flex items-center gap-3 p-4 bg-muted/30 rounded-lg border border-border">
+                  <Loader2 className="w-5 h-5 animate-spin text-primary" />
+                  <span className="text-sm text-muted-foreground">
+                    {t("dataIngestion.import.generatingPreview", {
+                      defaultValue: "Gerando preview do dataset...",
+                    })}
+                  </span>
+                </div>
+              )}
+
+              {previewError && (
+                <Alert variant="destructive" className="border-destructive/30 bg-destructive/5">
+                  <AlertTriangle className="h-4 w-4" />
+                  <AlertDescription className="text-sm">
+                    {previewError}
+                  </AlertDescription>
+                </Alert>
+              )}
+
+              {preview && (
+                <>
+                  {/* Sampling warning banner */}
+                  <Alert variant="default" className="border-primary/30 bg-primary/5">
+                    <Info className="h-4 w-4 text-primary" />
+                    <AlertDescription className="text-sm">
+                      {t("dataIngestion.import.previewSamplingWarning", {
+                        defaultValue:
+                          "Preview por amostragem. O processamento completo roda em background e pode alterar contagens finais.",
+                      })}
+                    </AlertDescription>
+                  </Alert>
+
+                  {/* Warnings from the preview engine */}
+                  {preview.warnings.length > 0 && (
+                    <div className="space-y-1">
+                      {preview.warnings.map((w, i) => (
+                        <p key={i} className="text-xs text-muted-foreground italic">
+                          {w}
+                        </p>
+                      ))}
+                    </div>
+                  )}
+
+                  <DataPreviewSection
+                    columns={previewColumns}
+                    previewRows={preview.previewRows}
+                    totalRows={preview.totalRowsEstimate}
+                    sampleRows={preview.previewRows.length}
+                    isSampled={preview.totalRowsEstimate > preview.previewRows.length}
+                  />
+                </>
+              )}
             </div>
           )}
 
