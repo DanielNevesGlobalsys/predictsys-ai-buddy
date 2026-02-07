@@ -49,40 +49,57 @@ serve(async (req) => {
     // Build prompt from accumulated context
     const edaSummary = ctx.eda?.summary || "EDA não realizado.";
     const edaWarnings = (ctx.eda?.warnings || []).join("; ") || "Nenhum alerta.";
+
+    // Business segment from Lys analysis
+    let segmentInfo = "";
+    if (ctx.targeting?.business_segment) {
+      segmentInfo = `Segmento de negócio: ${ctx.targeting.business_segment.segment} (confiança: ${ctx.targeting.business_segment.confidence}). ${ctx.targeting.business_segment.justification || ""}`;
+    }
+
     const targetInfo = ctx.targeting?.selected_target
       ? `Target: ${ctx.targeting.selected_target} (${ctx.targeting.selected_problem || "N/A"}). Justificativa: ${ctx.targeting.justification || "N/A"}`
       : "Target não definido.";
+
+    const insightText = ctx.targeting?.insight_text || "";
+
     const trainingInfo = ctx.training?.model_type
       ? `Modelo: ${ctx.training.model_type}. Métricas: ${JSON.stringify(ctx.training.metrics || {})}. Confiança: ${ctx.training.confidence_level || "N/A"}. Limitações: ${(ctx.training.limitations || []).join("; ") || "Nenhuma"}.`
       : "Modelo não treinado.";
 
-    // Predictions summary
     let predictionsInfo = "Predições não geradas.";
     if (ctx.predictions?.horizons && Object.keys(ctx.predictions.horizons).length > 0) {
       const horizonEntries = Object.entries(ctx.predictions.horizons)
-        .map(([days, data]: [string, any]) =>
-          `${days}d: ${data.total_entities || 0} entidades, ${data.high_risk_pct || 0}% alto risco`
-        )
+        .map(([days, data]: [string, any]) => `${days}d: ${data.total_entities || 0} entidades, ${data.high_risk_pct || 0}% alto risco`)
         .join("; ");
       predictionsInfo = `Horizons: ${horizonEntries}.`;
-      
       const segInsights = ctx.predictions.segment_insights || [];
       if (segInsights.length > 0) {
-        const topSegs = segInsights.slice(0, 3)
-          .map((s: any) => `${s.segment}: ${s.high_risk_pct}% alto risco`)
-          .join("; ");
+        const topSegs = segInsights.slice(0, 3).map((s: any) => `${s.segment}: ${s.high_risk_pct}% alto risco`).join("; ");
         predictionsInfo += ` Segmentos críticos: ${topSegs}.`;
       }
     }
 
-    const prompt = `Você é o copiloto de IA "Lys" da plataforma PredictSys AI. Gere um resumo executivo CURTO (máx 4 parágrafos) em português brasileiro para um decisor de negócio. NÃO use termos técnicos de ML. Foque em impacto de negócio, riscos e oportunidades.
+    // Dashboard mapping from Lys analysis
+    let dashboardInfo = "";
+    if (ctx.targeting?.dashboard_mapping) {
+      const dm = ctx.targeting.dashboard_mapping;
+      dashboardInfo = `KPIs sugeridos: ${(dm.primary_kpis || []).join(", ")}. Ação recomendada: ${dm.business_action || "N/A"}.`;
+    }
+
+    const learningNotes = ctx.targeting?.learning_notes || "";
+
+    const prompt = `Você é **Lys**, o copiloto de IA da plataforma PredictSys AI. Gere um resumo executivo CURTO (máx 4 parágrafos) em português brasileiro para um decisor de negócio. NÃO use termos técnicos de ML. Foque em impacto de negócio, riscos e oportunidades.
 
 Dados do projeto:
+${segmentInfo ? `- Segmento: ${segmentInfo}` : ""}
 - EDA: ${edaSummary}
 - Alertas: ${edaWarnings}
 - ${targetInfo}
+${insightText ? `- Insight da Lys: ${insightText}` : ""}
 - ${trainingInfo}
 - ${predictionsInfo}
+${dashboardInfo ? `- Dashboard: ${dashboardInfo}` : ""}
+${learningNotes ? `- Aprendizados: ${learningNotes}` : ""}
 - Razão desta atualização: ${trigger_reason || "Atualização de contexto"}
 
 Responda APENAS o texto do resumo executivo, sem markdown, sem títulos, sem bullet points. Texto corrido e fluido.`;
@@ -91,23 +108,31 @@ Responda APENAS o texto do resumo executivo, sem markdown, sem títulos, sem bul
 
     if (lovableApiKey) {
       try {
-        const aiRes = await fetch("https://ai.lovable.dev/api/generate", {
+        const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
           method: "POST",
           headers: {
             "Content-Type": "application/json",
-            "Authorization": `Bearer ${lovableApiKey}`,
+            Authorization: `Bearer ${lovableApiKey}`,
           },
           body: JSON.stringify({
             model: "google/gemini-2.5-flash",
-            prompt,
+            messages: [
+              { role: "system", content: "Você é Lys, copiloto de IA do PredictSys. Gere resumos executivos concisos em português brasileiro, focados em impacto de negócio." },
+              { role: "user", content: prompt },
+            ],
+            max_tokens: 1000,
+            temperature: 0.5,
           }),
         });
 
         if (aiRes.ok) {
           const aiData = await aiRes.json();
-          executiveSummary = aiData?.text || aiData?.response || "";
+          executiveSummary = aiData.choices?.[0]?.message?.content || "";
         } else {
           console.error(`[generate-executive-summary] AI API error: ${aiRes.status}`);
+          if (aiRes.status === 429) {
+            console.warn("[generate-executive-summary] Rate limited, using fallback");
+          }
         }
       } catch (aiErr) {
         console.error("[generate-executive-summary] AI call failed:", aiErr);
@@ -117,21 +142,28 @@ Responda APENAS o texto do resumo executivo, sem markdown, sem títulos, sem bul
     // Fallback: generate a rule-based summary
     if (!executiveSummary) {
       const parts: string[] = [];
-      
+
+      if (ctx.targeting?.business_segment) {
+        parts.push(`Este projeto atua no segmento de ${ctx.targeting.business_segment.segment}.`);
+      }
+
       if (ctx.eda?.summary) {
         parts.push(`A análise exploratória identificou os principais padrões nos dados: ${ctx.eda.summary}`);
       }
-      
+
       if (ctx.targeting?.selected_target) {
         parts.push(`O problema definido é de ${ctx.targeting.selected_problem || "previsão"}, com foco na variável "${ctx.targeting.selected_target}".`);
       }
-      
+
+      if (ctx.targeting?.insight_text) {
+        parts.push(ctx.targeting.insight_text);
+      }
+
       if (ctx.training?.model_type) {
-        const confLabel = ctx.training.confidence_level === "high" ? "alta"
-          : ctx.training.confidence_level === "medium" ? "moderada" : "limitada";
+        const confLabel = ctx.training.confidence_level === "high" ? "alta" : ctx.training.confidence_level === "medium" ? "moderada" : "limitada";
         parts.push(`O modelo treinado (${ctx.training.model_type}) apresenta confiabilidade ${confLabel}.`);
       }
-      
+
       if (ctx.predictions?.horizons) {
         const horizonKeys = Object.keys(ctx.predictions.horizons);
         if (horizonKeys.length > 0) {
@@ -139,40 +171,36 @@ Responda APENAS o texto do resumo executivo, sem markdown, sem títulos, sem bul
           parts.push(`As predições indicam ${first.high_risk_pct || 0}% da base em alto risco nos próximos ${horizonKeys[0]} dias.`);
         }
       }
-      
+
+      if (ctx.targeting?.dashboard_mapping?.business_action) {
+        parts.push(`Ação recomendada: ${ctx.targeting.dashboard_mapping.business_action}`);
+      }
+
       executiveSummary = parts.join(" ") || "Resumo executivo será gerado conforme o projeto avança.";
     }
 
     // Save storyline to context
-    const appendRes = await fetch(
-      `${supabaseUrl}/functions/v1/append-project-context`,
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseServiceKey}`,
-          "apikey": supabaseServiceKey,
+    const appendRes = await fetch(`${supabaseUrl}/functions/v1/append-project-context`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${supabaseServiceKey}`,
+        apikey: supabaseServiceKey,
+      },
+      body: JSON.stringify({
+        project_id,
+        stage: "storyline",
+        payload: {
+          executive_summary: executiveSummary,
+          last_update_reason: trigger_reason || "Geração automática",
+          generated_at: new Date().toISOString(),
         },
-        body: JSON.stringify({
-          project_id,
-          stage: "storyline",
-          payload: {
-            executive_summary: executiveSummary,
-            last_update_reason: trigger_reason || "Geração automática",
-            generated_at: new Date().toISOString(),
-          },
-        }),
-      }
-    );
-    const appendBody = await appendRes.text();
+      }),
+    });
     console.log(`[generate-executive-summary] Context append status=${appendRes.status}`);
 
     return new Response(
-      JSON.stringify({
-        success: true,
-        executive_summary: executiveSummary,
-        trigger_reason,
-      }),
+      JSON.stringify({ success: true, executive_summary: executiveSummary, trigger_reason }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (error) {
