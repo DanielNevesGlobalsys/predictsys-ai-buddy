@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import * as XLSX from "https://esm.sh/xlsx@0.18.5";
+import { parquetRead } from "npm:hyparquet@1.24.1";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -25,20 +26,17 @@ function inferColumnType(values: unknown[]): string {
   for (const value of nonNullValues.slice(0, 100)) {
     const strValue = String(value).trim();
     
-    // Check for boolean
     if (['true', 'false', '0', '1', 'sim', 'não', 'yes', 'no'].includes(strValue.toLowerCase())) {
       boolCount++;
       continue;
     }
     
-    // Check for number
     const num = Number(strValue.replace(',', '.'));
     if (!isNaN(num) && strValue !== '') {
       numericCount++;
       continue;
     }
     
-    // Check for date
     const datePatterns = [
       /^\d{4}-\d{2}-\d{2}$/,
       /^\d{2}\/\d{2}\/\d{4}$/,
@@ -64,23 +62,19 @@ function parseExcel(buffer: ArrayBuffer, maxSampleRows: number): ParsedData {
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
   
-  // Convert to JSON with header row
   const jsonData = XLSX.utils.sheet_to_json(sheet, { header: 1 }) as unknown[][];
   
   if (jsonData.length === 0) {
     throw new Error("Empty Excel file");
   }
   
-  // First row is headers
   const headers = (jsonData[0] as unknown[]).map((h, i) => String(h || `Column_${i + 1}`));
   const dataRows = jsonData.slice(1);
   const totalRows = dataRows.length;
   
-  // Sample rows
   const sampleSize = Math.min(maxSampleRows, totalRows);
   const sampledRows = dataRows.slice(0, sampleSize);
   
-  // Infer column types
   const columns = headers.map((name, index) => {
     const columnValues = sampledRows.map(row => (row as unknown[])[index]);
     return {
@@ -90,7 +84,6 @@ function parseExcel(buffer: ArrayBuffer, maxSampleRows: number): ParsedData {
     };
   });
   
-  // Convert rows to objects
   const rows = sampledRows.map(row => {
     const obj: Record<string, unknown> = {};
     headers.forEach((header, i) => {
@@ -101,18 +94,12 @@ function parseExcel(buffer: ArrayBuffer, maxSampleRows: number): ParsedData {
   
   console.log(`[parse-file] Excel parsed: ${columns.length} columns, ${totalRows} total rows, ${sampleSize} sampled`);
   
-  return {
-    columns,
-    rows,
-    totalRows,
-    sampleRows: sampleSize
-  };
+  return { columns, rows, totalRows, sampleRows: sampleSize };
 }
 
 function parseCSV(text: string, maxSampleRows: number): ParsedData {
   console.log("[parse-file] Parsing CSV file...");
   
-  // Detect delimiter
   const firstLine = text.split('\n')[0];
   const delimiters = [',', ';', '\t', '|'];
   let delimiter = ',';
@@ -131,19 +118,15 @@ function parseCSV(text: string, maxSampleRows: number): ParsedData {
     throw new Error("Empty CSV file");
   }
   
-  // Parse headers
   const headers = parseCSVLine(lines[0], delimiter);
   const dataLines = lines.slice(1);
   const totalRows = dataLines.length;
   
-  // Sample rows
   const sampleSize = Math.min(maxSampleRows, totalRows);
   const sampledLines = dataLines.slice(0, sampleSize);
   
-  // Parse sampled rows
   const parsedRows = sampledLines.map(line => parseCSVLine(line, delimiter));
   
-  // Infer column types
   const columns = headers.map((name, index) => {
     const columnValues = parsedRows.map(row => row[index]);
     return {
@@ -153,7 +136,6 @@ function parseCSV(text: string, maxSampleRows: number): ParsedData {
     };
   });
   
-  // Convert to objects
   const rows = parsedRows.map(row => {
     const obj: Record<string, unknown> = {};
     headers.forEach((header, i) => {
@@ -164,12 +146,7 @@ function parseCSV(text: string, maxSampleRows: number): ParsedData {
   
   console.log(`[parse-file] CSV parsed: ${columns.length} columns, ${totalRows} total rows, ${sampleSize} sampled`);
   
-  return {
-    columns,
-    rows,
-    totalRows,
-    sampleRows: sampleSize
-  };
+  return { columns, rows, totalRows, sampleRows: sampleSize };
 }
 
 function parseCSVLine(line: string, delimiter: string): string[] {
@@ -205,7 +182,6 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
   const data = JSON.parse(text);
   let records: Record<string, unknown>[];
   
-  // Handle different JSON structures
   if (Array.isArray(data)) {
     records = data;
   } else if (data.data && Array.isArray(data.data)) {
@@ -215,7 +191,6 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
   } else if (data.results && Array.isArray(data.results)) {
     records = data.results;
   } else {
-    // Single object, wrap in array
     records = [data];
   }
   
@@ -227,7 +202,6 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
   const sampleSize = Math.min(maxSampleRows, totalRows);
   const sampledRecords = records.slice(0, sampleSize);
   
-  // Extract all unique keys from sampled records
   const keysSet = new Set<string>();
   for (const record of sampledRecords) {
     if (typeof record === 'object' && record !== null) {
@@ -236,7 +210,6 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
   }
   const headers = Array.from(keysSet);
   
-  // Infer column types
   const columns = headers.map((name, index) => {
     const columnValues = sampledRecords.map(row => row[name]);
     return {
@@ -246,7 +219,6 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
     };
   });
   
-  // Normalize rows to have all columns
   const rows = sampledRecords.map(record => {
     const obj: Record<string, unknown> = {};
     headers.forEach(header => {
@@ -257,12 +229,55 @@ function parseJSON(text: string, maxSampleRows: number): ParsedData {
   
   console.log(`[parse-file] JSON parsed: ${columns.length} columns, ${totalRows} total rows, ${sampleSize} sampled`);
   
-  return {
-    columns,
-    rows,
-    totalRows,
-    sampleRows: sampleSize
-  };
+  return { columns, rows, totalRows, sampleRows: sampleSize };
+}
+
+async function parseParquet(buffer: ArrayBuffer, maxSampleRows: number): Promise<ParsedData> {
+  console.log("[parse-file] Parsing Parquet file...");
+  
+  let allRows: Record<string, unknown>[] = [];
+
+  await parquetRead({
+    file: buffer,
+    rowFormat: "object",
+    onComplete: (data: Record<string, unknown>[]) => {
+      allRows = data;
+    },
+  });
+
+  if (allRows.length === 0) throw new Error("Arquivo Parquet vazio ou ilegível.");
+
+  const headers = Object.keys(allRows[0]);
+  const totalRows = allRows.length;
+  const sampleSize = Math.min(maxSampleRows, totalRows);
+  const sampledRows = allRows.slice(0, sampleSize);
+
+  // Clean non-primitive values
+  const rows = sampledRows.map((row) => {
+    const clean: Record<string, unknown> = {};
+    for (const key of headers) {
+      const val = row[key];
+      if (val === null || val === undefined) clean[key] = null;
+      else if (typeof val === "bigint") clean[key] = Number(val);
+      else if (val instanceof Date) clean[key] = val.toISOString();
+      else if (typeof val === "object") clean[key] = JSON.stringify(val);
+      else clean[key] = val;
+    }
+    return clean;
+  });
+
+  const columns = headers.map((name, index) => {
+    const columnValues = rows.map(row => row[name]);
+    return {
+      name,
+      type: inferColumnType(columnValues),
+      index
+    };
+  });
+
+  console.log(`[parse-file] Parquet parsed: ${columns.length} columns, ${totalRows} total rows, ${sampleSize} sampled`);
+
+  return { columns, rows, totalRows, sampleRows: sampleSize };
 }
 
 serve(async (req) => {
@@ -298,11 +313,9 @@ serve(async (req) => {
     } else if (fileName.endsWith('.json')) {
       const text = await file.text();
       parsedData = parseJSON(text, maxSampleRows);
-    } else if (fileName.endsWith('.parquet')) {
-      return new Response(
-        JSON.stringify({ success: false, message: "Parquet files require async import. Please use the large file import flow or convert to CSV." }),
-        { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 400 }
-      );
+    } else if (fileName.endsWith('.parquet') || fileName.endsWith('.parq') || fileName.endsWith('.pq')) {
+      const buffer = await file.arrayBuffer();
+      parsedData = await parseParquet(buffer, maxSampleRows);
     } else {
       throw new Error(`Unsupported file format: ${fileName}`);
     }
@@ -310,13 +323,11 @@ serve(async (req) => {
     // Store columns in project_columns
     console.log(`[parse-file] Storing ${parsedData.columns.length} columns for project ${projectId}`);
     
-    // Delete existing columns
     await supabase
       .from('project_columns')
       .delete()
       .eq('project_id', projectId);
 
-    // Insert new columns
     const columnsToInsert = parsedData.columns.map(col => ({
       project_id: projectId,
       column_name: col.name,
@@ -333,7 +344,6 @@ serve(async (req) => {
       throw columnsError;
     }
 
-    // Update project with row counts
     await supabase
       .from('projects')
       .update({
