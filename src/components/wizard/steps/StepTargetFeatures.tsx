@@ -12,15 +12,17 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Bot, Save } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import type { FeatureExpression } from "@/lib/featureEngineering";
-import LysSuggestionCards, { type TargetSuggestion } from "./LysSuggestionCards";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
+import ProblemInferencePanel from "./ProblemInferencePanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
+import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
+import { logProjectAuditEvent } from "@/lib/auditLog";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -57,11 +59,16 @@ const StepTargetFeatures = ({
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
 
-  // Lys suggestions state
-  const [suggestions, setSuggestions] = useState<TargetSuggestion[]>([]);
-  const [loadingSuggestions, setLoadingSuggestions] = useState(false);
-  const [appliedSuggestionId, setAppliedSuggestionId] = useState<string | null>(null);
-  const [suggestionsGenerated, setSuggestionsGenerated] = useState(false);
+  // Inference panel
+  const [appliedTargetColumn, setAppliedTargetColumn] = useState<string | null>(null);
+  const [hasEDA, setHasEDA] = useState(false);
+  const inferenceAutoLoaded = useRef(false);
+
+  // Problem inference hook
+  const { inference, loading: inferenceLoading, error: inferenceError, loadInference } = useProblemInference(projectData.id);
+
+  // Derived problem type from inference
+  const [inferredProblemType, setInferredProblemType] = useState<string | null>(null);
 
   // Project settings persistence
   const { settings, loadSettings, saveSettings } = useProjectSettings(projectData.id);
@@ -71,6 +78,7 @@ const StepTargetFeatures = ({
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
+      checkEDA();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -79,11 +87,20 @@ const StepTargetFeatures = ({
     }
   }, [projectData.id]);
 
+  // Auto-load inference when EDA is available
+  useEffect(() => {
+    if (hasEDA && !inferenceAutoLoaded.current && !inference) {
+      inferenceAutoLoaded.current = true;
+      loadInference(false);
+    }
+  }, [hasEDA, inference, loadInference]);
+
   // Restore from persisted settings
   useEffect(() => {
     if (settings && settingsLoaded && columns.length > 0) {
       if (settings.target_column && columns.some((c) => c.name === settings.target_column)) {
         setTargetColumn(settings.target_column);
+        setAppliedTargetColumn(settings.target_column);
       }
       if (settings.feature_columns && settings.feature_columns.length > 0) {
         setSelectedFeatures(settings.feature_columns);
@@ -91,8 +108,8 @@ const StepTargetFeatures = ({
       if (settings.excluded_columns) {
         setExcludedColumns(settings.excluded_columns);
       }
-      if (settings.target_suggestion_meta?.chosen_suggestion_id) {
-        setAppliedSuggestionId(settings.target_suggestion_meta.chosen_suggestion_id as string);
+      if (settings.problem_type) {
+        setInferredProblemType(settings.problem_type);
       }
     }
   }, [settings, settingsLoaded, columns]);
@@ -112,6 +129,15 @@ const StepTargetFeatures = ({
       setSelectedFeatures(features);
     }
   }, [columns, targetColumn, settingsLoaded]);
+
+  const checkEDA = async () => {
+    if (!projectData.id) return;
+    const { count } = await supabase
+      .from("project_numeric_stats")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectData.id);
+    setHasEDA((count || 0) > 0);
+  };
 
   const loadColumns = async () => {
     setLoadingColumns(true);
@@ -187,7 +213,8 @@ const StepTargetFeatures = ({
       }
       return newFeatures;
     });
-    setAppliedSuggestionId(null);
+    setAppliedTargetColumn(null);
+    setInferredProblemType(null);
   };
 
   const toggleFeature = (columnName: string) => {
@@ -198,67 +225,58 @@ const StepTargetFeatures = ({
     );
   };
 
-  const handleGenerateSuggestions = async () => {
-    if (!projectData.id) return;
-    setLoadingSuggestions(true);
-    setSuggestionsGenerated(false);
-    try {
-      const { data, error } = await supabase.functions.invoke("ai-suggest-targets", {
-        body: { project_id: projectData.id },
-      });
+  // ── Apply inference target suggestion ────────────────────────────
+  const handleApplyInferenceTarget = (target: SuggestedTarget, predictors: SuggestedPredictor[]) => {
+    setTargetColumn(target.column);
+    setAppliedTargetColumn(target.column);
 
-      if (error) throw error;
+    // Map inference problem type to project problem type
+    const problemType = target.type === "regression" ? "regression" : "classification";
+    setInferredProblemType(problemType);
 
-      const result = data as { suggestions: TargetSuggestion[] };
-      setSuggestions(result.suggestions || []);
-      setSuggestionsGenerated(true);
+    // Select predictors (recommended by inference) - filter to existing columns
+    const colNames = new Set(columns.map((c) => c.name));
+    const recommended = predictors
+      .filter((p) => colNames.has(p.column) && p.column !== target.column)
+      .map((p) => p.column);
 
-      if (result.suggestions.length === 0) {
-        toast({
-          title: t("lysSuggestions.noSuggestions", "Nenhuma sugestão"),
-          description: t("lysSuggestions.noSuggestionsDesc", "A Lys não encontrou candidatos claros para target neste dataset."),
-        });
-      }
-    } catch (err: any) {
-      console.error("Error generating suggestions:", err);
-      toast({
-        title: t("common.error"),
-        description: err.message || t("lysSuggestions.errorGenerating", "Erro ao gerar sugestões"),
-        variant: "destructive",
-      });
+    if (recommended.length > 0) {
+      setSelectedFeatures(recommended);
     }
-    setLoadingSuggestions(false);
-  };
 
-  const handleApplySuggestion = (suggestion: TargetSuggestion) => {
-    // Set target
-    setTargetColumn(suggestion.target_column);
-    setAppliedSuggestionId(suggestion.id);
+    // Build excluded list
+    const recommendedSet = new Set(recommended);
+    const excluded = columns
+      .filter((c) => c.name !== target.column && !recommendedSet.has(c.name))
+      .map((c) => c.name);
+    setExcludedColumns(excluded);
 
-    // Set features (recommended) and excluded
-    setSelectedFeatures(suggestion.recommended_features);
-    setExcludedColumns(suggestion.excluded_features);
-
-    // Check if target changed from initial
-    if (
-      initialTargetRef.current &&
-      suggestion.target_column !== initialTargetRef.current &&
-      !hasChangedConfig.current
-    ) {
+    // Track config change
+    if (initialTargetRef.current && target.column !== initialTargetRef.current && !hasChangedConfig.current) {
       hasChangedConfig.current = true;
       onConfigChange?.();
     }
 
+    // Audit log
+    if (projectData.id) {
+      logProjectAuditEvent(
+        projectData.id,
+        "config_updated",
+        "config",
+        target.column,
+        { source: "lys_inference", problem_type: problemType, confidence: target.confidence }
+      ).catch(() => {});
+    }
+
     toast({
-      title: t("lysSuggestions.suggestionApplied", "Sugestão aplicada!"),
-      description: t("lysSuggestions.suggestionAppliedDesc", "Target, tipo de problema e features foram configurados. Revise e ajuste se necessário."),
+      title: t("inference.targetApplied", "Sugestão aplicada!"),
+      description: t("inference.targetAppliedDesc", "Target, tipo de problema e preditoras foram configurados pela Lys."),
     });
   };
 
   const handleSaveSettings = async () => {
     if (!projectData.id || !targetColumn) return;
 
-    // Validate: target cannot be in features
     const cleanFeatures = selectedFeatures.filter((f) => f !== targetColumn);
     if (cleanFeatures.length === 0) {
       toast({
@@ -269,22 +287,14 @@ const StepTargetFeatures = ({
       return;
     }
 
-    // Determine problem_type from suggestion or project data
-    const appliedSug = suggestions.find((s) => s.id === appliedSuggestionId);
-    const problemType = appliedSug?.problem_type || projectData.problem_type;
-
-    // Warn if classification with high unique count
-    const targetCol = columns.find((c) => c.name === targetColumn);
-    if (problemType === "classification" && targetCol) {
-      // We can't easily check unique_count from columns, but the suggestion warnings should cover it
-    }
+    const problemType = inferredProblemType || projectData.problem_type;
 
     const saved = await saveSettings({
       target_column: targetColumn,
       problem_type: problemType,
       feature_columns: cleanFeatures,
       excluded_columns: excludedColumns,
-      suggestion: appliedSug || null,
+      suggestion: null,
     });
 
     if (saved) {
@@ -294,8 +304,8 @@ const StepTargetFeatures = ({
         selected_target: targetColumn,
         recommended_features: cleanFeatures,
         excluded_features: excludedColumns,
-        justification: appliedSug?.reasoning || "Configuração manual pelo usuário.",
-        suggested_problems: suggestions.map((s) => `${s.target_column} (${s.problem_type})`),
+        justification: inference?.suggested_targets.find((t) => t.column === targetColumn)?.why_this_target || "Configuração manual pelo usuário.",
+        suggested_problems: inference?.suggested_problem_labels.map((l) => l.label) || [],
       }).catch((err) =>
         console.error("Failed to persist targeting AI context:", err)
       );
@@ -309,14 +319,13 @@ const StepTargetFeatures = ({
 
   const handleNext = async () => {
     if (targetColumn) {
-      // Save settings before moving forward
       await handleSaveSettings();
 
-      // Determine problem_type from applied suggestion
-      const appliedSug = suggestions.find((s) => s.id === appliedSuggestionId);
-      const updateData: Partial<ProjectData> = { target_column: targetColumn };
-      if (appliedSug) {
-        updateData.problem_type = appliedSug.problem_type;
+      const updateData: Partial<ProjectData> = {
+        target_column: targetColumn,
+      };
+      if (inferredProblemType) {
+        updateData.problem_type = inferredProblemType as "classification" | "regression";
       }
 
       await saveProject(updateData, 5);
@@ -326,6 +335,7 @@ const StepTargetFeatures = ({
   };
 
   const availableFeatures = columns.filter((col) => col.name !== targetColumn);
+  const effectiveProblemType = inferredProblemType || projectData.problem_type;
 
   if (loadingColumns) {
     return (
@@ -372,52 +382,31 @@ const StepTargetFeatures = ({
           </p>
         </div>
 
-        {/* Lys Suggestions Section */}
-        <div className="space-y-4 p-5 border border-secondary/30 rounded-xl bg-secondary/5">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Bot className="w-5 h-5 text-secondary" />
-              <h3 className="font-semibold text-sm">
-                {t("lysSuggestions.title", "Sugestões da Lys")}
-              </h3>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleGenerateSuggestions}
-              disabled={loadingSuggestions}
-            >
-              {loadingSuggestions ? (
-                <>
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  {t("lysSuggestions.generating", "Analisando...")}
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                  {suggestionsGenerated
-                    ? t("lysSuggestions.regenerate", "Regenerar")
-                    : t("lysSuggestions.generate", "Gerar sugestões")}
-                </>
-              )}
-            </Button>
+        {/* Problem Inference Panel (replaces old Lys suggestions) */}
+        <ProblemInferencePanel
+          inference={inference}
+          loading={inferenceLoading}
+          error={inferenceError}
+          onGenerate={() => loadInference(true)}
+          onApplyTarget={handleApplyInferenceTarget}
+          appliedTargetColumn={appliedTargetColumn}
+          hasEDA={hasEDA}
+        />
+
+        {/* Inferred problem type badge */}
+        {inferredProblemType && (
+          <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
+            <Info className="w-4 h-4 text-accent" />
+            <span className="text-sm">
+              {t("inference.inferredType", "Tipo detectado pela Lys")}:{" "}
+              <strong>
+                {inferredProblemType === "classification"
+                  ? t("project.classification", "Classificação")
+                  : t("project.regression", "Regressão")}
+              </strong>
+            </span>
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            {t(
-              "lysSuggestions.description",
-              "A Lys sugere opções com base no EDA. Você sempre pode ajustar manualmente."
-            )}
-          </p>
-
-          {suggestionsGenerated && (
-            <LysSuggestionCards
-              suggestions={suggestions}
-              onApply={handleApplySuggestion}
-              appliedId={appliedSuggestionId}
-            />
-          )}
-        </div>
+        )}
 
         {/* Target selection */}
         <div className="space-y-4">
@@ -454,7 +443,7 @@ const StepTargetFeatures = ({
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">
-              {projectData.problem_type === "classification"
+              {effectiveProblemType === "classification"
                 ? t("stepVariables.classificationHint")
                 : t("stepVariables.regressionHint")}
             </p>
