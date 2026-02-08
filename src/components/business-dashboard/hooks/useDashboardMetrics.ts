@@ -110,6 +110,8 @@ export function useDashboardMetrics(
         impact: result?.summary_cards?.financial_impact,
         predTotal: result?.summary_cards?.predicted_total_value,
         predAvg: result?.summary_cards?.predicted_avg_value,
+        modelQualityFlag: result?.modelQualityFlag,
+        diagnostic: result?.diagnostic,
       });
 
       setData(result);

@@ -83,17 +83,53 @@ serve(async (req) => {
 
     console.log(`[Dashboard Metrics] Project: ${project_id}, Mode: ${mode}, Horizon: ${horizon}d, Segment: ${segment_field}=${segment_value || 'all'}`);
 
+    // Resolve which batch_id is being used (latest batch)
+    const { data: latestBatchRow } = await supabase
+      .from('predictions')
+      .select('batch_id')
+      .eq('project_id', project_id)
+      .eq('is_latest', true)
+      .order('prediction_date', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const resolvedBatchId = latestBatchRow?.batch_id || 'unknown';
+    console.log(`[Dashboard Metrics][DIAG] resolved_batch_id: ${resolvedBatchId}`);
+
     // Fetch ALL predictions with pagination (no 1000-row truncation)
     const predictions = await fetchAllPredictions(supabase, project_id, horizon, segment_field, segment_value);
 
-    console.log(`[Dashboard Metrics] Total predictions fetched: ${predictions.length}`);
+    const predictionsCountUsed = predictions.length;
+
+    // Coverage: count total is_latest predictions (without horizon/segment filter) for comparison
+    const { count: totalLatestCount } = await supabase
+      .from('predictions')
+      .select('id', { count: 'exact', head: true })
+      .eq('project_id', project_id)
+      .eq('is_latest', true);
+
+    const coveragePct = (totalLatestCount && totalLatestCount > 0)
+      ? (predictionsCountUsed / totalLatestCount) * 100
+      : (predictionsCountUsed > 0 ? 100 : 0);
+
+    console.log(`[Dashboard Metrics][DIAG] predictions_count_used_for_kpis: ${predictionsCountUsed}, total_latest: ${totalLatestCount ?? 0}, coverage_pct: ${coveragePct.toFixed(2)}%`);
 
     if (predictions.length === 0) {
+      console.warn(`[Dashboard Metrics][DIAG] modelQualityFlag=fail — zero predictions found for KPIs`);
       return new Response(JSON.stringify({
         horizon,
         mode,
         segment: segment_value || 'all',
         problem_type: 'classification',
+        modelQualityFlag: 'fail',
+        error_friendly: 'Nenhuma previsão encontrada para este projeto. Execute o scoring primeiro.',
+        diagnostic: {
+          project_id,
+          resolved_batch_id: resolvedBatchId,
+          predictions_count_used_for_kpis: 0,
+          coverage_pct: 0,
+          total_latest_in_db: totalLatestCount ?? 0,
+        },
         summary_cards: {
           entities_with_prediction: 0,
           high_risk_or_opportunity: 0,
@@ -295,6 +331,14 @@ serve(async (req) => {
       mode,
       segment: segment_value || 'all',
       problem_type: problemType,
+      modelQualityFlag: predictionsCountUsed > 0 ? 'ok' : 'fail',
+      diagnostic: {
+        project_id,
+        resolved_batch_id: resolvedBatchId,
+        predictions_count_used_for_kpis: predictionsCountUsed,
+        coverage_pct: +coveragePct.toFixed(2),
+        total_latest_in_db: totalLatestCount ?? 0,
+      },
       summary_cards: {
         entities_with_prediction: entitiesWithPrediction,
         high_risk_or_opportunity: highRiskOrOpportunity,
@@ -309,7 +353,7 @@ serve(async (req) => {
       segments: availableSegments
     };
 
-    console.log(`[Dashboard Metrics] Response ready for project ${project_id}`);
+    console.log(`[Dashboard Metrics][DIAG] Response ready: predictions_count=${predictionsCountUsed}, coverage=${coveragePct.toFixed(2)}%, modelQualityFlag=ok`);
 
     return new Response(JSON.stringify(response), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
