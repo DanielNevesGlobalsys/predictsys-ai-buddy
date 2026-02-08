@@ -10,15 +10,14 @@ import {
   TrendingUp,
   Target,
   AlertTriangle,
-  CheckCircle2
+  CheckCircle2,
+  Building2,
+  Crosshair
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
-
-interface FeatureImportance {
-  feature_name: string;
-  importance_value: number;
-}
+import { useTrainingInsightContext, type FeatureImportanceItem, type DebugInfo } from "@/hooks/useTrainingInsightContext";
+import DebugLysPanel from "./DebugLysPanel";
 
 interface ModelResult {
   id: string;
@@ -29,8 +28,10 @@ interface ModelResult {
 }
 
 interface ParsedInsights {
-  summary: string;
-  featureImportance: string;
+  businessProblem: string;
+  targetExplanation: string;
+  modelQuality: string;
+  featureInfluence: string;
   risks: string[];
   recommendations: string[];
 }
@@ -57,10 +58,11 @@ const UnifiedModelInsights = ({
   targetColumn,
 }: UnifiedModelInsightsProps) => {
   const { t, i18n } = useTranslation();
-  const [featureImportances, setFeatureImportances] = useState<FeatureImportance[]>([]);
+  const [featureImportances, setFeatureImportances] = useState<FeatureImportanceItem[]>([]);
   const [parsedInsights, setParsedInsights] = useState<ParsedInsights | null>(null);
   const [loading, setLoading] = useState(false);
   const [generatingInsights, setGeneratingInsights] = useState(false);
+  const { debugInfo, gatherContext } = useTrainingInsightContext(projectId);
 
   useEffect(() => {
     if (modelId) {
@@ -98,7 +100,7 @@ const UnifiedModelInsights = ({
         .eq("project_id", projectId)
         .eq("model_id", modelId)
         .eq("language", i18n.language)
-        .eq("insight_type", "unified_cards")
+        .eq("insight_type", "unified_cumulative")
         .order("created_at", { ascending: false })
         .limit(1)
         .maybeSingle();
@@ -110,35 +112,71 @@ const UnifiedModelInsights = ({
 
       if (data?.shap_insights) {
         try {
-          const rawInsights = typeof data.shap_insights === 'string' 
+          const raw = typeof data.shap_insights === 'string' 
             ? JSON.parse(data.shap_insights) 
             : data.shap_insights;
           
-          // Normalize and ensure all fields exist with proper defaults
-          // Handle both string values and nested objects
           const parsed: ParsedInsights = {
-            summary: typeof rawInsights?.summary === 'string' 
-              ? rawInsights.summary 
-              : (rawInsights?.summary?.text || rawInsights?.summary?.overview || ""),
-            featureImportance: typeof rawInsights?.featureImportance === 'string'
-              ? rawInsights.featureImportance
-              : (rawInsights?.featureImportance?.text || rawInsights?.featureImportance?.description || ""),
-            risks: Array.isArray(rawInsights?.risks) 
-              ? rawInsights.risks.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+            businessProblem: raw?.businessProblem || raw?.summary || "",
+            targetExplanation: raw?.targetExplanation || "",
+            modelQuality: raw?.modelQuality || "",
+            featureInfluence: raw?.featureInfluence || raw?.featureImportance || "",
+            risks: Array.isArray(raw?.risks) 
+              ? raw.risks.map((r: unknown) => typeof r === 'string' ? r : String(r))
               : [],
-            recommendations: Array.isArray(rawInsights?.recommendations)
-              ? rawInsights.recommendations.map((r: unknown) => typeof r === 'string' ? r : (r && typeof r === 'object' && 'text' in r ? (r as {text: string}).text : String(r)))
+            recommendations: Array.isArray(raw?.recommendations)
+              ? raw.recommendations.map((r: unknown) => typeof r === 'string' ? r : String(r))
               : [],
           };
           setParsedInsights(parsed);
         } catch (e) {
           console.error("Error parsing saved insights:", e);
-          setParsedInsights(null);
+          // Try legacy format
+          loadLegacySavedInsights();
         }
+      } else {
+        // Try legacy format
+        loadLegacySavedInsights();
       }
     } catch (e) {
       console.error("Error in loadSavedInsights:", e);
     }
+  };
+
+  const loadLegacySavedInsights = async () => {
+    if (!modelId) return;
+    const { data } = await supabase
+      .from("project_model_insights")
+      .select("shap_insights")
+      .eq("project_id", projectId)
+      .eq("model_id", modelId)
+      .eq("language", i18n.language)
+      .eq("insight_type", "unified_cards")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (data?.shap_insights) {
+      try {
+        const raw = typeof data.shap_insights === 'string' 
+          ? JSON.parse(data.shap_insights) 
+          : data.shap_insights;
+        setParsedInsights({
+          businessProblem: raw?.summary || "",
+          targetExplanation: "",
+          modelQuality: "",
+          featureInfluence: raw?.featureImportance || "",
+          risks: Array.isArray(raw?.risks) ? raw.risks.map(String) : [],
+          recommendations: Array.isArray(raw?.recommendations) ? raw.recommendations.map(String) : [],
+        });
+      } catch { /* ignore */ }
+    }
+  };
+
+  const handleRefreshDebug = async () => {
+    if (!modelId) return;
+    const currentModel = models.find(m => m.id === modelId);
+    await gatherContext(modelId, modelName, problemType, featureImportances, currentModel?.metrics || []);
   };
 
   const generateInsights = async () => {
@@ -155,18 +193,26 @@ const UnifiedModelInsights = ({
     setGeneratingInsights(true);
     
     try {
-      const trainedModels = models.filter(m => m.status === "trained");
-      const currentModel = trainedModels.find(m => m.id === modelId);
-      
-      // Build metrics summary
+      const currentModel = models.find(m => m.id === modelId);
       const currentMetrics = currentModel?.metrics || [];
+
+      // Gather cumulative context
+      const ctx = await gatherContext(modelId, modelName, problemType, featureImportances, currentMetrics);
+
+      if (ctx?.debugInfo.fallback_reason) {
+        console.warn("[UnifiedModelInsights] Fallback detected:", ctx.debugInfo.fallback_reason);
+      }
+
+      // Build metrics text
       const metricsText = currentMetrics
         .filter(m => ["AUC", "F1", "Precision", "Recall", "Accuracy", "R²", "MAE", "RMSE"].includes(m.metric_name))
-        .map(m => `${m.metric_name}: ${(m.metric_value * 100).toFixed(1)}%`)
+        .map(m => `${m.metric_name}: ${m.metric_name === "MAE" || m.metric_name === "RMSE" 
+          ? m.metric_value.toFixed(4) 
+          : (m.metric_value * 100).toFixed(1) + "%"}`)
         .join(", ");
 
       // Build feature importances text
-      const topFeatures = featureImportances.slice(0, 5);
+      const topFeatures = featureImportances.slice(0, 10);
       const featureList = topFeatures.map(f => 
         `- ${f.feature_name}: ${(f.importance_value * 100).toFixed(1)}%`
       ).join("\n");
@@ -174,39 +220,76 @@ const UnifiedModelInsights = ({
       // Check for ID columns
       const idColumns = topFeatures.filter(f => 
         f.feature_name.toLowerCase().includes("id") || 
-        f.feature_name.toLowerCase().includes("_id") ||
         f.feature_name.toLowerCase() === "id"
       );
 
       const lang = i18n.language === 'pt' ? 'Portuguese (Brazil)' : i18n.language === 'es' ? 'Spanish' : 'English';
       
-      const systemPrompt = `You are a friendly data science expert who explains ML models in simple business language.
+      // Build cumulative context block
+      const ps = ctx?.projectState;
+      let contextBlock = "";
+      if (ps?.business_inference?.problem_statement) {
+        contextBlock += `\nInferred Business Problem: ${ps.business_inference.problem_statement}`;
+        if (ps.business_inference.domain) contextBlock += ` (Domain: ${ps.business_inference.domain})`;
+      }
+      if (ps?.eda_summary) {
+        contextBlock += `\nEDA Summary: ${ps.eda_summary.substring(0, 500)}`;
+      }
+      if (ps?.target?.column) {
+        contextBlock += `\nTarget: ${ps.target.column} (type: ${ps.target.type || problemType})`;
+        if (ps.target.reason) contextBlock += ` — Reason: ${ps.target.reason}`;
+      }
+      if (ps?.features) {
+        contextBlock += `\nIncluded features: ${ps.features.included.length} columns`;
+        if (ps.features.excluded.length > 0) {
+          contextBlock += ` | Excluded: ${ps.features.excluded.slice(0, 5).join(", ")}${ps.features.excluded.length > 5 ? "..." : ""}`;
+        }
+        if (ps.features.reasoning) contextBlock += `\nFeature reasoning: ${ps.features.reasoning.substring(0, 200)}`;
+      }
+
+      const isRegression = problemType === "regression";
+
+      const systemPrompt = `You are Lys, an AI business analyst that connects ML results to real business context.
 Respond in ${lang}.
 
 CRITICAL RULES:
-- DO NOT return JSON, no curly braces {}, no field names like "title" or "overallAssessment"
-- Respond in plain text with paragraphs and bullet points
-- Use clear, conversational language for business users
+- NEVER use generic phrases like "test other algorithms" or "try more data" as the only recommendation
+- ALWAYS connect insights to the specific business problem being solved
+- DO NOT return JSON. Use plain text with the section headers below.
+- When explaining metrics, translate them to business impact (e.g., "the model correctly identifies 87% of at-risk customers")
+- Reference the specific domain, target, and features in your analysis
 
-Structure your response exactly like this (use these exact section headers):
+Structure your response with these EXACT section headers:
 
-===RESUMO===
-Write 2-3 sentences about overall model performance and what it means for the business.
+===PROBLEMA DE NEGÓCIO INFERIDO===
+${ps?.business_inference?.problem_statement 
+  ? "Explain the specific business problem being addressed, using the inferred domain and problem statement."
+  : "State that no specific business inference was available and describe what the model appears to predict based on the target variable."}
 
-===IMPORTÂNCIA DAS VARIÁVEIS===
-Explain in a paragraph why the top 3-5 variables are important for predictions. Be specific about each variable.
+===O QUE ESTAMOS PREVENDO===
+Explain what the target variable represents, why it was chosen, and what kind of predictions the model makes (probability of event, estimated value, etc.)
+
+===QUALIDADE DO MODELO===
+${isRegression 
+  ? "Explain R², MAE, and RMSE in business terms (e.g., 'average prediction error of X units'). Rate quality as strong/medium/weak."
+  : "Explain AUC, F1, Precision, Recall in business terms (e.g., 'correctly identifies X% of at-risk cases'). Rate quality as strong/medium/weak."}
+
+===O QUE MAIS INFLUENCIA===
+For each of the top 5 features, explain WHY it influences the prediction in business terms. Connect each feature to the specific problem.
 
 ===RISCOS===
-• Risk 1
+• Risk 1 (specific to this model/data, not generic)
 • Risk 2
 • Risk 3
 
 ===AÇÕES RECOMENDADAS===
-• Action 1
+• Action 1 (business-specific, connected to the problem)
 • Action 2
 • Action 3`;
 
-      const prompt = `Analyze this ML model:
+      const prompt = `Analyze this ML model with the following cumulative project context:
+
+${contextBlock || "No prior context available."}
 
 Model: "${modelName}" (${problemType})
 Target: ${targetColumn || "not specified"}
@@ -216,9 +299,9 @@ Metrics: ${metricsText || "not available"}
 Top feature importances:
 ${featureList}
 
-${idColumns.length > 0 ? `WARNING: ID columns detected in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting - the model may be memorizing IDs instead of learning patterns.` : ""}
+${idColumns.length > 0 ? `⚠️ WARNING: ID columns in top features: ${idColumns.map(f => f.feature_name).join(", ")}. This indicates overfitting.` : ""}
 
-Provide your analysis following the exact section structure from the system prompt. Use plain text with bullet points, NOT JSON.`;
+Provide your analysis following the exact section structure. Be specific to THIS problem and THESE features.`;
 
       const { data, error } = await supabase.functions.invoke("global-chat", {
         body: {
@@ -234,89 +317,51 @@ Provide your analysis following the exact section structure from the system prom
 
       const responseText = data?.response || data?.text || "";
       
-      // Parse the plain text response by sections
-      let parsed: ParsedInsights;
-      try {
-        // Extract sections from plain text
-        const summaryMatch = responseText.match(/===RESUMO===\s*([\s\S]*?)(?=\n===|$)/i);
-        const featureMatch = responseText.match(/===IMPORTÂNCIA DAS VARIÁVEIS===\s*([\s\S]*?)(?=\n===|$)/i);
-        const risksMatch = responseText.match(/===RISCOS===\s*([\s\S]*?)(?=\n===|$)/i);
-        const actionsMatch = responseText.match(/===AÇÕES RECOMENDADAS===\s*([\s\S]*?)(?=\n===|$)/i);
-        
-        // Parse bullet points into arrays
-        const parseRisks = (text: string): string[] => {
-          if (!text) return [];
-          return text.split(/\n/)
-            .map(line => line.replace(/^[\s•\-*]+/, '').trim())
-            .filter(line => line.length > 0);
-        };
-        
-        parsed = {
-          summary: summaryMatch?.[1]?.trim() || t("training.fallbackSummary"),
-          featureImportance: featureMatch?.[1]?.trim() || topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
-          risks: risksMatch ? parseRisks(risksMatch[1]) : (idColumns.length > 0 ? [t("training.fallbackRiskIds")] : [t("training.noRisksIdentified")]),
-          recommendations: actionsMatch ? parseRisks(actionsMatch[1]) : [t("training.fallbackRecommendation1"), t("training.fallbackRecommendation2")]
-        };
-        
-        // If parsing failed (no sections found), try to handle as JSON fallback
-        if (!summaryMatch && !featureMatch) {
-          // Check if it's actually JSON (legacy format)
-          const jsonMatch = responseText.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            const rawParsed = JSON.parse(jsonMatch[0]);
-            parsed = {
-              summary: typeof rawParsed.summary === 'string' 
-                ? rawParsed.summary 
-                : (rawParsed.summary?.text || JSON.stringify(rawParsed.summary) || ""),
-              featureImportance: typeof rawParsed.featureImportance === 'string'
-                ? rawParsed.featureImportance
-                : (rawParsed.featureImportance?.text || JSON.stringify(rawParsed.featureImportance) || ""),
-              risks: Array.isArray(rawParsed.risks) 
-                ? rawParsed.risks.map((r: unknown) => typeof r === 'string' ? r : String(r))
-                : [],
-              recommendations: Array.isArray(rawParsed.recommendations)
-                ? rawParsed.recommendations.map((r: unknown) => typeof r === 'string' ? r : String(r))
-                : []
-            };
-          }
-        }
-      } catch (parseError) {
-        console.error("Parsing error:", parseError);
-        parsed = {
-          summary: t("training.fallbackSummary"),
-          featureImportance: topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
-          risks: idColumns.length > 0 
-            ? [t("training.fallbackRiskIds")] 
-            : [t("training.noRisksIdentified")],
-          recommendations: [t("training.fallbackRecommendation1"), t("training.fallbackRecommendation2")]
-        };
-      }
-
+      // Parse the response
+      const parsed = parseStructuredResponse(responseText, topFeatures, idColumns, isRegression);
       setParsedInsights(parsed);
 
-      // Save insights as JSON
+      // Save insights
       try {
         await (supabase.from("project_model_insights") as any).insert({
           project_id: projectId,
           model_id: modelId,
           language: i18n.language,
-          insight_type: "unified_cards",
+          insight_type: "unified_cumulative",
           shap_insights: JSON.stringify(parsed),
           insights: [],
         });
       } catch (saveError) {
         console.error("Error saving insights:", saveError);
-        // Don't throw - insights were generated successfully
       }
+
+      // Also update AI context with training insights
+      try {
+        await supabase.functions.invoke("append-project-context", {
+          body: {
+            project_id: projectId,
+            stage: "training",
+            payload: {
+              model_type: modelName,
+              metrics: ctx?.trainingResult.metrics || {},
+              confidence_level: getConfidenceLevel(currentMetrics, isRegression),
+              limitations: parsed.risks,
+              insights_generated: true,
+              cumulative_context_used: !ctx?.debugInfo.fallback_reason,
+            },
+          },
+        });
+      } catch { /* non-critical */ }
 
       toast.success(t("training.insightsGenerated"));
     } catch (error) {
       console.error("Error generating insights:", error);
       toast.error(t("training.insightsError"));
-      // Set a fallback state so the UI doesn't break
       setParsedInsights({
-        summary: t("training.insightsErrorMessage"),
-        featureImportance: "",
+        businessProblem: t("training.insightsErrorMessage"),
+        targetExplanation: "",
+        modelQuality: "",
+        featureInfluence: "",
         risks: [],
         recommendations: [t("training.tryAgainLater")]
       });
@@ -342,6 +387,9 @@ Provide your analysis following the exact section structure from the system prom
 
   return (
     <div className="space-y-6">
+      {/* Debug Panel */}
+      <DebugLysPanel debugInfo={debugInfo} onRefresh={handleRefreshDebug} loading={loading} />
+
       {/* Header Section */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -430,40 +478,70 @@ Provide your analysis following the exact section structure from the system prom
         )}
       </Card>
 
-      {/* Insights Cards Grid */}
+      {/* Insights Cards Grid - 4 mandatory blocks + risks/recommendations */}
       {parsedInsights ? (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {/* Card 1 - Summary */}
+          {/* Block 1 - Business Problem */}
           <Card className="p-5">
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 bg-chart-1/10 rounded-lg flex items-center justify-center flex-shrink-0">
-                <TrendingUp className="w-4 h-4 text-chart-1" />
+                <Building2 className="w-4 h-4 text-chart-1" />
               </div>
               <div className="flex-1 min-w-0">
-                <h4 className="font-semibold text-sm mb-2">{t("training.insightsSummary")}</h4>
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsBusinessProblem")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.summary || t("training.noInsightsAvailable")}
+                  {parsedInsights.businessProblem || t("training.noInsightsAvailable")}
                 </p>
               </div>
             </div>
           </Card>
 
-          {/* Card 2 - Feature Importance Explanation */}
+          {/* Block 2 - Target Explanation */}
           <Card className="p-5">
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 bg-chart-2/10 rounded-lg flex items-center justify-center flex-shrink-0">
-                <BarChart3 className="w-4 h-4 text-chart-2" />
+                <Crosshair className="w-4 h-4 text-chart-2" />
               </div>
               <div className="flex-1 min-w-0">
-                <h4 className="font-semibold text-sm mb-2">{t("training.insightsFeatureImportance")}</h4>
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsTarget")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.featureImportance || t("training.noInsightsAvailable")}
+                  {parsedInsights.targetExplanation || t("training.noInsightsAvailable")}
                 </p>
               </div>
             </div>
           </Card>
 
-          {/* Card 3 - Risks */}
+          {/* Block 3 - Model Quality */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-accent/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <TrendingUp className="w-4 h-4 text-accent" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsModelQuality")}</h4>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {parsedInsights.modelQuality || t("training.noInsightsAvailable")}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Block 4 - Feature Influence */}
+          <Card className="p-5">
+            <div className="flex items-start gap-3">
+              <div className="w-9 h-9 bg-chart-4/10 rounded-lg flex items-center justify-center flex-shrink-0">
+                <BarChart3 className="w-4 h-4 text-chart-4" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h4 className="font-semibold text-sm mb-2">{t("training.insightsFeatureInfluence")}</h4>
+                <p className="text-sm text-muted-foreground leading-relaxed">
+                  {parsedInsights.featureInfluence || t("training.noInsightsAvailable")}
+                </p>
+              </div>
+            </div>
+          </Card>
+
+          {/* Risks */}
           <Card className="p-5">
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 bg-destructive/10 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -487,7 +565,7 @@ Provide your analysis following the exact section structure from the system prom
             </div>
           </Card>
 
-          {/* Card 4 - Recommendations */}
+          {/* Recommendations */}
           <Card className="p-5">
             <div className="flex items-start gap-3">
               <div className="w-9 h-9 bg-chart-3/10 rounded-lg flex items-center justify-center flex-shrink-0">
@@ -544,5 +622,65 @@ Provide your analysis following the exact section structure from the system prom
     </div>
   );
 };
+
+// Helper: parse structured response
+function parseStructuredResponse(
+  responseText: string,
+  topFeatures: FeatureImportanceItem[],
+  idColumns: FeatureImportanceItem[],
+  isRegression: boolean
+): ParsedInsights {
+  const extractSection = (text: string, header: string, nextHeaders: string[]): string => {
+    const headerPattern = new RegExp(`===${header}===\\s*([\\s\\S]*?)(?=${nextHeaders.map(h => `\\n===${h}===`).join("|")}|$)`, "i");
+    const match = text.match(headerPattern);
+    return match?.[1]?.trim() || "";
+  };
+
+  const parseBullets = (text: string): string[] => {
+    if (!text) return [];
+    return text.split(/\n/)
+      .map(line => line.replace(/^[\s•\-*]+/, '').trim())
+      .filter(line => line.length > 0);
+  };
+
+  const allHeaders = ["PROBLEMA DE NEGÓCIO INFERIDO", "O QUE ESTAMOS PREVENDO", "QUALIDADE DO MODELO", "O QUE MAIS INFLUENCIA", "RISCOS", "AÇÕES RECOMENDADAS"];
+
+  const businessProblem = extractSection(responseText, allHeaders[0], allHeaders.slice(1));
+  const targetExplanation = extractSection(responseText, allHeaders[1], allHeaders.slice(2));
+  const modelQuality = extractSection(responseText, allHeaders[2], allHeaders.slice(3));
+  const featureInfluence = extractSection(responseText, allHeaders[3], allHeaders.slice(4));
+  const risksRaw = extractSection(responseText, allHeaders[4], allHeaders.slice(5));
+  const recsRaw = extractSection(responseText, allHeaders[5], []);
+
+  return {
+    businessProblem: businessProblem || "Insight não disponível.",
+    targetExplanation: targetExplanation || "",
+    modelQuality: modelQuality || "",
+    featureInfluence: featureInfluence || topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
+    risks: parseBullets(risksRaw).length > 0 
+      ? parseBullets(risksRaw) 
+      : (idColumns.length > 0 ? ["Colunas de ID detectadas entre as features mais importantes — risco de overfitting."] : []),
+    recommendations: parseBullets(recsRaw).length > 0 
+      ? parseBullets(recsRaw) 
+      : ["Analise as features mais influentes e valide se fazem sentido para o negócio."],
+  };
+}
+
+// Helper: determine confidence level from metrics
+function getConfidenceLevel(
+  metrics: { metric_name: string; metric_value: number }[],
+  isRegression: boolean
+): string {
+  if (isRegression) {
+    const r2 = metrics.find(m => m.metric_name === "R²")?.metric_value || 0;
+    if (r2 > 0.8) return "high";
+    if (r2 > 0.5) return "medium";
+    return "low";
+  }
+  const auc = metrics.find(m => m.metric_name === "AUC")?.metric_value || 0;
+  if (auc > 0.85) return "high";
+  if (auc > 0.7) return "medium";
+  return "low";
+}
 
 export default UnifiedModelInsights;
