@@ -1662,17 +1662,34 @@ serve(async (req) => {
               fileLinesCount++;
               
               if (isFirstFile && isFirstLineOfFile) {
-                // Auto-detect delimiter if the configured one produces too few columns
-                const testHeaders = parseCSVLine(line, delimiter);
-                if (testHeaders.length <= 1 && line.length > 10) {
-                  const detected = autoDetectDelimiter(line);
-                  if (detected !== delimiter) {
-                    console.log(`[AutoML] Delimiter mismatch: configured="${delimiter}", auto-detected="${detected}". Using auto-detected.`);
-                    delimiter = detected;
+                // Smart delimiter detection: compare parsed column count with expected from project_columns
+                const expectedColCount = columns.length;
+                let testHeaders = parseCSVLine(line, delimiter);
+                
+                if (testHeaders.length !== expectedColCount && expectedColCount > 0) {
+                  console.log(`[AutoML] Delimiter "${delimiter}" produced ${testHeaders.length} cols, expected ${expectedColCount}. Trying auto-detect...`);
+                  const candidates = [",", ";", "\t", "|"];
+                  for (const d of candidates) {
+                    const test = parseCSVLine(line, d);
+                    if (test.length === expectedColCount) {
+                      console.log(`[AutoML] Delimiter "${d}" matches expected ${expectedColCount} cols. Switching.`);
+                      delimiter = d;
+                      testHeaders = test;
+                      break;
+                    }
+                  }
+                  // If no exact match, use the one that produces most columns
+                  if (testHeaders.length !== expectedColCount) {
+                    const detected = autoDetectDelimiter(line);
+                    if (detected !== delimiter) {
+                      console.log(`[AutoML] No exact match. Using auto-detected "${detected}".`);
+                      delimiter = detected;
+                    }
                   }
                 }
+                
                 headers = parseCSVLine(line, delimiter);
-                console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
+                console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total, delimiter="${delimiter}")`);
                 isFirstLineOfFile = false;
               } else if (!isFirstFile && isFirstLineOfFile) {
                 const possibleHeaders = parseCSVLine(line, delimiter);
