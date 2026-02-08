@@ -42,12 +42,29 @@ export interface ContextFlags {
   used_feature_importance: boolean;
 }
 
+export interface PreflightReport {
+  target_valid: boolean;
+  target_issues: string[];
+  target_suggestions: string[];
+  features_blocked: string[];
+  features_block_reasons: Record<string, string>;
+  warnings: string[];
+}
+
+export interface ModelQualityInfo {
+  model_quality_flag: string | null;
+  baseline_metrics: Record<string, number> | null;
+  predictions_count: number | null;
+  preflight_report: PreflightReport | null;
+}
+
 export interface DebugInfo {
   project_state_version: string;
   context_flags: ContextFlags;
   missing_fields: string[];
   fallback_reason: string | null;
   payload_preview: Record<string, any>;
+  quality_info: ModelQualityInfo;
 }
 
 export function useTrainingInsightContext(projectId: string | undefined) {
@@ -72,7 +89,7 @@ export function useTrainingInsightContext(projectId: string | undefined) {
 
     try {
       // Fetch all context in parallel
-      const [aiCtxRes, inferenceRes, settingsRes, edaInsightsRes] = await Promise.all([
+      const [aiCtxRes, inferenceRes, settingsRes, edaInsightsRes, modelRes, predictionsCountRes] = await Promise.all([
         supabase
           .from("project_ai_context")
           .select("context, last_updated_at")
@@ -97,12 +114,33 @@ export function useTrainingInsightContext(projectId: string | undefined) {
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
+        modelId
+          ? supabase
+              .from("project_models")
+              .select("hyperparameters")
+              .eq("id", modelId)
+              .maybeSingle()
+          : Promise.resolve({ data: null }),
+        supabase
+          .from("predictions")
+          .select("id", { count: "exact", head: true })
+          .eq("project_id", projectId)
+          .eq("is_latest", true),
       ]);
 
       const aiCtx = aiCtxRes.data?.context as Record<string, any> | null;
       const inference = inferenceRes.data;
       const settings = settingsRes.data;
       const edaInsights = edaInsightsRes.data;
+
+      // Extract model quality info from hyperparameters
+      const hp = modelRes.data?.hyperparameters as Record<string, any> | null;
+      const qualityInfo: ModelQualityInfo = {
+        model_quality_flag: hp?.model_quality_flag || null,
+        baseline_metrics: hp?.baseline_metrics || null,
+        predictions_count: predictionsCountRes.count ?? null,
+        preflight_report: hp?.preflight_report || null,
+      };
 
       // Build EDA summary
       let edaSummary: string | null = null;
@@ -239,6 +277,7 @@ export function useTrainingInsightContext(projectId: string | undefined) {
           metrics_count: Object.keys(metricsMap).length,
           fi_count: featureImportances.length,
         },
+        quality_info: qualityInfo,
       };
 
       setProjectState(state);

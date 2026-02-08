@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Bug, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertTriangle } from "lucide-react";
+import { Bug, ChevronDown, ChevronUp, CheckCircle2, XCircle, AlertTriangle, ShieldCheck, ShieldX } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import type { DebugInfo, ContextFlags } from "@/hooks/useTrainingInsightContext";
 
@@ -49,6 +49,9 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
 
   if (!isAdmin) return null;
 
+  const qi = debugInfo?.quality_info;
+  const qFlag = qi?.model_quality_flag;
+
   return (
     <Card className="border-dashed border-yellow-500/40 bg-yellow-500/5 p-4">
       <button
@@ -58,7 +61,7 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
         <div className="flex items-center gap-2">
           <Bug className="w-4 h-4 text-yellow-600" />
           <span className="text-sm font-mono font-semibold text-yellow-700 dark:text-yellow-400">
-            Debug LYS
+            Debug LYS CUMULATIVE
           </span>
           {debugInfo && (
             <Badge
@@ -66,6 +69,14 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
               className="text-xs"
             >
               {debugInfo.fallback_reason ? "FALLBACK" : "CUMULATIVE"}
+            </Badge>
+          )}
+          {qFlag && (
+            <Badge
+              variant={qFlag === "ok" ? "secondary" : "destructive"}
+              className="text-xs"
+            >
+              {qFlag === "ok" ? "QUALITY OK" : "QUALITY FAIL"}
             </Badge>
           )}
         </div>
@@ -113,6 +124,113 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
                   ))}
                 </div>
               </div>
+
+              {/* Model Quality Info */}
+              {qi && (
+                <div className="space-y-2">
+                  <span className="text-muted-foreground block mb-1">quality_info:</span>
+                  <div className="pl-2 space-y-1.5">
+                    {/* model_quality_flag */}
+                    <div className="flex items-center gap-1.5">
+                      {qFlag === "ok" ? (
+                        <ShieldCheck className="w-3.5 h-3.5 text-green-500" />
+                      ) : qFlag === "fail" ? (
+                        <ShieldX className="w-3.5 h-3.5 text-red-500" />
+                      ) : (
+                        <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
+                      )}
+                      <span className={qFlag === "fail" ? "text-red-400" : "text-foreground"}>
+                        model_quality_flag: {qFlag || "N/A"}
+                      </span>
+                    </div>
+
+                    {/* predictions_count */}
+                    <div className="flex items-center gap-1.5">
+                      {(qi.predictions_count ?? 0) > 0 ? (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                      ) : (
+                        <XCircle className="w-3.5 h-3.5 text-red-500" />
+                      )}
+                      <span className={(qi.predictions_count ?? 0) === 0 ? "text-red-400" : "text-foreground"}>
+                        predictions_count: {qi.predictions_count ?? "N/A"}
+                      </span>
+                    </div>
+
+                    {/* baseline_metrics */}
+                    {qi.baseline_metrics && (
+                      <div>
+                        <span className="text-muted-foreground block mb-1">baseline_metrics:</span>
+                        <div className="pl-2 grid grid-cols-2 gap-1">
+                          {Object.entries(qi.baseline_metrics).map(([key, value]) => (
+                            <span key={key} className="text-foreground">
+                              {key}: {typeof value === "number" ? value.toFixed(4) : String(value)}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* preflight_report */}
+                    {qi.preflight_report && (
+                      <div>
+                        <span className="text-muted-foreground block mb-1">preflight_report:</span>
+                        <div className="pl-2 space-y-1">
+                          <div className="flex items-center gap-1.5">
+                            {qi.preflight_report.target_valid ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                            ) : (
+                              <XCircle className="w-3.5 h-3.5 text-red-500" />
+                            )}
+                            <span className={qi.preflight_report.target_valid ? "text-foreground" : "text-red-400"}>
+                              target_validity: {qi.preflight_report.target_valid ? "VALID" : "INVALID"}
+                            </span>
+                          </div>
+                          
+                          {qi.preflight_report.target_issues.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {qi.preflight_report.target_issues.map((issue, idx) => (
+                                <Badge key={idx} variant="outline" className="text-[10px] text-orange-500 border-orange-500/30">
+                                  {issue}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+
+                          <div className="flex items-center gap-1.5">
+                            {qi.preflight_report.features_blocked.length === 0 ? (
+                              <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                            ) : (
+                              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
+                            )}
+                            <span className="text-foreground">
+                              feature_validity: {qi.preflight_report.features_blocked.length} features bloqueadas
+                            </span>
+                          </div>
+
+                          {qi.preflight_report.features_blocked.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {qi.preflight_report.features_blocked.map((f, idx) => (
+                                <Badge key={idx} variant="outline" className="text-[10px] text-red-500 border-red-500/30">
+                                  {f}: {qi.preflight_report!.features_block_reasons[f] || "blocked"}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+
+                          {qi.preflight_report.warnings.length > 0 && (
+                            <div>
+                              <span className="text-yellow-600">warnings ({qi.preflight_report.warnings.length}):</span>
+                              {qi.preflight_report.warnings.map((w, idx) => (
+                                <div key={idx} className="text-yellow-600/80 pl-2">⚠ {w}</div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Missing fields */}
               {debugInfo.missing_fields.length > 0 && (
