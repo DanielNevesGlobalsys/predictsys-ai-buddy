@@ -41,6 +41,7 @@ interface BatchFile {
   status: "pending" | "uploading" | "uploaded" | "error";
   error?: string;
   storagePathfile?: string;
+  detectedFormat?: string;
 }
 
 interface BatchImportModalProps {
@@ -70,6 +71,23 @@ const isValidBatchFormat = (filename: string): boolean => {
   return SUPPORTED_EXTENSIONS.includes(ext);
 };
 
+const getFormatFromName = (filename: string): string => {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  if ([".parquet", ".parq", ".pq"].includes(ext)) return "Parquet";
+  if ([".xlsx", ".xls"].includes(ext)) return "Excel";
+  if (ext === ".json") return "JSON";
+  return "CSV";
+};
+
+const getFormatBadgeClass = (format: string): string => {
+  switch (format) {
+    case "Parquet": return "bg-purple-500/10 text-purple-600 border-purple-500/30";
+    case "Excel": return "bg-green-500/10 text-green-600 border-green-500/30";
+    case "JSON": return "bg-amber-500/10 text-amber-600 border-amber-500/30";
+    default: return "bg-blue-500/10 text-blue-600 border-blue-500/30";
+  }
+};
+
 const BatchImportModal = ({
   open,
   onOpenChange,
@@ -91,7 +109,7 @@ const BatchImportModal = ({
   const [uploadStats, setUploadStats] = useState<UploadProgress | null>(null);
   const [uploadPhase, setUploadPhase] = useState<"uploading" | "processing" | "done">("uploading");
   const [batchFiles, setBatchFiles] = useState<BatchFile[]>(
-    initialFiles.map(f => ({ file: f, status: "pending" }))
+    initialFiles.map(f => ({ file: f, status: "pending", detectedFormat: getFormatFromName(f.name) }))
   );
   const [isDetectingDelimiter, setIsDetectingDelimiter] = useState(false);
   const [delimiterAutoDetected, setDelimiterAutoDetected] = useState(false);
@@ -177,7 +195,7 @@ const BatchImportModal = ({
       });
     }
     
-    const newBatchFiles = validFiles.map(f => ({ file: f, status: "pending" as const }));
+    const newBatchFiles = validFiles.map(f => ({ file: f, status: "pending" as const, detectedFormat: getFormatFromName(f.name) }));
     setBatchFiles(prev => [...prev, ...newBatchFiles]);
     
     e.target.value = "";
