@@ -37,6 +37,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   } | null>(null);
   
   const [modelQualityFlag, setModelQualityFlag] = useState<string | null>(null);
+  const [scoreCoveragePct, setScoreCoveragePct] = useState<number | null>(null);
   
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
@@ -127,11 +128,25 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
           const hp = prodModel.hyperparameters as any;
           const qFlag = hp?.model_quality_flag || null;
           const sanity = hp?.prediction_sanity;
-          // Override to fail if prediction sanity failed
           if (sanity && sanity.passed === false) {
             setModelQualityFlag("fail");
           } else {
             setModelQualityFlag(qFlag);
+          }
+        }
+
+        // Check score coverage from AI context
+        const { data: aiCtxData } = await supabase
+          .from('project_ai_context')
+          .select('context')
+          .eq('project_id', projectId)
+          .maybeSingle();
+
+        if (aiCtxData?.context) {
+          const ctx = aiCtxData.context as any;
+          const coverage = ctx?.predictions?.score_report?.coverage_pct;
+          if (typeof coverage === 'number') {
+            setScoreCoveragePct(coverage);
           }
         }
       } catch (err) {
@@ -315,7 +330,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             
             <div className="space-y-2">
               <h3 className="text-xl font-semibold text-destructive">
-                {t('businessDashboard.modelQualityFail', { defaultValue: 'Modelo abaixo do baseline' })}
+                {t('businessDashboard.modelQualityFail', { defaultValue: 'Modelo reprovado — abaixo do baseline' })}
               </h3>
               <p className="text-muted-foreground max-w-lg mx-auto">
                 {t('businessDashboard.modelQualityFailDesc', { 
@@ -325,13 +340,11 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             </div>
 
             <div className="flex items-center justify-center gap-3 flex-wrap">
-              <Button 
-                variant="outline"
-                size="sm"
-                onClick={handleRunPredictions}
-                disabled={runningBatch}
-                className="gap-2"
-              >
+              <Button variant="outline" size="sm" onClick={() => window.history.back()} className="gap-2">
+                <ArrowLeft className="w-4 h-4" />
+                {t('businessDashboard.reviewTarget', { defaultValue: 'Revisar Target' })}
+              </Button>
+              <Button variant="outline" size="sm" onClick={handleRunPredictions} disabled={runningBatch} className="gap-2">
                 <RefreshCw className="w-4 h-4" />
                 {t('businessDashboard.retryPredictions', { defaultValue: 'Re-gerar previsões' })}
               </Button>
@@ -345,6 +358,44 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
                 <li>• {t('businessDashboard.retrainModel', { defaultValue: 'Re-treine o modelo com novos parâmetros' })}</li>
               </ul>
             </div>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // Coverage gate: block dashboard if score coverage < 95%
+  if (scoreCoveragePct !== null && scoreCoveragePct < 95 && data.predictions.length > 0) {
+    return (
+      <div className="space-y-6">
+        <BusinessDashboardHero 
+          projectId={projectId}
+          problemContext={problemContext}
+          problemType={problemType}
+          horizonDays={filters.horizon}
+        />
+        
+        <Card className="p-8 border-yellow-500/50">
+          <div className="text-center space-y-6">
+            <div className="w-16 h-16 mx-auto rounded-full bg-yellow-500/10 flex items-center justify-center">
+              <AlertCircle className="w-8 h-8 text-yellow-600" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-xl font-semibold text-yellow-700 dark:text-yellow-400">
+                Score parcial — cobertura de {scoreCoveragePct.toFixed(1)}%
+              </h3>
+              <p className="text-muted-foreground max-w-lg mx-auto">
+                As previsões cobrem apenas {scoreCoveragePct.toFixed(1)}% da base esperada. 
+                Para KPIs confiáveis, é necessário cobertura mínima de 95%. 
+                Re-gere as previsões para processar 100% dos dados.
+              </p>
+            </div>
+
+            <Button size="lg" onClick={handleRunPredictions} disabled={runningBatch} className="gap-2">
+              <PlayCircle className="w-5 h-5" />
+              Gerar previsões (cobertura total)
+            </Button>
           </div>
         </Card>
       </div>

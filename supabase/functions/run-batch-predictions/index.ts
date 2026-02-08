@@ -7,8 +7,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ===== NO MAX_ROWS LIMIT — process 100% of the dataset =====
+const CHUNK_SIZE = 3000; // rows per chunk for memory safety
+const MAX_BYTES_PER_FILE = 50 * 1024 * 1024; // 50MB per file
+const DB_INSERT_BATCH = 500; // rows per DB insert
 
-// Tree prediction helper (for gradient boosting models)
 function predictTree(tree: any, x: number[]): number {
   if (!tree || tree.isLeaf) return tree?.value || 0;
   return x[tree.feature] <= tree.threshold 
@@ -16,7 +19,6 @@ function predictTree(tree: any, x: number[]): number {
     : predictTree(tree.right, x);
 }
 
-// Simple statistical functions
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -32,6 +34,20 @@ function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
 }
 
+function parseCSVLine(line: string, delim: string): string[] {
+  const result: string[] = [];
+  let current = "";
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    if (char === '"') { inQuotes = !inQuotes; }
+    else if (char === delim && !inQuotes) { result.push(current.trim().replace(/^"|"$/g, "")); current = ""; }
+    else { current += char; }
+  }
+  result.push(current.trim().replace(/^"|"$/g, ""));
+  return result;
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -41,15 +57,12 @@ serve(async (req) => {
     const { project_id, horizon_days = 30 } = await req.json();
 
     if (!project_id) {
-      return new Response(JSON.stringify({ 
-        error: "project_id é obrigatório" 
-      }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      return new Response(JSON.stringify({ error: "project_id é obrigatório" }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`Running batch predictions for project: ${project_id}`);
+    console.log(`[Scoring] Starting 100% coverage scoring for project: ${project_id}`);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
@@ -63,10 +76,8 @@ serve(async (req) => {
       .single();
 
     if (projectError || !project) {
-      console.error("Project not found:", projectError);
       return new Response(JSON.stringify({ error: "Projeto não encontrado" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
@@ -80,98 +91,89 @@ serve(async (req) => {
       .single();
 
     if (modelError || !productionModel) {
-      console.error("Production model not found:", modelError);
       return new Response(JSON.stringify({ 
         error: "Nenhum modelo em produção encontrado. Selecione um modelo para produção primeiro." 
       }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-
-    console.log(`Using production model: ${productionModel.algorithm_name} (${productionModel.id})`);
 
     const hyperparams = productionModel.hyperparameters as any || {};
     const modelArtifacts = hyperparams.model_artifacts;
     const savedNormalization = hyperparams.normalization;
     const savedFeatureNames = hyperparams.feature_names as string[] | undefined;
-    
-    const hasRealModel = !!modelArtifacts && (modelArtifacts.weights || modelArtifacts.trees);
-    
-    if (!hasRealModel) {
-      console.warn("[Predictions] ⚠️ Modelo sem artefatos de treinamento. Re-treine o modelo.");
+
+    if (!modelArtifacts || (!modelArtifacts.weights && !modelArtifacts.trees)) {
       return new Response(JSON.stringify({ 
-        error: "Modelo sem artefatos de treinamento salvos. Re-treine o modelo para gerar previsões reais.",
+        error: "Modelo sem artefatos de treinamento salvos. Re-treine o modelo.",
         action: "retrain"
       }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    
-    console.log(`[Predictions] Model artifacts loaded: type=${modelArtifacts.type}, hasWeights=${!!modelArtifacts.weights}, hasTrees=${!!modelArtifacts.trees}`);
 
-    // Get feature columns
-    const { data: columns, error: colError } = await supabase
+    if (!savedNormalization?.means || !savedNormalization?.stds || !savedFeatureNames?.length) {
+      return new Response(JSON.stringify({ 
+        error: "Modelo sem parâmetros de normalização. Re-treine o modelo.",
+        action: "retrain"
+      }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Get columns
+    const { data: columns } = await supabase
       .from("project_columns")
       .select("*")
       .eq("project_id", project_id)
       .order("column_index");
 
-    if (colError || !columns) {
+    if (!columns) {
       return new Response(JSON.stringify({ error: "Erro ao carregar colunas do projeto" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get numeric and categorical feature columns (excluding target)
-    // Handle both accented and non-accented type names
     const numericTypes = ["numerico", "numérico", "numeric"];
-    const categoricalTypes = ["categorico", "categórico", "categorical", "texto", "text"];
-    
     const numericFeatures = columns.filter(c => 
       numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
     );
-    const categoricalFeatures = columns.filter(c => 
-      categoricalTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
-    );
     const baseFeatureNames = numericFeatures.map(c => c.column_name);
-
-    console.log(`Found ${numericFeatures.length} numeric features and ${categoricalFeatures.length} categorical features`);
 
     if (baseFeatureNames.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada no projeto" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
-    
-    // Fetch enabled project features for feature engineering
+
+    // Fetch engineered features
     const { data: projectFeaturesData } = await supabase
       .from("project_features")
       .select("*")
       .eq("project_id", project_id)
       .eq("enabled", true);
-    
+
     const enabledFeatures: ProjectFeature[] = (projectFeaturesData || []).map(f => ({
-      id: f.id,
-      project_id: f.project_id,
-      name: f.name,
-      label: f.label,
-      description: f.description || undefined,
-      enabled: f.enabled,
+      id: f.id, project_id: f.project_id, name: f.name, label: f.label,
+      description: f.description || undefined, enabled: f.enabled,
       expression: f.expression as FeatureExpression
     }));
-    
+
     const engineeredFeatureNames = enabledFeatures.map(f => f.name);
     const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
-    
-    console.log(`Engineered features: ${engineeredFeatureNames.length}`);
-    console.log(`Total features: ${allFeatureNames.length}`);
 
-    // Get active dataset from project_datasets - use maybeSingle for fallback
-    const { data: activeDataset, error: datasetError } = await supabase
+    // Build normalization lookup from saved model
+    const means = allFeatureNames.map(name => {
+      const idx = savedFeatureNames.indexOf(name);
+      return idx !== -1 ? savedNormalization.means[idx] : 0;
+    });
+    const stds = allFeatureNames.map(name => {
+      const idx = savedFeatureNames.indexOf(name);
+      return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
+    });
+
+    // Get dataset
+    const { data: activeDataset } = await supabase
       .from("project_datasets")
       .select("*")
       .eq("project_id", project_id)
@@ -179,506 +181,378 @@ serve(async (req) => {
       .maybeSingle();
 
     let delimiter = ",";
-    let isBatchImport = false;
     let filePaths: string[] = [];
-    let sourceMetadata: Record<string, any> = {};
+    let totalExpectedRows = 0;
 
     if (activeDataset) {
-      // Use active dataset
-      sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
+      const sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
       delimiter = sourceMetadata.delimiter || ",";
-      isBatchImport = activeDataset.source_type === "batch_import";
-      
-      if (isBatchImport && sourceMetadata.file_paths) {
+      const isBatch = activeDataset.source_type === "batch_import";
+      if (isBatch && sourceMetadata.file_paths) {
         filePaths = sourceMetadata.file_paths as string[];
       } else {
         filePaths = [activeDataset.storage_path];
       }
-      console.log(`[Predictions] Usando dataset ativo: ${activeDataset.name}`);
+      totalExpectedRows = activeDataset.total_rows || 0;
     } else if (project.dataset_filename) {
-      // Fallback to project.dataset_filename - it already contains the full path!
-      console.log(`[Predictions] Sem dataset ativo, usando project.dataset_filename`);
       filePaths = [project.dataset_filename];
-      delimiter = ","; // Default delimiter
+      totalExpectedRows = project.total_rows || project.dataset_rows || 0;
     } else {
-      console.error("No dataset found for project");
-      return new Response(JSON.stringify({ error: "Nenhum dataset encontrado para o projeto" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      return new Response(JSON.stringify({ error: "Nenhum dataset encontrado" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`Dataset path: ${filePaths[0]}, Batch: ${isBatchImport}, Delimiter: ${delimiter}`);
-
-    // Some ingestion flows store a *folder prefix* in storage_path (e.g. ".../uuid")
-    // while the actual file lives inside that folder (e.g. ".../uuid/dataset.csv").
-    // If we receive a folder, expand it into real object paths before streaming.
+    // Expand folder paths
     const expandedFilePaths = (await Promise.all(
       filePaths.map(async (p) => {
-        const { data: listed, error: listError } = await supabase.storage
-          .from("datasets")
-          .list(p, { limit: 1000 });
-
-        if (!listError && listed && listed.length > 0) {
+        const { data: listed } = await supabase.storage.from("datasets").list(p, { limit: 1000 });
+        if (listed && listed.length > 0) {
           const childPaths = listed
             .map((obj) => (obj as any)?.name)
             .filter((name): name is string => typeof name === "string" && name.length > 0)
             .map((name) => `${p}/${name}`);
-
           return childPaths.length > 0 ? childPaths : [p];
         }
-
         return [p];
       })
     )).flat();
-
     filePaths = expandedFilePaths;
-    console.log(`Resolved file paths: ${filePaths.length}`);
 
     if (filePaths.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // CSV parsing helper
-    function parseCSVLine(line: string, delim: string): string[] {
-      const result: string[] = [];
-      let current = "";
-      let inQuotes = false;
-      
-      for (let i = 0; i < line.length; i++) {
-        const char = line[i];
-        if (char === '"') {
-          inQuotes = !inQuotes;
-        } else if (char === delim && !inQuotes) {
-          result.push(current.trim().replace(/^"|"$/g, ""));
-          current = "";
-        } else {
-          current += char;
-        }
-      }
-      result.push(current.trim().replace(/^"|"$/g, ""));
-      return result;
-    }
-
-    // Stream data from files with byte limits
-    const MAX_ROWS = 5000; // Limit for batch predictions
-    const MAX_BYTES_PER_FILE = 10 * 1024 * 1024; // 10MB per file
-    let allLines: string[] = [];
-    let headers: string[] = [];
-    let isFirstFile = true;
-
-    for (const filePath of filePaths) {
-      if (allLines.length >= MAX_ROWS) break;
-
-      console.log(`Streaming: ${filePath}`);
-      
-      try {
-        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
-          .from("datasets")
-          .createSignedUrl(filePath, 300);
-
-        if (signedUrlError || !signedUrlData?.signedUrl) {
-          console.error(`Error creating signed URL for ${filePath}:`, signedUrlError);
-          continue;
-        }
-
-        const response = await fetch(signedUrlData.signedUrl);
-        if (!response.ok || !response.body) {
-          console.error(`Error fetching ${filePath}: HTTP ${response.status}`);
-          continue;
-        }
-
-        const reader = response.body.getReader();
-        const decoder = new TextDecoder("utf-8");
-        let bytesRead = 0;
-        let buffer = "";
-        let fileLines: string[] = [];
-
-        while (bytesRead < MAX_BYTES_PER_FILE && fileLines.length < MAX_ROWS + 10) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          bytesRead += value?.length || 0;
-          buffer += decoder.decode(value, { stream: true });
-
-          const lineBreaks = buffer.split(/\r?\n/);
-          for (let i = 0; i < lineBreaks.length - 1; i++) {
-            const line = lineBreaks[i].trim();
-            if (line) fileLines.push(line);
-          }
-          buffer = lineBreaks[lineBreaks.length - 1];
-        }
-
-        try { await reader.cancel(); } catch (_) {}
-
-        console.log(`Bytes read: ${bytesRead}, Lines: ${fileLines.length}`);
-
-        if (fileLines.length === 0) continue;
-
-        if (isFirstFile) {
-          headers = parseCSVLine(fileLines[0], delimiter);
-          console.log(`Headers: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
-          isFirstFile = false;
-          
-          const remaining = MAX_ROWS - allLines.length;
-          allLines.push(...fileLines.slice(1, 1 + remaining));
-        } else {
-          const fileHeaders = parseCSVLine(fileLines[0], delimiter);
-          const startLine = fileHeaders.length === headers.length ? 1 : 0;
-          
-          const remaining = MAX_ROWS - allLines.length;
-          allLines.push(...fileLines.slice(startLine, startLine + remaining));
-        }
-
-        console.log(`Lines accumulated: ${allLines.length}`);
-
-      } catch (err) {
-        console.error(`Error processing ${filePath}:`, err);
-        continue;
-      }
-    }
-
-    if (headers.length === 0 || allLines.length === 0) {
-      return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    console.log(`Total lines for predictions: ${allLines.length}`);
-
-    // Find column indices for base features
-    const featureIndices = baseFeatureNames.map(name => headers.indexOf(name));
-    const categoricalIndices = categoricalFeatures.map(c => ({
-      name: c.column_name,
-      index: headers.indexOf(c.column_name)
-    }));
-
-    // Look for entity_id column
-    const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'ID', 'Id'];
-    let entityIdIndex = -1;
-    let entityIdColumn = 'row_index';
-    for (const candidate of entityIdCandidates) {
-      const idx = headers.indexOf(candidate);
-      if (idx !== -1) {
-        entityIdIndex = idx;
-        entityIdColumn = candidate;
-        break;
-      }
-    }
-
-    // Look for segmentation columns
-    const segmentationCandidates: Record<string, number> = {};
+    // Segmentation field names
     const segmentColNames = ['segment', 'segmento', 'segmento_cliente', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
-    
-    segmentColNames.forEach(name => {
-      const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
-      if (idx !== -1) {
-        segmentationCandidates[name] = idx;
-      }
-    });
-
-    // Use saved normalization from training — REQUIRED for consistent predictions
-    let means: number[];
-    let stds: number[];
-    
-    if (savedNormalization?.means && savedNormalization?.stds && savedFeatureNames) {
-      // Map saved normalization to the order of allFeatureNames
-      means = allFeatureNames.map(name => {
-        const idx = savedFeatureNames.indexOf(name);
-        return idx !== -1 ? savedNormalization.means[idx] : 0;
-      });
-      stds = allFeatureNames.map(name => {
-        const idx = savedFeatureNames.indexOf(name);
-        return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
-      });
-      console.log(`[Predictions] Using saved normalization from training (${means.length} features)`);
-    } else {
-      console.warn(`[Predictions] ⚠️ No saved normalization — predictions may be inaccurate`);
-      // Fallback: calculate from data (not ideal but avoids breaking)
-      const featureData: number[][] = baseFeatureNames.map(() => []);
-      for (let i = 0; i < Math.min(allLines.length, 2000); i++) {
-        const values = parseCSVLine(allLines[i], delimiter);
-        featureIndices.forEach((idx, j) => {
-          const val = parseFloat((values[idx] || "").replace(",", "."));
-          if (!isNaN(val)) featureData[j].push(val);
-        });
-      }
-      const baseMeans = featureData.map(arr => mean(arr));
-      const baseStds = featureData.map(arr => std(arr) || 1);
-      // For engineered features, use 0/1 defaults
-      means = [...baseMeans, ...engineeredFeatureNames.map(() => 0)];
-      stds = [...baseStds, ...engineeredFeatureNames.map(() => 1)];
-    }
-
-    // Normalization is now handled in unified means/stds above
+    const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'ID', 'Id'];
 
     const isClassification = project.problem_type === "classification";
     const batchId = `batch_${Date.now()}`;
     const predictionDate = new Date().toISOString();
-    const predictions: any[] = [];
+    const startTime = Date.now();
 
-    console.log(`Processing ${allLines.length} entities...`);
+    // Mark all existing predictions as not latest
+    await supabase.from("predictions").update({ is_latest: false }).eq("project_id", project_id);
 
-    // First, mark all existing predictions for this project as not latest
-    await supabase
-      .from("predictions")
-      .update({ is_latest: false })
-      .eq("project_id", project_id);
+    // ===== CHUNKED SCORING: process ALL rows =====
+    let totalRowsScored = 0;
+    let totalRowsInvalid = 0;
+    let headers: string[] = [];
+    let isFirstFile = true;
+    let featureIndices: number[] = [];
+    let entityIdIndex = -1;
+    let entityIdColumn = 'row_index';
+    let segmentationCandidates: Record<string, number> = {};
 
-    // Process each row
-    for (let i = 0; i < allLines.length; i++) {
-      const values = parseCSVLine(allLines[i], delimiter);
-      
-      // Get entity ID
-      const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${i + 1}`;
-      
-      // Build raw record for feature engineering
-      const rawRecord: Record<string, string | number | null> = {};
-      headers.forEach((h, idx) => {
-        rawRecord[h] = values[idx] || null;
-      });
-      
-      // Extract and normalize base feature values using unified normalization
-      const baseFeatureValues = featureIndices.map((idx, j) => {
-        const val = parseFloat((values[idx] || "").replace(",", "."));
-        if (isNaN(val)) return 0;
-        return (val - means[j]) / stds[j];
-      });
-      
-      // Apply and normalize engineered features using unified normalization
-      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-      const engineeredFeatureValues = engineeredFeatureNames.map((name, j) => {
-        const val = engineeredValues[name];
-        if (typeof val !== "number" || isNaN(val)) return 0;
-        const normIdx = baseFeatureNames.length + j;
-        return (val - means[normIdx]) / stds[normIdx];
-      });
-      
-      // Combine all features
-      const featureValues = [...baseFeatureValues, ...engineeredFeatureValues];
+    // Score stats accumulators
+    const allPredValues: number[] = [];
 
-      // Make prediction using real model artifacts
-      
-      // Extract segmentation values
-      const segmentValues: Record<string, string | null> = {
-        segment: null,
-        region: null,
-        state: null,
-        city: null,
-        channel: null,
-        campaign: null,
-        cohort: null,
-        age_group: null,
-        product_category: null
-      };
+    for (const filePath of filePaths) {
+      console.log(`[Scoring] Processing file: ${filePath}`);
 
-      Object.entries(segmentationCandidates).forEach(([name, idx]) => {
-        const value = values[idx] || null;
-        // Map to standard column names
-        if (name.includes('segment')) segmentValues.segment = value;
-        else if (name.includes('region') || name.includes('regiao')) segmentValues.region = value;
-        else if (name.includes('state') || name.includes('estado')) segmentValues.state = value;
-        else if (name.includes('city') || name.includes('cidade')) segmentValues.city = value;
-        else if (name.includes('channel') || name.includes('canal')) segmentValues.channel = value;
-        else if (name.includes('campaign') || name.includes('campanha')) segmentValues.campaign = value;
-        else if (name.includes('cohort') || name.includes('coorte')) segmentValues.cohort = value;
-        else if (name.includes('age') || name.includes('etaria')) segmentValues.age_group = value;
-        else if (name.includes('category') || name.includes('categoria')) segmentValues.product_category = value;
-      });
+      const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+        .from("datasets").createSignedUrl(filePath, 600);
 
-      // === REAL MODEL INFERENCE ===
-      let predictedValue: number | null = null;
-      let probability: number | null = null;
-      let predictedClass: string | null = null;
-
-      if (modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees) {
-        // Gradient Boosting inference
-        let pred = modelArtifacts.base || 0;
-        const lr = modelArtifacts.lr || 0.1;
-        for (const tree of modelArtifacts.trees) {
-          pred += lr * predictTree(tree, featureValues);
-        }
-        if (isClassification) {
-          probability = sigmoid(pred);
-          predictedClass = probability >= 0.5 ? "1" : "0";
-        } else {
-          predictedValue = pred;
-        }
-      } else if (modelArtifacts.weights) {
-        // Linear / Logistic regression inference
-        const weights: number[] = modelArtifacts.weights;
-        const bias: number = modelArtifacts.bias || 0;
-        let z = bias;
-        for (let j = 0; j < Math.min(weights.length, featureValues.length); j++) {
-          z += weights[j] * featureValues[j];
-        }
-        if (isClassification) {
-          probability = sigmoid(z);
-          predictedClass = probability >= 0.5 ? "1" : "0";
-        } else {
-          predictedValue = z;
-        }
-      } else {
-        // Should not happen — model validated above
-        console.warn(`[Predictions] Row ${i}: no usable model artifacts, skipping`);
+      if (signedUrlError || !signedUrlData?.signedUrl) {
+        console.error(`Error creating signed URL for ${filePath}:`, signedUrlError);
         continue;
       }
 
-      if (isClassification) {
-        predictions.push({
-          project_id: project_id,
-          user_id: project.user_id,
-          entity_id: entityId,
-          entity_type: "customer",
-          reference_date: predictionDate,
-          prediction_date: predictionDate,
-          horizon_days: horizon_days,
-          problem_type: "classification",
-          problem_context: project.business_objective || null,
-          probability_event: probability,
-          predicted_class: predictedClass,
-          predicted_value: null,
-          potential_value: null,
-          batch_id: batchId,
-          is_latest: true,
-          ...segmentValues,
-          metadata: {
-            model_id: productionModel.id,
-            model_name: productionModel.algorithm_name
-          }
-        });
-      } else {
-        predictions.push({
-          project_id: project_id,
-          user_id: project.user_id,
-          entity_id: entityId,
-          entity_type: "customer",
-          reference_date: predictionDate,
-          prediction_date: predictionDate,
-          horizon_days: horizon_days,
-          problem_type: "regression",
-          problem_context: project.business_objective || null,
-          probability_event: null,
-          predicted_class: null,
-          predicted_value: predictedValue,
-          potential_value: predictedValue,
-          batch_id: batchId,
-          is_latest: true,
-          ...segmentValues,
-          metadata: {
-            model_id: productionModel.id,
-            model_name: productionModel.algorithm_name
-          }
-        });
+      const response = await fetch(signedUrlData.signedUrl);
+      if (!response.ok || !response.body) {
+        console.error(`Error fetching ${filePath}: HTTP ${response.status}`);
+        continue;
       }
-    }
 
-    console.log(`Generated ${predictions.length} predictions, inserting into database...`);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+      let bytesRead = 0;
+      let buffer = "";
+      let chunkRows: string[] = [];
+      let isFirstLineOfFile = true;
 
-    // Insert predictions in batches of 500
-    const batchSize = 500;
-    let insertedCount = 0;
-    
-    for (let i = 0; i < predictions.length; i += batchSize) {
-      const batch = predictions.slice(i, i + batchSize);
-      const { error: insertError } = await supabase
-        .from("predictions")
-        .insert(batch);
+      const processChunk = async (rows: string[]) => {
+        const predictions: any[] = [];
 
-      if (insertError) {
-        console.error("Error inserting predictions batch:", insertError);
-        throw insertError;
-      }
-      insertedCount += batch.length;
-      console.log(`Inserted ${insertedCount}/${predictions.length} predictions`);
-    }
+        for (let i = 0; i < rows.length; i++) {
+          const values = parseCSVLine(rows[i], delimiter);
+          const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${totalRowsScored + i + 1}`;
 
-    console.log(`Successfully inserted ${predictions.length} predictions`);
+          // Build raw record
+          const rawRecord: Record<string, string | number | null> = {};
+          headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
 
-    // ── Append AI context for predictions stage ──
-    try {
-      const totalEntities = predictions.length;
-      const classificationPreds = predictions.filter(p => p.problem_type === "classification");
-      const regressionPreds = predictions.filter(p => p.problem_type === "regression");
+          // Extract and normalize base features
+          const baseFeatureValues = featureIndices.map((idx, j) => {
+            const val = parseFloat((values[idx] || "").replace(",", "."));
+            if (isNaN(val)) return 0;
+            return (val - means[j]) / stds[j];
+          });
 
-      const highRiskCount = classificationPreds.filter(p => (p.probability_event || 0) >= 0.7).length;
-      const avgProbability = classificationPreds.length > 0
-        ? classificationPreds.reduce((s, p) => s + (p.probability_event || 0), 0) / classificationPreds.length
-        : null;
-      const avgPredictedValue = regressionPreds.length > 0
-        ? regressionPreds.reduce((s, p) => s + (p.predicted_value || 0), 0) / regressionPreds.length
-        : null;
+          // Engineered features
+          const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+          const engineeredFeatureValues = engineeredFeatureNames.map((name, j) => {
+            const val = engineeredValues[name];
+            if (typeof val !== "number" || isNaN(val)) return 0;
+            const normIdx = baseFeatureNames.length + j;
+            return (val - means[normIdx]) / stds[normIdx];
+          });
 
-      // Segment summary
-      const segmentMap = new Map<string, { count: number; highRisk: number }>();
-      predictions.forEach(p => {
-        const seg = p.segment || "sem_segmento";
-        if (!segmentMap.has(seg)) segmentMap.set(seg, { count: 0, highRisk: 0 });
-        const s = segmentMap.get(seg)!;
-        s.count++;
-        if ((p.probability_event || 0) >= 0.7) s.highRisk++;
-      });
+          const featureValues = [...baseFeatureValues, ...engineeredFeatureValues];
 
-      const segmentInsights = Array.from(segmentMap.entries())
-        .sort((a, b) => b[1].highRisk - a[1].highRisk)
-        .slice(0, 10)
-        .map(([seg, info]) => ({
-          segment: seg,
-          count: info.count,
-          high_risk_count: info.highRisk,
-          high_risk_pct: info.count > 0 ? +(info.highRisk / info.count * 100).toFixed(1) : 0,
-        }));
+          // Check if any feature is NaN (bad row)
+          if (featureValues.some(v => isNaN(v))) {
+            totalRowsInvalid++;
+            continue;
+          }
 
-      const horizonData: Record<string, any> = {};
-      horizonData[String(horizon_days)] = {
-        total_entities: totalEntities,
-        high_risk_count: highRiskCount,
-        high_risk_pct: totalEntities > 0 ? +(highRiskCount / totalEntities * 100).toFixed(1) : 0,
-        avg_probability: avgProbability !== null ? +avgProbability.toFixed(4) : null,
-        avg_predicted_value: avgPredictedValue !== null ? +avgPredictedValue.toFixed(2) : null,
-        generated_at: new Date().toISOString(),
+          // Segmentation values
+          const segmentValues: Record<string, string | null> = {
+            segment: null, region: null, state: null, city: null,
+            channel: null, campaign: null, cohort: null, age_group: null, product_category: null
+          };
+          Object.entries(segmentationCandidates).forEach(([name, idx]) => {
+            const value = values[idx] || null;
+            if (name.includes('segment')) segmentValues.segment = value;
+            else if (name.includes('region') || name.includes('regiao')) segmentValues.region = value;
+            else if (name.includes('state') || name.includes('estado')) segmentValues.state = value;
+            else if (name.includes('city') || name.includes('cidade')) segmentValues.city = value;
+            else if (name.includes('channel') || name.includes('canal')) segmentValues.channel = value;
+            else if (name.includes('campaign') || name.includes('campanha')) segmentValues.campaign = value;
+            else if (name.includes('cohort') || name.includes('coorte')) segmentValues.cohort = value;
+            else if (name.includes('age') || name.includes('etaria')) segmentValues.age_group = value;
+            else if (name.includes('category') || name.includes('categoria')) segmentValues.product_category = value;
+          });
+
+          // === REAL MODEL INFERENCE ===
+          let predictedValue: number | null = null;
+          let probability: number | null = null;
+          let predictedClass: string | null = null;
+
+          if (modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees) {
+            let pred = modelArtifacts.base || 0;
+            const lr = modelArtifacts.lr || 0.1;
+            for (const tree of modelArtifacts.trees) {
+              pred += lr * predictTree(tree, featureValues);
+            }
+            if (isClassification) {
+              probability = sigmoid(pred);
+              predictedClass = probability >= 0.5 ? "1" : "0";
+            } else {
+              predictedValue = pred;
+            }
+          } else if (modelArtifacts.weights) {
+            const weights: number[] = modelArtifacts.weights;
+            const bias: number = modelArtifacts.bias || 0;
+            let z = bias;
+            for (let j = 0; j < Math.min(weights.length, featureValues.length); j++) {
+              z += weights[j] * featureValues[j];
+            }
+            if (isClassification) {
+              probability = sigmoid(z);
+              predictedClass = probability >= 0.5 ? "1" : "0";
+            } else {
+              predictedValue = z;
+            }
+          } else {
+            totalRowsInvalid++;
+            continue;
+          }
+
+          // Accumulate prediction stats
+          if (isClassification && probability !== null) {
+            allPredValues.push(probability);
+          } else if (predictedValue !== null) {
+            allPredValues.push(predictedValue);
+          }
+
+          const pred: any = {
+            project_id, user_id: project.user_id, entity_id: entityId,
+            entity_type: "customer", reference_date: predictionDate,
+            prediction_date: predictionDate, horizon_days,
+            problem_type: isClassification ? "classification" : "regression",
+            problem_context: project.business_objective || null,
+            probability_event: isClassification ? probability : null,
+            predicted_class: isClassification ? predictedClass : null,
+            predicted_value: isClassification ? null : predictedValue,
+            potential_value: isClassification ? null : predictedValue,
+            batch_id: batchId, is_latest: true,
+            ...segmentValues,
+            metadata: { model_id: productionModel.id, model_name: productionModel.algorithm_name }
+          };
+          predictions.push(pred);
+        }
+
+        // Insert in DB batches
+        for (let i = 0; i < predictions.length; i += DB_INSERT_BATCH) {
+          const batch = predictions.slice(i, i + DB_INSERT_BATCH);
+          const { error: insertError } = await supabase.from("predictions").insert(batch);
+          if (insertError) {
+            console.error("Error inserting predictions batch:", insertError);
+            throw insertError;
+          }
+        }
+        totalRowsScored += predictions.length;
       };
 
+      // Stream and process in chunks
+      while (bytesRead < MAX_BYTES_PER_FILE) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        bytesRead += value?.length || 0;
+        buffer += decoder.decode(value, { stream: true });
+        const lineBreaks = buffer.split(/\r?\n/);
+
+        for (let i = 0; i < lineBreaks.length - 1; i++) {
+          const line = lineBreaks[i].trim();
+          if (!line) continue;
+
+          if (isFirstFile && isFirstLineOfFile) {
+            headers = parseCSVLine(line, delimiter);
+            // Setup indices
+            featureIndices = baseFeatureNames.map(name => headers.indexOf(name));
+            for (const candidate of entityIdCandidates) {
+              const idx = headers.indexOf(candidate);
+              if (idx !== -1) { entityIdIndex = idx; entityIdColumn = candidate; break; }
+            }
+            segmentColNames.forEach(name => {
+              const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+              if (idx !== -1) segmentationCandidates[name] = idx;
+            });
+            isFirstLineOfFile = false;
+            isFirstFile = false;
+            continue;
+          }
+
+          if (isFirstLineOfFile) {
+            // Skip header of subsequent files
+            const possibleHeaders = parseCSVLine(line, delimiter);
+            if (possibleHeaders.length === headers.length && possibleHeaders[0] === headers[0]) {
+              isFirstLineOfFile = false;
+              continue;
+            }
+            isFirstLineOfFile = false;
+          }
+
+          chunkRows.push(line);
+
+          if (chunkRows.length >= CHUNK_SIZE) {
+            await processChunk(chunkRows);
+            console.log(`[Scoring] Scored ${totalRowsScored} rows so far...`);
+            chunkRows = [];
+          }
+        }
+        buffer = lineBreaks[lineBreaks.length - 1];
+      }
+
+      try { await reader.cancel(); } catch (_) {}
+
+      // Process remaining rows in buffer
+      if (buffer.trim()) {
+        chunkRows.push(buffer.trim());
+      }
+      if (chunkRows.length > 0) {
+        await processChunk(chunkRows);
+        chunkRows = [];
+      }
+
+      console.log(`[Scoring] File done. Total scored: ${totalRowsScored}`);
+    }
+
+    // ===== SCORE REPORT =====
+    const elapsedMs = Date.now() - startTime;
+    const coveragePct = totalExpectedRows > 0 
+      ? Math.min(100, (totalRowsScored / totalExpectedRows) * 100) 
+      : (totalRowsScored > 0 ? 100 : 0);
+
+    // Prediction stats
+    let predMin = 0, predMax = 0, predMedian = 0, predMean = 0, predStd = 0;
+    const quantiles: Record<string, number> = {};
+    if (allPredValues.length > 0) {
+      allPredValues.sort((a, b) => a - b);
+      predMin = allPredValues[0];
+      predMax = allPredValues[allPredValues.length - 1];
+      predMean = mean(allPredValues);
+      predStd = std(allPredValues);
+      predMedian = allPredValues[Math.floor(allPredValues.length / 2)];
+      quantiles.p10 = allPredValues[Math.floor(allPredValues.length * 0.1)];
+      quantiles.p25 = allPredValues[Math.floor(allPredValues.length * 0.25)];
+      quantiles.p50 = predMedian;
+      quantiles.p75 = allPredValues[Math.floor(allPredValues.length * 0.75)];
+      quantiles.p90 = allPredValues[Math.floor(allPredValues.length * 0.9)];
+    }
+
+    const scoreReport = {
+      total_rows_scored: totalRowsScored,
+      total_rows_expected: totalExpectedRows,
+      coverage_pct: +coveragePct.toFixed(2),
+      invalid_rows: totalRowsInvalid,
+      latency_ms: elapsedMs,
+      prediction_stats: {
+        min: +predMin.toFixed(4),
+        max: +predMax.toFixed(4),
+        mean: +predMean.toFixed(4),
+        median: +predMedian.toFixed(4),
+        std: +predStd.toFixed(4),
+        quantiles,
+      },
+      model_id: productionModel.id,
+      model_name: productionModel.algorithm_name,
+      batch_id: batchId,
+      generated_at: new Date().toISOString(),
+    };
+
+    console.log(`[Scoring] === SCORE REPORT ===`);
+    console.log(`[Scoring] Rows scored: ${totalRowsScored} / ${totalExpectedRows} (${coveragePct.toFixed(1)}%)`);
+    console.log(`[Scoring] Invalid rows: ${totalRowsInvalid}`);
+    console.log(`[Scoring] Latency: ${elapsedMs}ms`);
+    console.log(`[Scoring] Pred stats: min=${predMin.toFixed(4)}, max=${predMax.toFixed(4)}, mean=${predMean.toFixed(4)}, std=${predStd.toFixed(4)}`);
+
+    // Persist score_report in AI context
+    try {
+      const { data: existingCtx } = await supabase
+        .from("project_ai_context")
+        .select("id, context")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
       const contextPayload = {
-        horizons: horizonData,
-        segment_insights: segmentInsights,
+        score_report: scoreReport,
         last_batch_id: batchId,
         last_batch_at: new Date().toISOString(),
         model_used: productionModel.algorithm_name,
       };
 
-      const appendRes = await fetch(
-        `${supabaseUrl}/functions/v1/append-project-context`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${supabaseServiceKey}`,
-            "apikey": supabaseServiceKey,
-          },
-          body: JSON.stringify({
-            project_id,
-            stage: "predictions",
-            payload: contextPayload,
-            status_update: "predictions_ready",
-          }),
-        }
-      );
-      const appendBody = await appendRes.text();
-      console.log(`[run-batch-predictions] AI context append status=${appendRes.status}`);
+      if (existingCtx) {
+        const currentCtx = existingCtx.context as Record<string, any> || {};
+        await supabase.from("project_ai_context").update({
+          context: { ...currentCtx, predictions: contextPayload },
+          status: "predictions_ready",
+          last_updated_at: new Date().toISOString(),
+        }).eq("id", existingCtx.id);
+      } else {
+        await supabase.from("project_ai_context").insert({
+          organization_id: project.organization_id,
+          project_id,
+          context: { predictions: contextPayload },
+          status: "predictions_ready",
+        });
+      }
+      console.log(`[Scoring] AI context updated with score_report`);
     } catch (ctxErr) {
-      console.error("[run-batch-predictions] AI context append error (non-fatal):", ctxErr);
+      console.error("[Scoring] AI context append error (non-fatal):", ctxErr);
     }
 
     return new Response(JSON.stringify({
       success: true,
-      message: `${predictions.length} previsões geradas com sucesso`,
+      message: `${totalRowsScored} previsões geradas (cobertura: ${coveragePct.toFixed(1)}%)`,
       batch_id: batchId,
-      predictions_count: predictions.length,
+      predictions_count: totalRowsScored,
+      rows_scored: totalRowsScored,
+      score_report: scoreReport,
       model_id: productionModel.id,
       model_name: productionModel.algorithm_name
     }), {
@@ -690,8 +564,7 @@ serve(async (req) => {
     return new Response(JSON.stringify({ 
       error: error instanceof Error ? error.message : "Erro desconhecido" 
     }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
