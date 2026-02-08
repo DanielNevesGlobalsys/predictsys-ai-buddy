@@ -129,7 +129,7 @@ export function useBusinessDashboard(projectId: string) {
     fetchPredictions();
   }, [fetchPredictions]);
 
-  // Run batch predictions with error handling that doesn't throw
+  // Run batch predictions with multi-pass support for large datasets
   const runBatchPredictions = useCallback(async (): Promise<{ success: boolean; error?: string }> => {
     if (!projectId || !productionModel) {
       return { success: false, error: 'Nenhum modelo em produção' };
@@ -140,57 +140,91 @@ export function useBusinessDashboard(projectId: string) {
     setError(null);
     
     try {
-      const { data, error: invokeError } = await supabase.functions.invoke('run-batch-predictions', {
-        body: { project_id: projectId, horizon_days: filters.horizon }
-      });
-      
-      if (invokeError) {
-        console.error('Error invoking batch predictions:', invokeError);
-        const errorMsg = invokeError.message || 'Erro ao gerar previsões';
-        setError(errorMsg);
-        
+      let passOffset = 0;
+      let batchIdToUse: string | undefined;
+      let runningStatsState: any = null;
+      let totalScoredPrev = 0;
+      let totalInvalidPrev = 0;
+      let passNumber = 0;
+
+      // Multi-pass loop: keeps calling until the function says continue=false
+      while (true) {
+        passNumber++;
+        console.log(`[Scoring] Client pass #${passNumber}, offset=${passOffset}`);
+
+        const { data, error: invokeError } = await supabase.functions.invoke('run-batch-predictions', {
+          body: {
+            project_id: projectId,
+            horizon_days: filters.horizon,
+            pass_offset: passOffset,
+            batch_id: batchIdToUse,
+            running_stats: runningStatsState,
+            total_scored_prev: totalScoredPrev,
+            total_invalid_prev: totalInvalidPrev,
+          }
+        });
+
+        if (invokeError) {
+          console.error('Error invoking batch predictions:', invokeError);
+          const errorMsg = invokeError.message || 'Erro ao gerar previsões';
+          setError(errorMsg);
+          
+          trackEventWithTiming({
+            event_type: "job_error",
+            project_id: projectId,
+            status: "error",
+            metadata: { stage: "prediction", error_message: errorMsg, pass: passNumber },
+            source: "app",
+          }, startTime);
+          
+          return { success: false, error: errorMsg };
+        }
+
+        if (data?.error) {
+          console.error('Batch predictions error:', data.error);
+          setError(data.error);
+          
+          trackEventWithTiming({
+            event_type: "job_error",
+            project_id: projectId,
+            status: "error",
+            metadata: { stage: "prediction", error_message: data.error, pass: passNumber },
+            source: "app",
+          }, startTime);
+          
+          return { success: false, error: data.error };
+        }
+
+        console.log(`[Scoring] Pass #${passNumber} result:`, {
+          continue: data?.continue,
+          pass_rows: data?.pass_rows_scored,
+          total: data?.total_scored_prev || data?.rows_scored,
+        });
+
+        // If continuation needed, update state and loop
+        if (data?.continue) {
+          passOffset = data.next_offset;
+          batchIdToUse = data.batch_id;
+          runningStatsState = data.running_stats;
+          totalScoredPrev = data.total_scored_prev;
+          totalInvalidPrev = data.total_invalid_prev;
+          continue;
+        }
+
+        // Final pass complete
+        console.log('Batch predictions complete:', data);
+
         trackEventWithTiming({
-          event_type: "job_error",
+          event_type: "prediction_run",
           project_id: projectId,
-          status: "error",
-          metadata: { stage: "prediction", error_message: errorMsg },
+          status: "success",
+          metadata: { rows_scored: data?.rows_scored, passes: passNumber },
           source: "app",
         }, startTime);
-        
-        return { success: false, error: errorMsg };
+
+        await Promise.all([fetchPredictions(), refetchMetrics()]);
+        return { success: true };
       }
-      
-      // Check if the response indicates an error
-      if (data?.error) {
-        console.error('Batch predictions error:', data.error);
-        setError(data.error);
-        
-        trackEventWithTiming({
-          event_type: "job_error",
-          project_id: projectId,
-          status: "error",
-          metadata: { stage: "prediction", error_message: data.error },
-          source: "app",
-        }, startTime);
-        
-        return { success: false, error: data.error };
-      }
-      
-      console.log('Batch predictions result:', data);
-      
-      // Track successful prediction run
-      trackEventWithTiming({
-        event_type: "prediction_run",
-        project_id: projectId,
-        status: "success",
-        metadata: { rows_scored: data?.rows_scored || data?.predictions_created },
-        source: "app",
-      }, startTime);
-      
-      // Refetch predictions and metrics after batch is done
-      await Promise.all([fetchPredictions(), refetchMetrics()]);
-      
-      return { success: true };
     } catch (err) {
       console.error('Error running batch predictions:', err);
       const errorMsg = err instanceof Error ? err.message : 'Erro ao gerar previsões';
