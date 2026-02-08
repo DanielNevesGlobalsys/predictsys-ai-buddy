@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet, ShieldAlert, ArrowLeft } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { useSimulation } from './hooks/useSimulation';
@@ -35,6 +35,8 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     problem_context: string | null;
     target_column: string | null;
   } | null>(null);
+  
+  const [modelQualityFlag, setModelQualityFlag] = useState<string | null>(null);
   
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
@@ -110,6 +112,20 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             problem_context: project.business_objective || project.detected_problem_type || null,
             target_column: project.target_column
           });
+        }
+        
+        // Check production model quality flag
+        const { data: prodModel } = await supabase
+          .from('project_models')
+          .select('hyperparameters')
+          .eq('project_id', projectId)
+          .eq('is_production', true)
+          .eq('status', 'trained')
+          .maybeSingle();
+        
+        if (prodModel?.hyperparameters) {
+          const hp = prodModel.hyperparameters as any;
+          setModelQualityFlag(hp?.model_quality_flag || null);
         }
       } catch (err) {
         console.error('Error fetching project info:', err);
@@ -267,6 +283,61 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             <p className="text-sm text-muted-foreground">
               {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
             </p>
+          </div>
+        </Card>
+      </div>
+    );
+  }
+
+  // Quality gate: block dashboard when model is flagged as fail
+  if (modelQualityFlag === "fail") {
+    return (
+      <div className="space-y-6">
+        <BusinessDashboardHero 
+          projectId={projectId}
+          problemContext={problemContext}
+          problemType={problemType}
+          horizonDays={filters.horizon}
+        />
+        
+        <Card className="p-8 border-destructive/50">
+          <div className="text-center space-y-6">
+            <div className="w-16 h-16 mx-auto rounded-full bg-destructive/10 flex items-center justify-center">
+              <ShieldAlert className="w-8 h-8 text-destructive" />
+            </div>
+            
+            <div className="space-y-2">
+              <h3 className="text-xl font-semibold text-destructive">
+                {t('businessDashboard.modelQualityFail', { defaultValue: 'Modelo abaixo do baseline' })}
+              </h3>
+              <p className="text-muted-foreground max-w-lg mx-auto">
+                {t('businessDashboard.modelQualityFailDesc', { 
+                  defaultValue: 'O modelo atual possui métricas inferiores ao baseline (predição pela média/classe majoritária). Os KPIs e previsões gerados não são confiáveis. Revise o target, as features ou re-treine o modelo antes de usar o dashboard.'
+                })}
+              </p>
+            </div>
+
+            <div className="flex items-center justify-center gap-3 flex-wrap">
+              <Button 
+                variant="outline"
+                size="sm"
+                onClick={handleRunPredictions}
+                disabled={runningBatch}
+                className="gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                {t('businessDashboard.retryPredictions', { defaultValue: 'Re-gerar previsões' })}
+              </Button>
+            </div>
+
+            <div className="bg-muted/50 rounded-lg p-4 max-w-md mx-auto text-left space-y-2">
+              <p className="text-sm font-medium">{t('businessDashboard.suggestedActions', { defaultValue: 'Ações sugeridas:' })}</p>
+              <ul className="text-sm text-muted-foreground space-y-1">
+                <li>• {t('businessDashboard.reviewTarget', { defaultValue: 'Revise a variável alvo (target)' })}</li>
+                <li>• {t('businessDashboard.reviewFeatures', { defaultValue: 'Remova colunas de ID ou com vazamento' })}</li>
+                <li>• {t('businessDashboard.retrainModel', { defaultValue: 'Re-treine o modelo com novos parâmetros' })}</li>
+              </ul>
+            </div>
           </div>
         </Card>
       </div>
