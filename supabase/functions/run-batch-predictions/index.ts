@@ -562,7 +562,39 @@ serve(async (req) => {
     const hasMore = reachedLimit;
     const elapsedMs = Date.now() - startTime;
 
-    console.log(`[Scoring] Pass complete: scored=${totalRowsScored}, cumulative=${cumulativeScored}, hasMore=${hasMore}`);
+    // ===== POST-PASS DB VERIFICATION =====
+    const { count: countBatch } = await supabase
+      .from("predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", project_id)
+      .eq("batch_id", batchId);
+
+    const { count: countLatest } = await supabase
+      .from("predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", project_id)
+      .eq("is_latest", true);
+
+    const passDiag = {
+      project_id,
+      model_id: productionModel.id,
+      batch_id: batchId,
+      offset: pass_offset,
+      limit: MAX_ROWS_PER_PASS,
+      continue: hasMore,
+      next_offset: hasMore ? nextOffset : null,
+      rows_fetched: totalRowsScored + totalRowsInvalid,
+      predictions_generated: totalRowsScored,
+      predictions_inserted: totalRowsScored,
+      insert_target_table: "predictions",
+      insert_elapsed_ms: elapsedMs,
+      cumulative_scored: cumulativeScored,
+      cumulative_invalid: cumulativeInvalid,
+      db_count_batch: countBatch ?? -1,
+      db_count_latest: countLatest ?? -1,
+    };
+
+    console.log(`[Scoring][DIAG] Pass diagnostic: ${JSON.stringify(passDiag)}`);
 
     if (hasMore) {
       // Return continuation - client should call again
@@ -575,13 +607,39 @@ serve(async (req) => {
         total_scored_prev: cumulativeScored,
         total_invalid_prev: cumulativeInvalid,
         pass_rows_scored: totalRowsScored,
+        pass_diagnostic: passDiag,
         message: `Processadas ${cumulativeScored} linhas até agora... continuando`,
       }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // ===== FINAL PASS: Generate score report =====
+    // ===== FINAL PASS: mark_latest verification =====
+    const markLatestStart = Date.now();
+    // All new predictions are inserted with is_latest=true, so we just verify count
+    const { count: markedLatestCount } = await supabase
+      .from("predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", project_id)
+      .eq("is_latest", true)
+      .eq("batch_id", batchId);
+    const markLatestElapsed = Date.now() - markLatestStart;
+
+    const finalDiag = {
+      ...passDiag,
+      mark_latest_elapsed_ms: markLatestElapsed,
+      marked_latest_count: markedLatestCount ?? -1,
+      total_expected_rows: totalExpectedRows,
+    };
+
+    console.log(`[Scoring][DIAG] Final pass diagnostic: ${JSON.stringify(finalDiag)}`);
+
+    // Validate: marked_latest_count should == db_count_batch
+    if (markedLatestCount !== null && countBatch !== null && markedLatestCount !== countBatch) {
+      console.warn(`[Scoring][DIAG] WARNING: marked_latest_count (${markedLatestCount}) != count_batch (${countBatch}). Possible data inconsistency.`);
+    }
+
+    // ===== Generate score report =====
     const coveragePct = totalExpectedRows > 0
       ? Math.min(100, (cumulativeScored / totalExpectedRows) * 100)
       : (cumulativeScored > 0 ? 100 : 0);
@@ -611,6 +669,7 @@ serve(async (req) => {
     console.log(`[Scoring] === FINAL SCORE REPORT ===`);
     console.log(`[Scoring] Rows scored: ${cumulativeScored} / ${totalExpectedRows} (${coveragePct.toFixed(1)}%)`);
     console.log(`[Scoring] Invalid rows: ${cumulativeInvalid}`);
+    console.log(`[Scoring] DB batch count: ${countBatch}, DB latest count: ${markedLatestCount}`);
 
     // Persist score_report in AI context
     try {
@@ -655,15 +714,18 @@ serve(async (req) => {
       rows_scored: cumulativeScored,
       score_report: scoreReport,
       model_id: productionModel.id,
-      model_name: productionModel.algorithm_name
+      model_name: productionModel.algorithm_name,
+      final_diagnostic: finalDiag,
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
   } catch (error) {
-    console.error("Error in batch predictions:", error);
+    const errorStack = error instanceof Error ? error.stack || error.message : "Erro desconhecido";
+    console.error(`[Scoring][DIAG] error_stack: ${errorStack}`);
     return new Response(JSON.stringify({
-      error: error instanceof Error ? error.message : "Erro desconhecido"
+      error: error instanceof Error ? error.message : "Erro desconhecido",
+      error_stack: errorStack,
     }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
