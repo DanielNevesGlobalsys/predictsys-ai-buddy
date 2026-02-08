@@ -111,12 +111,13 @@ export function FullReportPDFExport(props: FullReportPDFExportProps) {
           .select('context')
           .eq('project_id', props.projectId)
           .maybeSingle(),
-        // Predictions count
+        // Predictions count — use select count instead of HEAD to avoid ERR_ABORTED
         supabase
           .from('predictions')
-          .select('id', { count: 'exact', head: true })
+          .select('id', { count: 'exact' })
           .eq('project_id', props.projectId)
-          .eq('is_latest', true),
+          .eq('is_latest', true)
+          .limit(1),
       ]);
 
       // Dataset info
