@@ -139,6 +139,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     return (
       <div className="space-y-6">
         <BusinessDashboardHero 
+          projectId={projectId}
           problemContext={problemContext}
           problemType={problemType}
           horizonDays={filters.horizon}
@@ -176,6 +177,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     return (
       <div className="space-y-6">
         <BusinessDashboardHero 
+          projectId={projectId}
           problemContext={problemContext}
           problemType={problemType}
           horizonDays={filters.horizon}
@@ -210,6 +212,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     return (
       <div className="space-y-6">
         <BusinessDashboardHero 
+          projectId={projectId}
           problemContext={problemContext}
           problemType={problemType}
           horizonDays={filters.horizon}
@@ -274,6 +277,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     <div className="space-y-6">
       {/* Hero */}
       <BusinessDashboardHero 
+        projectId={projectId}
         problemContext={problemContext}
         problemType={problemType}
         horizonDays={filters.horizon}

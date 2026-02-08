@@ -84,17 +84,36 @@ const TrainingAIInsights = ({
         return `${m.algorithm_name}: ${primaryMetric}=${metricValue.toFixed(4)}`;
       }).join("; ");
 
+      // Gather cumulative context
+      let contextBlock = "";
+      try {
+        const [aiCtxRes, inferenceRes] = await Promise.all([
+          supabase.from("project_ai_context").select("context").eq("project_id", projectId).maybeSingle(),
+          supabase.from("project_problem_inference").select("problem_type, suggested_problem_labels, narrative").eq("project_id", projectId).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+        ]);
+        const aiCtx = aiCtxRes.data?.context as Record<string, any> | null;
+        if (aiCtx?.eda?.business_segment?.segment) {
+          contextBlock += `\nDomínio: ${aiCtx.eda.business_segment.segment}`;
+        }
+        if (inferenceRes.data?.suggested_problem_labels) {
+          const labels = (inferenceRes.data.suggested_problem_labels as { label: string }[])
+            .filter(l => !(l.label || '').startsWith('__'))
+            .map(l => l.label);
+          if (labels.length > 0) contextBlock += `\nProblemas inferidos: ${labels.join(', ')}`;
+        }
+      } catch { /* non-critical */ }
+
       const languageMap: Record<string, string> = {
         pt: "Portuguese (Brazil)",
         en: "English",
         es: "Spanish"
       };
 
-      const systemPrompt = `You are a machine learning expert providing actionable insights about model training results.
-Respond in ${languageMap[i18n.language] || "English"}.
-Be concise and focus on business implications. Avoid technical jargon.`;
+      const systemPrompt = `You are Lys, a business-focused ML analyst. Respond in ${languageMap[i18n.language] || "English"}.
+Be concise. Connect ALL insights to the specific business problem. Never use generic phrases like "test other algorithms" alone.`;
 
-      const prompt = `Analyze these ML training results and provide insights:
+      const prompt = `Analyze these ML training results with business context:
+${contextBlock}
 
 Problem type: ${problemType}
 Target variable: ${targetColumn || "not specified"}
@@ -105,13 +124,13 @@ Production model: ${productionModel?.algorithm_name || "not selected"}
 
 Return a JSON array with exactly 4-5 insights. Each insight must have:
 - "type": one of "positive", "negative", or "suggestion"
-- "text": the insight text (1-2 sentences)
+- "text": the insight text connected to the business problem (1-2 sentences)
 
 Include:
-1. Assessment of overall model performance (is it good, medium, or weak?)
-2. Strength of the best model
-3. Any risks or limitations
-4. 1-2 actionable suggestions for improvement
+1. Assessment of model performance IN BUSINESS TERMS (what does it mean for the problem?)
+2. Strength of the best model relative to the problem
+3. Specific risks or limitations for THIS use case
+4. 1-2 actionable, problem-specific suggestions
 
 Example format:
 [{"type":"positive","text":"The model shows strong predictive power..."},{"type":"suggestion","text":"Consider adding..."}]`;
