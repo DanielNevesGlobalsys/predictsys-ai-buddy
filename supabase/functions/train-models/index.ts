@@ -1877,10 +1877,11 @@ serve(async (req) => {
           rawRecord[h] = values[idx] || null;
         });
         
-        // Get base features
+        // Get base features (impute NaN → 0 for missing columns in batch imports)
         const baseFeatures = featureIndices.map(idx => {
           const val = values[idx]?.replace(",", ".") || "";
-          return parseFloat(val);
+          const parsed = parseFloat(val);
+          return isNaN(parsed) ? 0 : parsed;
         });
         
         // Apply engineered features
@@ -1900,7 +1901,9 @@ serve(async (req) => {
           targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
         }
         
-        if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
+        // Only require valid target; missing features are imputed to 0
+        const hasValidTarget = isTargetCategorical ? targetNumeric !== -1 : !isNaN(targetNumeric);
+        if (hasValidTarget) {
           X.push(allFeatures);
           y.push(targetNumeric);
         }
