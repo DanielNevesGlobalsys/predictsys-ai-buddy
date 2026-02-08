@@ -1207,7 +1207,7 @@ serve(async (req) => {
     }
 
     // Normalize data
-    const { normalized: Xnorm } = normalize(X);
+    const { normalized: Xnorm, means: normMeans, stds: normStds } = normalize(X);
 
     // ==================== SPLIT TRAIN/VAL/TEST (70/15/15) ====================
     const trainRatio = 0.70;
@@ -1323,6 +1323,40 @@ serve(async (req) => {
       allFeatureNames
     );
 
+    // ==================== BASELINE CALCULATION ====================
+    const yTrainMean = mean(isClassification ? ytrainCombined : ytrain);
+    let baselineMetrics: Record<string, number>;
+    
+    if (isClassification) {
+      const baselineProbs = ytestFinal.map(() => yTrainMean);
+      baselineMetrics = calcClassificationMetrics(ytestFinal, baselineProbs);
+    } else {
+      const baselinePreds = ytest.map(() => yTrainMean);
+      baselineMetrics = calcRegressionMetrics(ytest, baselinePreds);
+    }
+    
+    console.log(`\n=== Baseline Metrics ===`);
+    console.log(JSON.stringify(baselineMetrics));
+
+    // ==================== MODEL QUALITY CHECK ====================
+    let modelQualityFlag = "ok";
+    const modelR2 = trainResult.metrics["R²"];
+    const modelAUC = trainResult.metrics["AUC"];
+    
+    if (!isClassification && modelR2 !== undefined && modelR2 < 0) {
+      modelQualityFlag = "fail";
+      console.warn(`[AutoML] ⚠️ R² negativo (${modelR2.toFixed(4)}) — modelo PIOR que baseline! NÃO promover para produção.`);
+    } else if (isClassification && modelAUC !== undefined && modelAUC < 0.55) {
+      modelQualityFlag = "fail";
+      console.warn(`[AutoML] ⚠️ AUC abaixo de 0.55 (${modelAUC.toFixed(4)}) — capacidade preditiva insuficiente!`);
+    }
+    
+    const shouldPromoteToProduction = modelQualityFlag === "ok";
+    
+    if (!shouldPromoteToProduction) {
+      console.warn(`[AutoML] ⚠️ Modelo NÃO será promovido para produção automaticamente.`);
+    }
+
     // Save model to database
     const { data: modelData, error: modelError } = await supabase
       .from("project_models")
@@ -1331,13 +1365,30 @@ serve(async (req) => {
         algorithm_name: strategy.name,
         problem_type,
         status: "trained",
-        is_production: true, // Auto-set as production since it's the only model
+        is_production: shouldPromoteToProduction,
         trained_at: new Date().toISOString(),
         hyperparameters: {
           strategy_id: strategy.id,
           algorithm: strategy.algorithm,
           params: strategy.params,
           reason: strategy.reason,
+          // Model artifacts for real predictions
+          model_artifacts: {
+            type: strategy.algorithm,
+            weights: trainResult.model.weights || null,
+            bias: trainResult.model.bias || null,
+            trees: trainResult.model.trees || null,
+            lr: trainResult.model.lr || null,
+            base: trainResult.model.base || null,
+            isClassification: trainResult.model.isClassification ?? null,
+          },
+          normalization: {
+            means: Array.from(normMeans),
+            stds: Array.from(normStds),
+          },
+          feature_names: allFeatureNames,
+          baseline_metrics: baselineMetrics,
+          model_quality_flag: modelQualityFlag,
           // Dataset info
           total_rows_dataset: totalDatasetRows,
           rows_read: totalLinesRead,
@@ -1454,13 +1505,18 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ 
       success: true, 
-      message: "Treinamento concluído",
+      message: modelQualityFlag === "ok" 
+        ? "Treinamento concluído" 
+        : "Treinamento concluído — modelo abaixo do baseline",
+      model_quality_flag: modelQualityFlag,
+      baseline_metrics: baselineMetrics,
       model: {
         id: modelData.id,
         name: strategy.name,
         algorithm: strategy.algorithm,
         reason: strategy.reason,
         metrics: trainResult.metrics,
+        is_production: shouldPromoteToProduction,
         sample_info: {
           total_dataset_rows: totalDatasetRows,
           rows_read: totalLinesRead,
@@ -1471,6 +1527,7 @@ serve(async (req) => {
         },
         warnings: {
           class_min_samples_warning: classMinSamplesWarning,
+          model_quality_flag: modelQualityFlag,
         }
       }
     }), {

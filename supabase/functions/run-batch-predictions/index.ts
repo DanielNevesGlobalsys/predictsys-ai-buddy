@@ -7,6 +7,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+
+// Tree prediction helper (for gradient boosting models)
+function predictTree(tree: any, x: number[]): number {
+  if (!tree || tree.isLeaf) return tree?.value || 0;
+  return x[tree.feature] <= tree.threshold 
+    ? predictTree(tree.left, x) 
+    : predictTree(tree.right, x);
+}
+
 // Simple statistical functions
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
@@ -81,6 +90,26 @@ serve(async (req) => {
     }
 
     console.log(`Using production model: ${productionModel.algorithm_name} (${productionModel.id})`);
+
+    const hyperparams = productionModel.hyperparameters as any || {};
+    const modelArtifacts = hyperparams.model_artifacts;
+    const savedNormalization = hyperparams.normalization;
+    const savedFeatureNames = hyperparams.feature_names as string[] | undefined;
+    
+    const hasRealModel = !!modelArtifacts && (modelArtifacts.weights || modelArtifacts.trees);
+    
+    if (!hasRealModel) {
+      console.warn("[Predictions] ⚠️ Modelo sem artefatos de treinamento. Re-treine o modelo.");
+      return new Response(JSON.stringify({ 
+        error: "Modelo sem artefatos de treinamento salvos. Re-treine o modelo para gerar previsões reais.",
+        action: "retrain"
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+    
+    console.log(`[Predictions] Model artifacts loaded: type=${modelArtifacts.type}, hasWeights=${!!modelArtifacts.weights}, hasTrees=${!!modelArtifacts.trees}`);
 
     // Get feature columns
     const { data: columns, error: colError } = await supabase
@@ -352,37 +381,62 @@ serve(async (req) => {
       }
     });
 
-    // Calculate means and stds for normalization from sample data (base features only)
-    const featureData: number[][] = baseFeatureNames.map(() => []);
-    for (let i = 0; i < allLines.length; i++) {
-      const values = parseCSVLine(allLines[i], delimiter);
-      featureIndices.forEach((idx, j) => {
-        const val = parseFloat((values[idx] || "").replace(",", "."));
-        if (!isNaN(val)) featureData[j].push(val);
+    // Use saved normalization from training when available
+    let baseMeans: number[];
+    let baseStds: number[];
+    
+    if (savedNormalization?.means && savedNormalization?.stds && savedFeatureNames) {
+      baseMeans = baseFeatureNames.map(name => {
+        const idx = savedFeatureNames.indexOf(name);
+        return idx !== -1 ? savedNormalization.means[idx] : 0;
       });
+      baseStds = baseFeatureNames.map(name => {
+        const idx = savedFeatureNames.indexOf(name);
+        return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
+      });
+      console.log(`[Predictions] Using saved normalization from training`);
+    } else {
+      console.warn(`[Predictions] ⚠️ No saved normalization, calculating from data`);
+      const featureData: number[][] = baseFeatureNames.map(() => []);
+      for (let i = 0; i < allLines.length; i++) {
+        const values = parseCSVLine(allLines[i], delimiter);
+        featureIndices.forEach((idx, j) => {
+          const val = parseFloat((values[idx] || "").replace(",", "."));
+          if (!isNaN(val)) featureData[j].push(val);
+        });
+      }
+      baseMeans = featureData.map(arr => mean(arr));
+      baseStds = featureData.map(arr => std(arr) || 1);
     }
 
-    const means = featureData.map(arr => mean(arr));
-    const stds = featureData.map(arr => std(arr) || 1);
+    // Engineered feature normalization
+    let engMeans: number[];
+    let engStds: number[];
     
-    // Calculate means and stds for engineered features
-    const engineeredData: number[][] = engineeredFeatureNames.map(() => []);
-    for (let i = 0; i < Math.min(allLines.length, 1000); i++) {
-      const values = parseCSVLine(allLines[i], delimiter);
-      const rawRecord: Record<string, string | number | null> = {};
-      headers.forEach((h, idx) => {
-        rawRecord[h] = values[idx] || null;
+    if (savedNormalization?.means && savedFeatureNames) {
+      engMeans = engineeredFeatureNames.map(name => {
+        const idx = savedFeatureNames.indexOf(name);
+        return idx !== -1 ? savedNormalization.means[idx] : 0;
       });
-      const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-      engineeredFeatureNames.forEach((name, j) => {
-        const val = engineeredValues[name];
-        if (typeof val === "number" && !isNaN(val)) {
-          engineeredData[j].push(val);
-        }
+      engStds = engineeredFeatureNames.map(name => {
+        const idx = savedFeatureNames.indexOf(name);
+        return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
       });
+    } else {
+      const engineeredData: number[][] = engineeredFeatureNames.map(() => []);
+      for (let i = 0; i < Math.min(allLines.length, 1000); i++) {
+        const values = parseCSVLine(allLines[i], delimiter);
+        const rawRecord: Record<string, string | number | null> = {};
+        headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
+        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        engineeredFeatureNames.forEach((name, j) => {
+          const val = engineeredValues[name];
+          if (typeof val === "number" && !isNaN(val)) engineeredData[j].push(val);
+        });
+      }
+      engMeans = engineeredData.map(arr => mean(arr));
+      engStds = engineeredData.map(arr => std(arr) || 1);
     }
-    const engineeredMeans = engineeredData.map(arr => mean(arr));
-    const engineeredStds = engineeredData.map(arr => std(arr) || 1);
 
     const isClassification = project.problem_type === "classification";
     const batchId = `batch_${Date.now()}`;
