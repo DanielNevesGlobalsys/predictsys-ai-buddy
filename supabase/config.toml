@@ -95,3 +95,6 @@ verify_jwt = false
 
 [functions.infer-problem]
 verify_jwt = false
+
+[functions.audit-project-pipeline]
+verify_jwt = false
