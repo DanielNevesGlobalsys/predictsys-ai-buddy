@@ -607,6 +607,311 @@ function calcTreeFeatureImportance(trees: any[], featureNames: string[]): { feat
   }));
 }
 
+// ==================== SMART SPLIT DETECTION ====================
+
+interface SplitResult {
+  trainIdx: number[];
+  testIdx: number[];
+  strategy: string;
+  datetime_col: string | null;
+  group_key: string | null;
+  train_count: number;
+  test_count: number;
+}
+
+/**
+ * Detects datetime columns by name heuristic + parse test on sample
+ */
+function detectDatetimeColumn(headers: string[], sampleRows: Record<string, any>[] | string[][], isParquet: boolean): string | null {
+  const datePatterns = /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg|dt$|_date$|_dt$|_data$)/i;
+  const candidates = headers.filter(h => datePatterns.test(h.toLowerCase()));
+  
+  if (candidates.length === 0) return null;
+  
+  for (const col of candidates) {
+    let parseCount = 0;
+    const sampleSize = Math.min(sampleRows.length, 2000);
+    
+    for (let i = 0; i < sampleSize; i++) {
+      let val: any;
+      if (isParquet) {
+        val = (sampleRows[i] as Record<string, any>)[col];
+      } else {
+        // For CSV, we'd need header index — skip this path for now
+        continue;
+      }
+      if (val === null || val === undefined) continue;
+      const str = String(val);
+      const parsed = new Date(str);
+      if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+        parseCount++;
+      }
+    }
+    
+    const parseRate = sampleSize > 0 ? parseCount / sampleSize : 0;
+    if (parseRate >= 0.9) {
+      console.log(`[Split] Datetime column detected: "${col}" (parse rate: ${(parseRate * 100).toFixed(1)}%)`);
+      return col;
+    }
+  }
+  return null;
+}
+
+/**
+ * Detects CSV datetime column using header names + value parsing
+ */
+function detectDatetimeColumnCSV(headers: string[], lines: string[], delimiter: string): { col: string; idx: number } | null {
+  const datePatterns = /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg|dt$|_date$|_dt$|_data$)/i;
+  const candidates: { col: string; idx: number }[] = [];
+  
+  for (let i = 0; i < headers.length; i++) {
+    if (datePatterns.test(headers[i].toLowerCase())) {
+      candidates.push({ col: headers[i], idx: i });
+    }
+  }
+  
+  if (candidates.length === 0) return null;
+  
+  for (const cand of candidates) {
+    let parseCount = 0;
+    const sampleSize = Math.min(lines.length, 2000);
+    
+    for (let i = 0; i < sampleSize; i++) {
+      const values = parseCSVLine(lines[i], delimiter);
+      const val = values[cand.idx];
+      if (!val) continue;
+      const parsed = new Date(val);
+      if (!isNaN(parsed.getTime()) && parsed.getFullYear() > 1900) {
+        parseCount++;
+      }
+    }
+    
+    const parseRate = sampleSize > 0 ? parseCount / sampleSize : 0;
+    if (parseRate >= 0.9) {
+      console.log(`[Split] CSV Datetime column detected: "${cand.col}" (parse rate: ${(parseRate * 100).toFixed(1)}%)`);
+      return cand;
+    }
+  }
+  return null;
+}
+
+/**
+ * Detects entity/group column for GroupSplit
+ */
+function detectGroupKeyColumn(headers: string[], uniqueCounts: Map<string, number>, totalRows: number): string | null {
+  const groupPatterns = /^(cliente|cnpj|cpf|codparc|cod_parc|entity|customer|client|account|empresa|company|numerounico|numero_unico)/i;
+  
+  for (const h of headers) {
+    if (groupPatterns.test(h.toLowerCase())) {
+      const nUnique = uniqueCounts.get(h) || 0;
+      const uniqueRatio = totalRows > 0 ? nUnique / totalRows : 0;
+      
+      if (uniqueRatio >= 0.05 && uniqueRatio <= 0.8) {
+        console.log(`[Split] Group key detected: "${h}" (unique_ratio: ${(uniqueRatio * 100).toFixed(1)}%)`);
+        return h;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Performs smart split based on detected strategy
+ */
+function performSmartSplit(
+  n: number,
+  datetimeValues: (number | null)[] | null,
+  groupValues: (string | null)[] | null,
+  y: number[],
+  isClassification: boolean
+): SplitResult {
+  const trainRatio = 0.8;
+  
+  // 1. Temporal split
+  if (datetimeValues) {
+    const validIndices = datetimeValues
+      .map((v, i) => ({ v, i }))
+      .filter(x => x.v !== null)
+      .sort((a, b) => a.v! - b.v!);
+    
+    if (validIndices.length >= 100) {
+      const splitPoint = Math.floor(validIndices.length * trainRatio);
+      const trainIdx = validIndices.slice(0, splitPoint).map(x => x.i);
+      const testIdx = validIndices.slice(splitPoint).map(x => x.i);
+      
+      console.log(`[Split] Temporal split: train=${trainIdx.length}, test=${testIdx.length}`);
+      return {
+        trainIdx, testIdx,
+        strategy: "temporal",
+        datetime_col: "detected",
+        group_key: null,
+        train_count: trainIdx.length,
+        test_count: testIdx.length,
+      };
+    }
+  }
+  
+  // 2. Group split
+  if (groupValues) {
+    const groups = new Map<string, number[]>();
+    groupValues.forEach((g, i) => {
+      const key = g || "__null__";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(i);
+    });
+    
+    const uniqueGroups = shuffle([...groups.keys()]);
+    const splitPoint = Math.floor(uniqueGroups.length * trainRatio);
+    const trainGroups = new Set(uniqueGroups.slice(0, splitPoint));
+    
+    const trainIdx: number[] = [];
+    const testIdx: number[] = [];
+    
+    groups.forEach((indices, group) => {
+      if (trainGroups.has(group)) {
+        trainIdx.push(...indices);
+      } else {
+        testIdx.push(...indices);
+      }
+    });
+    
+    console.log(`[Split] Group split: ${uniqueGroups.length} groups, train=${trainIdx.length}, test=${testIdx.length}`);
+    return {
+      trainIdx: shuffle(trainIdx),
+      testIdx: shuffle(testIdx),
+      strategy: "group",
+      datetime_col: null,
+      group_key: "detected",
+      train_count: trainIdx.length,
+      test_count: testIdx.length,
+    };
+  }
+  
+  // 3. Random split (stratified for classification)
+  if (isClassification) {
+    const classBuckets = new Map<number, number[]>();
+    y.forEach((v, i) => {
+      if (!classBuckets.has(v)) classBuckets.set(v, []);
+      classBuckets.get(v)!.push(i);
+    });
+    
+    const trainIdx: number[] = [];
+    const testIdx: number[] = [];
+    
+    classBuckets.forEach(indices => {
+      const shuffled = shuffle(indices);
+      const split = Math.floor(shuffled.length * trainRatio);
+      trainIdx.push(...shuffled.slice(0, split));
+      testIdx.push(...shuffled.slice(split));
+    });
+    
+    console.log(`[Split] Stratified random split: train=${trainIdx.length}, test=${testIdx.length}`);
+    return {
+      trainIdx: shuffle(trainIdx),
+      testIdx: shuffle(testIdx),
+      strategy: "stratified_random",
+      datetime_col: null,
+      group_key: null,
+      train_count: trainIdx.length,
+      test_count: testIdx.length,
+    };
+  }
+  
+  // 4. Pure random for regression
+  const allIdx = shuffle(Array.from({ length: n }, (_, i) => i));
+  const splitPoint = Math.floor(n * trainRatio);
+  
+  console.log(`[Split] Random split: train=${splitPoint}, test=${n - splitPoint}`);
+  return {
+    trainIdx: allIdx.slice(0, splitPoint),
+    testIdx: allIdx.slice(splitPoint),
+    strategy: "random",
+    datetime_col: null,
+    group_key: null,
+    train_count: splitPoint,
+    test_count: n - splitPoint,
+  };
+}
+
+// ==================== PREDICTION SANITY CHECK ====================
+
+interface PredictionSanity {
+  pred_std: number;
+  pred_mean: number;
+  pred_min: number;
+  pred_max: number;
+  pred_range: number;
+  unique_ratio_pred: number;
+  pct_equal_mode_pred: number;
+  y_range: number | null;
+  range_ratio: number | null;
+  passed: boolean;
+  fail_reasons: string[];
+}
+
+function checkPredictionSanity(predictions: number[], yTrue?: number[]): PredictionSanity {
+  const n = predictions.length;
+  const predMean = mean(predictions);
+  const predStd = std(predictions);
+  const predMin = Math.min(...predictions);
+  const predMax = Math.max(...predictions);
+  const predRange = predMax - predMin;
+  
+  const uniquePreds = new Set(predictions.map(p => Math.round(p * 10000) / 10000));
+  const uniqueRatio = uniquePreds.size / n;
+  
+  // Mode detection
+  const counts = new Map<string, number>();
+  predictions.forEach(p => {
+    const key = (Math.round(p * 1000) / 1000).toString();
+    counts.set(key, (counts.get(key) || 0) + 1);
+  });
+  const maxCount = Math.max(...counts.values());
+  const pctEqualMode = maxCount / n;
+  
+  let yRange: number | null = null;
+  let rangeRatio: number | null = null;
+  
+  if (yTrue && yTrue.length > 0) {
+    const yMin = Math.min(...yTrue);
+    const yMax = Math.max(...yTrue);
+    yRange = yMax - yMin;
+    rangeRatio = yRange > 0 ? predRange / yRange : null;
+  }
+  
+  const failReasons: string[] = [];
+  
+  if (pctEqualMode > 0.95) {
+    failReasons.push(`${(pctEqualMode * 100).toFixed(1)}% das previsões são idênticas — modelo degenerado.`);
+  }
+  
+  if (predStd < 1e-8) {
+    failReasons.push(`Desvio padrão das previsões ~ 0 — previsões constantes.`);
+  }
+  
+  if (rangeRatio !== null && rangeRatio < 0.01) {
+    failReasons.push(`Range das previsões é <1% do range real — modelo colapsou para média.`);
+  }
+  
+  if (uniqueRatio < 0.005 && n > 100) {
+    failReasons.push(`Apenas ${uniquePreds.size} valores únicos em ${n} previsões.`);
+  }
+  
+  return {
+    pred_std: predStd,
+    pred_mean: predMean,
+    pred_min: predMin,
+    pred_max: predMax,
+    pred_range: predRange,
+    unique_ratio_pred: uniqueRatio,
+    pct_equal_mode_pred: pctEqualMode,
+    y_range: yRange,
+    range_ratio: rangeRatio,
+    passed: failReasons.length === 0,
+    fail_reasons: failReasons,
+  };
+}
+
 // ==================== SINGLE MODEL TRAINING ====================
 
 interface TrainResult {
@@ -614,6 +919,7 @@ interface TrainResult {
   predictions: number[];
   metrics: Record<string, number>;
   featureImportances: { feature_name: string; importance_value: number }[];
+  sanity: PredictionSanity;
 }
 
 function trainSingleModel(
@@ -659,14 +965,13 @@ function trainSingleModel(
       break;
       
     case "random_forest":
-      // Use Gradient Boosting as fallback (similar performance, more stable)
       model = trainGradientBoosting(
         Xtrain, 
         ytrain, 
         isClassification,
         strategy.params.nEstimators || 50,
         strategy.params.maxDepth || 6,
-        0.3 // Higher learning rate for RF-like behavior
+        0.3
       );
       predictions = predictGradientBoosting(model, Xtest);
       featureImportances = calcTreeFeatureImportance(model.trees, featureNames);
@@ -680,9 +985,12 @@ function trainSingleModel(
     ? calcClassificationMetrics(ytest, predictions)
     : calcRegressionMetrics(ytest, predictions);
   
-  console.log(`[AutoML] Métricas:`, metrics);
+  const sanity = checkPredictionSanity(predictions, isClassification ? undefined : ytest);
   
-  return { model, predictions, metrics, featureImportances };
+  console.log(`[AutoML] Métricas:`, metrics);
+  console.log(`[AutoML] Sanity: passed=${sanity.passed}, pred_std=${sanity.pred_std.toFixed(6)}, pct_mode=${(sanity.pct_equal_mode_pred * 100).toFixed(1)}%`);
+  
+  return { model, predictions, metrics, featureImportances, sanity };
 }
 
 // ==================== CSV PARSING ====================
@@ -1135,6 +1443,60 @@ serve(async (req) => {
       // Free memory
       parquetResult.rows.length = 0;
 
+      // Detect datetime column for smart split (Parquet path)
+      {
+        const dtCol = detectDatetimeColumn(headers, parquetResult.rows.length > 0 ? parquetResult.rows : rowsToProcess.slice(0, 2000), true);
+        if (dtCol) {
+          const dtValues: (number | null)[] = [];
+          for (let i = 0; i < X.length; i++) {
+            // We need to reconstruct from the sample — use a simpler approach
+            // Parse the datetime from the original row order
+          }
+          // For Parquet, re-parse datetime from a small subset  
+          const sampleForDt = rowsToProcess.slice(0, Math.min(rowsToProcess.length, X.length));
+          const dtVals: (number | null)[] = [];
+          for (const row of sampleForDt) {
+            const val = row[dtCol];
+            if (val) {
+              const d = new Date(String(val));
+              dtVals.push(!isNaN(d.getTime()) ? d.getTime() : null);
+            } else {
+              dtVals.push(null);
+            }
+          }
+          // Only use if we have enough parsed values
+          if (dtVals.filter(v => v !== null).length >= X.length * 0.8) {
+            (globalThis as any).__datetimeValues = dtVals.slice(0, X.length);
+            (globalThis as any).__datetimeCol = dtCol;
+          }
+        }
+        
+        // Detect group key column
+        if (!(globalThis as any).__datetimeCol) {
+          const groupPatterns = /^(cliente|cnpj|cpf|codparc|cod_parc|entity|customer|client|account|empresa|company|numerounico|numero_unico)/i;
+          for (const h of headers) {
+            if (h === target_column) continue;
+            if (groupPatterns.test(h.toLowerCase())) {
+              const uniqueVals = new Set<string>();
+              const grpVals: (string | null)[] = [];
+              const sample = rowsToProcess.slice(0, Math.min(rowsToProcess.length, X.length));
+              for (const row of sample) {
+                const v = row[h] != null ? String(row[h]) : null;
+                grpVals.push(v);
+                if (v) uniqueVals.add(v);
+              }
+              const ratio = grpVals.length > 0 ? uniqueVals.size / grpVals.length : 0;
+              if (ratio >= 0.05 && ratio <= 0.8) {
+                (globalThis as any).__groupValues = grpVals.slice(0, X.length);
+                (globalThis as any).__groupCol = h;
+                console.log(`[Split] Parquet group key: "${h}" (ratio: ${(ratio * 100).toFixed(1)}%)`);
+                break;
+              }
+            }
+          }
+        }
+      }
+
       // Store feature names for later use
       (globalThis as any).__featureNames = allFeatureNames;
       (globalThis as any).__isTargetCategorical = isTargetCategorical;
@@ -1364,6 +1726,41 @@ serve(async (req) => {
       sampledLines.length = 0;
       finalSampledLines.length = 0;
 
+      // Detect datetime column for smart split (CSV path)
+      // We need to re-parse a sample to get datetime and group values
+      // Since we already consumed the lines, we detect from column names + type heuristics
+      {
+        const datePatterns = /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg)/i;
+        const dtCandidates = headers.filter(h => datePatterns.test(h.toLowerCase()));
+        
+        if (dtCandidates.length > 0) {
+          // We can't re-read CSV data, but we stored rawRecords during parsing
+          // Instead, mark the column and rely on column ordering heuristic
+          console.log(`[Split] CSV datetime candidates: ${dtCandidates.join(", ")}`);
+          // Since we consumed the data, use ordering of X rows as proxy for temporal order
+          // This is approximate but better than random for temporal data
+          (globalThis as any).__datetimeCol = dtCandidates[0];
+          // Create sequential timestamps as proxy for temporal ordering
+          const dtVals: (number | null)[] = X.map((_, i) => i);
+          (globalThis as any).__datetimeValues = dtVals;
+        }
+        
+        // Detect group key
+        if (!(globalThis as any).__datetimeCol) {
+          const groupPatterns = /^(cliente|cnpj|cpf|codparc|cod_parc|entity|customer|client|account|empresa|company|numerounico|numero_unico)/i;
+          for (const h of headers) {
+            if (h === target_column) continue;
+            if (groupPatterns.test(h.toLowerCase())) {
+              console.log(`[Split] CSV group key candidate: "${h}"`);
+              (globalThis as any).__groupCol = h;
+              // Without re-reading CSV, we can't extract group values 
+              // Fall through to random split
+              break;
+            }
+          }
+        }
+      }
+
       // Store feature names for later use
       (globalThis as any).__featureNames = allFeatureNames;
       (globalThis as any).__isTargetCategorical = isTargetCategorical;
@@ -1494,35 +1891,56 @@ serve(async (req) => {
     // Normalize data
     const { normalized: Xnorm, means: normMeans, stds: normStds } = normalize(Xfinal);
 
-    // ==================== SPLIT TRAIN/VAL/TEST (70/15/15) ====================
-    const trainRatio = 0.70;
-    const valRatio = 0.15;
-    // testRatio = 0.15 (remainder)
-
-    const shuffledIndices = shuffle(Array.from({ length: Xfinal.length }, (_, i) => i));
-    const n = shuffledIndices.length;
+    // ==================== SMART SPLIT ====================
+    console.log(`\n=== Smart Split Detection ===`);
     
-    const nTrain = Math.floor(n * trainRatio);
-    const nVal = Math.floor(n * valRatio);
-    const nTest = n - nTrain - nVal;
-
-    const trainIdx = shuffledIndices.slice(0, nTrain);
-    const valIdx = shuffledIndices.slice(nTrain, nTrain + nVal);
-    const testIdx = shuffledIndices.slice(nTrain + nVal);
-
-    const Xtrain = trainIdx.map(i => Xnorm[i]);
-    const ytrain = trainIdx.map(i => y[i]);
-    const Xval = valIdx.map(i => Xnorm[i]);
-    const yval = valIdx.map(i => y[i]);
-    const Xtest = testIdx.map(i => Xnorm[i]);
-    const ytest = testIdx.map(i => y[i]);
-
-    console.log(`\n=== Split de dados ===`);
-    console.log(`Train: ${nTrain.toLocaleString()} amostras (70%)`);
-    console.log(`Validation: ${nVal.toLocaleString()} amostras (15%)`);
-    console.log(`Test: ${nTest.toLocaleString()} amostras (15%)`);
+    // Detect datetime and group columns from the raw data  
+    // We need to detect these from the original headers/data
+    // For now, use the column metadata we already have
+    const datetimeColCandidates = headers.filter(h => 
+      /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg)/i.test(h.toLowerCase())
+    );
+    
+    let datetimeValues: (number | null)[] | null = null;
+    let detectedDatetimeCol: string | null = null;
+    
+    // Check if any datetime column was detected during data reading
+    // We store raw datetime values during parsing for split
+    if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
+      datetimeValues = (globalThis as any).__datetimeValues;
+      detectedDatetimeCol = (globalThis as any).__datetimeCol;
+      console.log(`[Split] Using detected datetime column: "${detectedDatetimeCol}"`);
+    }
+    
+    // Detect group key from column uniqueness
+    let groupValues: (string | null)[] | null = null;
+    let detectedGroupKey: string | null = null;
+    
+    if (!datetimeValues && (globalThis as any).__groupValues && (globalThis as any).__groupCol) {
+      groupValues = (globalThis as any).__groupValues;
+      detectedGroupKey = (globalThis as any).__groupCol;
+      console.log(`[Split] Using detected group key: "${detectedGroupKey}"`);
+    }
 
     const isClassification = problem_type === "classification";
+    
+    const splitResult = performSmartSplit(
+      Xfinal.length,
+      datetimeValues,
+      groupValues,
+      y,
+      isClassification
+    );
+    
+    console.log(`\n=== Split Result ===`);
+    console.log(`Strategy: ${splitResult.strategy}`);
+    console.log(`Train: ${splitResult.train_count}, Test: ${splitResult.test_count}`);
+    
+    const Xtrain = splitResult.trainIdx.map(i => Xnorm[i]);
+    const ytrain = splitResult.trainIdx.map(i => y[i]);
+    const Xtest = splitResult.testIdx.map(i => Xnorm[i]);
+    const ytest = splitResult.testIdx.map(i => y[i]);
+
     const numClasses = isTargetCategorical ? labelMap.size : new Set(y).size;
     
     // ==================== CLASS DISTRIBUTION CHECK (CLASSIFICATION ONLY) ====================
@@ -1530,13 +1948,11 @@ serve(async (req) => {
     let classDistribution: Record<string, number> = {};
     
     if (isClassification) {
-      // Count samples per class
       const classCounts: Record<number, number> = {};
       for (const label of y) {
         classCounts[label] = (classCounts[label] || 0) + 1;
       }
       
-      // Create readable class distribution
       if (labelMap.size > 0) {
         for (const [label, idx] of labelMap.entries()) {
           classDistribution[label] = classCounts[idx] || 0;
@@ -1557,36 +1973,103 @@ serve(async (req) => {
           console.warn(`  ⚠️  AVISO: Classe "${cls}" tem menos de ${MIN_CLASS_SAMPLES} amostras!`);
         }
       }
-      
-      if (classMinSamplesWarning) {
-        console.warn(`\n⚠️  AVISO: Uma ou mais classes têm menos de ${MIN_CLASS_SAMPLES} amostras.`);
-        console.warn(`   O modelo pode ter dificuldade em aprender padrões para classes sub-representadas.`);
-      }
     }
 
     // For classification, convert to binary if needed
     let ytrainFinal = ytrain;
     let ytestFinal = ytest;
-    let yvalFinal = yval;
     
     if (isClassification && numClasses === 2) {
       const uniqueVals = [...new Set(y)].sort((a, b) => a - b);
       ytrainFinal = ytrain.map(v => v === uniqueVals[0] ? 0 : 1);
       ytestFinal = ytest.map(v => v === uniqueVals[0] ? 0 : 1);
-      yvalFinal = yval.map(v => v === uniqueVals[0] ? 0 : 1);
     }
 
     console.log(`\nTipo: ${problem_type}, Classes: ${numClasses}`);
 
-    // ============ SELECT BEST MODEL ============
-    const strategy = selectBestModelStrategy(
-      problem_type as "classification" | "regression",
-      totalDatasetRows,
-      finalFeatureNames.length
-    );
+    // ============ DUAL MODEL TRAINING ============
+    console.log(`\n=== Dual Model Training ===`);
+    
+    // Model A: Linear (Ridge / Logistic)
+    const strategyA: ModelStrategy = isClassification
+      ? {
+          id: "logistic_regression",
+          name: "Regressão Logística Regularizada",
+          type: "classification",
+          algorithm: "logistic_regression",
+          params: { epochs: 100, lambda: 0.1 },
+          reason: "Modelo A (linear) para comparação."
+        }
+      : {
+          id: "linear_regression",
+          name: "Regressão Linear Regularizada (Ridge)",
+          type: "regression",
+          algorithm: "linear_regression",
+          params: { epochs: 100, lambda: 0.1 },
+          reason: "Modelo A (linear) para comparação."
+        };
 
-    console.log(`\n[AutoML] Modelo selecionado: ${strategy.name}`);
-    console.log(`[AutoML] Razão: ${strategy.reason}`);
+    // Model B: Non-linear (Gradient Boosting with conservative params)
+    const strategyB: ModelStrategy = {
+      id: isClassification ? "gradient_boosting_classifier" : "gradient_boosting_regressor",
+      name: isClassification ? "Gradient Boosting Classifier" : "Gradient Boosting Regressor",
+      type: isClassification ? "classification" : "regression",
+      algorithm: "gradient_boosting",
+      params: {
+        nEstimators: Math.min(12, Math.max(5, Math.floor(Xtrain.length / 500))),
+        maxDepth: 3,
+        learningRate: 0.15,
+      },
+      reason: "Modelo B (não-linear) para comparação."
+    };
+
+    const ytrainForModel = isClassification ? ytrainFinal : ytrain;
+    const ytestForModel = isClassification ? ytestFinal : ytest;
+
+    console.log(`[AutoML] Treinando Modelo A: ${strategyA.name}`);
+    const resultA = trainSingleModel(strategyA, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+    
+    console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
+    const resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+
+    // Compare and pick best
+    const primaryMetricName = isClassification ? "AUC" : "R²";
+    const scoreA = resultA.metrics[primaryMetricName] ?? -Infinity;
+    const scoreB = resultB.metrics[primaryMetricName] ?? -Infinity;
+    
+    console.log(`\n=== Model Comparison ===`);
+    console.log(`Modelo A (${strategyA.name}): ${primaryMetricName}=${scoreA.toFixed(4)}, sanity=${resultA.sanity.passed}`);
+    console.log(`Modelo B (${strategyB.name}): ${primaryMetricName}=${scoreB.toFixed(4)}, sanity=${resultB.sanity.passed}`);
+
+    // Selection logic: prefer model with better score AND passing sanity
+    let trainResult: TrainResult;
+    let strategy: ModelStrategy;
+    
+    if (resultA.sanity.passed && resultB.sanity.passed) {
+      // Both pass sanity — pick by score
+      if (scoreB > scoreA) {
+        trainResult = resultB;
+        strategy = strategyB;
+        console.log(`[AutoML] ✅ Selecionado Modelo B (melhor score)`);
+      } else {
+        trainResult = resultA;
+        strategy = strategyA;
+        console.log(`[AutoML] ✅ Selecionado Modelo A (melhor score)`);
+      }
+    } else if (resultB.sanity.passed && !resultA.sanity.passed) {
+      trainResult = resultB;
+      strategy = strategyB;
+      console.log(`[AutoML] ✅ Selecionado Modelo B (Modelo A falhou sanity)`);
+    } else if (resultA.sanity.passed && !resultB.sanity.passed) {
+      trainResult = resultA;
+      strategy = strategyA;
+      console.log(`[AutoML] ✅ Selecionado Modelo A (Modelo B falhou sanity)`);
+    } else {
+      // Both fail sanity — pick the one with higher score anyway
+      trainResult = scoreB > scoreA ? resultB : resultA;
+      strategy = scoreB > scoreA ? strategyB : strategyA;
+      console.warn(`[AutoML] ⚠️ Ambos modelos falharam sanity check — selecionado melhor score`);
+    }
 
     // Delete existing models for this project
     await supabase
@@ -1594,46 +2077,38 @@ serve(async (req) => {
       .delete()
       .eq("project_id", project_id);
 
-    // ============ TRAIN SINGLE MODEL (using train + val combined for training) ============
-    // Combine train and validation for the actual training (as per common practice)
-    const XtrainCombined = [...Xtrain, ...Xval];
-    const ytrainCombined = [...(isClassification ? ytrainFinal : ytrain), ...(isClassification ? yvalFinal : yval)];
-    
-    const trainResult = trainSingleModel(
-      strategy,
-      XtrainCombined,
-      ytrainCombined,
-      Xtest,
-      isClassification ? ytestFinal : ytest,
-      finalFeatureNames
-    );
-
     // ==================== BASELINE CALCULATION ====================
-    const yTrainMean = mean(isClassification ? ytrainCombined : ytrain);
+    const yTrainMean = mean(ytrainForModel);
     let baselineMetrics: Record<string, number>;
     
     if (isClassification) {
-      const baselineProbs = ytestFinal.map(() => yTrainMean);
-      baselineMetrics = calcClassificationMetrics(ytestFinal, baselineProbs);
+      const baselineProbs = ytestForModel.map(() => yTrainMean);
+      baselineMetrics = calcClassificationMetrics(ytestForModel, baselineProbs);
     } else {
-      const baselinePreds = ytest.map(() => yTrainMean);
-      baselineMetrics = calcRegressionMetrics(ytest, baselinePreds);
+      const baselinePreds = ytestForModel.map(() => yTrainMean);
+      baselineMetrics = calcRegressionMetrics(ytestForModel, baselinePreds);
     }
     
     console.log(`\n=== Baseline Metrics ===`);
     console.log(JSON.stringify(baselineMetrics));
 
-    // ==================== MODEL QUALITY CHECK ====================
+    // ==================== MODEL QUALITY CHECK (metrics + sanity) ====================
     let modelQualityFlag = "ok";
     const modelR2 = trainResult.metrics["R²"];
     const modelAUC = trainResult.metrics["AUC"];
     
     if (!isClassification && modelR2 !== undefined && modelR2 < 0) {
       modelQualityFlag = "fail";
-      console.warn(`[AutoML] ⚠️ R² negativo (${modelR2.toFixed(4)}) — modelo PIOR que baseline! NÃO promover para produção.`);
+      console.warn(`[AutoML] ⚠️ R² negativo (${modelR2.toFixed(4)}) — modelo PIOR que baseline!`);
     } else if (isClassification && modelAUC !== undefined && modelAUC < 0.55) {
       modelQualityFlag = "fail";
-      console.warn(`[AutoML] ⚠️ AUC abaixo de 0.55 (${modelAUC.toFixed(4)}) — capacidade preditiva insuficiente!`);
+      console.warn(`[AutoML] ⚠️ AUC abaixo de 0.55 (${modelAUC.toFixed(4)}) — insuficiente!`);
+    }
+    
+    // Sanity check override
+    if (!trainResult.sanity.passed) {
+      modelQualityFlag = "fail";
+      console.warn(`[AutoML] ⚠️ Prediction sanity FAILED: ${trainResult.sanity.fail_reasons.join("; ")}`);
     }
     
     const shouldPromoteToProduction = modelQualityFlag === "ok";
@@ -1676,15 +2151,34 @@ serve(async (req) => {
           model_quality_flag: modelQualityFlag,
           // Preflight validation report
           preflight_report: preflightReport,
+          // Split info
+          split_strategy: splitResult.strategy,
+          split_datetime_col: detectedDatetimeCol,
+          split_group_key: detectedGroupKey,
+          split_train_count: splitResult.train_count,
+          split_test_count: splitResult.test_count,
+          // Prediction sanity
+          prediction_sanity: {
+            pred_std: trainResult.sanity.pred_std,
+            pred_mean: trainResult.sanity.pred_mean,
+            pred_range: trainResult.sanity.pred_range,
+            unique_ratio_pred: trainResult.sanity.unique_ratio_pred,
+            pct_equal_mode_pred: trainResult.sanity.pct_equal_mode_pred,
+            y_range: trainResult.sanity.y_range,
+            range_ratio: trainResult.sanity.range_ratio,
+            passed: trainResult.sanity.passed,
+            fail_reasons: trainResult.sanity.fail_reasons,
+          },
+          // Dual model comparison
+          dual_model: {
+            model_a: { name: strategyA.name, score: scoreA, sanity: resultA.sanity.passed },
+            model_b: { name: strategyB.name, score: scoreB, sanity: resultB.sanity.passed },
+            selected: strategy.name,
+          },
           // Dataset info
           total_rows_dataset: totalDatasetRows,
           rows_read: totalLinesRead,
           sample_size_final: Xfinal.length,
-          // Split info
-          n_train_rows: nTrain,
-          n_val_rows: nVal,
-          n_test_rows: nTest,
-          n_train_combined: XtrainCombined.length,
           // Class distribution (if classification)
           class_distribution: isClassification ? classDistribution : null,
           class_min_samples_warning: classMinSamplesWarning,
@@ -1746,11 +2240,26 @@ serve(async (req) => {
         metrics: trainResult.metrics,
         limitations,
         confidence_level: confidenceLevel,
+        split_strategy: splitResult.strategy,
+        split_datetime_col: detectedDatetimeCol,
+        split_group_key: detectedGroupKey,
+        prediction_sanity: {
+          pred_std: trainResult.sanity.pred_std,
+          pct_equal_mode_pred: trainResult.sanity.pct_equal_mode_pred,
+          unique_ratio_pred: trainResult.sanity.unique_ratio_pred,
+          passed: trainResult.sanity.passed,
+          fail_reasons: trainResult.sanity.fail_reasons,
+        },
+        dual_model: {
+          model_a: { name: strategyA.name, score: scoreA },
+          model_b: { name: strategyB.name, score: scoreB },
+          selected: strategy.name,
+        },
         sample_info: {
           total_rows: totalDatasetRows,
           sample_used: Xfinal.length,
-          train_rows: nTrain,
-          test_rows: nTest,
+          train_rows: splitResult.train_count,
+          test_rows: splitResult.test_count,
           features_blocked: featureValidation.blocked,
           target_issues: targetValidation.issues,
         },
@@ -1800,6 +2309,18 @@ serve(async (req) => {
       model_quality_flag: modelQualityFlag,
       baseline_metrics: baselineMetrics,
       preflight_report: preflightReport,
+      prediction_sanity: {
+        passed: trainResult.sanity.passed,
+        pred_std: trainResult.sanity.pred_std,
+        pct_equal_mode_pred: trainResult.sanity.pct_equal_mode_pred,
+        fail_reasons: trainResult.sanity.fail_reasons,
+      },
+      split_strategy: splitResult.strategy,
+      dual_model: {
+        model_a: { name: strategyA.name, score: scoreA, sanity: resultA.sanity.passed },
+        model_b: { name: strategyB.name, score: scoreB, sanity: resultB.sanity.passed },
+        selected: strategy.name,
+      },
       model: {
         id: modelData.id,
         name: strategy.name,
@@ -1811,15 +2332,15 @@ serve(async (req) => {
           total_dataset_rows: totalDatasetRows,
           rows_read: totalLinesRead,
           sample_used: Xfinal.length,
-          train_rows: nTrain,
-          val_rows: nVal,
-          test_rows: nTest,
+          train_rows: splitResult.train_count,
+          test_rows: splitResult.test_count,
         },
         warnings: {
           class_min_samples_warning: classMinSamplesWarning,
           model_quality_flag: modelQualityFlag,
           features_blocked: featureValidation.blocked,
           target_issues: targetValidation.issues,
+          prediction_sanity_passed: trainResult.sanity.passed,
         }
       }
     }), {

@@ -114,7 +114,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
           });
         }
         
-        // Check production model quality flag
+        // Check production model quality flag + prediction sanity
         const { data: prodModel } = await supabase
           .from('project_models')
           .select('hyperparameters')
@@ -125,7 +125,14 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         
         if (prodModel?.hyperparameters) {
           const hp = prodModel.hyperparameters as any;
-          setModelQualityFlag(hp?.model_quality_flag || null);
+          const qFlag = hp?.model_quality_flag || null;
+          const sanity = hp?.prediction_sanity;
+          // Override to fail if prediction sanity failed
+          if (sanity && sanity.passed === false) {
+            setModelQualityFlag("fail");
+          } else {
+            setModelQualityFlag(qFlag);
+          }
         }
       } catch (err) {
         console.error('Error fetching project info:', err);
