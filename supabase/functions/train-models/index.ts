@@ -60,6 +60,188 @@ function normalize(data: number[][]): { normalized: number[][]; means: number[];
   return { normalized, means, stds };
 }
 
+// ==================== PREFLIGHT VALIDATION ====================
+
+interface PreflightResult {
+  target_valid: boolean;
+  target_issues: string[];
+  target_suggestions: string[];
+  features_blocked: string[];
+  features_block_reasons: Record<string, string>;
+  warnings: string[];
+}
+
+/**
+ * Validates the target column BEFORE training.
+ * Checks: cardinality, sequential patterns, near-constant, null rate
+ */
+function validateTarget(
+  yValues: number[],
+  targetName: string,
+  problemType: string,
+  isTargetCategorical: boolean,
+  labelMap: Map<string, number>
+): { valid: boolean; issues: string[]; suggestions: string[] } {
+  const issues: string[] = [];
+  const suggestions: string[] = [];
+
+  if (yValues.length === 0) {
+    return { valid: false, issues: ["Nenhum valor válido no target."], suggestions: ["Verifique a coluna alvo e o dataset."] };
+  }
+
+  const uniqueValues = new Set(yValues);
+  const nUnique = uniqueValues.size;
+  const nRows = yValues.length;
+  const uniqueRatio = nUnique / nRows;
+
+  // Null rate check (already filtered, but check original data proportion)
+  // This is checked earlier in the pipeline
+
+  if (problemType === "regression") {
+    // A1: Cardinality check for regression
+    if (nUnique <= 20) {
+      issues.push(`Target "${targetName}" tem apenas ${nUnique} valores únicos — muito discreto para regressão.`);
+      if (nUnique <= 10) {
+        suggestions.push(`Considere converter para classificação (${nUnique} classes).`);
+      }
+    }
+
+    if (uniqueRatio < 0.01 && nRows > 100) {
+      issues.push(`Target "${targetName}" é quase constante (unique_ratio = ${(uniqueRatio * 100).toFixed(2)}%).`);
+    }
+
+    // Check for sequential/ID pattern
+    const sorted = [...yValues].sort((a, b) => a - b);
+    const diffs = [];
+    for (let i = 1; i < Math.min(sorted.length, 1000); i++) {
+      diffs.push(sorted[i] - sorted[i - 1]);
+    }
+    const constantDiff = diffs.length > 0 && diffs.every(d => d === diffs[0]) && diffs[0] > 0;
+    if (constantDiff && nUnique > 100) {
+      issues.push(`Target "${targetName}" parece ser um ID sequencial (incremento constante de ${diffs[0]}).`);
+      suggestions.push("Selecione uma variável que represente um fenômeno de negócio, não um identificador.");
+    }
+
+    // Near-zero variance check
+    const yMean = mean(yValues);
+    const yStd = std(yValues);
+    if (yStd < 1e-8) {
+      issues.push(`Target "${targetName}" tem variância zero — todos os valores são iguais (${yMean}).`);
+    } else if (yStd / Math.abs(yMean || 1) < 0.001) {
+      issues.push(`Target "${targetName}" tem variância extremamente baixa (CV = ${(yStd / Math.abs(yMean || 1) * 100).toFixed(4)}%).`);
+    }
+
+    // Check for "coded categorical" — integers with few levels
+    const allIntegers = yValues.every(v => Number.isInteger(v));
+    if (allIntegers && nUnique >= 2 && nUnique <= 10) {
+      issues.push(`Target "${targetName}" tem ${nUnique} valores inteiros distintos — pode ser categórico codificado.`);
+      suggestions.push(`Considere converter para classificação (${nUnique} classes).`);
+    }
+  }
+
+  if (problemType === "classification") {
+    // Single class dominant check (>90%)
+    const classCounts: Record<number, number> = {};
+    yValues.forEach(v => { classCounts[v] = (classCounts[v] || 0) + 1; });
+    const maxClassCount = Math.max(...Object.values(classCounts));
+    const maxClassPct = maxClassCount / nRows;
+    
+    if (maxClassPct > 0.9) {
+      issues.push(`Uma classe domina ${(maxClassPct * 100).toFixed(1)}% dos dados — desbalanceamento severo.`);
+      suggestions.push("Considere técnicas de balanceamento ou reavalie a definição do target.");
+    }
+
+    if (nUnique === 1) {
+      issues.push(`Target "${targetName}" tem cardinalidade 1 — classificação impossível.`);
+    }
+  }
+
+  return {
+    valid: issues.length === 0,
+    issues,
+    suggestions
+  };
+}
+
+/**
+ * Validates features BEFORE training.
+ * Blocks: IDs/keys, high cardinality categoricals, zero-variance, leakage suspects
+ */
+function validateFeatures(
+  featureNames: string[],
+  X: number[][],
+  targetName: string,
+  y: number[]
+): { blocked: string[]; blockReasons: Record<string, string>; warnings: string[] } {
+  const blocked: string[] = [];
+  const blockReasons: Record<string, string> = {};
+  const warnings: string[] = [];
+
+  const idPatterns = /^(id|_id|codigo|cod_|numero|num_|chave|key|uuid|pk|fk|idx|index)/i;
+  const idSuffixPatterns = /(_id|_key|_code|_cod|_numero|_num|_uuid)$/i;
+
+  for (let j = 0; j < featureNames.length; j++) {
+    const name = featureNames[j];
+    const nameLower = name.toLowerCase();
+
+    // 1. ID/Key pattern detection
+    if (idPatterns.test(nameLower) || idSuffixPatterns.test(nameLower)) {
+      // Check if it actually has high cardinality
+      const col = X.map(row => row[j]);
+      const uniqueCount = new Set(col).size;
+      const uniqueRatio = uniqueCount / col.length;
+      
+      if (uniqueRatio > 0.5) {
+        blocked.push(name);
+        blockReasons[name] = `Parece ser ID/chave (${uniqueCount} valores únicos em ${col.length} linhas).`;
+        continue;
+      } else {
+        warnings.push(`Feature "${name}" tem nome de ID mas baixa cardinalidade (${uniqueCount} únicos) — mantida.`);
+      }
+    }
+
+    // 2. Zero/near-zero variance
+    const col = X.map(row => row[j]);
+    const colStd = std(col);
+    if (colStd < 1e-10) {
+      blocked.push(name);
+      blockReasons[name] = `Variância zero — coluna constante.`;
+      continue;
+    }
+
+    // 3. Leakage: feature contains target name
+    if (nameLower.includes(targetName.toLowerCase()) && nameLower !== targetName.toLowerCase()) {
+      warnings.push(`Feature "${name}" contém o nome do target "${targetName}" — possível vazamento.`);
+    }
+
+    // 4. Leakage: extremely high correlation with target
+    if (y.length > 0 && y.length === col.length) {
+      const yMean = mean(y);
+      const colMean = mean(col);
+      const yStd = std(y);
+      
+      if (yStd > 0 && colStd > 0) {
+        let cov = 0;
+        for (let i = 0; i < y.length; i++) {
+          cov += (y[i] - yMean) * (col[i] - colMean);
+        }
+        cov /= y.length;
+        const corr = Math.abs(cov / (yStd * colStd));
+        
+        if (corr > 0.98) {
+          blocked.push(name);
+          blockReasons[name] = `Correlação com target = ${corr.toFixed(4)} — provável vazamento de dados.`;
+          continue;
+        } else if (corr > 0.9) {
+          warnings.push(`Feature "${name}" tem alta correlação com target (${corr.toFixed(3)}) — verifique vazamento.`);
+        }
+      }
+    }
+  }
+
+  return { blocked, blockReasons, warnings };
+}
+
 // ==================== MODEL STRATEGY ====================
 
 interface ModelStrategy {
@@ -1206,15 +1388,118 @@ serve(async (req) => {
       });
     }
 
+    // ==================== PREFLIGHT VALIDATION ====================
+    console.log(`\n=== Preflight Validation ===`);
+
+    // A1: Validate target
+    const targetValidation = validateTarget(y, target_column, problem_type, isTargetCategorical, labelMap);
+    
+    if (targetValidation.issues.length > 0) {
+      console.warn(`[Preflight] Target issues:`);
+      targetValidation.issues.forEach(i => console.warn(`  ❌ ${i}`));
+    }
+    if (targetValidation.suggestions.length > 0) {
+      targetValidation.suggestions.forEach(s => console.log(`  💡 ${s}`));
+    }
+
+    // Block training if target is critically invalid
+    const criticalTargetIssues = targetValidation.issues.filter(i => 
+      i.includes("variância zero") || 
+      i.includes("cardinalidade 1") ||
+      i.includes("ID sequencial")
+    );
+    
+    if (criticalTargetIssues.length > 0) {
+      console.error(`[Preflight] ⛔ Target inválido — treinamento bloqueado.`);
+      
+      await supabase.from("projects").update({ status: "target_invalid" }).eq("id", project_id);
+      
+      return new Response(JSON.stringify({
+        error: "Target inválido para treinamento",
+        preflight_report: {
+          target_valid: false,
+          target_issues: targetValidation.issues,
+          target_suggestions: targetValidation.suggestions,
+          features_blocked: [],
+          features_block_reasons: {},
+          warnings: [],
+        },
+        details: criticalTargetIssues.join("; "),
+        action: "review_target"
+      }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // A2: Validate features
+    const featureValidation = validateFeatures(allFeatureNames, X, target_column, y);
+    
+    if (featureValidation.blocked.length > 0) {
+      console.warn(`[Preflight] Features blocked (${featureValidation.blocked.length}):`);
+      featureValidation.blocked.forEach(f => console.warn(`  ❌ ${f}: ${featureValidation.blockReasons[f]}`));
+    }
+    if (featureValidation.warnings.length > 0) {
+      featureValidation.warnings.forEach(w => console.warn(`  ⚠️ ${w}`));
+    }
+
+    // Remove blocked features from X and allFeatureNames
+    let filteredFeatureNames = allFeatureNames;
+    let filteredX = X;
+    
+    if (featureValidation.blocked.length > 0) {
+      const blockedIndices = new Set(featureValidation.blocked.map(name => allFeatureNames.indexOf(name)).filter(i => i !== -1));
+      filteredFeatureNames = allFeatureNames.filter((_, i) => !blockedIndices.has(i));
+      filteredX = X.map(row => row.filter((_, i) => !blockedIndices.has(i)));
+      
+      console.log(`[Preflight] Features após filtragem: ${filteredFeatureNames.length} (removidas: ${featureValidation.blocked.length})`);
+      
+      if (filteredFeatureNames.length === 0) {
+        return new Response(JSON.stringify({
+          error: "Todas as features foram bloqueadas pela validação. Revise as colunas do dataset.",
+          preflight_report: {
+            target_valid: targetValidation.valid,
+            target_issues: targetValidation.issues,
+            target_suggestions: targetValidation.suggestions,
+            features_blocked: featureValidation.blocked,
+            features_block_reasons: featureValidation.blockReasons,
+            warnings: featureValidation.warnings,
+          },
+          action: "review_features"
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    const preflightReport: PreflightResult = {
+      target_valid: targetValidation.valid,
+      target_issues: targetValidation.issues,
+      target_suggestions: targetValidation.suggestions,
+      features_blocked: featureValidation.blocked,
+      features_block_reasons: featureValidation.blockReasons,
+      warnings: [
+        ...targetValidation.issues.filter(i => !criticalTargetIssues.includes(i)),
+        ...featureValidation.warnings
+      ],
+    };
+
+    console.log(`[Preflight] Report:`, JSON.stringify(preflightReport, null, 2));
+
+    // Use filtered data for training
+    const Xfinal = filteredX;
+    const finalFeatureNames = filteredFeatureNames;
+
     // Normalize data
-    const { normalized: Xnorm, means: normMeans, stds: normStds } = normalize(X);
+    const { normalized: Xnorm, means: normMeans, stds: normStds } = normalize(Xfinal);
 
     // ==================== SPLIT TRAIN/VAL/TEST (70/15/15) ====================
     const trainRatio = 0.70;
     const valRatio = 0.15;
     // testRatio = 0.15 (remainder)
 
-    const shuffledIndices = shuffle(Array.from({ length: X.length }, (_, i) => i));
+    const shuffledIndices = shuffle(Array.from({ length: Xfinal.length }, (_, i) => i));
     const n = shuffledIndices.length;
     
     const nTrain = Math.floor(n * trainRatio);
@@ -1297,7 +1582,7 @@ serve(async (req) => {
     const strategy = selectBestModelStrategy(
       problem_type as "classification" | "regression",
       totalDatasetRows,
-      allFeatureNames.length
+      finalFeatureNames.length
     );
 
     console.log(`\n[AutoML] Modelo selecionado: ${strategy.name}`);
@@ -1320,7 +1605,7 @@ serve(async (req) => {
       ytrainCombined,
       Xtest,
       isClassification ? ytestFinal : ytest,
-      allFeatureNames
+      finalFeatureNames
     );
 
     // ==================== BASELINE CALCULATION ====================
@@ -1386,13 +1671,15 @@ serve(async (req) => {
             means: Array.from(normMeans),
             stds: Array.from(normStds),
           },
-          feature_names: allFeatureNames,
+          feature_names: finalFeatureNames,
           baseline_metrics: baselineMetrics,
           model_quality_flag: modelQualityFlag,
+          // Preflight validation report
+          preflight_report: preflightReport,
           // Dataset info
           total_rows_dataset: totalDatasetRows,
           rows_read: totalLinesRead,
-          sample_size_final: X.length,
+          sample_size_final: Xfinal.length,
           // Split info
           n_train_rows: nTrain,
           n_val_rows: nVal,
@@ -1461,9 +1748,11 @@ serve(async (req) => {
         confidence_level: confidenceLevel,
         sample_info: {
           total_rows: totalDatasetRows,
-          sample_used: X.length,
+          sample_used: Xfinal.length,
           train_rows: nTrain,
           test_rows: nTest,
+          features_blocked: featureValidation.blocked,
+          target_issues: targetValidation.issues,
         },
         top_features: trainResult.featureImportances
           .sort((a: any, b: any) => b.importance_value - a.importance_value)
@@ -1510,6 +1799,7 @@ serve(async (req) => {
         : "Treinamento concluído — modelo abaixo do baseline",
       model_quality_flag: modelQualityFlag,
       baseline_metrics: baselineMetrics,
+      preflight_report: preflightReport,
       model: {
         id: modelData.id,
         name: strategy.name,
@@ -1520,7 +1810,7 @@ serve(async (req) => {
         sample_info: {
           total_dataset_rows: totalDatasetRows,
           rows_read: totalLinesRead,
-          sample_used: X.length,
+          sample_used: Xfinal.length,
           train_rows: nTrain,
           val_rows: nVal,
           test_rows: nTest,
@@ -1528,6 +1818,8 @@ serve(async (req) => {
         warnings: {
           class_min_samples_warning: classMinSamplesWarning,
           model_quality_flag: modelQualityFlag,
+          features_blocked: featureValidation.blocked,
+          target_issues: targetValidation.issues,
         }
       }
     }), {
