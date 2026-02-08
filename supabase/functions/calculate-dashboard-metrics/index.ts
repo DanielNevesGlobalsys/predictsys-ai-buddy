@@ -7,6 +7,54 @@ const corsHeaders = {
 };
 
 const HIGH_THRESHOLD = 0.7;
+const PAGE_SIZE = 1000; // Supabase default limit — we paginate over it
+
+/**
+ * Paginated fetch: retrieves ALL rows matching the query, not just the first 1000.
+ * Uses range-based pagination with deterministic ordering by id.
+ */
+async function fetchAllPredictions(
+  supabase: any,
+  projectId: string,
+  horizon: number,
+  segmentField: string | null,
+  segmentValue: string | null,
+): Promise<any[]> {
+  const all: any[] = [];
+  let from = 0;
+
+  while (true) {
+    let query = supabase
+      .from('predictions')
+      .select('id, entity_id, probability_event, predicted_value, potential_value, prediction_date, problem_type, horizon_days')
+      .eq('project_id', projectId)
+      .eq('is_latest', true)
+      .lte('horizon_days', horizon)
+      .order('id', { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+
+    if (segmentField && segmentValue) {
+      query = query.eq(segmentField, segmentValue);
+    }
+
+    const { data, error } = await query;
+
+    if (error) {
+      throw new Error('Erro ao buscar previsões: ' + error.message);
+    }
+
+    if (!data || data.length === 0) break;
+
+    all.push(...data);
+
+    // If we got fewer than PAGE_SIZE, we've reached the end
+    if (data.length < PAGE_SIZE) break;
+
+    from += PAGE_SIZE;
+  }
+
+  return all;
+}
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -35,31 +83,12 @@ serve(async (req) => {
 
     console.log(`[Dashboard Metrics] Project: ${project_id}, Mode: ${mode}, Horizon: ${horizon}d, Segment: ${segment_field}=${segment_value || 'all'}`);
 
-    // Build query
-    let query = supabase
-      .from('predictions')
-      .select('id, entity_id, probability_event, predicted_value, potential_value, prediction_date, problem_type, horizon_days')
-      .eq('project_id', project_id)
-      .eq('is_latest', true)
-      .lte('horizon_days', horizon);
+    // Fetch ALL predictions with pagination (no 1000-row truncation)
+    const predictions = await fetchAllPredictions(supabase, project_id, horizon, segment_field, segment_value);
 
-    if (segment_field && segment_value) {
-      query = (query as any).eq(segment_field, segment_value);
-    }
+    console.log(`[Dashboard Metrics] Total predictions fetched: ${predictions.length}`);
 
-    const { data: predictions, error: predError } = await query;
-
-    if (predError) {
-      console.error('[Dashboard Metrics] Error fetching predictions:', predError);
-      return new Response(
-        JSON.stringify({ error: 'Erro ao buscar previsões: ' + predError.message }),
-        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-      );
-    }
-
-    console.log(`[Dashboard Metrics] Total predictions fetched: ${predictions?.length || 0}`);
-
-    if (!predictions || predictions.length === 0) {
+    if (predictions.length === 0) {
       return new Response(JSON.stringify({
         horizon,
         mode,
@@ -87,7 +116,7 @@ serve(async (req) => {
     const isClassification = problemType === 'classification';
 
     // Calculate KPIs
-    const uniqueEntities = new Set(predictions.map(p => p.entity_id));
+    const uniqueEntities = new Set(predictions.map((p: any) => p.entity_id));
     const entitiesWithPrediction = uniqueEntities.size;
 
     let highRiskOrOpportunity = 0;
@@ -97,7 +126,7 @@ serve(async (req) => {
     let totalPredictedValue = 0;
     const allPredictedValues: number[] = [];
 
-    predictions.forEach(p => {
+    for (const p of predictions) {
       if (isClassification) {
         const prob = p.probability_event ?? 0;
         if (prob >= HIGH_THRESHOLD) {
@@ -107,7 +136,6 @@ serve(async (req) => {
         const value = p.potential_value ?? p.predicted_value ?? 0;
         financialImpact += prob * value;
       } else {
-        // Regression
         const value = p.predicted_value ?? 0;
         totalPredictedValue += value;
         allPredictedValues.push(value);
@@ -116,9 +144,8 @@ serve(async (req) => {
       if (!lastUpdateDate || (p.prediction_date && p.prediction_date > lastUpdateDate)) {
         lastUpdateDate = p.prediction_date;
       }
-    });
+    }
 
-    // For regression, financial impact = total predicted value
     if (!isClassification) {
       financialImpact = totalPredictedValue;
       expectedEvents = totalPredictedValue;
@@ -128,7 +155,7 @@ serve(async (req) => {
       ? totalPredictedValue / allPredictedValues.length
       : 0;
 
-    // Coverage
+    // Coverage — count total predictions without horizon/segment filter
     const { count: totalBaseCount } = await supabase
       .from('predictions')
       .select('id', { count: 'exact', head: true })
@@ -152,7 +179,7 @@ serve(async (req) => {
         { bucket: '80-100%', min: 0.8, max: 1.0, count: 0, sumValue: 0, sumProb: 0 }
       ];
 
-      predictions.forEach(p => {
+      for (const p of predictions) {
         const prob = p.probability_event ?? 0;
         const value = p.potential_value ?? p.predicted_value ?? 0;
         for (const bucket of buckets) {
@@ -163,7 +190,7 @@ serve(async (req) => {
             break;
           }
         }
-      });
+      }
 
       probabilityBuckets = buckets.map(b => ({
         bucket: b.bucket,
@@ -174,7 +201,6 @@ serve(async (req) => {
         percent: predictions.length > 0 ? (b.count / predictions.length) * 100 : 0
       }));
     } else {
-      // Regression: quantile-based bins (p25/p50/p75/p90/p95)
       const values = allPredictedValues.sort((a, b) => a - b);
 
       if (values.length > 0) {
@@ -195,7 +221,6 @@ serve(async (req) => {
         const minVal = values[0];
         const maxVal = values[values.length - 1];
 
-        // Build quantile-based bins
         const quantileBins = [
           { label: 'Até P25', min: minVal, max: p25 },
           { label: 'P25–P50', min: p25, max: p50 },
@@ -210,7 +235,6 @@ serve(async (req) => {
           return v.toFixed(0);
         };
 
-        // Deduplicate bins with same min/max (happens when many values are identical)
         const seenBuckets = new Set<string>();
         probabilityBuckets = [];
 
@@ -221,13 +245,13 @@ serve(async (req) => {
           seenBuckets.add(bucketKey);
 
           const isLast = i === quantileBins.length - 1;
-          const inBucket = predictions.filter(p => {
+          const inBucket = predictions.filter((p: any) => {
             const v = p.predicted_value ?? 0;
             if (isLast) return v >= bin.min && v <= maxVal;
             return v >= bin.min && v < bin.max;
           });
 
-          const totalVal = inBucket.reduce((s, p) => s + (p.predicted_value ?? 0), 0);
+          const totalVal = inBucket.reduce((s: number, p: any) => s + (p.predicted_value ?? 0), 0);
 
           probabilityBuckets.push({
             bucket: `R$ ${formatVal(bin.min)} – ${formatVal(isLast ? maxVal : bin.max)}`,
@@ -243,9 +267,9 @@ serve(async (req) => {
       }
     }
 
-    console.log(`[Dashboard Metrics] Buckets:`, probabilityBuckets.map(b => `${b.bucket}: ${b.count}`).join(', '));
+    console.log(`[Dashboard Metrics] Buckets:`, probabilityBuckets.map((b: any) => `${b.bucket}: ${b.count}`).join(', '));
 
-    // Segments
+    // Segments — sample to detect available fields
     const segmentFields = ['segment', 'age_group', 'region', 'state', 'city', 'product_category', 'channel', 'campaign', 'cohort'];
     const availableSegments: { field: string; values: string[] }[] = [];
 
@@ -259,7 +283,7 @@ serve(async (req) => {
         .limit(100);
 
       if (segData && segData.length > 0) {
-        const uniqueValues = [...new Set(segData.map(s => s[field as keyof typeof s]).filter(Boolean))] as string[];
+        const uniqueValues = [...new Set(segData.map((s: any) => s[field]).filter(Boolean))] as string[];
         if (uniqueValues.length > 0) {
           availableSegments.push({ field, values: uniqueValues.slice(0, 50) });
         }

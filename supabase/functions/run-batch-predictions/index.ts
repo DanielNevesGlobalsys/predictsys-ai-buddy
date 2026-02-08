@@ -272,7 +272,7 @@ serve(async (req) => {
       });
     }
 
-    // Expand folder paths
+    // Expand folder paths and sort for deterministic ordering across passes
     const expandedFilePaths = (await Promise.all(
       filePaths.map(async (p) => {
         const { data: listed } = await supabase.storage.from("datasets").list(p, { limit: 1000 });
@@ -286,7 +286,8 @@ serve(async (req) => {
         return [p];
       })
     )).flat();
-    filePaths = expandedFilePaths;
+    // DETERMINISTIC: sort file paths alphabetically to guarantee same order across passes
+    filePaths = expandedFilePaths.sort();
 
     if (filePaths.length === 0) {
       return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
@@ -303,8 +304,20 @@ serve(async (req) => {
     const predictionDate = new Date().toISOString();
     const startTime = Date.now();
 
-    // Only mark old predictions as not-latest on first pass
+    // On first pass: clean up old predictions to avoid data bloat, then mark remaining as not-latest
     if (isFirstPass) {
+      // Delete old non-latest predictions (accumulated from previous runs) to prevent bloat
+      const { error: deleteError } = await supabase
+        .from("predictions")
+        .delete()
+        .eq("project_id", project_id)
+        .eq("is_latest", false);
+      
+      if (deleteError) {
+        console.warn("[Scoring] Non-fatal: failed to clean old predictions:", deleteError.message);
+      }
+      
+      // Mark current latest predictions as not-latest (they'll be replaced by new ones)
       await supabase.from("predictions").update({ is_latest: false }).eq("project_id", project_id);
     }
 
