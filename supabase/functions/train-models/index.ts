@@ -1021,6 +1021,35 @@ function trainSingleModel(
 
 // ==================== CSV PARSING ====================
 
+/** Auto-detect CSV delimiter from a header line */
+function autoDetectDelimiter(headerLine: string): string {
+  const candidates = [";", ",", "\t", "|"];
+  let best = ",";
+  let bestCount = 0;
+  for (const d of candidates) {
+    const count = headerLine.split(d).length;
+    if (count > bestCount) {
+      bestCount = count;
+      best = d;
+    }
+  }
+  console.log(`[AutoML] Auto-detected delimiter: "${best === "\t" ? "\\t" : best}" (${bestCount} columns)`);
+  return best;
+}
+
+/** Case-insensitive header index search */
+function findHeaderIndex(headers: string[], target: string): number {
+  // Exact match first
+  const exact = headers.indexOf(target);
+  if (exact !== -1) return exact;
+  // Case-insensitive match
+  const lower = target.toLowerCase().trim();
+  for (let i = 0; i < headers.length; i++) {
+    if (headers[i].toLowerCase().trim() === lower) return i;
+  }
+  return -1;
+}
+
 function parseCSVLine(line: string, delim: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -1366,8 +1395,8 @@ serve(async (req) => {
         });
       }
 
-      // Find target column index
-      const targetIndex = headers.indexOf(target_column);
+      // Find target column index (case-insensitive fallback)
+      const targetIndex = findHeaderIndex(headers, target_column);
       if (targetIndex === -1) {
         console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.join(", ")}`);
         return new Response(JSON.stringify({ 
@@ -1378,12 +1407,19 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
+      // Use the actual header name from the file for row access
+      const actualTargetName = headers[targetIndex];
 
-      // Get numeric feature columns
+      // Get numeric feature columns (case-insensitive matching)
       const numericColumns = columns.filter(c => 
         (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
       );
-      const baseFeatureNames = numericColumns.map(c => c.column_name).filter(n => headers.includes(n));
+      const baseFeatureNames = numericColumns
+        .map(c => {
+          const idx = findHeaderIndex(headers, c.column_name);
+          return idx !== -1 ? headers[idx] : null;
+        })
+        .filter((n): n is string => n !== null);
       const engineeredFeatureNames = enabledFeatures.map(f => f.name);
       const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
 
@@ -1626,6 +1662,15 @@ serve(async (req) => {
               fileLinesCount++;
               
               if (isFirstFile && isFirstLineOfFile) {
+                // Auto-detect delimiter if the configured one produces too few columns
+                const testHeaders = parseCSVLine(line, delimiter);
+                if (testHeaders.length <= 1 && line.length > 10) {
+                  const detected = autoDetectDelimiter(line);
+                  if (detected !== delimiter) {
+                    console.log(`[AutoML] Delimiter mismatch: configured="${delimiter}", auto-detected="${detected}". Using auto-detected.`);
+                    delimiter = detected;
+                  }
+                }
                 headers = parseCSVLine(line, delimiter);
                 console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total)`);
                 isFirstLineOfFile = false;
@@ -1707,23 +1752,24 @@ serve(async (req) => {
         });
       }
 
-      // Find target column index
-      const targetIndex = headers.indexOf(target_column);
+      // Find target column index (case-insensitive fallback)
+      const targetIndex = findHeaderIndex(headers, target_column);
       if (targetIndex === -1) {
-        console.error(`Coluna alvo "${target_column}" não encontrada.`);
+        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.slice(0, 20).join(", ")}`);
         return new Response(JSON.stringify({ 
-          error: `Coluna alvo "${target_column}" não encontrada no dataset.` 
+          error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
+          available_columns: headers.slice(0, 20)
         }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
 
-      // Get numeric feature columns
+      // Get numeric feature columns (case-insensitive matching)
       const numericColumns = columns.filter(c => 
         (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
       );
-      const featureIndices = numericColumns.map(c => headers.indexOf(c.column_name)).filter(i => i !== -1);
+      const featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
       const baseFeatureNames = featureIndices.map(i => headers[i]);
       const engineeredFeatureNames = enabledFeatures.map(f => f.name);
       const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];

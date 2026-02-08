@@ -1080,6 +1080,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       canonical_columns: canonical.columns.length,
       coverage_pct: coveragePct,
       rows_consolidated: totalRowsConsolidated,
+      delimiter: primaryJob.delimiter || ",",
+      encoding: primaryJob.encoding || "utf-8",
     },
   );
 
