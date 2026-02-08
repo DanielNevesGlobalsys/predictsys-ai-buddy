@@ -19,6 +19,7 @@ import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
+import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface StepTrainingProps {
@@ -505,6 +506,9 @@ const StepTraining = ({
               datasetRows={projectData.dataset_rows}
               targetColumn={projectData.target_column}
             />
+
+            {/* Pipeline Audit Panel (admin only) */}
+            <PipelineAuditPanel projectId={projectData.id || ""} />
           </div>
         )}
 
