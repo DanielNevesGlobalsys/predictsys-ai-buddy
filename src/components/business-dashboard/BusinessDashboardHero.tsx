@@ -1,18 +1,90 @@
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Badge } from '@/components/ui/badge';
-import { TrendingUp, Users, AlertTriangle, ShoppingCart, CreditCard, DollarSign, BarChart3 } from 'lucide-react';
+import { TrendingUp, Users, AlertTriangle, ShoppingCart, CreditCard, DollarSign, BarChart3, GraduationCap, Heart, Truck } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
 import { PROBLEM_CONTEXT_LABELS } from './types';
 
 interface BusinessDashboardHeroProps {
+  projectId?: string;
   problemContext: string | null;
   problemType: string;
   horizonDays: number;
 }
 
-export function BusinessDashboardHero({ problemContext, problemType, horizonDays }: BusinessDashboardHeroProps) {
+interface InferredContext {
+  industryLabel: string | null;
+  industryDisplay: string | null;
+  problemLabels: string[];
+  narrative: string | null;
+}
+
+export function BusinessDashboardHero({ projectId, problemContext, problemType, horizonDays }: BusinessDashboardHeroProps) {
   const { t } = useTranslation();
+  const [inferred, setInferred] = useState<InferredContext>({
+    industryLabel: null,
+    industryDisplay: null,
+    problemLabels: [],
+    narrative: null,
+  });
+  
+  // Load inferred context from AI context and problem inference
+  useEffect(() => {
+    if (!projectId) return;
+    
+    const loadInferredContext = async () => {
+      try {
+        const [aiCtxRes, inferenceRes] = await Promise.all([
+          supabase
+            .from('project_ai_context')
+            .select('context')
+            .eq('project_id', projectId)
+            .maybeSingle(),
+          supabase
+            .from('project_problem_inference')
+            .select('suggested_problem_labels, narrative')
+            .eq('project_id', projectId)
+            .order('created_at', { ascending: false })
+            .limit(1)
+            .maybeSingle(),
+        ]);
+
+        const aiCtx = aiCtxRes.data?.context as Record<string, any> | null;
+        const segment = aiCtx?.eda?.business_segment;
+        
+        let labels: string[] = [];
+        if (inferenceRes.data?.suggested_problem_labels) {
+          labels = (inferenceRes.data.suggested_problem_labels as { label: string }[])
+            .filter(l => !(l.label || '').startsWith('__'))
+            .map(l => l.label)
+            .slice(0, 3);
+        }
+
+        setInferred({
+          industryLabel: segment?.label || null,
+          industryDisplay: segment?.segment || null,
+          problemLabels: labels,
+          narrative: inferenceRes.data?.narrative ? (inferenceRes.data.narrative as string).substring(0, 200) : null,
+        });
+      } catch (err) {
+        console.error('[BusinessDashboardHero] Error loading context:', err);
+      }
+    };
+    
+    loadInferredContext();
+  }, [projectId]);
   
   const getContextIcon = () => {
+    // Use inferred industry for icon when available
+    if (inferred.industryLabel) {
+      switch (inferred.industryLabel) {
+        case 'education': return <GraduationCap className="w-8 h-8" />;
+        case 'healthcare': return <Heart className="w-8 h-8" />;
+        case 'logistics': return <Truck className="w-8 h-8" />;
+        case 'retail_shopping': return <ShoppingCart className="w-8 h-8" />;
+        case 'financial': return <CreditCard className="w-8 h-8" />;
+      }
+    }
     switch (problemContext) {
       case 'churn': return <Users className="w-8 h-8" />;
       case 'propensao_compra': return <ShoppingCart className="w-8 h-8" />;
@@ -24,15 +96,16 @@ export function BusinessDashboardHero({ problemContext, problemType, horizonDays
     }
   };
   
-  const contextLabels = problemContext && PROBLEM_CONTEXT_LABELS[problemContext] 
-    ? {
-        title: t(PROBLEM_CONTEXT_LABELS[problemContext].title),
-        subtitle: t(PROBLEM_CONTEXT_LABELS[problemContext].subtitle)
-      }
-    : {
-        title: t('businessDashboard.hero.defaultTitle'),
-        subtitle: t('businessDashboard.hero.defaultSubtitle')
-      };
+  // Build dynamic subtitle from inferred problems
+  const getSubtitle = (): string => {
+    if (inferred.problemLabels.length > 0) {
+      return inferred.problemLabels.join(' · ');
+    }
+    if (problemContext && PROBLEM_CONTEXT_LABELS[problemContext]) {
+      return t(PROBLEM_CONTEXT_LABELS[problemContext].subtitle);
+    }
+    return t('businessDashboard.hero.defaultSubtitle');
+  };
   
   const problemTypeLabel = problemType === 'classification' 
     ? t('businessDashboard.hero.classification')
@@ -64,13 +137,18 @@ export function BusinessDashboardHero({ problemContext, problemType, horizonDays
                 {t('businessDashboard.hero.title')}
               </h1>
               <p className="text-lg text-muted-foreground mt-1">
-                {contextLabels.subtitle}
+                {getSubtitle()}
               </p>
             </div>
           </div>
         </div>
         
         <div className="flex flex-wrap gap-2">
+          {inferred.industryDisplay && (
+            <Badge variant="secondary" className="text-sm px-3 py-1 bg-primary/10 text-primary border-primary/20">
+              {inferred.industryDisplay}
+            </Badge>
+          )}
           <Badge variant="secondary" className="text-sm px-3 py-1">
             {problemTypeLabel}
           </Badge>

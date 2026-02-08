@@ -313,6 +313,31 @@ function isIdColumn(name: string, uniqueCount: number, totalRows: number): boole
   return false;
 }
 
+// GUARDRAIL: Detect sequential integer columns that should NEVER be regression targets
+function isSequentialInteger(numStat: any, distinctCount: number, totalRows: number): boolean {
+  if (!numStat || numStat.min_value === null || numStat.max_value === null) return false;
+  const range = numStat.max_value - numStat.min_value;
+  // If range ≈ totalRows and all integers → sequential
+  if (range > 0 && Math.abs(range - (totalRows - 1)) / totalRows < 0.15) return true;
+  // High uniqueness + integer-like values (no decimals visible)
+  if (distinctCount >= totalRows * 0.8 && numStat.std_value && numStat.mean_value) {
+    const isWholeNumbers = numStat.min_value === Math.floor(numStat.min_value) && 
+                           numStat.max_value === Math.floor(numStat.max_value);
+    if (isWholeNumbers && range > 50) return true;
+  }
+  return false;
+}
+
+// GUARDRAIL: Detect coded categorical columns masquerading as numeric
+function isCodedCategorical(name: string, numStat: any, distinctCount: number): boolean {
+  const lower = name.toLowerCase();
+  const codedPatterns = ["cod", "codigo", "código", "tipo", "flag", "status", "classe", "grau", "nivel", "nível", "sexo", "genero", "gênero", "uf", "regiao", "região"];
+  if (codedPatterns.some(p => lower.includes(p)) && distinctCount <= 20) return true;
+  // Numeric but very few distinct values with integer range
+  if (numStat && distinctCount <= 10 && numStat.min_value === Math.floor(numStat.min_value)) return true;
+  return false;
+}
+
 function isDateColumn(name: string): boolean {
   return matchesPatterns(name, TIME_PATTERNS);
 }
@@ -466,6 +491,21 @@ function runInference(
       distinctCount > 20 &&
       numStat
     ) {
+      // GUARDRAIL: Block ID-like columns from being regression targets
+      if (isIdColumn(name, distinctCount, totalRows)) continue;
+      
+      // GUARDRAIL: Block sequential integer columns (auto-increment, row numbers)
+      if (isSequentialInteger(numStat, distinctCount, totalRows)) {
+        console.log(`[infer-problem] BLOCKED regression target "${name}": sequential integer pattern`);
+        continue;
+      }
+      
+      // GUARDRAIL: Block coded categorical columns masquerading as numeric
+      if (isCodedCategorical(name, numStat, distinctCount)) {
+        console.log(`[infer-problem] BLOCKED regression target "${name}": coded categorical pattern`);
+        continue;
+      }
+
       let bestMatch: VerticalProblem | null = null;
       let matchedGeneric = false;
 
@@ -935,6 +975,34 @@ serve(async (req) => {
       });
     } catch (ctxErr) {
       console.error("[infer-problem] Context append error:", ctxErr);
+    }
+
+    // Also append business_segment to AI context for downstream usage
+    try {
+      await fetch(`${supabaseUrl}/functions/v1/append-project-context`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${supabaseServiceKey}`,
+          apikey: supabaseServiceKey,
+        },
+        body: JSON.stringify({
+          project_id,
+          organization_id: orgId,
+          stage: "eda",
+          payload: {
+            business_segment: {
+              segment: result.industry.display_name,
+              label: result.industry.label,
+              confidence: result.industry.confidence,
+              evidence: result.industry.evidence,
+            },
+            insight_text: result.suggested_problem_labels.map(l => l.label).join(", "),
+          },
+        }),
+      });
+    } catch (ctxEda) {
+      console.error("[infer-problem] EDA context append error:", ctxEda);
     }
 
     // Build response with industry info included at top level
