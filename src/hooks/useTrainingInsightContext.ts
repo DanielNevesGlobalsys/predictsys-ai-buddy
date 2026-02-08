@@ -69,6 +69,10 @@ export interface ModelQualityInfo {
   split_group_key: string | null;
   prediction_sanity: PredictionSanityInfo | null;
   dual_model: { model_a: any; model_b: any; selected: string } | null;
+  sample_strategy: string | null;
+  total_rows_dataset: number | null;
+  train_rows_used: number | null;
+  coverage_pct: number | null;
 }
 
 export interface DebugInfo {
@@ -146,8 +150,9 @@ export function useTrainingInsightContext(projectId: string | undefined) {
       const settings = settingsRes.data;
       const edaInsights = edaInsightsRes.data;
 
-      // Extract model quality info from hyperparameters
+      // Extract model quality info from hyperparameters + AI context
       const hp = modelRes.data?.hyperparameters as Record<string, any> | null;
+      const scoreReport = aiCtx?.predictions?.score_report;
       const qualityInfo: ModelQualityInfo = {
         model_quality_flag: hp?.model_quality_flag || null,
         baseline_metrics: hp?.baseline_metrics || null,
@@ -158,6 +163,10 @@ export function useTrainingInsightContext(projectId: string | undefined) {
         split_group_key: hp?.split_group_key || null,
         prediction_sanity: hp?.prediction_sanity || null,
         dual_model: hp?.dual_model || null,
+        sample_strategy: hp?.sample_strategy || null,
+        total_rows_dataset: hp?.total_rows_dataset || null,
+        train_rows_used: hp?.sample_size_final || null,
+        coverage_pct: scoreReport?.coverage_pct ?? null,
       };
 
       // Build EDA summary

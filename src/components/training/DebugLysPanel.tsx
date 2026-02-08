@@ -210,6 +210,31 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
                       </span>
                     </div>
 
+                    {/* coverage_pct */}
+                    {qi.coverage_pct !== null && qi.coverage_pct !== undefined && (
+                      <div className="flex items-center gap-1.5">
+                        {qi.coverage_pct >= 95 ? (
+                          <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                        ) : (
+                          <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
+                        )}
+                        <span className={qi.coverage_pct < 95 ? "text-yellow-500" : "text-foreground"}>
+                          coverage_pct: {qi.coverage_pct.toFixed(1)}%
+                        </span>
+                      </div>
+                    )}
+
+                    {/* sample_strategy + train_rows_used / total_rows */}
+                    {qi.sample_strategy && (
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                        <span className="text-foreground">
+                          sample_strategy: {qi.sample_strategy}
+                          {qi.train_rows_used && qi.total_rows_dataset ? ` (${qi.train_rows_used.toLocaleString()} / ${qi.total_rows_dataset.toLocaleString()})` : ""}
+                        </span>
+                      </div>
+                    )}
+
                     {/* baseline_metrics */}
                     {qi.baseline_metrics && (
                       <div>

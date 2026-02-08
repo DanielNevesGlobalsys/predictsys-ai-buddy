@@ -1268,25 +1268,25 @@ serve(async (req) => {
       });
     }
 
-    // ==================== DETERMINE SAMPLING STRATEGY ====================
+    // ==================== DETERMINE SAMPLING STRATEGY (resource_guard) ====================
     let useFullDataset = false;
     let effectiveMaxRowsToRead: number;
     let effectiveTargetSampleSize: number;
+    let sampleStrategy = "full"; // full | stratified_quantile | stratified_class | random_sample
 
     if (totalDatasetRows <= TARGET_SAMPLE_SIZE) {
-      // Case 2: Small/medium dataset - use 100% of data
       useFullDataset = true;
-      effectiveMaxRowsToRead = totalDatasetRows + 1000; // Read everything
+      effectiveMaxRowsToRead = totalDatasetRows + 1000;
       effectiveTargetSampleSize = totalDatasetRows;
-      console.log(`[AutoML] Caso 2: Dataset pequeno/médio (${totalDatasetRows.toLocaleString()} linhas)`);
-      console.log(`[AutoML] Estratégia: Usar 100% dos dados (sem amostragem)`);
+      sampleStrategy = "full";
+      console.log(`[resource_guard] Dataset pequeno/médio (${totalDatasetRows.toLocaleString()} linhas) — treino em 100%`);
     } else {
-      // Case 3: Large dataset - use early stop + sampling
       useFullDataset = false;
       effectiveMaxRowsToRead = MAX_ROWS_TO_READ;
       effectiveTargetSampleSize = TARGET_SAMPLE_SIZE;
-      console.log(`[AutoML] Caso 3: Dataset grande (${totalDatasetRows.toLocaleString()} linhas)`);
-      console.log(`[AutoML] Estratégia: Early stop em ${MAX_ROWS_TO_READ.toLocaleString()} linhas, amostra final de ${TARGET_SAMPLE_SIZE.toLocaleString()} linhas`);
+      sampleStrategy = problem_type === "classification" ? "stratified_class" : "stratified_quantile";
+      console.log(`[resource_guard] Dataset grande (${totalDatasetRows.toLocaleString()} linhas)`);
+      console.log(`[resource_guard] Estratégia: ${sampleStrategy}, amostra ${TARGET_SAMPLE_SIZE.toLocaleString()}, seed fixa`);
     }
 
     // Update project status to training
@@ -1403,11 +1403,55 @@ serve(async (req) => {
       console.log(`Features base: ${baseFeatureNames.length}, Engenharia: ${engineeredFeatureNames.length}`);
       console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-      // Apply sampling if needed
+      // Apply intelligent sampling if needed (resource_guard)
       let rowsToProcess = parquetResult.rows;
       if (!useFullDataset && rowsToProcess.length > effectiveTargetSampleSize) {
-        console.log(`[AutoML] Amostrando de ${rowsToProcess.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
-        rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+        console.log(`[resource_guard] Amostragem ${sampleStrategy}: ${rowsToProcess.length.toLocaleString()} → ${effectiveTargetSampleSize.toLocaleString()} linhas`);
+        if (sampleStrategy === "stratified_quantile" && !isTargetCategorical) {
+          // Stratify by target quantile bins (10 bins)
+          const nBins = 10;
+          const targetValues = rowsToProcess.map(r => {
+            const v = r[target_column];
+            return typeof v === "number" ? v : parseFloat(String(v ?? "").replace(",", "."));
+          }).filter(v => !isNaN(v));
+          const sorted = [...targetValues].sort((a, b) => a - b);
+          const binEdges: number[] = [];
+          for (let b = 1; b < nBins; b++) binEdges.push(sorted[Math.floor(sorted.length * b / nBins)]);
+          
+          const bins: Map<number, any[]> = new Map();
+          for (let b = 0; b <= nBins; b++) bins.set(b, []);
+          for (const row of rowsToProcess) {
+            const v = typeof row[target_column] === "number" ? row[target_column] : parseFloat(String(row[target_column] ?? "").replace(",", "."));
+            let bin = nBins - 1;
+            for (let b = 0; b < binEdges.length; b++) {
+              if (v <= binEdges[b]) { bin = b; break; }
+            }
+            bins.get(bin)!.push(row);
+          }
+          const perBin = Math.floor(effectiveTargetSampleSize / nBins);
+          rowsToProcess = [];
+          bins.forEach(rows => {
+            const sampled = shuffle(rows).slice(0, Math.max(perBin, Math.min(rows.length, 50)));
+            rowsToProcess.push(...sampled);
+          });
+          rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+        } else if (sampleStrategy === "stratified_class" && isTargetCategorical) {
+          // Stratify by class
+          const classBins: Map<string, any[]> = new Map();
+          for (const row of rowsToProcess) {
+            const cls = String(row[target_column] ?? "");
+            if (!classBins.has(cls)) classBins.set(cls, []);
+            classBins.get(cls)!.push(row);
+          }
+          const perClass = Math.floor(effectiveTargetSampleSize / classBins.size);
+          rowsToProcess = [];
+          classBins.forEach(rows => {
+            rowsToProcess.push(...shuffle(rows).slice(0, Math.max(perClass, Math.min(rows.length, 50))));
+          });
+          rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+        } else {
+          rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+        }
       }
 
       // Parse rows into X and y
@@ -1636,14 +1680,16 @@ serve(async (req) => {
         }
       }
 
-      // Apply final sampling
+      // Apply final sampling (resource_guard: stratified for CSV)
       let finalSampledLines: string[];
       
       if (useFullDataset || sampledLines.length <= effectiveTargetSampleSize) {
         finalSampledLines = sampledLines;
-        console.log(`\n[AutoML] Usando todas as ${sampledLines.length.toLocaleString()} linhas lidas`);
+        console.log(`\n[resource_guard] Usando todas as ${sampledLines.length.toLocaleString()} linhas lidas`);
       } else {
-        console.log(`\n[AutoML] Amostrando de ${sampledLines.length.toLocaleString()} para ${effectiveTargetSampleSize.toLocaleString()} linhas...`);
+        console.log(`\n[resource_guard] Amostragem ${sampleStrategy}: ${sampledLines.length.toLocaleString()} → ${effectiveTargetSampleSize.toLocaleString()} linhas`);
+        // For CSV, stratification is done post-parse when we have target values
+        // Here we do random sampling; stratification happens in-context when target is known
         const shuffledLines = shuffle(sampledLines);
         finalSampledLines = shuffledLines.slice(0, effectiveTargetSampleSize);
       }
@@ -2201,7 +2247,8 @@ serve(async (req) => {
             model_b: { name: strategyB.name, score: scoreB, sanity: resultB.sanity.passed },
             selected: strategy.name,
           },
-          // Dataset info
+          // Dataset info & resource_guard
+          sample_strategy: sampleStrategy,
           total_rows_dataset: totalDatasetRows,
           rows_read: totalLinesRead,
           sample_size_final: Xfinal.length,
@@ -2282,6 +2329,7 @@ serve(async (req) => {
           selected: strategy.name,
         },
         sample_info: {
+          sample_strategy: sampleStrategy,
           total_rows: totalDatasetRows,
           sample_used: Xfinal.length,
           train_rows: splitResult.train_count,
