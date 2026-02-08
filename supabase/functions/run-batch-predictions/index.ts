@@ -381,62 +381,40 @@ serve(async (req) => {
       }
     });
 
-    // Use saved normalization from training when available
-    let baseMeans: number[];
-    let baseStds: number[];
+    // Use saved normalization from training — REQUIRED for consistent predictions
+    let means: number[];
+    let stds: number[];
     
     if (savedNormalization?.means && savedNormalization?.stds && savedFeatureNames) {
-      baseMeans = baseFeatureNames.map(name => {
+      // Map saved normalization to the order of allFeatureNames
+      means = allFeatureNames.map(name => {
         const idx = savedFeatureNames.indexOf(name);
         return idx !== -1 ? savedNormalization.means[idx] : 0;
       });
-      baseStds = baseFeatureNames.map(name => {
+      stds = allFeatureNames.map(name => {
         const idx = savedFeatureNames.indexOf(name);
         return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
       });
-      console.log(`[Predictions] Using saved normalization from training`);
+      console.log(`[Predictions] Using saved normalization from training (${means.length} features)`);
     } else {
-      console.warn(`[Predictions] ⚠️ No saved normalization, calculating from data`);
+      console.warn(`[Predictions] ⚠️ No saved normalization — predictions may be inaccurate`);
+      // Fallback: calculate from data (not ideal but avoids breaking)
       const featureData: number[][] = baseFeatureNames.map(() => []);
-      for (let i = 0; i < allLines.length; i++) {
+      for (let i = 0; i < Math.min(allLines.length, 2000); i++) {
         const values = parseCSVLine(allLines[i], delimiter);
         featureIndices.forEach((idx, j) => {
           const val = parseFloat((values[idx] || "").replace(",", "."));
           if (!isNaN(val)) featureData[j].push(val);
         });
       }
-      baseMeans = featureData.map(arr => mean(arr));
-      baseStds = featureData.map(arr => std(arr) || 1);
+      const baseMeans = featureData.map(arr => mean(arr));
+      const baseStds = featureData.map(arr => std(arr) || 1);
+      // For engineered features, use 0/1 defaults
+      means = [...baseMeans, ...engineeredFeatureNames.map(() => 0)];
+      stds = [...baseStds, ...engineeredFeatureNames.map(() => 1)];
     }
 
-    // Engineered feature normalization
-    let engMeans: number[];
-    let engStds: number[];
-    
-    if (savedNormalization?.means && savedFeatureNames) {
-      engMeans = engineeredFeatureNames.map(name => {
-        const idx = savedFeatureNames.indexOf(name);
-        return idx !== -1 ? savedNormalization.means[idx] : 0;
-      });
-      engStds = engineeredFeatureNames.map(name => {
-        const idx = savedFeatureNames.indexOf(name);
-        return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
-      });
-    } else {
-      const engineeredData: number[][] = engineeredFeatureNames.map(() => []);
-      for (let i = 0; i < Math.min(allLines.length, 1000); i++) {
-        const values = parseCSVLine(allLines[i], delimiter);
-        const rawRecord: Record<string, string | number | null> = {};
-        headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
-        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-        engineeredFeatureNames.forEach((name, j) => {
-          const val = engineeredValues[name];
-          if (typeof val === "number" && !isNaN(val)) engineeredData[j].push(val);
-        });
-      }
-      engMeans = engineeredData.map(arr => mean(arr));
-      engStds = engineeredData.map(arr => std(arr) || 1);
-    }
+    // Normalization is now handled in unified means/stds above
 
     const isClassification = project.problem_type === "classification";
     const batchId = `batch_${Date.now()}`;
@@ -464,26 +442,26 @@ serve(async (req) => {
         rawRecord[h] = values[idx] || null;
       });
       
-      // Extract and normalize base feature values
+      // Extract and normalize base feature values using unified normalization
       const baseFeatureValues = featureIndices.map((idx, j) => {
         const val = parseFloat((values[idx] || "").replace(",", "."));
         if (isNaN(val)) return 0;
         return (val - means[j]) / stds[j];
       });
       
-      // Apply and normalize engineered features
+      // Apply and normalize engineered features using unified normalization
       const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
       const engineeredFeatureValues = engineeredFeatureNames.map((name, j) => {
         const val = engineeredValues[name];
         if (typeof val !== "number" || isNaN(val)) return 0;
-        return (val - engineeredMeans[j]) / engineeredStds[j];
+        const normIdx = baseFeatureNames.length + j;
+        return (val - means[normIdx]) / stds[normIdx];
       });
       
       // Combine all features
       const featureValues = [...baseFeatureValues, ...engineeredFeatureValues];
 
-      // Make prediction
-      const featureSum = featureValues.reduce((a, b) => a + b, 0);
+      // Make prediction using real model artifacts
       
       // Extract segmentation values
       const segmentValues: Record<string, string | null> = {
@@ -512,14 +490,45 @@ serve(async (req) => {
         else if (name.includes('category') || name.includes('categoria')) segmentValues.product_category = value;
       });
 
-      if (isClassification) {
-        // Simulate probability based on features (use weights from feature importance if available)
-        const probability = sigmoid(featureSum * 0.3 + (Math.random() * 0.4 - 0.2));
-        const predictedClass = probability >= 0.5 ? "1" : "0";
-        
-        // Calculate potential value (estimate based on average ticket or similar)
-        const potentialValue = 100 + Math.random() * 900; // Placeholder - should come from data
+      // === REAL MODEL INFERENCE ===
+      let predictedValue: number | null = null;
+      let probability: number | null = null;
+      let predictedClass: string | null = null;
 
+      if (modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees) {
+        // Gradient Boosting inference
+        let pred = modelArtifacts.base || 0;
+        const lr = modelArtifacts.lr || 0.1;
+        for (const tree of modelArtifacts.trees) {
+          pred += lr * predictTree(tree, featureValues);
+        }
+        if (isClassification) {
+          probability = sigmoid(pred);
+          predictedClass = probability >= 0.5 ? "1" : "0";
+        } else {
+          predictedValue = pred;
+        }
+      } else if (modelArtifacts.weights) {
+        // Linear / Logistic regression inference
+        const weights: number[] = modelArtifacts.weights;
+        const bias: number = modelArtifacts.bias || 0;
+        let z = bias;
+        for (let j = 0; j < Math.min(weights.length, featureValues.length); j++) {
+          z += weights[j] * featureValues[j];
+        }
+        if (isClassification) {
+          probability = sigmoid(z);
+          predictedClass = probability >= 0.5 ? "1" : "0";
+        } else {
+          predictedValue = z;
+        }
+      } else {
+        // Should not happen — model validated above
+        console.warn(`[Predictions] Row ${i}: no usable model artifacts, skipping`);
+        continue;
+      }
+
+      if (isClassification) {
         predictions.push({
           project_id: project_id,
           user_id: project.user_id,
@@ -533,7 +542,7 @@ serve(async (req) => {
           probability_event: probability,
           predicted_class: predictedClass,
           predicted_value: null,
-          potential_value: potentialValue,
+          potential_value: null,
           batch_id: batchId,
           is_latest: true,
           ...segmentValues,
@@ -543,10 +552,6 @@ serve(async (req) => {
           }
         });
       } else {
-        // Regression prediction
-        const baseValue = mean(featureData[0]) || 100;
-        const predictedValue = baseValue + featureSum * (std(featureData[0]) || 10);
-
         predictions.push({
           project_id: project_id,
           user_id: project.user_id,

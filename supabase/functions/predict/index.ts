@@ -6,20 +6,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Simple statistical functions
-function mean(arr: number[]): number {
-  if (arr.length === 0) return 0;
-  return arr.reduce((a, b) => a + b, 0) / arr.length;
-}
-
-function std(arr: number[]): number {
-  if (arr.length === 0) return 0;
-  const m = mean(arr);
-  return Math.sqrt(arr.reduce((acc, val) => acc + Math.pow(val - m, 2), 0) / arr.length);
-}
-
 function sigmoid(x: number): number {
   return 1 / (1 + Math.exp(-Math.max(-500, Math.min(500, x))));
+}
+
+function predictTree(tree: any, x: number[]): number {
+  if (!tree || tree.isLeaf) return tree?.value || 0;
+  return x[tree.feature] <= tree.threshold 
+    ? predictTree(tree.left, x) 
+    : predictTree(tree.right, x);
 }
 
 serve(async (req) => {
@@ -62,7 +57,6 @@ serve(async (req) => {
       .single();
 
     if (projectError || !project) {
-      console.error("Projeto não encontrado:", projectError);
       return new Response(JSON.stringify({ error: "Projeto não encontrado" }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -79,85 +73,45 @@ serve(async (req) => {
       .single();
 
     if (modelError || !productionModel) {
-      console.error("Modelo em produção não encontrado:", modelError);
       return new Response(JSON.stringify({ 
-        error: "Nenhum modelo em produção encontrado. Selecione um modelo para produção primeiro." 
+        error: "Nenhum modelo em produção encontrado." 
       }), {
         status: 404,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get feature columns
-    const { data: columns, error: colError } = await supabase
-      .from("project_columns")
-      .select("*")
-      .eq("project_id", project_id)
-      .order("column_index");
+    // Extract model artifacts
+    const hyperparams = (productionModel.hyperparameters as any) || {};
+    const modelArtifacts = hyperparams.model_artifacts;
+    const savedNormalization = hyperparams.normalization;
+    const savedFeatureNames: string[] = hyperparams.feature_names || [];
 
-    if (colError || !columns) {
-      return new Response(JSON.stringify({ error: "Erro ao carregar colunas do projeto" }), {
-        status: 500,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // Get numeric feature columns (excluding target)
-    const numericFeatures = columns.filter(c => 
-      c.inferred_type === "numerico" && c.column_name !== project.target_column
-    );
-    const featureNames = numericFeatures.map(c => c.column_name);
-
-    if (featureNames.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada no projeto" }), {
+    if (!modelArtifacts || (!modelArtifacts.weights && !modelArtifacts.trees)) {
+      return new Response(JSON.stringify({ 
+        error: "Modelo sem artefatos de treinamento salvos. Re-treine o modelo." 
+      }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Handle single object or array of objects
-    const inputArray = Array.isArray(features) ? features : [features];
-    const predictions: any[] = [];
-
-    // Download dataset to get normalization parameters
-    const { data: fileData, error: downloadError } = await supabase.storage
-      .from("datasets")
-      .download(project.dataset_filename);
-
-    if (downloadError || !fileData) {
-      console.error("Erro ao baixar dataset:", downloadError);
-      return new Response(JSON.stringify({ error: "Erro ao carregar dados de normalização" }), {
-        status: 500,
+    if (!savedNormalization?.means || !savedNormalization?.stds || savedFeatureNames.length === 0) {
+      return new Response(JSON.stringify({ 
+        error: "Modelo sem parâmetros de normalização. Re-treine o modelo." 
+      }), {
+        status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Parse CSV to get normalization params
-    const text = await fileData.text();
-    const lines = text.split("\n").filter(line => line.trim());
-    const headers = lines[0].split(",").map(h => h.trim().replace(/^"|"$/g, ""));
-    const featureIndices = featureNames.map(name => headers.indexOf(name));
-
-    // Calculate means and stds for normalization
-    const featureData: number[][] = featureNames.map(() => []);
-    for (let i = 1; i < lines.length; i++) {
-      const values = lines[i].split(",").map(v => v.trim().replace(/^"|"$/g, ""));
-      featureIndices.forEach((idx, j) => {
-        const val = parseFloat(values[idx]);
-        if (!isNaN(val)) featureData[j].push(val);
-      });
-    }
-
-    const means = featureData.map(arr => mean(arr));
-    const stds = featureData.map(arr => std(arr) || 1);
-
     const isClassification = project.problem_type === "classification";
-    const hyperparams = productionModel.hyperparameters as { type?: string } || {};
-    const modelType = hyperparams.type || "logistic";
+    const inputArray = Array.isArray(features) ? features : [features];
+    const predictions: any[] = [];
 
     for (const input of inputArray) {
-      // Validate input has all required features
-      const missingFeatures = featureNames.filter(name => !(name in input));
+      // Validate input has required features
+      const missingFeatures = savedFeatureNames.filter(name => !(name in input));
       if (missingFeatures.length > 0) {
         predictions.push({
           error: `Features faltando: ${missingFeatures.join(", ")}`,
@@ -166,37 +120,53 @@ serve(async (req) => {
         continue;
       }
 
-      // Extract and normalize feature values
-      const featureValues = featureNames.map((name, i) => {
+      // Normalize features using saved training params
+      const featureValues = savedFeatureNames.map((name, i) => {
         const val = parseFloat(input[name]);
         if (isNaN(val)) return 0;
-        return (val - means[i]) / stds[i];
+        return (val - savedNormalization.means[i]) / (savedNormalization.stds[i] || 1);
       });
 
-      // Make prediction based on model type
-      // Note: This is a simplified prediction - in production you'd load actual trained weights
+      // Real model inference
       let prediction: number;
       let probability: number | undefined;
 
-      // Simulate prediction with reasonable values based on input
-      const featureSum = featureValues.reduce((a, b) => a + b, 0);
-      
+      if (modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees) {
+        let pred = modelArtifacts.base || 0;
+        const lr = modelArtifacts.lr || 0.1;
+        for (const tree of modelArtifacts.trees) {
+          pred += lr * predictTree(tree, featureValues);
+        }
+        if (isClassification) {
+          probability = sigmoid(pred);
+          prediction = probability >= 0.5 ? 1 : 0;
+        } else {
+          prediction = pred;
+        }
+      } else {
+        // Linear / Logistic regression
+        const weights: number[] = modelArtifacts.weights;
+        const bias: number = modelArtifacts.bias || 0;
+        let z = bias;
+        for (let j = 0; j < Math.min(weights.length, featureValues.length); j++) {
+          z += weights[j] * featureValues[j];
+        }
+        if (isClassification) {
+          probability = sigmoid(z);
+          prediction = probability >= 0.5 ? 1 : 0;
+        } else {
+          prediction = z;
+        }
+      }
+
       if (isClassification) {
-        // For classification, output probability and class
-        probability = sigmoid(featureSum * 0.5 + Math.random() * 0.1);
-        prediction = probability >= 0.5 ? 1 : 0;
-        
         predictions.push({
           classe_prevista: prediction,
-          probabilidade: Number(probability.toFixed(4)),
+          probabilidade: Number((probability ?? 0).toFixed(4)),
           modelo: productionModel.algorithm_name,
           timestamp: new Date().toISOString(),
         });
       } else {
-        // For regression, output predicted value
-        const baseValue = mean(featureData[0]) || 100;
-        prediction = baseValue + featureSum * (std(featureData[0]) || 10);
-        
         predictions.push({
           valor_previsto: Number(prediction.toFixed(4)),
           modelo: productionModel.algorithm_name,
@@ -205,7 +175,6 @@ serve(async (req) => {
       }
     }
 
-    // Return single prediction or array based on input
     const result = inputArray.length === 1 ? predictions[0] : predictions;
 
     return new Response(JSON.stringify(result), {

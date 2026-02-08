@@ -490,7 +490,7 @@ Provide your analysis following the exact section structure. Be specific to THIS
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsBusinessProblem")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.businessProblem || t("training.noInsightsAvailable")}
+                  {parsedInsights.businessProblem || t("training.insightsBusinessProblemFallback", { defaultValue: "Clique em 'Gerar Insights' para que a Lys analise o contexto de negócio com base no EDA, target e métricas do modelo." })}
                 </p>
               </div>
             </div>
@@ -505,7 +505,10 @@ Provide your analysis following the exact section structure. Be specific to THIS
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsTarget")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.targetExplanation || t("training.noInsightsAvailable")}
+                  {parsedInsights.targetExplanation || (targetColumn 
+                    ? t("training.insightsTargetFallback", { defaultValue: `Target: ${targetColumn} (${problemType}). Gere insights para uma análise detalhada da variável alvo.`, target: targetColumn, type: problemType })
+                    : t("training.insightsTargetMissing", { defaultValue: "Nenhuma variável alvo definida. Configure o target na etapa anterior." })
+                  )}
                 </p>
               </div>
             </div>
@@ -520,7 +523,16 @@ Provide your analysis following the exact section structure. Be specific to THIS
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsModelQuality")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.modelQuality || t("training.noInsightsAvailable")}
+                  {parsedInsights.modelQuality || (() => {
+                    const currentModel = models.find(m => m.id === modelId);
+                    const metricsStr = currentModel?.metrics
+                      ?.filter(m => ["AUC", "F1", "R²", "MAE", "RMSE"].includes(m.metric_name))
+                      .map(m => `${m.metric_name}: ${m.metric_value.toFixed(4)}`)
+                      .join(" | ");
+                    return metricsStr 
+                      ? t("training.insightsModelQualityFallback", { defaultValue: `Métricas: ${metricsStr}. Gere insights para uma avaliação completa da qualidade.`, metrics: metricsStr })
+                      : t("training.insightsModelQualityMissing", { defaultValue: "Métricas não disponíveis. O modelo pode não ter sido treinado corretamente." });
+                  })()}
                 </p>
               </div>
             </div>
@@ -535,7 +547,10 @@ Provide your analysis following the exact section structure. Be specific to THIS
               <div className="flex-1 min-w-0">
                 <h4 className="font-semibold text-sm mb-2">{t("training.insightsFeatureInfluence")}</h4>
                 <p className="text-sm text-muted-foreground leading-relaxed">
-                  {parsedInsights.featureInfluence || t("training.noInsightsAvailable")}
+                  {parsedInsights.featureInfluence || (featureImportances.length > 0 
+                    ? featureImportances.slice(0, 5).map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", ")
+                    : t("training.insightsFeatureInfluenceMissing", { defaultValue: "Nenhuma importância de variável registrada. Verifique se o treinamento concluiu com sucesso." })
+                  )}
                 </p>
               </div>
             </div>
@@ -653,7 +668,7 @@ function parseStructuredResponse(
   const recsRaw = extractSection(responseText, allHeaders[5], []);
 
   return {
-    businessProblem: businessProblem || "Insight não disponível.",
+    businessProblem: businessProblem || "",
     targetExplanation: targetExplanation || "",
     modelQuality: modelQuality || "",
     featureInfluence: featureInfluence || topFeatures.map(f => `${f.feature_name} (${(f.importance_value * 100).toFixed(1)}%)`).join(", "),
