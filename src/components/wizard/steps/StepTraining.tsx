@@ -40,6 +40,22 @@ interface ModelResult {
   metrics: { metric_name: string; metric_value: number }[];
 }
 
+interface PreflightReport {
+  target_valid: boolean;
+  target_issues: string[];
+  target_suggestions: string[];
+  features_blocked: string[];
+  features_block_reasons: Record<string, string>;
+  warnings: string[];
+}
+
+interface TrainingErrorDetails {
+  error: string;
+  preflight_report?: PreflightReport;
+  details?: string;
+  action?: string;
+}
+
 const StepTraining = ({
   projectData,
   onNext,
@@ -54,6 +70,8 @@ const StepTraining = ({
   const [models, setModels] = useState<ModelResult[]>([]);
   const [trainingComplete, setTrainingComplete] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [preflightReport, setPreflightReport] = useState<PreflightReport | null>(null);
+  const [errorAction, setErrorAction] = useState<string | null>(null);
   const [detectedProblemType, setDetectedProblemType] = useState<string | null>(null);
   const [showTypeWarning, setShowTypeWarning] = useState(false);
 
@@ -166,6 +184,8 @@ const StepTraining = ({
     const startTime = Date.now();
     setIsTraining(true);
     setError(null);
+    setPreflightReport(null);
+    setErrorAction(null);
     setModels([]);
 
     try {
@@ -181,17 +201,26 @@ const StepTraining = ({
         const ctxBody = (fnError as any)?.context?.body;
         if (ctxBody) {
           try {
-            const parsed = typeof ctxBody === "string" ? JSON.parse(ctxBody) : ctxBody;
-            const msg = parsed?.error || parsed?.message;
+            const parsed: TrainingErrorDetails = typeof ctxBody === "string" ? JSON.parse(ctxBody) : ctxBody;
+            if (parsed?.preflight_report) {
+              setPreflightReport(parsed.preflight_report);
+              setErrorAction(parsed.action || null);
+            }
+            const msg = parsed?.error || parsed?.details;
             if (msg) throw new Error(String(msg));
-          } catch {
-            // ignore parsing errors and fall back to the original error
+          } catch (parseErr) {
+            if (parseErr instanceof Error && parseErr.message !== ctxBody) throw parseErr;
+            // ignore JSON parsing errors and fall back to the original error
           }
         }
         throw fnError;
       }
 
       if ((data as any)?.error) {
+        if ((data as any)?.preflight_report) {
+          setPreflightReport((data as any).preflight_report);
+          setErrorAction((data as any).action || null);
+        }
         throw new Error(String((data as any).error));
       }
 
@@ -426,6 +455,65 @@ const StepTraining = ({
                 </p>
                 <p className="text-muted-foreground">{error}</p>
               </div>
+
+              {/* Preflight Report — actionable target/feature issues */}
+              {preflightReport && (
+                <div className="p-4 bg-destructive/5 border border-destructive/20 rounded-lg text-left max-w-lg mx-auto space-y-3">
+                  {preflightReport.target_issues.length > 0 && (
+                    <div>
+                      <p className="text-sm font-semibold flex items-center gap-1.5 text-destructive mb-1">
+                        <AlertTriangle className="w-4 h-4" />
+                        {t("training.preflight.targetIssues", "Problemas no Target")}
+                      </p>
+                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                        {preflightReport.target_issues.map((issue, i) => (
+                          <li key={i}>{issue}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {preflightReport.target_suggestions.length > 0 && (
+                    <div>
+                      <p className="text-sm font-semibold flex items-center gap-1.5 text-primary mb-1">
+                        <Sparkles className="w-4 h-4" />
+                        {t("training.preflight.suggestions", "Sugestões")}
+                      </p>
+                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                        {preflightReport.target_suggestions.map((sug, i) => (
+                          <li key={i}>{sug}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  {preflightReport.features_blocked.length > 0 && (
+                    <div>
+                      <p className="text-sm font-semibold mb-1">
+                        {t("training.preflight.featuresBlocked", "Features Bloqueadas")}
+                      </p>
+                      <ul className="text-sm text-muted-foreground list-disc list-inside space-y-1">
+                        {preflightReport.features_blocked.map((feat, i) => (
+                          <li key={i}>
+                            <strong>{feat}</strong>: {preflightReport.features_block_reasons[feat]}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {errorAction === "review_target" && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onBack}
+                      className="mt-2"
+                    >
+                      <AlertTriangle className="w-4 h-4 mr-1.5" />
+                      {t("training.preflight.reviewTarget", "Voltar e revisar o Target")}
+                    </Button>
+                  )}
+                </div>
+              )}
+
               {error === t("training.cpuLimitError") && (
                 <div className="p-4 bg-muted/50 rounded-lg text-left max-w-md mx-auto">
                   <p className="text-sm font-medium mb-2">{t("training.cpuLimitSuggestions")}</p>
