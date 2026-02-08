@@ -12,9 +12,10 @@ const corsHeaders = {
 // Minimum absolute rows required for reliable training
 const MIN_ROWS_FOR_TRAIN = 5_000;
 // Target sample size for train+val+test (healthy model size)
-const TARGET_SAMPLE_SIZE = 30_000;
+// IMPORTANT: Keep this low to avoid CPU Time exceeded in Edge Functions
+const TARGET_SAMPLE_SIZE = 12_000;
 // Maximum rows to read with early stop (for large datasets)
-const MAX_ROWS_TO_READ = 90_000;
+const MAX_ROWS_TO_READ = 40_000;
 // Minimum samples per class to avoid warning
 const MIN_CLASS_SAMPLES = 50;
 
@@ -407,36 +408,53 @@ function predictLogistic(X: number[][], weights: number[], bias: number): number
   });
 }
 
-// Simple Decision Tree for Gradient Boosting
-function trainSimpleTree(X: number[][], y: number[], maxDepth = 6): any {
+// Simple Decision Tree for Gradient Boosting — optimized for Edge Function CPU limits
+function trainSimpleTree(X: number[][], y: number[], maxDepth = 3): any {
   function buildTree(indices: number[], depth: number): any {
-    if (depth >= maxDepth || indices.length < 5) {
-      const values = indices.map(i => y[i]);
-      return { isLeaf: true, value: mean(values) };
+    if (depth >= maxDepth || indices.length < 10) {
+      let sum = 0;
+      for (let k = 0; k < indices.length; k++) sum += y[indices[k]];
+      return { isLeaf: true, value: sum / indices.length };
     }
     
     const numFeatures = X[0].length;
     let bestFeature = 0, bestThreshold = 0, bestScore = Infinity;
     
     // Sample features for faster training
-    const featuresToCheck = Math.min(numFeatures, Math.max(5, Math.floor(Math.sqrt(numFeatures))));
+    const featuresToCheck = Math.min(numFeatures, Math.max(3, Math.floor(Math.sqrt(numFeatures))));
     const featureIndices = shuffle(Array.from({ length: numFeatures }, (_, i) => i)).slice(0, featuresToCheck);
     
+    // Use subset of indices for split search to save CPU
+    const searchSize = Math.min(indices.length, 500);
+    const searchIndices = indices.length <= searchSize ? indices : shuffle([...indices]).slice(0, searchSize);
+    
     for (const f of featureIndices) {
-      const vals = indices.map(i => X[i][f]).sort((a, b) => a - b);
+      // Find median threshold from search sample
+      const vals: number[] = [];
+      for (let k = 0; k < searchIndices.length; k++) vals.push(X[searchIndices[k]][f]);
+      vals.sort((a, b) => a - b);
       const threshold = vals[Math.floor(vals.length / 2)];
       
-      const leftIdx = indices.filter(i => X[i][f] <= threshold);
-      const rightIdx = indices.filter(i => X[i][f] > threshold);
+      let leftSum = 0, leftCount = 0, rightSum = 0, rightCount = 0;
+      for (let k = 0; k < searchIndices.length; k++) {
+        const idx = searchIndices[k];
+        if (X[idx][f] <= threshold) { leftSum += y[idx]; leftCount++; }
+        else { rightSum += y[idx]; rightCount++; }
+      }
       
-      if (leftIdx.length === 0 || rightIdx.length === 0) continue;
+      if (leftCount === 0 || rightCount === 0) continue;
       
-      const leftY = leftIdx.map(i => y[i]);
-      const rightY = rightIdx.map(i => y[i]);
+      const leftMean = leftSum / leftCount;
+      const rightMean = rightSum / rightCount;
       
-      // MSE for split quality
-      const score = leftY.reduce((a, v) => a + Math.pow(v - mean(leftY), 2), 0) +
-                    rightY.reduce((a, v) => a + Math.pow(v - mean(rightY), 2), 0);
+      // Compute MSE without creating arrays
+      let score = 0;
+      for (let k = 0; k < searchIndices.length; k++) {
+        const idx = searchIndices[k];
+        const m = X[idx][f] <= threshold ? leftMean : rightMean;
+        const diff = y[idx] - m;
+        score += diff * diff;
+      }
       
       if (score < bestScore) {
         bestScore = score;
@@ -445,12 +463,18 @@ function trainSimpleTree(X: number[][], y: number[], maxDepth = 6): any {
       }
     }
     
-    const leftIdx = indices.filter(i => X[i][bestFeature] <= bestThreshold);
-    const rightIdx = indices.filter(i => X[i][bestFeature] > bestThreshold);
+    // Split on full indices using best feature/threshold
+    const leftIdx: number[] = [];
+    const rightIdx: number[] = [];
+    for (let k = 0; k < indices.length; k++) {
+      if (X[indices[k]][bestFeature] <= bestThreshold) leftIdx.push(indices[k]);
+      else rightIdx.push(indices[k]);
+    }
     
     if (leftIdx.length === 0 || rightIdx.length === 0) {
-      const values = indices.map(i => y[i]);
-      return { isLeaf: true, value: mean(values) };
+      let sum = 0;
+      for (let k = 0; k < indices.length; k++) sum += y[indices[k]];
+      return { isLeaf: true, value: sum / indices.length };
     }
     
     return {
@@ -462,7 +486,9 @@ function trainSimpleTree(X: number[][], y: number[], maxDepth = 6): any {
     };
   }
   
-  return buildTree(Array.from({ length: X.length }, (_, i) => i), 0);
+  const allIdx: number[] = [];
+  for (let i = 0; i < X.length; i++) allIdx.push(i);
+  return buildTree(allIdx, 0);
 }
 
 function predictTree(tree: any, x: number[]): number {
@@ -481,8 +507,8 @@ function trainGradientBoosting(
   maxDepth: number,
   learningRate: number
 ): { trees: any[]; lr: number; base: number; isClassification: boolean } {
-  // Subsample for faster training
-  const maxSamples = Math.min(X.length, 5000);
+  // Subsample for faster training — keep low to avoid CPU timeout
+  const maxSamples = Math.min(X.length, 2500);
   const sampleIndices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxSamples);
   const Xs = sampleIndices.map(i => X[i]);
   const ys = sampleIndices.map(i => y[i]);
@@ -2016,7 +2042,7 @@ serve(async (req) => {
       type: isClassification ? "classification" : "regression",
       algorithm: "gradient_boosting",
       params: {
-        nEstimators: Math.min(12, Math.max(5, Math.floor(Xtrain.length / 500))),
+        nEstimators: Math.min(8, Math.max(3, Math.floor(Xtrain.length / 800))),
         maxDepth: 3,
         learningRate: 0.15,
       },
