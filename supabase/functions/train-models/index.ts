@@ -1614,7 +1614,24 @@ serve(async (req) => {
       let totalBytesRead = 0;
       let reachedReadLimit = false;
 
+      // For batch imports with canonical schema, use the canonical headers as master
+      // This ensures all files are mapped to the same column order even if each file
+      // has a different subset of columns (union-by-name).
+      let canonicalHeaders: string[] | null = null;
+      if (isBatchImport && sourceMetadata.canonical_schema_hash) {
+        canonicalHeaders = (sourceMetadata.canonical_schema_hash as string).split("|").map(h => h.trim()).filter(Boolean);
+        if (canonicalHeaders.length > 0) {
+          headers = canonicalHeaders;
+          console.log(`[AutoML] Usando canonical schema com ${canonicalHeaders.length} colunas para batch import`);
+        } else {
+          canonicalHeaders = null;
+        }
+      }
+
       console.log(`[AutoML] Iniciando leitura CSV... Delimiter: ${delimiter}`);
+
+      // Per-file column mapping: maps canonical column index → file column index
+      let fileColumnMap: number[] = [];
 
       for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
         const filePath = filePaths[fileIndex];
@@ -1661,52 +1678,85 @@ serve(async (req) => {
               
               fileLinesCount++;
               
-              if (isFirstFile && isFirstLineOfFile) {
-                // Smart delimiter detection: compare parsed column count with expected from project_columns
-                const expectedColCount = columns.length;
-                let testHeaders = parseCSVLine(line, delimiter);
-                
-                if (testHeaders.length !== expectedColCount && expectedColCount > 0) {
-                  console.log(`[AutoML] Delimiter "${delimiter}" produced ${testHeaders.length} cols, expected ${expectedColCount}. Trying auto-detect...`);
-                  const candidates = [",", ";", "\t", "|"];
-                  for (const d of candidates) {
-                    const test = parseCSVLine(line, d);
-                    if (test.length === expectedColCount) {
-                      console.log(`[AutoML] Delimiter "${d}" matches expected ${expectedColCount} cols. Switching.`);
-                      delimiter = d;
-                      testHeaders = test;
-                      break;
+              if (isFirstLineOfFile) {
+                // Detect delimiter on the very first file
+                if (isFirstFile && !canonicalHeaders) {
+                  const expectedColCount = columns.length;
+                  let testHeaders = parseCSVLine(line, delimiter);
+                  
+                  if (testHeaders.length !== expectedColCount && expectedColCount > 0) {
+                    console.log(`[AutoML] Delimiter "${delimiter}" produced ${testHeaders.length} cols, expected ${expectedColCount}. Trying auto-detect...`);
+                    const candidates = [",", ";", "\t", "|"];
+                    for (const d of candidates) {
+                      const test = parseCSVLine(line, d);
+                      if (test.length === expectedColCount) {
+                        console.log(`[AutoML] Delimiter "${d}" matches expected ${expectedColCount} cols. Switching.`);
+                        delimiter = d;
+                        testHeaders = test;
+                        break;
+                      }
                     }
-                  }
-                  // If no exact match, use the one that produces most columns
-                  if (testHeaders.length !== expectedColCount) {
-                    const detected = autoDetectDelimiter(line);
-                    if (detected !== delimiter) {
-                      console.log(`[AutoML] No exact match. Using auto-detected "${detected}".`);
-                      delimiter = detected;
+                    if (testHeaders.length !== expectedColCount) {
+                      const detected = autoDetectDelimiter(line);
+                      if (detected !== delimiter) {
+                        console.log(`[AutoML] No exact match. Using auto-detected "${detected}".`);
+                        delimiter = detected;
+                      }
                     }
                   }
                 }
+
+                // Parse file-specific headers
+                const fileHeaders = parseCSVLine(line, delimiter);
                 
-                headers = parseCSVLine(line, delimiter);
-                console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total, delimiter="${delimiter}")`);
-                isFirstLineOfFile = false;
-              } else if (!isFirstFile && isFirstLineOfFile) {
-                const possibleHeaders = parseCSVLine(line, delimiter);
-                const matchesHeaders = possibleHeaders.length === headers.length && 
-                  possibleHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
-                
-                if (matchesHeaders) {
-                  isFirstLineOfFile = false;
-                  continue;
+                if (canonicalHeaders) {
+                  // Build mapping: for each canonical column, find its index in this file's headers
+                  fileColumnMap = canonicalHeaders.map(ch => {
+                    const exact = fileHeaders.indexOf(ch);
+                    if (exact !== -1) return exact;
+                    const lower = ch.toLowerCase().trim();
+                    return fileHeaders.findIndex(fh => fh.toLowerCase().trim() === lower);
+                  });
+                  const matched = fileColumnMap.filter(i => i !== -1).length;
+                  console.log(`  File headers: ${fileHeaders.length} cols, mapped ${matched}/${canonicalHeaders.length} to canonical schema`);
+                } else if (isFirstFile) {
+                  // No canonical schema — use first file's headers as master
+                  headers = fileHeaders;
+                  fileColumnMap = fileHeaders.map((_, idx) => idx); // identity mapping
+                  console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total, delimiter="${delimiter}")`);
+                } else {
+                  // Subsequent file without canonical: check if headers match master
+                  const matchesHeaders = fileHeaders.length === headers.length && 
+                    fileHeaders.slice(0, 3).every((h, idx) => h === headers[idx]);
+                  if (!matchesHeaders) {
+                    // Different columns — build mapping to master headers
+                    fileColumnMap = headers.map(mh => {
+                      const exact = fileHeaders.indexOf(mh);
+                      if (exact !== -1) return exact;
+                      const lower = mh.toLowerCase().trim();
+                      return fileHeaders.findIndex(fh => fh.toLowerCase().trim() === lower);
+                    });
+                    const matched = fileColumnMap.filter(i => i !== -1).length;
+                    console.log(`  File headers differ from master. Mapped ${matched}/${headers.length}`);
+                  } else {
+                    fileColumnMap = fileHeaders.map((_, idx) => idx);
+                  }
                 }
-                isFirstLineOfFile = false;
                 
-                totalLinesRead++;
-                sampledLines.push(line);
+                isFirstLineOfFile = false;
               } else {
+                // Data row
                 totalLinesRead++;
-                sampledLines.push(line);
+
+                if (canonicalHeaders) {
+                  // Remap this line's values to canonical column order
+                  const fileValues = parseCSVLine(line, delimiter);
+                  const remapped = fileColumnMap.map(idx => idx !== -1 ? (fileValues[idx] ?? "") : "");
+                  // Reconstruct as a delimited line using the same delimiter
+                  sampledLines.push(remapped.join(delimiter));
+                } else {
+                  sampledLines.push(line);
+                }
               }
               
               // Check early stop for large datasets
