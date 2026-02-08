@@ -9,7 +9,7 @@ import { BusinessDashboardHero } from './BusinessDashboardHero';
 import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessAIInsights } from './BusinessAIInsights';
 import { ExecutiveNarrative } from './ExecutiveNarrative';
-import { DashboardPDFExport } from './DashboardPDFExport';
+import { FullReportPDFExport } from './pdf/FullReportPDFExport';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
@@ -369,20 +369,29 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
           {/* Actions */}
           {productionModel && (
             <div className="flex items-center gap-2 flex-wrap">
-              <DashboardPDFExport
+              <FullReportPDFExport
                 projectId={projectId}
                 projectName={projectInfo?.name || 'Projeto'}
                 organizationName={projectInfo?.organization_name || 'Organização'}
                 modelName={productionModel.algorithm_name}
+                problemType={problemType}
+                problemContext={problemContext}
+                projectStage={projectStage}
                 filters={filters}
+                mainMetric={mainMetric}
+                baselineMetric={baselineMetric}
+                scoreCoveragePct={scoreCoveragePct}
+                totalEntities={data.kpis.totalEntities}
+                executiveNarrative={aiContext.storyline?.executive_summary || null}
                 kpis={data.kpis}
-                simulatedKpis={simulatedKpis}
+                segmentationBands={data.segmentationBands}
+                groupSegmentation={data.groupSegmentation}
+                predictions={data.predictions}
+                timeProjections={data.timeProjections}
+                displayKpis={displayKpis}
                 simulationParams={simulationParams}
                 simulationResults={simulationResults}
                 businessConfig={businessConfig}
-                segmentationBands={data.segmentationBands}
-                predictions={data.predictions}
-                problemType={problemType}
                 isSimulationActive={isSimulationActive}
               />
               <Button variant="outline" size="sm" onClick={() => setExportJobsModalOpen(true)} className="gap-2">
