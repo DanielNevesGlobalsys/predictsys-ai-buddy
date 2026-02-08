@@ -144,6 +144,60 @@ const DebugLysPanel = ({ debugInfo, onRefresh, loading }: DebugLysPanelProps) =>
                       </span>
                     </div>
 
+                    {/* split_strategy */}
+                    {qi.split_strategy && (
+                      <div className="flex items-center gap-1.5">
+                        <CheckCircle2 className="w-3.5 h-3.5 text-blue-500" />
+                        <span className="text-foreground">
+                          split_strategy: {qi.split_strategy}
+                          {qi.split_datetime_col ? ` (col: ${qi.split_datetime_col})` : ""}
+                          {qi.split_group_key ? ` (group: ${qi.split_group_key})` : ""}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* prediction_sanity */}
+                    {qi.prediction_sanity && (
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-1.5">
+                          {qi.prediction_sanity.passed ? (
+                            <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
+                          ) : (
+                            <ShieldX className="w-3.5 h-3.5 text-red-500" />
+                          )}
+                          <span className={qi.prediction_sanity.passed ? "text-foreground" : "text-red-400"}>
+                            prediction_sanity: {qi.prediction_sanity.passed ? "PASSED" : "FAILED"}
+                          </span>
+                        </div>
+                        <div className="pl-4 grid grid-cols-2 gap-1 text-[10px]">
+                          <span>pred_std: {qi.prediction_sanity.pred_std?.toFixed(4) ?? "N/A"}</span>
+                          <span>pct_equal_mode: {qi.prediction_sanity.pct_equal_mode_pred != null ? (qi.prediction_sanity.pct_equal_mode_pred * 100).toFixed(1) + "%" : "N/A"}</span>
+                          <span>unique_ratio: {qi.prediction_sanity.unique_ratio_pred?.toFixed(4) ?? "N/A"}</span>
+                        </div>
+                        {qi.prediction_sanity.fail_reasons && qi.prediction_sanity.fail_reasons.length > 0 && (
+                          <div className="flex flex-wrap gap-1 pl-4">
+                            {qi.prediction_sanity.fail_reasons.map((r, idx) => (
+                              <Badge key={idx} variant="outline" className="text-[10px] text-red-500 border-red-500/30">
+                                {r}
+                              </Badge>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* dual_model */}
+                    {qi.dual_model && (
+                      <div className="space-y-1">
+                        <span className="text-muted-foreground block">dual_model:</span>
+                        <div className="pl-4 text-[10px] space-y-0.5">
+                          <span className="block">A: {qi.dual_model.model_a?.name} (score: {qi.dual_model.model_a?.score?.toFixed(4)})</span>
+                          <span className="block">B: {qi.dual_model.model_b?.name} (score: {qi.dual_model.model_b?.score?.toFixed(4)})</span>
+                          <span className="block font-semibold">→ selected: {qi.dual_model.selected}</span>
+                        </div>
+                      </div>
+                    )}
+
                     {/* predictions_count */}
                     <div className="flex items-center gap-1.5">
                       {(qi.predictions_count ?? 0) > 0 ? (

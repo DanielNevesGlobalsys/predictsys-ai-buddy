@@ -51,11 +51,24 @@ export interface PreflightReport {
   warnings: string[];
 }
 
+export interface PredictionSanityInfo {
+  pred_std: number | null;
+  pct_equal_mode_pred: number | null;
+  unique_ratio_pred: number | null;
+  passed: boolean | null;
+  fail_reasons: string[];
+}
+
 export interface ModelQualityInfo {
   model_quality_flag: string | null;
   baseline_metrics: Record<string, number> | null;
   predictions_count: number | null;
   preflight_report: PreflightReport | null;
+  split_strategy: string | null;
+  split_datetime_col: string | null;
+  split_group_key: string | null;
+  prediction_sanity: PredictionSanityInfo | null;
+  dual_model: { model_a: any; model_b: any; selected: string } | null;
 }
 
 export interface DebugInfo {
@@ -140,6 +153,11 @@ export function useTrainingInsightContext(projectId: string | undefined) {
         baseline_metrics: hp?.baseline_metrics || null,
         predictions_count: predictionsCountRes.count ?? null,
         preflight_report: hp?.preflight_report || null,
+        split_strategy: hp?.split_strategy || null,
+        split_datetime_col: hp?.split_datetime_col || null,
+        split_group_key: hp?.split_group_key || null,
+        prediction_sanity: hp?.prediction_sanity || null,
+        dual_model: hp?.dual_model || null,
       };
 
       // Build EDA summary
