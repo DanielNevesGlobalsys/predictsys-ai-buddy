@@ -62,6 +62,14 @@ const MAX_LARGE_IMPORT_GB = 10;
 const MAX_LARGE_IMPORT_BYTES = MAX_LARGE_IMPORT_GB * 1024 * 1024 * 1024;
 const POLL_INTERVAL_MS = 1500;
 
+const SUPPORTED_EXTENSIONS = [".csv", ".parquet", ".parq", ".pq", ".xlsx", ".xls", ".json"];
+const ACCEPTED_FORMATS = ".csv,.parquet,.parq,.pq,.xlsx,.xls,.json";
+
+const isValidBatchFormat = (filename: string): boolean => {
+  const ext = filename.slice(filename.lastIndexOf(".")).toLowerCase();
+  return SUPPORTED_EXTENSIONS.includes(ext);
+};
+
 const BatchImportModal = ({
   open,
   onOpenChange,
@@ -159,17 +167,17 @@ const BatchImportModal = ({
 
   const handleAddFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const csvFiles = files.filter(f => f.name.toLowerCase().endsWith('.csv'));
+    const validFiles = files.filter(f => isValidBatchFormat(f.name));
     
-    if (csvFiles.length !== files.length) {
+    if (validFiles.length !== files.length) {
       toast({
         title: t("common.error"),
-        description: t("dataIngestion.batchImport.onlyCsv"),
+        description: t("dataIngestion.file.errors.invalidFormat"),
         variant: "destructive",
       });
     }
     
-    const newBatchFiles = csvFiles.map(f => ({ file: f, status: "pending" as const }));
+    const newBatchFiles = validFiles.map(f => ({ file: f, status: "pending" as const }));
     setBatchFiles(prev => [...prev, ...newBatchFiles]);
     
     e.target.value = "";
@@ -642,7 +650,7 @@ const BatchImportModal = ({
               <div className="relative">
                 <input
                   type="file"
-                  accept=".csv"
+                  accept={ACCEPTED_FORMATS}
                   multiple
                   onChange={handleAddFiles}
                   className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
