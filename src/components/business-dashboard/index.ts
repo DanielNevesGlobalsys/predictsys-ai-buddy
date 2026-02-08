@@ -8,7 +8,7 @@ export { TimeProjection } from './TimeProjection';
 export { ActionableList } from './ActionableList';
 export { CohortComparison } from './CohortComparison';
 export { SimulationPanel } from './SimulationPanel';
-export { DashboardPDFExport } from './DashboardPDFExport';
+export { FullReportPDFExport } from './pdf/FullReportPDFExport';
 export { BusinessAIInsights } from './BusinessAIInsights';
 export { useSimulation } from './hooks/useSimulation';
 export * from './types';
