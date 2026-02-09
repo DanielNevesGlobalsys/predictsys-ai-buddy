@@ -1665,11 +1665,50 @@ serve(async (req) => {
       let filesWithTarget = 0; // count files that actually have the target
       let filesSkipped = 0; // count files skipped (no target column)
 
+      // SYSTEMATIC SKIP SAMPLING: For large files (>effectiveMaxRowsToRead rows),
+      // reading the first N rows sequentially from a sorted file produces constant
+      // features (zero variance). Instead, compute a skip interval to spread the
+      // sample across the entire file. E.g., for 2.7M rows wanting 40K: keep 1 in ~68.
+      // We estimate file rows from import_jobs or totalDatasetRows.
+      const fileRowEstimates: number[] = [];
+      const fileNames = (sourceMetadata.file_names as string[]) || [];
+      const rowsConsolidated = (sourceMetadata as any)?.rows_consolidated || totalDatasetRows;
+      
+      // Try to get per-file row counts from import_jobs
+      {
+        const { data: jobRows } = await supabase
+          .from("import_jobs")
+          .select("file_name, rows_processed, batch_sequence")
+          .eq("project_id", project_id)
+          .eq("status", "completed")
+          .order("batch_sequence");
+        
+        if (jobRows && jobRows.length > 0 && jobRows.length === filePaths.length) {
+          for (const jr of jobRows) {
+            fileRowEstimates.push(jr.rows_processed || 0);
+          }
+          console.log(`[AutoML] Per-file row estimates from import_jobs: ${fileRowEstimates.map(r => r.toLocaleString()).join(", ")}`);
+        } else {
+          // Fallback: distribute total rows evenly
+          const perFile = Math.ceil(totalDatasetRows / filePaths.length);
+          for (let i = 0; i < filePaths.length; i++) fileRowEstimates.push(perFile);
+        }
+      }
+
       console.log(`[AutoML] Batch: ${isBatchImport}, files: ${filePaths.length}, max_per_file: ${maxLinesPerFile.toLocaleString()}`);
 
       for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
         const filePath = filePaths[fileIndex];
         console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
+        
+        // Calculate skip interval for this file to spread sample across entire file
+        const estimatedFileRows = fileRowEstimates[fileIndex] || totalDatasetRows;
+        const desiredFromFile = Math.min(maxLinesPerFile, effectiveMaxRowsToRead - totalLinesRead);
+        const skipInterval = estimatedFileRows > desiredFromFile * 2
+          ? Math.floor(estimatedFileRows / desiredFromFile)
+          : 1; // No skipping for small files
+        
+        console.log(`  Skip sampling: estimated ${estimatedFileRows.toLocaleString()} rows, want ${desiredFromFile.toLocaleString()}, skip_interval=${skipInterval}`);
         
         try {
           const { data: signedUrlData, error: signedUrlError } = await supabase.storage
@@ -1694,6 +1733,7 @@ serve(async (req) => {
           let buffer = "";
           let fileLinesCount = 0;
           fileLinesReadCount = 0; // reset per-file counter
+          let fileDataLineIndex = 0; // total data lines seen in this file (for skip sampling)
           let isFirstLineOfFile = true;
           let lastProgressLog = 0;
           let shouldStopReading = false;
@@ -1807,6 +1847,15 @@ serve(async (req) => {
                 isFirstLineOfFile = false;
               } else {
                 // Data row
+                fileDataLineIndex++;
+                
+                // SYSTEMATIC SKIP SAMPLING: only keep every Nth row to spread
+                // sample across the entire file (avoids zero-variance from sorted data)
+                if (skipInterval > 1 && (fileDataLineIndex % skipInterval) !== 0) {
+                  // Skip this row — don't count it toward read limits
+                  continue;
+                }
+                
                 totalLinesRead++;
                 fileLinesReadCount++;
 
