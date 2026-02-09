@@ -1633,6 +1633,17 @@ serve(async (req) => {
       // Per-file column mapping: maps canonical column index → file column index
       let fileColumnMap: number[] = [];
 
+      // CRITICAL FIX: For batch imports with different schemas per file,
+      // distribute the read limit across ALL files to ensure column coverage.
+      // Without this, the training may only read from the first file and miss
+      // columns that exist only in other files (all mapped to 0 → zero variance).
+      const maxLinesPerFile = isBatchImport && filePaths.length > 1
+        ? Math.ceil(effectiveMaxRowsToRead / filePaths.length)
+        : effectiveMaxRowsToRead;
+      let fileLinesReadCount = 0; // tracks lines read from current file
+
+      console.log(`[AutoML] Batch: ${isBatchImport}, files: ${filePaths.length}, max_per_file: ${maxLinesPerFile.toLocaleString()}`);
+
       for (let fileIndex = 0; fileIndex < filePaths.length && !reachedReadLimit; fileIndex++) {
         const filePath = filePaths[fileIndex];
         console.log(`[${fileIndex + 1}/${filePaths.length}] Streaming: ${filePath}`);
@@ -1659,6 +1670,7 @@ serve(async (req) => {
           let bytesRead = 0;
           let buffer = "";
           let fileLinesCount = 0;
+          fileLinesReadCount = 0; // reset per-file counter
           let isFirstLineOfFile = true;
           let lastProgressLog = 0;
           let shouldStopReading = false;
@@ -1747,6 +1759,7 @@ serve(async (req) => {
               } else {
                 // Data row
                 totalLinesRead++;
+                fileLinesReadCount++;
 
                 if (canonicalHeaders) {
                   // Remap this line's values to canonical column order
@@ -1759,11 +1772,16 @@ serve(async (req) => {
                 }
               }
               
-              // Check early stop for large datasets
+              // Check early stop: global limit OR per-file limit (for batch imports)
               if (!useFullDataset && totalLinesRead >= effectiveMaxRowsToRead) {
                 shouldStopReading = true;
                 reachedReadLimit = true;
-                console.log(`  Early stop: lidas ${totalLinesRead.toLocaleString()} linhas`);
+                console.log(`  Early stop (global): lidas ${totalLinesRead.toLocaleString()} linhas`);
+                break;
+              }
+              if (!useFullDataset && fileLinesReadCount >= maxLinesPerFile) {
+                shouldStopReading = true;
+                console.log(`  Per-file limit reached: ${fileLinesReadCount.toLocaleString()} linhas from file ${fileIndex + 1}`);
                 break;
               }
             }
