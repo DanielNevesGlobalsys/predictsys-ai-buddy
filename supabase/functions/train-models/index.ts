@@ -1634,13 +1634,36 @@ serve(async (req) => {
       let fileColumnMap: number[] = [];
 
       // CRITICAL FIX: For batch imports with different schemas per file,
-      // distribute the read limit across ALL files to ensure column coverage.
-      // Without this, the training may only read from the first file and miss
-      // columns that exist only in other files (all mapped to 0 → zero variance).
+      // only count files that contain the target column toward the read limit.
+      // Files without the target produce zero valid training rows (wasted reads).
+      // Also, reading sequential rows from a single sorted file can produce
+      // constant features, so we need to maximize coverage of the target-bearing files.
+      let targetBearingFileCount = filePaths.length; // default: assume all
+      if (isBatchImport && canonicalHeaders && filePaths.length > 1) {
+        // Use manifest/metadata to identify which files have the target column
+        const targetLower = target_column.toLowerCase().trim();
+        const fileNames = (sourceMetadata.file_names as string[]) || [];
+        const filesData = (sourceMetadata as any)?.files_detail || null;
+        
+        // Check canonical_schema_hash — target must be present in file's own schema
+        // We detect this from import_manifest files data if available
+        // Fallback: try reading headers from each file (expensive, skip for now)
+        // Simpler heuristic: the canonical schema includes the target, but individual
+        // files may not. We'll handle this by skipping files without target during reading.
+        console.log(`[AutoML] Target column: "${target_column}" (lower: "${targetLower}")`);
+        console.log(`[AutoML] Will skip files without target column during reading`);
+        
+        // We don't know which files have the target until we read headers,
+        // so set a generous per-file limit and let the header check handle it
+        targetBearingFileCount = filePaths.length;
+      }
+      
       const maxLinesPerFile = isBatchImport && filePaths.length > 1
-        ? Math.ceil(effectiveMaxRowsToRead / filePaths.length)
+        ? Math.ceil(effectiveMaxRowsToRead / targetBearingFileCount)
         : effectiveMaxRowsToRead;
       let fileLinesReadCount = 0; // tracks lines read from current file
+      let filesWithTarget = 0; // count files that actually have the target
+      let filesSkipped = 0; // count files skipped (no target column)
 
       console.log(`[AutoML] Batch: ${isBatchImport}, files: ${filePaths.length}, max_per_file: ${maxLinesPerFile.toLocaleString()}`);
 
@@ -1731,11 +1754,26 @@ serve(async (req) => {
                   });
                   const matched = fileColumnMap.filter(i => i !== -1).length;
                   console.log(`  File headers: ${fileHeaders.length} cols, mapped ${matched}/${canonicalHeaders.length} to canonical schema`);
+                  
+                  // CRITICAL: Check if this file contains the target column.
+                  // If not, ALL rows from this file will be discarded (invalid target),
+                  // so skip reading it entirely to save the read budget for files that matter.
+                  const targetCanonicalIdx = findHeaderIndex(canonicalHeaders, target_column);
+                  const fileHasTarget = targetCanonicalIdx !== -1 && fileColumnMap[targetCanonicalIdx] !== -1;
+                  if (!fileHasTarget) {
+                    filesSkipped++;
+                    console.log(`  SKIP: File does not contain target "${target_column}" — no valid training rows possible`);
+                    isFirstLineOfFile = false;
+                    shouldStopReading = true; // skip to next file
+                    continue;
+                  }
+                  filesWithTarget++;
                 } else if (isFirstFile) {
                   // No canonical schema — use first file's headers as master
                   headers = fileHeaders;
                   fileColumnMap = fileHeaders.map((_, idx) => idx); // identity mapping
                   console.log(`Headers detectados: ${headers.slice(0, 5).join(", ")}... (${headers.length} total, delimiter="${delimiter}")`);
+                  filesWithTarget++;
                 } else {
                   // Subsequent file without canonical: check if headers match master
                   const matchesHeaders = fileHeaders.length === headers.length && 
@@ -1753,6 +1791,17 @@ serve(async (req) => {
                   } else {
                     fileColumnMap = fileHeaders.map((_, idx) => idx);
                   }
+                  
+                  // Check if this file has the target
+                  const targetIdx = findHeaderIndex(fileHeaders, target_column);
+                  if (targetIdx === -1) {
+                    filesSkipped++;
+                    console.log(`  SKIP: File does not contain target "${target_column}"`);
+                    isFirstLineOfFile = false;
+                    shouldStopReading = true;
+                    continue;
+                  }
+                  filesWithTarget++;
                 }
                 
                 isFirstLineOfFile = false;
@@ -1779,9 +1828,10 @@ serve(async (req) => {
                 console.log(`  Early stop (global): lidas ${totalLinesRead.toLocaleString()} linhas`);
                 break;
               }
-              if (!useFullDataset && fileLinesReadCount >= maxLinesPerFile) {
+              // Per-file limit only applies when multiple files have the target
+              if (!useFullDataset && filesWithTarget > 1 && fileLinesReadCount >= Math.ceil(effectiveMaxRowsToRead / filesWithTarget)) {
                 shouldStopReading = true;
-                console.log(`  Per-file limit reached: ${fileLinesReadCount.toLocaleString()} linhas from file ${fileIndex + 1}`);
+                console.log(`  Per-file limit reached: ${fileLinesReadCount.toLocaleString()} linhas from file ${fileIndex + 1} (${filesWithTarget} target files)`);
                 break;
               }
             }
@@ -1809,6 +1859,8 @@ serve(async (req) => {
           continue;
         }
       }
+
+      console.log(`\n[AutoML] Files with target: ${filesWithTarget}, files skipped: ${filesSkipped}`);
 
       // Apply final sampling (resource_guard: stratified for CSV)
       let finalSampledLines: string[];
