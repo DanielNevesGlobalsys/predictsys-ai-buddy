@@ -34,7 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
 import DatasetSelector from "./DatasetSelector";
-import { ImportJobsModal, BatchImportModal } from "@/components/import";
+import { ImportJobsModal, BatchImportModal, ImportManifestPanel } from "@/components/import";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useImportPreview } from "@/hooks/useImportPreview";
@@ -1220,6 +1220,11 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             })}
           </span>
         </div>
+      )}
+
+      {/* ═══ IMPORT MANIFEST ════════════════════════════════ */}
+      {projectData.id && uploadStatus === "success" && (
+        <ImportManifestPanel projectId={projectData.id} />
       )}
 
       {/* ═══ MODALS ══════════════════════════════════════════ */}
