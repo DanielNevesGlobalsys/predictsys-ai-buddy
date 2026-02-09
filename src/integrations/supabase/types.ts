@@ -1880,6 +1880,7 @@ export type Database = {
           total_projects: number
         }[]
       }
+      delete_project_cascade: { Args: { p_project_id: string }; Returns: Json }
       get_user_organizations: { Args: { _user_id: string }; Returns: string[] }
       has_role: {
         Args: {
