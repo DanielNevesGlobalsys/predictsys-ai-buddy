@@ -344,16 +344,13 @@ serve(async (req) => {
 
         // Extract and normalize base features
         const featureValues = new Array(totalFeatures);
-        let hasNaN = false;
 
         for (let j = 0; j < baseLen; j++) {
           const raw = values[featureIndices[j]];
           const val = raw ? +raw.replace(",", ".") : NaN;
-          if (isNaN(val)) { hasNaN = true; break; }
-          featureValues[j] = (val - means[j]) / stdsArr[j];
+          // Impute NaN → 0 (matches training behavior) instead of skipping entire row
+          featureValues[j] = isNaN(val) ? (0 - means[j]) / stdsArr[j] : (val - means[j]) / stdsArr[j];
         }
-
-        if (hasNaN) { totalRowsInvalid++; continue; }
 
         // Engineered features
         if (hasEngineeredFeatures) {

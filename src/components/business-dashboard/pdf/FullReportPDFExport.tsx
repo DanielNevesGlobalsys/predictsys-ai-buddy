@@ -51,6 +51,14 @@ export function FullReportPDFExport(props: FullReportPDFExportProps) {
   const [exporting, setExporting] = useState(false);
 
   const handleExport = useCallback(async () => {
+    // Block PDF export when dashboard has no data (Regra de Falha de Relatório)
+    if (props.predictions.length === 0 && props.scoreCoveragePct !== null && props.scoreCoveragePct === 0) {
+      toast.error('Relatório indisponível', {
+        description: 'O modelo não produziu previsões válidas. Revise o target/features e retreine antes de exportar.',
+      });
+      return;
+    }
+
     setExporting(true);
     try {
       // Fetch additional data needed for the report in parallel
