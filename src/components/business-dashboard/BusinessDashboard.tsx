@@ -301,6 +301,9 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     );
   }
 
+  // Detect inference failure: model exists, scoring ran, but 0 predictions persisted
+  const inferenceFailure = productionModel && data.predictions.length === 0 && scoreCoveragePct !== null && scoreCoveragePct === 0;
+
   // Show empty state with CTA if no predictions but has production model
   if (data.predictions.length === 0 && productionModel) {
     return (
@@ -326,24 +329,60 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             </div>
           </Card>
         )}
-        <Card className="p-8">
-          <div className="text-center space-y-6">
-            <div className="w-16 h-16 mx-auto rounded-full bg-muted flex items-center justify-center">
-              <AlertCircle className="w-8 h-8 text-muted-foreground" />
+
+        {/* Inference failure: scored 0 rows — show fail message per Regra Mestra */}
+        {inferenceFailure ? (
+          <Card className="p-8 border-2 border-destructive/40 bg-destructive/5">
+            <div className="text-center space-y-6">
+              <div className="w-16 h-16 mx-auto rounded-full bg-destructive/10 flex items-center justify-center">
+                <AlertCircle className="w-8 h-8 text-destructive" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-semibold text-destructive">
+                  ⚠️ Não foi possível gerar o relatório deste projeto
+                </h3>
+                <p className="text-muted-foreground max-w-lg mx-auto">
+                  Detectamos que o modelo atual não produziu previsões válidas para o dashboard.
+                  Isso pode ocorrer quando as features do dataset possuem valores ausentes ou incompatíveis
+                  com o modelo treinado.
+                </p>
+              </div>
+              <div className="bg-muted/50 p-4 rounded-lg max-w-lg mx-auto text-left space-y-2">
+                <p className="text-sm font-medium">👉 Recomendação:</p>
+                <p className="text-sm text-muted-foreground">
+                  Volte para a etapa de <strong>Modelos</strong>, revise o target e as features e 
+                  retreine o modelo antes de tentar gerar o dashboard ou o relatório novamente.
+                </p>
+              </div>
+              <Button size="lg" onClick={handleRunPredictions} disabled={runningBatch} className="gap-2">
+                <RefreshCw className="w-5 h-5" />
+                Tentar novamente
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Modelo: <strong>{productionModel.algorithm_name}</strong> · Cobertura: 0%
+              </p>
             </div>
-            <div className="space-y-2">
-              <h3 className="text-xl font-semibold">{t('businessDashboard.noPredictions')}</h3>
-              <p className="text-muted-foreground max-w-md mx-auto">{t('businessDashboard.noPredictionsDesc')}</p>
+          </Card>
+        ) : (
+          <Card className="p-8">
+            <div className="text-center space-y-6">
+              <div className="w-16 h-16 mx-auto rounded-full bg-muted flex items-center justify-center">
+                <AlertCircle className="w-8 h-8 text-muted-foreground" />
+              </div>
+              <div className="space-y-2">
+                <h3 className="text-xl font-semibold">{t('businessDashboard.noPredictions')}</h3>
+                <p className="text-muted-foreground max-w-md mx-auto">{t('businessDashboard.noPredictionsDesc')}</p>
+              </div>
+              <Button size="lg" onClick={handleRunPredictions} disabled={runningBatch} className="gap-2">
+                <PlayCircle className="w-5 h-5" />
+                {t('businessDashboard.runPredictionsNow')}
+              </Button>
+              <p className="text-sm text-muted-foreground">
+                {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
+              </p>
             </div>
-            <Button size="lg" onClick={handleRunPredictions} disabled={runningBatch} className="gap-2">
-              <PlayCircle className="w-5 h-5" />
-              {t('businessDashboard.runPredictionsNow')}
-            </Button>
-            <p className="text-sm text-muted-foreground">
-              {t('businessDashboard.usingModel')}: <strong>{productionModel.algorithm_name}</strong>
-            </p>
-          </div>
-        </Card>
+          </Card>
+        )}
       </div>
     );
   }
