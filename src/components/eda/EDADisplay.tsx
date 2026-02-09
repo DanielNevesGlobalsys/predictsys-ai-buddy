@@ -5,7 +5,7 @@ import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, RefreshCw, BarChart3, Calculator, Download, FileSpreadsheet, Layers, AlertTriangle } from "lucide-react";
+import { Loader2, RefreshCw, BarChart3, Calculator, Download, FileSpreadsheet, Layers, AlertTriangle, ChevronDown } from "lucide-react";
 import EDAKPICards from "./EDAKPICards";
 import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
@@ -15,6 +15,8 @@ import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
 import { ExportCSVModal, ExportJobsModal } from "@/components/export";
 import { FeatureEngineeringSection } from "@/components/feature-engineering";
+import { ImportManifestPanel } from "@/components/import";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface NumericStat {
@@ -57,6 +59,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [aiInsights, setAiInsights] = useState<string[]>([]);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
+  const [manifestOpen, setManifestOpen] = useState(false);
   const [projectColumns, setProjectColumns] = useState<{ column_name: string; inferred_type: string }[]>([]);
   const [enabledFeatureNames, setEnabledFeatureNames] = useState<string[]>([]);
 
@@ -282,7 +285,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       {projectInfo.filesCount && projectInfo.filesCount > 1 && (
         <Alert className="border-primary/30 bg-primary/5">
           <Layers className="h-4 w-4 text-primary" />
-          <AlertDescription className="text-sm flex items-center gap-2">
+          <AlertDescription className="text-sm flex items-center gap-2 justify-between">
             <span className="font-medium">
               {t("eda.consolidatedBanner", {
                 rows: projectInfo.rows.toLocaleString(),
@@ -291,9 +294,46 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
                 defaultValue: `Dataset consolidado: ${projectInfo.rows.toLocaleString()} linhas | ${projectInfo.columns} colunas | ${projectInfo.filesCount} arquivos`,
               })}
             </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => setManifestOpen(!manifestOpen)}
+            >
+              <ChevronDown className={`w-3.5 h-3.5 mr-1 transition-transform ${manifestOpen ? "rotate-180" : ""}`} />
+              Ver resumo de importação
+            </Button>
           </AlertDescription>
         </Alert>
       )}
+
+      {/* Single-file dataset info */}
+      {(!projectInfo.filesCount || projectInfo.filesCount <= 1) && projectInfo.rows > 0 && (
+        <Alert className="border-primary/30 bg-primary/5">
+          <Layers className="h-4 w-4 text-primary" />
+          <AlertDescription className="text-sm flex items-center gap-2 justify-between">
+            <span className="font-medium">
+              Dataset: {projectInfo.rows.toLocaleString()} linhas | {projectInfo.columns} colunas
+            </span>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => setManifestOpen(!manifestOpen)}
+            >
+              <ChevronDown className={`w-3.5 h-3.5 mr-1 transition-transform ${manifestOpen ? "rotate-180" : ""}`} />
+              Ver resumo de importação
+            </Button>
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Collapsible Import Manifest */}
+      <Collapsible open={manifestOpen} onOpenChange={setManifestOpen}>
+        <CollapsibleContent>
+          <ImportManifestPanel projectId={projectId} />
+        </CollapsibleContent>
+      </Collapsible>
 
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
