@@ -334,8 +334,17 @@ serve(async (req) => {
         const sampleResult = await executePowerBIQuery(accessToken, workspace_id, dataset_id, sampleQuery);
         rows = sampleResult.results?.[0]?.tables?.[0]?.rows || [];
       } catch (error) {
-        console.error('[ingest-cloud-data] Error fetching data:', error);
-        throw new Error(`Failed to fetch data from table '${tableName}': ${error}`);
+        const errMsg = error instanceof Error ? error.message : String(error);
+        console.error('[ingest-cloud-data] Error fetching data:', errMsg);
+        
+        if (errMsg.includes('PowerBIEntityNotFound') || errMsg.includes('404')) {
+          throw new Error(
+            `Tabela '${tableName}' não foi encontrada no modelo semântico (dataset_id: ${dataset_id}). ` +
+            `Verifique se o nome está exatamente igual ao que aparece no Power BI (incluindo maiúsculas/minúsculas e espaços). ` +
+            `Certifique-se também de que o workspace_id e dataset_id estão corretos.`
+          );
+        }
+        throw new Error(`Falha ao buscar dados da tabela '${tableName}': ${errMsg}`);
       }
       
       sampleRows = rows.length;
