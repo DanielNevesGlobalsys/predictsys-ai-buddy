@@ -178,6 +178,14 @@ serve(async (req) => {
     if (exportError) console.warn(`[delete-project] Error deleting export jobs:`, exportError);
     else console.log(`[delete-project] Deleted export jobs`);
 
+    // Delete import manifests (depends on project_datasets via dataset_id)
+    const { error: manifestsError } = await supabaseAdmin
+      .from("import_manifests")
+      .delete()
+      .eq("project_id", project_id);
+    if (manifestsError) console.warn(`[delete-project] Error deleting import manifests:`, manifestsError);
+    else console.log(`[delete-project] Deleted import manifests`);
+
     // Delete import jobs
     const { error: importError } = await supabaseAdmin
       .from("import_jobs")
@@ -226,6 +234,38 @@ serve(async (req) => {
     if (ingestionError) console.warn(`[delete-project] Error deleting ingestion logs:`, ingestionError);
     else console.log(`[delete-project] Deleted ingestion logs`);
 
+    // Delete project AI context
+    const { error: aiCtxError } = await supabaseAdmin
+      .from("project_ai_context")
+      .delete()
+      .eq("project_id", project_id);
+    if (aiCtxError) console.warn(`[delete-project] Error deleting AI context:`, aiCtxError);
+    else console.log(`[delete-project] Deleted AI context`);
+
+    // Delete project AI memory
+    const { error: aiMemError } = await supabaseAdmin
+      .from("project_ai_memory")
+      .delete()
+      .eq("project_id", project_id);
+    if (aiMemError) console.warn(`[delete-project] Error deleting AI memory:`, aiMemError);
+    else console.log(`[delete-project] Deleted AI memory`);
+
+    // Delete project data contract
+    const { error: contractError } = await supabaseAdmin
+      .from("project_data_contract")
+      .delete()
+      .eq("project_id", project_id);
+    if (contractError) console.warn(`[delete-project] Error deleting data contract:`, contractError);
+    else console.log(`[delete-project] Deleted data contract`);
+
+    // Delete EDA snapshots
+    const { error: edaSnapError } = await supabaseAdmin
+      .from("project_eda_snapshots")
+      .delete()
+      .eq("project_id", project_id);
+    if (edaSnapError) console.warn(`[delete-project] Error deleting EDA snapshots:`, edaSnapError);
+    else console.log(`[delete-project] Deleted EDA snapshots`);
+
     // Delete platform events (set project_id to null instead of deleting for analytics)
     const { error: eventsError } = await supabaseAdmin
       .from("platform_events")
@@ -253,6 +293,21 @@ serve(async (req) => {
       } else {
         console.log(`[delete-project] Deleted storage file`);
       }
+    }
+
+    // 4b. Delete big_imports storage files for this project
+    try {
+      const userFolder = `${project.user_id}/${project_id}`;
+      const { data: bigFiles } = await supabaseAdmin.storage
+        .from("big_imports")
+        .list(userFolder);
+      if (bigFiles && bigFiles.length > 0) {
+        const paths = bigFiles.map(f => `${userFolder}/${f.name}`);
+        await supabaseAdmin.storage.from("big_imports").remove(paths);
+        console.log(`[delete-project] Deleted ${paths.length} big_imports files`);
+      }
+    } catch (e) {
+      console.warn(`[delete-project] Error cleaning big_imports storage:`, e);
     }
 
     // 5. Finally delete the project itself using admin client
