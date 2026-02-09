@@ -13,6 +13,7 @@ import {
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save } from "lucide-react";
+import TargetPresenceScan from "./TargetPresenceScan";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
@@ -449,6 +450,11 @@ const StepTargetFeatures = ({
             </p>
           </div>
         </div>
+
+        {/* Target Presence Scan */}
+        {projectData.id && targetColumn && (
+          <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} />
+        )}
 
         {/* Features selection */}
         <div className="space-y-4">
