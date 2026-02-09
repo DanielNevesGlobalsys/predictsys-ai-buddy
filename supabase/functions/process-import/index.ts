@@ -106,7 +106,61 @@ function detectFileFormat(fileName: string, storagePath: string): FileFormat {
 // Utility: Generate schema hash (for column-set comparison)
 // ═══════════════════════════════════════════════════════════
 function generateSchemaHash(columns: string[]): string {
-  return columns.map(c => c.toLowerCase().trim()).sort().join("|");
+  return columns.map(c => normalizeColumnName(c)).sort().join("|");
+}
+
+// ═══════════════════════════════════════════════════════════
+// Column Name Normalization (accents, spaces, special chars)
+// ═══════════════════════════════════════════════════════════
+function normalizeColumnName(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
+    .replace(/\s+/g, "_")                              // spaces → _
+    .replace(/[^a-z0-9_]/g, "")                        // remove special chars
+    .replace(/_+/g, "_")                               // collapse underscores
+    .replace(/^_|_$/g, "");                             // trim underscores
+}
+
+// ═══════════════════════════════════════════════════════════
+// Column Equivalence Heuristics
+// ═══════════════════════════════════════════════════════════
+const EQUIVALENCE_GROUPS: string[][] = [
+  ["id", "id_cliente", "cliente_id", "customer_id", "cod_cliente", "codigo_cliente"],
+  ["codparc", "cod_parc", "codigo_parceiro", "partner_code", "parceiro_id"],
+  ["nome", "name", "nome_cliente", "customer_name", "nm_cliente"],
+  ["data", "date", "dt", "data_ref", "reference_date", "dt_ref"],
+  ["valor", "value", "vlr", "vlrtot", "valor_total", "total_value", "amount"],
+  ["email", "e_mail", "email_cliente", "customer_email"],
+  ["telefone", "phone", "tel", "fone", "celular", "mobile"],
+  ["cidade", "city", "municipio"],
+  ["estado", "state", "uf"],
+  ["cep", "zip", "zipcode", "zip_code", "codigo_postal"],
+];
+
+function findEquivalentCanonical(normalizedName: string, existingCanonicals: Map<string, string>): string | null {
+  // Direct match
+  if (existingCanonicals.has(normalizedName)) return normalizedName;
+
+  // Check equivalence groups
+  for (const group of EQUIVALENCE_GROUPS) {
+    if (group.includes(normalizedName)) {
+      for (const equiv of group) {
+        if (existingCanonicals.has(equiv)) return equiv;
+      }
+    }
+  }
+
+  // Fuzzy: try removing common prefixes/suffixes
+  const stripped = normalizedName
+    .replace(/^(cod_?|codigo_?|id_?|num_?|nr_?)/, "")
+    .replace(/(_id|_cod|_codigo|_num)$/, "");
+  if (stripped && stripped !== normalizedName && existingCanonicals.has(stripped)) {
+    return stripped;
+  }
+
+  return null;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -587,73 +641,104 @@ async function extractSchemaJSON(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Canonical Schema Builder (union by name)
+// Canonical Schema Builder (union by name + normalization)
 // ═══════════════════════════════════════════════════════════
-function buildCanonicalSchema(fileSchemas: FileSchema[]): CanonicalSchema {
+interface ColumnMappingEntry {
+  canonical: string;
+  type: string;
+  sources: { file: string; original_col: string }[];
+}
+
+function buildCanonicalSchema(
+  fileSchemas: FileSchema[],
+  fileNames?: string[],
+): CanonicalSchema & { columnMapping: ColumnMappingEntry[] } {
   if (fileSchemas.length === 0) {
-    return { columns: [], columnTypes: {}, sourceFiles: 0 };
+    return { columns: [], columnTypes: {}, sourceFiles: 0, columnMapping: [] };
   }
 
-  // Union all column names preserving order of first appearance
-  const seenColumns = new Map<string, string>(); // lowercase → original name
+  // Map: normalizedName → canonical display name (first seen)
+  const canonicalNames = new Map<string, string>();
   const columnOrder: string[] = [];
+  const mappingEntries = new Map<string, ColumnMappingEntry>();
 
-  // Use frequency-based approach: columns from more files get priority
-  const columnFrequency = new Map<string, number>();
-  const columnOriginalNames = new Map<string, string>(); // lowercase → first-seen original
+  for (let fi = 0; fi < fileSchemas.length; fi++) {
+    const schema = fileSchemas[fi];
+    const fileName = fileNames?.[fi] || `file_${fi + 1}`;
 
-  for (const schema of fileSchemas) {
     for (const col of schema.columns) {
-      const key = col.toLowerCase().trim();
-      columnFrequency.set(key, (columnFrequency.get(key) || 0) + 1);
-      if (!columnOriginalNames.has(key)) {
-        columnOriginalNames.set(key, col);
+      const normalized = normalizeColumnName(col);
+      
+      // Try direct match or equivalence
+      let canonicalKey = canonicalNames.has(normalized) ? normalized : findEquivalentCanonical(normalized, canonicalNames);
+      
+      if (canonicalKey) {
+        // Column exists — add source mapping
+        const entry = mappingEntries.get(canonicalKey)!;
+        entry.sources.push({ file: fileName, original_col: col });
+      } else {
+        // New column
+        canonicalKey = normalized;
+        const displayName = col; // preserve original casing from first file
+        canonicalNames.set(normalized, displayName);
+        columnOrder.push(displayName);
+        mappingEntries.set(normalized, {
+          canonical: displayName,
+          type: "texto",
+          sources: [{ file: fileName, original_col: col }],
+        });
       }
     }
   }
 
-  // Sort by frequency (descending), then by first appearance
-  const allColumnKeys = Array.from(columnFrequency.keys());
-  // Maintain insertion order from first schema, then add extras
-  for (const schema of fileSchemas) {
-    for (const col of schema.columns) {
-      const key = col.toLowerCase().trim();
-      if (!seenColumns.has(key)) {
-        seenColumns.set(key, columnOriginalNames.get(key) || col);
-        columnOrder.push(columnOriginalNames.get(key) || col);
-      }
-    }
-  }
-
-  // Merge types: prefer most specific (numérico > categórico > texto)
+  // Merge types with coercion: prefer numérico > categórico > texto
   const mergedTypes: Record<string, string> = {};
   for (const col of columnOrder) {
-    const key = col.toLowerCase().trim();
+    const normalized = normalizeColumnName(col);
     const types: string[] = [];
     for (const schema of fileSchemas) {
-      const matchCol = schema.columns.find(c => c.toLowerCase().trim() === key);
+      const matchCol = schema.columns.find(c => {
+        const norm = normalizeColumnName(c);
+        return norm === normalized || findEquivalentCanonical(norm, canonicalNames) === normalized;
+      });
       if (matchCol && schema.columnTypes[matchCol]) {
         types.push(schema.columnTypes[matchCol]);
       }
     }
-    // Use most common type, fallback to texto
+
     if (types.length === 0) {
       mergedTypes[col] = "texto";
     } else {
-      const typeCounts = new Map<string, number>();
-      for (const t of types) {
-        typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
-      }
-      let bestType = "texto";
-      let bestCount = 0;
-      for (const [t, count] of typeCounts) {
-        if (count > bestCount) {
-          bestCount = count;
-          bestType = t;
+      // Type coercion: if any file has "numérico" and another has "texto", try "numérico" (will attempt conversion)
+      const hasNumeric = types.includes("numérico");
+      const hasText = types.includes("texto");
+      if (hasNumeric && !hasText) {
+        mergedTypes[col] = "numérico";
+      } else if (hasNumeric && hasText) {
+        // Mixed — keep numérico, backend will try conversion
+        mergedTypes[col] = "numérico";
+      } else {
+        // Use most common type
+        const typeCounts = new Map<string, number>();
+        for (const t of types) typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
+        let bestType = "texto";
+        let bestCount = 0;
+        for (const [t, count] of typeCounts) {
+          if (count > bestCount) { bestCount = count; bestType = t; }
         }
+        mergedTypes[col] = bestType;
       }
-      mergedTypes[col] = bestType;
     }
+
+    // Update mapping entry type
+    const entry = mappingEntries.get(normalized);
+    if (entry) entry.type = mergedTypes[col];
+  }
+
+  // Build column mapping array
+  const columnMapping: ColumnMappingEntry[] = [];
+  for (const [, entry] of mappingEntries) {
+    columnMapping.push(entry);
   }
 
   console.log(`[process-import] Canonical schema: ${columnOrder.length} cols from ${fileSchemas.length} files`);
@@ -662,32 +747,234 @@ function buildCanonicalSchema(fileSchemas: FileSchema[]): CanonicalSchema {
     columns: columnOrder,
     columnTypes: mergedTypes,
     sourceFiles: fileSchemas.length,
+    columnMapping,
   };
 }
 
 // ═══════════════════════════════════════════════════════════
-// Normalize samples to canonical schema
+// Normalize samples to canonical schema (with normalization)
 // ═══════════════════════════════════════════════════════════
 function normalizeToSchema(
   sampleRows: Record<string, unknown>[],
   fileColumns: string[],
   canonicalColumns: string[],
+  canonicalNames?: Map<string, string>,
 ): Record<string, unknown>[] {
-  // Build mapping: canonical column → file column (case-insensitive)
+  // Build mapping: canonical normalized → file column
   const fileColMap = new Map<string, string>();
   for (const col of fileColumns) {
-    fileColMap.set(col.toLowerCase().trim(), col);
+    fileColMap.set(normalizeColumnName(col), col);
+  }
+
+  // Build canonical normalized map
+  const canonNormMap = new Map<string, string>();
+  for (const col of canonicalColumns) {
+    canonNormMap.set(normalizeColumnName(col), col);
   }
 
   return sampleRows.map(row => {
     const normalized: Record<string, unknown> = {};
     for (const canonCol of canonicalColumns) {
-      const key = canonCol.toLowerCase().trim();
-      const fileCol = fileColMap.get(key);
-      normalized[canonCol] = fileCol ? (row[fileCol] ?? null) : null;
+      const normKey = normalizeColumnName(canonCol);
+      const fileCol = fileColMap.get(normKey);
+
+      if (fileCol) {
+        normalized[canonCol] = row[fileCol] ?? null;
+      } else {
+        // Try equivalence
+        const equivKey = findEquivalentCanonical(normKey, canonNormMap);
+        if (equivKey) {
+          const eqFileCol = fileColMap.get(equivKey);
+          normalized[canonCol] = eqFileCol ? (row[eqFileCol] ?? null) : null;
+        } else {
+          normalized[canonCol] = null;
+        }
+      }
     }
     return normalized;
   });
+}
+
+// ═══════════════════════════════════════════════════════════
+// NULL Diagnostic: detect columns with high NULL from schema mismatch
+// ═══════════════════════════════════════════════════════════
+interface NullDiagnosticEntry {
+  column: string;
+  null_pct: number;
+  probable_cause: string;
+  files_with_data: string[];
+}
+
+function computeNullDiagnostic(
+  canonicalColumns: string[],
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  allSampleRows: Record<string, unknown>[],
+): NullDiagnosticEntry[] {
+  const diagnostics: NullDiagnosticEntry[] = [];
+  if (allSampleRows.length === 0) return diagnostics;
+
+  for (const col of canonicalColumns) {
+    const nullCount = allSampleRows.filter(row => {
+      const v = row[col];
+      return v === null || v === undefined || String(v).trim() === "";
+    }).length;
+    const nullPct = (nullCount / allSampleRows.length) * 100;
+
+    if (nullPct > 50) {
+      // Check which files had this column
+      const filesWithData: string[] = [];
+      const normCol = normalizeColumnName(col);
+      for (let i = 0; i < fileSchemas.length; i++) {
+        const hasCol = fileSchemas[i].columns.some(c => normalizeColumnName(c) === normCol);
+        if (hasCol) filesWithData.push(fileNames[i]);
+      }
+
+      let cause = "Coluna ausente em parte dos arquivos.";
+      if (filesWithData.length === fileSchemas.length) {
+        cause = "Provável mismatch de nome/tipo/parse entre arquivos. Valores perdidos na conversão.";
+      } else if (filesWithData.length === 0) {
+        cause = "Coluna não encontrada em nenhum arquivo (possível coluna derivada).";
+      } else {
+        cause = `Coluna presente apenas em ${filesWithData.length}/${fileSchemas.length} arquivos.`;
+      }
+
+      diagnostics.push({
+        column: col,
+        null_pct: Math.round(nullPct * 10) / 10,
+        probable_cause: cause,
+        files_with_data: filesWithData,
+      });
+    }
+  }
+
+  return diagnostics.sort((a, b) => b.null_pct - a.null_pct);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Import Manifest Generator
+// ═══════════════════════════════════════════════════════════
+async function createImportManifest(
+  supabase: any,
+  projectId: string,
+  userId: string,
+  batchId: string | null,
+  datasetId: string | null,
+  fileResults: FileProcessResult[],
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  canonical: CanonicalSchema & { columnMapping?: ColumnMappingEntry[] },
+  totalRowsConsolidated: number,
+  allSampleRows: Record<string, unknown>[],
+): Promise<void> {
+  try {
+    const rowsSum = fileSchemas.reduce((s, sc) => s + sc.totalRows, 0);
+    const nullDiag = computeNullDiagnostic(canonical.columns, fileSchemas, fileNames, allSampleRows);
+
+    // Build per-file entries
+    const files = fileResults.map((result, i) => {
+      const schema = result.schema;
+      const nullPctByCol: { col: string; pct: number }[] = [];
+      const missingCols: string[] = [];
+
+      if (schema && allSampleRows.length > 0) {
+        // Compute null% per column for this file's contribution
+        for (const col of schema.columns) {
+          const nullCount = schema.sampleRows.filter(row => {
+            const v = row[col];
+            return v === null || v === undefined || String(v).trim() === "";
+          }).length;
+          const pct = schema.sampleRows.length > 0 ? Math.round((nullCount / schema.sampleRows.length) * 1000) / 10 : 0;
+          if (pct > 0) nullPctByCol.push({ col, pct });
+        }
+        nullPctByCol.sort((a, b) => b.pct - a.pct);
+
+        // Check which canonical columns are missing from this file
+        for (const canonCol of canonical.columns) {
+          const normCanon = normalizeColumnName(canonCol);
+          const hasCol = schema.columns.some(c => normalizeColumnName(c) === normCanon);
+          if (!hasCol) missingCols.push(canonCol);
+        }
+      }
+
+      let status: "ok" | "warn" | "fail" = "ok";
+      const parseWarnings: string[] = [];
+
+      if (!result.success) {
+        status = "fail";
+        if (result.error) parseWarnings.push(result.error);
+      } else if (missingCols.length > 0) {
+        status = "warn";
+        parseWarnings.push(`${missingCols.length} coluna(s) ausente(s): ${missingCols.slice(0, 3).join(", ")}${missingCols.length > 3 ? "..." : ""}`);
+      }
+
+      return {
+        file_id: result.jobId,
+        file_name: result.fileName,
+        format: result.format,
+        size_mb: schema ? Math.round((schema.sampleRows.length * 100) / 100) : 0, // approximate
+        rows_detected: result.rowsRead,
+        rows_loaded: result.rowsRead,
+        cols_detected: schema?.columns.length || 0,
+        schema_detected: schema?.columnTypes || {},
+        null_pct_by_col: nullPctByCol.slice(0, 10),
+        parse_warnings: parseWarnings,
+        status,
+        missing_cols: missingCols,
+      };
+    });
+
+    const filesOk = files.filter(f => f.status === "ok").length;
+    const filesWarn = files.filter(f => f.status === "warn").length;
+    const filesFail = files.filter(f => f.status === "fail").length;
+
+    let overallStatus: "ok" | "warn" | "fail" = "ok";
+    let statusReason: string | null = null;
+
+    if (filesFail > 0 && filesOk === 0) {
+      overallStatus = "fail";
+      statusReason = "Todos os arquivos falharam no processamento.";
+    } else if (filesFail > 0) {
+      overallStatus = "warn";
+      statusReason = `${filesFail} arquivo(s) falharam. Dataset parcial.`;
+    } else if (nullDiag.some(d => d.null_pct > 80)) {
+      overallStatus = "warn";
+      statusReason = "Colunas com >80% NULL detectadas — possível mismatch de schema.";
+    } else if (filesWarn > 0) {
+      overallStatus = "warn";
+      statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`;
+    }
+
+    if (totalRowsConsolidated === 0) {
+      overallStatus = "fail";
+      statusReason = "Nenhuma linha consolidada. Verifique os arquivos e schemas.";
+    }
+
+    await supabase.from("import_manifests").insert({
+      project_id: projectId,
+      user_id: userId,
+      batch_id: batchId,
+      dataset_id: datasetId,
+      total_files: fileResults.length,
+      files_ok: filesOk,
+      files_warn: filesWarn,
+      files_fail: filesFail,
+      rows_sum: rowsSum,
+      rows_consolidated: totalRowsConsolidated,
+      rows_difference: Math.max(0, rowsSum - totalRowsConsolidated),
+      columns_final: canonical.columns.length,
+      canonical_schema: canonical.columnTypes,
+      column_mapping_report: canonical.columnMapping || [],
+      null_diagnostic: nullDiag,
+      files,
+      status: overallStatus,
+      status_reason: statusReason,
+    });
+
+    console.log(`[process-import] Manifest created: ${overallStatus}, ${files.length} files, ${totalRowsConsolidated} rows`);
+  } catch (e) {
+    console.error("[process-import] Failed to create manifest:", e);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -866,6 +1153,11 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 
     await completeJob(supabase, job.id, schema.totalRows, datasetId);
 
+    // Create manifest for single file
+    const singleCanonical = { columns: schema.columns, columnTypes: schema.columnTypes, sourceFiles: 1, columnMapping: schema.columns.map(c => ({ canonical: c, type: schema.columnTypes[c] || "texto", sources: [{ file: job.file_name, original_col: c }] })) };
+    const singleFileResult: FileProcessResult = { success: true, jobId: job.id, fileName: job.file_name, format: schema.format, schema, rowsRead: schema.totalRows, coveragePct: 100 };
+    await createImportManifest(supabase, job.project_id, job.user_id, null, datasetId, [singleFileResult], [schema], [job.file_name], singleCanonical, schema.totalRows, schema.sampleRows);
+
     console.log(`[process-import] Job ${job.id} completed: ${schema.format.toUpperCase()}, ${schema.totalRows} rows, ${schema.columns.length} cols`);
 
     return new Response(JSON.stringify({
@@ -973,16 +1265,17 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
   // ─── Phase 2: Build canonical schema ───────────────────────
   const successSchemas = successResults.map(r => r.schema!);
-  const canonical = buildCanonicalSchema(successSchemas);
+  const successFileNames = successResults.map(r => r.fileName);
+  const canonical = buildCanonicalSchema(successSchemas, successFileNames);
 
-  // Log schema divergences
+  // Log schema divergences (using normalization)
   for (const result of successResults) {
     if (result.schema!.schemaHash !== successSchemas[0].schemaHash) {
       const missing = canonical.columns.filter(c =>
-        !result.schema!.columns.some(fc => fc.toLowerCase().trim() === c.toLowerCase().trim())
+        !result.schema!.columns.some(fc => normalizeColumnName(fc) === normalizeColumnName(c))
       );
       const extra = result.schema!.columns.filter(fc =>
-        !canonical.columns.some(c => c.toLowerCase().trim() === fc.toLowerCase().trim())
+        !canonical.columns.some(c => normalizeColumnName(c) === normalizeColumnName(fc))
       );
       console.log(`[process-import] Schema divergence in ${result.fileName}: missing=[${missing.join(",")}] extra=[${extra.join(",")}]`);
     }
@@ -1117,6 +1410,13 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       dataset_id: datasetId,
     },
   });
+
+  // ─── Create Import Manifest ─────────────────────────────────
+  const allFileNames = batchJobs.map((j: ImportJob) => j.file_name);
+  await createImportManifest(
+    supabase, primaryJob.project_id, primaryJob.user_id, primaryJob.batch_id, datasetId,
+    fileResults, successSchemas, allFileNames, canonical, totalRowsConsolidated, allSampleRows,
+  );
 
   const responseMessage = failedResults.length > 0
     ? `Importação parcial: ${successResults.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas, ${coveragePct}% coverage`

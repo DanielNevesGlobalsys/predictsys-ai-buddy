@@ -3,7 +3,9 @@ import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Button } from "@/components/ui/button";
-import { Loader2, RefreshCw, BarChart3, Calculator, Download, FileSpreadsheet } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
+import { Loader2, RefreshCw, BarChart3, Calculator, Download, FileSpreadsheet, Layers, AlertTriangle } from "lucide-react";
 import EDAKPICards from "./EDAKPICards";
 import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
@@ -49,7 +51,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [categoricalStats, setCategoricalStats] = useState<CategoricalStat[]>([]);
   const [hasData, setHasData] = useState(false);
   const [projectHasDataset, setProjectHasDataset] = useState<boolean | null>(null);
-  const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null; sampledRows?: number }>({
+  const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null; sampledRows?: number; filesCount?: number; sourceType?: string }>({
     rows: 0, columns: 0, target: null
   });
   const [aiInsights, setAiInsights] = useState<string[]>([]);
@@ -102,7 +104,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       // First check project_datasets for any active dataset (including cloud sources)
       const { data: activeDataset } = await supabase
         .from("project_datasets")
-        .select("id, name, total_rows, columns_count, sample_rows, source_type")
+        .select("id, name, total_rows, columns_count, sample_rows, source_type, source_metadata")
         .eq("project_id", projectId)
         .eq("is_active", true)
         .single();
@@ -110,13 +112,16 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       if (activeDataset) {
         // Found an active dataset (file upload, cloud, etc.)
         setProjectHasDataset(true);
+        const metadata = activeDataset.source_metadata as Record<string, any> | null;
         setProjectInfo({
           rows: activeDataset.total_rows || 0,
           columns: activeDataset.columns_count || 0,
           target: null, // Will be updated by loadEDAStats
           sampledRows: activeDataset.sample_rows && activeDataset.sample_rows < (activeDataset.total_rows || 0) 
             ? activeDataset.sample_rows 
-            : undefined
+            : undefined,
+          filesCount: metadata?.files_count || metadata?.file_paths?.length || 1,
+          sourceType: activeDataset.source_type || "upload",
         });
         return;
       }
@@ -273,6 +278,23 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
 
   return (
     <div className="space-y-6">
+      {/* Consolidated Dataset Banner */}
+      {projectInfo.filesCount && projectInfo.filesCount > 1 && (
+        <Alert className="border-primary/30 bg-primary/5">
+          <Layers className="h-4 w-4 text-primary" />
+          <AlertDescription className="text-sm flex items-center gap-2">
+            <span className="font-medium">
+              {t("eda.consolidatedBanner", {
+                rows: projectInfo.rows.toLocaleString(),
+                columns: projectInfo.columns,
+                files: projectInfo.filesCount,
+                defaultValue: `Dataset consolidado: ${projectInfo.rows.toLocaleString()} linhas | ${projectInfo.columns} colunas | ${projectInfo.filesCount} arquivos`,
+              })}
+            </span>
+          </AlertDescription>
+        </Alert>
+      )}
+
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
