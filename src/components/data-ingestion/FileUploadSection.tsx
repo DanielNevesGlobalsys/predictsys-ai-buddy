@@ -253,6 +253,155 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
     }
   }, [projectData.dataset_filename]);
 
+  // ─── Recover active import job on mount/refresh ──────────
+  const [activeJobInfo, setActiveJobInfo] = useState<{
+    id: string;
+    status: string;
+    progress: number;
+    file_name: string;
+    current_step?: string;
+    error_message?: string;
+    updated_at?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (!projectData.id || projectData.dataset_filename) return;
+
+    const recoverActiveJob = async () => {
+      // Check for any active (non-terminal) import jobs
+      const { data: activeJobs } = await supabase
+        .from("import_jobs")
+        .select("id, status, progress, file_name, error_message, updated_at")
+        .eq("project_id", projectData.id)
+        .in("status", ["pending", "processing", "uploading"])
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      if (activeJobs && activeJobs.length > 0) {
+        const job = activeJobs[0];
+        console.log("[FileUploadSection] Recovering active import job:", job.id, job.status);
+        setActiveJobInfo({
+          id: job.id,
+          status: job.status,
+          progress: job.progress || 0,
+          file_name: job.file_name,
+          error_message: job.error_message || undefined,
+          updated_at: job.updated_at || undefined,
+        });
+      }
+    };
+
+    recoverActiveJob();
+  }, [projectData.id, projectData.dataset_filename]);
+
+  // Poll active job for progress updates
+  useEffect(() => {
+    if (!activeJobInfo) return;
+
+    const pollInterval = setInterval(async () => {
+      const { data: job } = await supabase
+        .from("import_jobs")
+        .select("id, status, progress, file_name, error_message, updated_at, rows_processed")
+        .eq("id", activeJobInfo.id)
+        .single();
+
+      if (!job) return;
+
+      if (job.status === "completed") {
+        setActiveJobInfo(null);
+        clearInterval(pollInterval);
+        // Reload project data
+        const { data: updatedProject } = await supabase
+          .from("projects")
+          .select("dataset_filename, dataset_rows, dataset_columns, total_rows, sample_rows")
+          .eq("id", projectData.id)
+          .single();
+
+        if (updatedProject?.dataset_filename) {
+          setUploadStatus("success");
+          loadExistingData();
+          onDataReady();
+          toast({
+            title: t("dataIngestion.import.statusCompleted"),
+            description: `${job.file_name} — ${(job.rows_processed || 0).toLocaleString()} linhas processadas`,
+          });
+        }
+        return;
+      }
+
+      if (job.status === "failed") {
+        setActiveJobInfo({
+          ...activeJobInfo,
+          status: "failed",
+          progress: job.progress || 0,
+          error_message: job.error_message || "Falha na importação",
+          updated_at: job.updated_at || undefined,
+        });
+        clearInterval(pollInterval);
+        return;
+      }
+
+      // Check for stale jobs (no update in 10 minutes)
+      if (job.updated_at) {
+        const lastUpdate = new Date(job.updated_at).getTime();
+        const now = Date.now();
+        if (now - lastUpdate > 10 * 60 * 1000) {
+          // Mark as stale/failed
+          await supabase
+            .from("import_jobs")
+            .update({
+              status: "failed",
+              error_message: "Importação expirou sem atualização. Tente novamente.",
+              finished_at: new Date().toISOString(),
+            })
+            .eq("id", job.id);
+
+          setActiveJobInfo({
+            ...activeJobInfo,
+            status: "failed",
+            error_message: "Importação expirou sem atualização. Tente novamente.",
+          });
+          clearInterval(pollInterval);
+          return;
+        }
+      }
+
+      // Update progress
+      setActiveJobInfo(prev => prev ? {
+        ...prev,
+        status: job.status,
+        progress: job.progress || 0,
+        updated_at: job.updated_at || undefined,
+      } : null);
+    }, 2000);
+
+    return () => clearInterval(pollInterval);
+  }, [activeJobInfo?.id]);
+
+  const handleRetryImport = async () => {
+    if (!activeJobInfo) return;
+    // Clear failed job from view
+    setActiveJobInfo(null);
+    setErrorMessage("");
+    toast({
+      title: "Pronto para nova importação",
+      description: "Selecione os arquivos e tente novamente.",
+    });
+  };
+
+  const handleCancelImport = async () => {
+    if (!activeJobInfo) return;
+    await supabase
+      .from("import_jobs")
+      .update({
+        status: "failed",
+        error_message: "Cancelado pelo usuário",
+        finished_at: new Date().toISOString(),
+      })
+      .eq("id", activeJobInfo.id);
+    setActiveJobInfo(null);
+  };
+
   const loadExistingData = async () => {
     if (!projectData.id) return;
 
@@ -712,6 +861,85 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
             {asyncImport.errorMessage}
           </div>
         </div>
+      )}
+
+      {/* ─── Active import job recovery panel ─────────────── */}
+      {activeJobInfo && (
+        <Card className="p-4 space-y-3 border-primary/30 bg-primary/5">
+          <div className="flex items-center justify-between">
+            <h4 className="font-semibold text-sm flex items-center gap-2">
+              {activeJobInfo.status === "failed" ? (
+                <AlertCircle className="w-4 h-4 text-destructive" />
+              ) : (
+                <Loader2 className="w-4 h-4 text-primary animate-spin" />
+              )}
+              Importação em andamento
+            </h4>
+            <Badge variant={activeJobInfo.status === "failed" ? "destructive" : "outline"}>
+              {activeJobInfo.status === "failed" ? "Falhou" : `${activeJobInfo.progress}%`}
+            </Badge>
+          </div>
+
+          <div className="text-sm text-muted-foreground">
+            <p><strong>Arquivo:</strong> {activeJobInfo.file_name}</p>
+            {activeJobInfo.updated_at && (
+              <p><strong>Última atualização:</strong> {new Date(activeJobInfo.updated_at).toLocaleString("pt-BR")}</p>
+            )}
+          </div>
+
+          {activeJobInfo.status !== "failed" && (
+            <div className="w-full bg-muted rounded-full h-2">
+              <div
+                className="bg-primary h-2 rounded-full transition-all duration-300"
+                style={{ width: `${activeJobInfo.progress}%` }}
+              />
+            </div>
+          )}
+
+          {activeJobInfo.status === "failed" && activeJobInfo.error_message && (
+            <div className="text-sm text-destructive bg-destructive/10 p-3 rounded-lg">
+              {activeJobInfo.error_message}
+            </div>
+          )}
+
+          <div className="flex gap-2">
+            {activeJobInfo.status === "failed" && (
+              <Button variant="outline" size="sm" onClick={handleRetryImport}>
+                Tentar novamente
+              </Button>
+            )}
+            {activeJobInfo.status !== "failed" && (
+              <Button variant="outline" size="sm" onClick={handleCancelImport}>
+                Cancelar
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                if (!activeJobInfo) return;
+                const { data } = await supabase
+                  .from("import_jobs")
+                  .select("id, status, progress, file_name, error_message, updated_at")
+                  .eq("id", activeJobInfo.id)
+                  .single();
+                if (data) {
+                  setActiveJobInfo({
+                    id: data.id,
+                    status: data.status,
+                    progress: data.progress || 0,
+                    file_name: data.file_name,
+                    error_message: data.error_message || undefined,
+                    updated_at: data.updated_at || undefined,
+                  });
+                  toast({ title: "Status atualizado" });
+                }
+              }}
+            >
+              Atualizar status
+            </Button>
+          </div>
+        </Card>
       )}
 
       {/* ─── Drop zone ────────────────────────────────────── */}
