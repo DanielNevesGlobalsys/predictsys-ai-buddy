@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Cloud, Zap, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ExternalLink } from "lucide-react";
+import { Cloud, Zap, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ExternalLink, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
@@ -26,6 +26,7 @@ interface DataSource {
   is_continuous: boolean;
   sync_status: string;
   last_sync_at: string | null;
+  connection_config?: Record<string, any>;
 }
 
 const CLOUD_CONNECTORS = [
@@ -67,6 +68,7 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
   const [existingConnections, setExistingConnections] = useState<DataSource[]>([]);
   const [selectedConnector, setSelectedConnector] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
   
   // Form state - varies by connector
   const [connectionName, setConnectionName] = useState("");
@@ -110,6 +112,23 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
     setSelectedConnector(value);
     setFormData({});
     setConnectionName("");
+    setEditingConnectionId(null);
+    setTestStatus("idle");
+    setTestMessage("");
+  };
+
+  const handleEditConnection = (conn: DataSource) => {
+    setEditingConnectionId(conn.id);
+    setSelectedConnector(conn.connector_type);
+    setConnectionName(conn.name);
+    setIsContinuous(conn.is_continuous);
+    // Load connection_config into formData
+    const config = conn.connection_config || {};
+    const stringConfig: Record<string, string> = {};
+    for (const [key, val] of Object.entries(config)) {
+      stringConfig[key] = val != null ? String(val) : "";
+    }
+    setFormData(stringConfig);
     setTestStatus("idle");
     setTestMessage("");
   };
@@ -166,20 +185,36 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error("Not authenticated");
 
-      const { data, error } = await supabase
-        .from("data_sources")
-        .insert({
-          user_id: user.id,
-          name: connectionName,
-          source_type: "cloud",
-          connector_type: selectedConnector,
-          connection_config: formData,
-          is_continuous: isContinuous
-        })
-        .select()
-        .single();
+      if (editingConnectionId) {
+        // Update existing connection
+        const { error } = await supabase
+          .from("data_sources")
+          .update({
+            name: connectionName,
+            connector_type: selectedConnector,
+            connection_config: formData,
+            is_continuous: isContinuous
+          })
+          .eq("id", editingConnectionId);
 
-      if (error) throw error;
+        if (error) throw error;
+      } else {
+        // Insert new connection
+        const { error } = await supabase
+          .from("data_sources")
+          .insert({
+            user_id: user.id,
+            name: connectionName,
+            source_type: "cloud",
+            connector_type: selectedConnector,
+            connection_config: formData,
+            is_continuous: isContinuous
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+      }
 
       toast({
         title: t("common.success"),
@@ -187,6 +222,7 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
       });
 
       setSelectedConnector(null);
+      setEditingConnectionId(null);
       setFormData({});
       setConnectionName("");
       loadExistingConnections();
@@ -682,6 +718,13 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                     </Button>
                     <Button
                       size="sm"
+                      variant="outline"
+                      onClick={() => handleEditConnection(conn)}
+                    >
+                      <Pencil className="w-4 h-4" />
+                    </Button>
+                    <Button
+                      size="sm"
                       variant="ghost"
                       onClick={() => handleDeleteConnection(conn.id)}
                     >
@@ -701,9 +744,11 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
           <div className="flex items-center justify-between">
             <h3 className="font-semibold flex items-center gap-2">
               <span className="text-xl">{connectorInfo?.icon}</span>
-              {t("dataIngestion.cloud.newConnection", { type: connectorInfo?.label })}
+              {editingConnectionId 
+                ? t("dataIngestion.cloud.editConnection", { type: connectorInfo?.label })
+                : t("dataIngestion.cloud.newConnection", { type: connectorInfo?.label })}
             </h3>
-            <Button variant="ghost" size="sm" onClick={() => setSelectedConnector(null)}>
+            <Button variant="ghost" size="sm" onClick={() => { setSelectedConnector(null); setEditingConnectionId(null); }}>
               {t("common.cancel")}
             </Button>
           </div>

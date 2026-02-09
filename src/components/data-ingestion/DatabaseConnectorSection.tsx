@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp, Layers } from "lucide-react";
+import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp, Layers, Pencil } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
@@ -28,6 +28,8 @@ interface DataSource {
   is_continuous: boolean;
   sync_status: string;
   last_sync_at: string | null;
+  connection_config?: Record<string, any>;
+  incremental_key?: string | null;
 }
 
 interface TableInfo {
@@ -50,6 +52,7 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
   
   const [existingConnections, setExistingConnections] = useState<DataSource[]>([]);
   const [isCreatingNew, setIsCreatingNew] = useState(false);
+  const [editingConnectionId, setEditingConnectionId] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
   const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
   
@@ -171,21 +174,38 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
         ? { connection_string: connectionString }
         : { host, port: parseInt(port), database, username, password };
 
-      const { data, error } = await supabase
-        .from("data_sources")
-        .insert({
-          user_id: user.id,
-          name: connectionName,
-          source_type: "database",
-          connector_type: dbType,
-          connection_config: connectionConfig,
-          is_continuous: isContinuous,
-          incremental_key: incrementalKey || null
-        })
-        .select()
-        .single();
+      if (editingConnectionId) {
+        // Update existing connection
+        const { error } = await supabase
+          .from("data_sources")
+          .update({
+            name: connectionName,
+            connector_type: dbType,
+            connection_config: connectionConfig,
+            is_continuous: isContinuous,
+            incremental_key: incrementalKey || null
+          })
+          .eq("id", editingConnectionId);
 
-      if (error) throw error;
+        if (error) throw error;
+      } else {
+        // Insert new connection
+        const { error } = await supabase
+          .from("data_sources")
+          .insert({
+            user_id: user.id,
+            name: connectionName,
+            source_type: "database",
+            connector_type: dbType,
+            connection_config: connectionConfig,
+            is_continuous: isContinuous,
+            incremental_key: incrementalKey || null
+          })
+          .select()
+          .single();
+
+        if (error) throw error;
+      }
 
       toast({
         title: t("common.success"),
@@ -194,6 +214,7 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
 
       resetForm();
       setIsCreatingNew(false);
+      setEditingConnectionId(null);
       loadExistingConnections();
     } catch (error: any) {
       toast({
@@ -204,6 +225,30 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
     } finally {
       setIsSaving(false);
     }
+  };
+
+  const handleEditConnection = (conn: DataSource) => {
+    setEditingConnectionId(conn.id);
+    setIsCreatingNew(true);
+    setConnectionName(conn.name);
+    setDbType(conn.connector_type);
+    setIsContinuous(conn.is_continuous);
+    setIncrementalKey(conn.incremental_key || "");
+    
+    const config = conn.connection_config || {};
+    if (config.connection_string) {
+      setUseConnectionString(true);
+      setConnectionString(String(config.connection_string));
+    } else {
+      setUseConnectionString(false);
+      setHost(config.host ? String(config.host) : "");
+      setPort(config.port ? String(config.port) : "5432");
+      setDatabase(config.database ? String(config.database) : "");
+      setUsername(config.username ? String(config.username) : "");
+      setPassword(config.password ? String(config.password) : "");
+    }
+    setTestStatus("idle");
+    setTestMessage("");
   };
 
   const handleSelectConnection = async (connection: DataSource) => {
@@ -361,6 +406,13 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
                   </Button>
                   <Button
                     size="sm"
+                    variant="outline"
+                    onClick={() => handleEditConnection(conn)}
+                  >
+                    <Pencil className="w-4 h-4" />
+                  </Button>
+                  <Button
+                    size="sm"
                     variant="ghost"
                     onClick={() => handleDeleteConnection(conn.id)}
                   >
@@ -379,9 +431,11 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
           <div className="flex items-center justify-between">
             <h3 className="font-semibold flex items-center gap-2">
               <span className="text-xl">{dbInfo?.icon}</span>
-              {t("dataIngestion.database.newConnection", { type: dbInfo?.label })}
+              {editingConnectionId
+                ? t("dataIngestion.database.editConnection", { type: dbInfo?.label })
+                : t("dataIngestion.database.newConnection", { type: dbInfo?.label })}
             </h3>
-            <Button variant="ghost" size="sm" onClick={() => { setIsCreatingNew(false); resetForm(); }}>
+            <Button variant="ghost" size="sm" onClick={() => { setIsCreatingNew(false); setEditingConnectionId(null); resetForm(); }}>
               {t("common.cancel")}
             </Button>
           </div>
