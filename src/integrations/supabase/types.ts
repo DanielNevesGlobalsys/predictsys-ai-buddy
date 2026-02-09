@@ -309,6 +309,90 @@ export type Database = {
           },
         ]
       }
+      import_manifests: {
+        Row: {
+          batch_id: string | null
+          canonical_schema: Json | null
+          column_mapping_report: Json | null
+          columns_final: number
+          created_at: string
+          dataset_id: string | null
+          files: Json
+          files_fail: number
+          files_ok: number
+          files_warn: number
+          id: string
+          null_diagnostic: Json | null
+          project_id: string
+          rows_consolidated: number
+          rows_difference: number
+          rows_sum: number
+          status: string
+          status_reason: string | null
+          total_files: number
+          user_id: string
+        }
+        Insert: {
+          batch_id?: string | null
+          canonical_schema?: Json | null
+          column_mapping_report?: Json | null
+          columns_final?: number
+          created_at?: string
+          dataset_id?: string | null
+          files?: Json
+          files_fail?: number
+          files_ok?: number
+          files_warn?: number
+          id?: string
+          null_diagnostic?: Json | null
+          project_id: string
+          rows_consolidated?: number
+          rows_difference?: number
+          rows_sum?: number
+          status?: string
+          status_reason?: string | null
+          total_files?: number
+          user_id: string
+        }
+        Update: {
+          batch_id?: string | null
+          canonical_schema?: Json | null
+          column_mapping_report?: Json | null
+          columns_final?: number
+          created_at?: string
+          dataset_id?: string | null
+          files?: Json
+          files_fail?: number
+          files_ok?: number
+          files_warn?: number
+          id?: string
+          null_diagnostic?: Json | null
+          project_id?: string
+          rows_consolidated?: number
+          rows_difference?: number
+          rows_sum?: number
+          status?: string
+          status_reason?: string | null
+          total_files?: number
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_manifests_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_manifests_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_data_policy: {
         Row: {
           allow_data_export: boolean
