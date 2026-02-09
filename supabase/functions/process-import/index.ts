@@ -950,7 +950,7 @@ async function createImportManifest(
       statusReason = "Nenhuma linha consolidada. Verifique os arquivos e schemas.";
     }
 
-    await supabase.from("import_manifests").insert({
+    const { data: manifestData, error: manifestError } = await supabase.from("import_manifests").insert({
       project_id: projectId,
       user_id: userId,
       batch_id: batchId,
@@ -969,11 +969,14 @@ async function createImportManifest(
       files,
       status: overallStatus,
       status_reason: statusReason,
-    });
+    }).select("id").single();
 
-    console.log(`[process-import] Manifest created: ${overallStatus}, ${files.length} files, ${totalRowsConsolidated} rows`);
+    const manifestId = manifestData?.id || null;
+    console.log(`[process-import] Manifest created: ${overallStatus}, ${files.length} files, ${totalRowsConsolidated} rows, manifest_id=${manifestId}`);
+    return manifestId;
   } catch (e) {
     console.error("[process-import] Failed to create manifest:", e);
+    return null;
   }
 }
 
@@ -1156,9 +1159,9 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
     // Create manifest for single file
     const singleCanonical = { columns: schema.columns, columnTypes: schema.columnTypes, sourceFiles: 1, columnMapping: schema.columns.map(c => ({ canonical: c, type: schema.columnTypes[c] || "texto", sources: [{ file: job.file_name, original_col: c }] })) };
     const singleFileResult: FileProcessResult = { success: true, jobId: job.id, fileName: job.file_name, format: schema.format, schema, rowsRead: schema.totalRows, coveragePct: 100 };
-    await createImportManifest(supabase, job.project_id, job.user_id, null, datasetId, [singleFileResult], [schema], [job.file_name], singleCanonical, schema.totalRows, schema.sampleRows);
+    const manifestId = await createImportManifest(supabase, job.project_id, job.user_id, null, datasetId, [singleFileResult], [schema], [job.file_name], singleCanonical, schema.totalRows, schema.sampleRows);
 
-    console.log(`[process-import] Job ${job.id} completed: ${schema.format.toUpperCase()}, ${schema.totalRows} rows, ${schema.columns.length} cols`);
+    console.log(`[process-import] Job ${job.id} completed: ${schema.format.toUpperCase()}, ${schema.totalRows} rows, ${schema.columns.length} cols, manifest_generated=${!!manifestId}`);
 
     return new Response(JSON.stringify({
       success: true,
@@ -1167,6 +1170,8 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       columns: schema.columns.length,
       format: schema.format,
       dataset_id: datasetId,
+      manifest_generated: !!manifestId,
+      manifest_id: manifestId,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error: unknown) {
@@ -1413,7 +1418,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
   // ─── Create Import Manifest ─────────────────────────────────
   const allFileNames = batchJobs.map((j: ImportJob) => j.file_name);
-  await createImportManifest(
+  const manifestId = await createImportManifest(
     supabase, primaryJob.project_id, primaryJob.user_id, primaryJob.batch_id, datasetId,
     fileResults, successSchemas, allFileNames, canonical, totalRowsConsolidated, allSampleRows,
   );
@@ -1422,7 +1427,7 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     ? `Importação parcial: ${successResults.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas, ${coveragePct}% coverage`
     : `Batch consolidado: ${successResults.length} arquivos, ~${totalRowsConsolidated.toLocaleString()} linhas, ${canonical.columns.length} colunas`;
 
-  console.log(`[process-import] Batch ${primaryJob.batch_id} done. ${responseMessage}`);
+  console.log(`[process-import] Batch ${primaryJob.batch_id} done. ${responseMessage}, manifest_generated=${!!manifestId}`);
 
   return new Response(JSON.stringify({
     success: true,
@@ -1434,6 +1439,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     coverage_pct: coveragePct,
     canonical_schema: { columns: canonical.columns, types: canonical.columnTypes },
     dataset_id: datasetId,
+    manifest_generated: !!manifestId,
+    manifest_id: manifestId,
     file_results: fileResults.map(r => ({
       file: r.fileName, format: r.format, status: r.success ? "OK" : "FAIL",
       rows: r.rowsRead, cols: r.schema?.columns.length || 0, error: r.error || null,

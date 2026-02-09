@@ -34,7 +34,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DataPreviewSection from "./DataPreviewSection";
 import DatasetSelector from "./DatasetSelector";
-import { ImportJobsModal, BatchImportModal, ImportManifestPanel } from "@/components/import";
+import { ImportJobsModal, BatchImportModal, ImportManifestPanel, AdminManifestDebugModal } from "@/components/import";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useImportPreview } from "@/hooks/useImportPreview";
@@ -682,8 +682,11 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         </div>
       </div>
 
-      {/* ─── View Imports Button ──────────────────────────── */}
-      <div className="flex justify-end">
+      {/* ─── View Imports & Debug Buttons ────────────────── */}
+      <div className="flex justify-end gap-2">
+        {projectData.id && (
+          <AdminManifestDebugModal projectId={projectData.id} />
+        )}
         <Button
           variant="outline"
           size="sm"
@@ -1222,8 +1225,8 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
         </div>
       )}
 
-      {/* ═══ IMPORT MANIFEST ════════════════════════════════ */}
-      {projectData.id && uploadStatus === "success" && (
+      {/* ═══ IMPORT MANIFEST (always visible if project exists) ════ */}
+      {projectData.id && (
         <ImportManifestPanel projectId={projectData.id} />
       )}
 
