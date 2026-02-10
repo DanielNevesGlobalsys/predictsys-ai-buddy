@@ -28,6 +28,55 @@ export interface IndustryInference {
   evidence: string[];
 }
 
+// ── ModelingContract types (v3) ──
+
+export interface TargetDefinition {
+  type: "event" | "state_to_event";
+  base_column: string;
+  derived_target: string;
+  window_days: number | null;
+  problem_type: "binary" | "class" | "regression";
+  confidence: number;
+  business_summary: string;
+  why_this_target: string;
+  caveats: string[];
+  notes: string;
+}
+
+export interface BlockedFeature {
+  col: string;
+  reason: string;
+}
+
+export interface LeakageFlag {
+  col: string;
+  reason: string;
+}
+
+export type ColumnRole =
+  | "ID_TECNICO"
+  | "TEMPO"
+  | "DIMENSAO_NEGOCIO"
+  | "MEDIDA_NUMERICA"
+  | "CATEGORICA"
+  | "TEXTO"
+  | "TARGET_CANDIDATO_EVENTO"
+  | "TARGET_CANDIDATO_ESTADO"
+  | "DERIVADA_LEAKAGE"
+  | "DESCONHECIDO";
+
+export interface ModelingContract {
+  anchor_time_col: string | null;
+  entity_key: string[] | null;
+  target_definition: TargetDefinition;
+  split_strategy: "temporal" | "stratified" | "random";
+  features_final: string[];
+  features_blocked: BlockedFeature[];
+  leakage_flags: LeakageFlag[];
+  column_roles: Record<string, ColumnRole>;
+  dashboard_gold_schema: string[];
+}
+
 export interface ProblemInference {
   id?: string;
   project_id: string;
@@ -61,6 +110,11 @@ function parseIndustryFromLabels(labels: ProblemLabel[]): IndustryInference | nu
 
 export function useProblemInference(projectId: string | undefined) {
   const [inference, setInference] = useState<ProblemInference | null>(null);
+  const [modelingContract, setModelingContract] = useState<ModelingContract | null>(null);
+  const [contractStatus, setContractStatus] = useState<"APPROVED" | "BLOCKED" | null>(null);
+  const [justification, setJustification] = useState<string[]>([]);
+  const [removedAndWhy, setRemovedAndWhy] = useState<BlockedFeature[]>([]);
+  const [nextStep, setNextStep] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const loadingRef = useRef(false);
@@ -96,17 +150,22 @@ export function useProblemInference(projectId: string | undefined) {
 
         const result = data?.inference as ProblemInference | null;
         const industryFromResponse = data?.industry as IndustryInference | undefined;
+        const contractFromResponse = data?.modeling_contract as ModelingContract | undefined;
+
+        // Set contract-related state
+        setModelingContract(contractFromResponse || null);
+        setContractStatus(data?.contract_status || null);
+        setJustification(data?.justification || []);
+        setRemovedAndWhy(data?.removed_and_why || []);
+        setNextStep(data?.next_step || null);
 
         if (result) {
           const allLabels = Array.isArray(result.suggested_problem_labels)
             ? result.suggested_problem_labels
             : [];
 
-          // Extract industry from __industry: label or from response
           const industryFromLabels = parseIndustryFromLabels(allLabels);
           const industry = industryFromResponse || industryFromLabels || undefined;
-
-          // Filter out internal __industry labels
           const cleanLabels = allLabels.filter((l) => !l.label.startsWith("__industry:"));
 
           const parsed: ProblemInference = {
@@ -137,5 +196,15 @@ export function useProblemInference(projectId: string | undefined) {
     [projectId]
   );
 
-  return { inference, loading, error, loadInference };
+  return {
+    inference,
+    modelingContract,
+    contractStatus,
+    justification,
+    removedAndWhy,
+    nextStep,
+    loading,
+    error,
+    loadInference,
+  };
 }

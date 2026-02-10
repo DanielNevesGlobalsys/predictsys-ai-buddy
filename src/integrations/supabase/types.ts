@@ -1483,6 +1483,97 @@ export type Database = {
           },
         ]
       }
+      project_modeling_contracts: {
+        Row: {
+          anchor_time_col: string | null
+          blocked_reasons: Json | null
+          column_roles: Json
+          contract_version: string
+          created_at: string
+          dashboard_gold_schema: Json
+          dataset_id: string | null
+          entity_key: Json | null
+          features_blocked: Json
+          features_final: Json
+          full_contract: Json
+          id: string
+          justification: string[] | null
+          leakage_flags: Json
+          organization_id: string
+          project_id: string
+          split_strategy: string
+          status: string
+          target_definition: Json
+          updated_at: string
+        }
+        Insert: {
+          anchor_time_col?: string | null
+          blocked_reasons?: Json | null
+          column_roles?: Json
+          contract_version?: string
+          created_at?: string
+          dashboard_gold_schema?: Json
+          dataset_id?: string | null
+          entity_key?: Json | null
+          features_blocked?: Json
+          features_final?: Json
+          full_contract: Json
+          id?: string
+          justification?: string[] | null
+          leakage_flags?: Json
+          organization_id: string
+          project_id: string
+          split_strategy?: string
+          status?: string
+          target_definition: Json
+          updated_at?: string
+        }
+        Update: {
+          anchor_time_col?: string | null
+          blocked_reasons?: Json | null
+          column_roles?: Json
+          contract_version?: string
+          created_at?: string
+          dashboard_gold_schema?: Json
+          dataset_id?: string | null
+          entity_key?: Json | null
+          features_blocked?: Json
+          features_final?: Json
+          full_contract?: Json
+          id?: string
+          justification?: string[] | null
+          leakage_flags?: Json
+          organization_id?: string
+          project_id?: string
+          split_strategy?: string
+          status?: string
+          target_definition?: Json
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_modeling_contracts_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_modeling_contracts_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_modeling_contracts_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_models: {
         Row: {
           algorithm_name: string
