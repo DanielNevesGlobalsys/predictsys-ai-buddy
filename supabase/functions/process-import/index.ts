@@ -1655,6 +1655,108 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     }
   }
 
+  // ─── Phase 5b: Real JOIN for small files (anchor_enrichment) ──
+  const JOIN_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB total
+  if (
+    targetAnchor?.strategy === "anchor_enrichment" &&
+    entityKeyCandidates.length > 0 &&
+    totalFileSizeBytes <= JOIN_SIZE_LIMIT &&
+    successSchemas.length > 1
+  ) {
+    const bestKey = entityKeyCandidates[0];
+    const keyCol = bestKey.column;
+    const normKey = normalizeColumnName(keyCol);
+
+    // Check the key exists in anchor + at least one aux file
+    const anchorSchema = successSchemas[targetAnchor.anchorFileIndex];
+    const anchorHasKey = anchorSchema?.columns.some(c => normalizeColumnName(c) === normKey);
+
+    if (anchorHasKey) {
+      console.log(`[process-import] Attempting real JOIN: key="${keyCol}", anchor="${targetAnchor.anchorFileName}"`);
+
+      try {
+        // Build anchor index: key_value → row_index in allSampleRows
+        // First, figure out which sample rows belong to the anchor
+        let anchorStartIdx = 0;
+        for (let i = 0; i < targetAnchor.anchorFileIndex; i++) {
+          const schema = successSchemas[i];
+          const budget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
+          anchorStartIdx += Math.min(budget, schema.sampleRows.length);
+        }
+        const anchorBudget = Math.max(10, Math.ceil((anchorSchema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
+        const anchorEndIdx = Math.min(anchorStartIdx + anchorBudget, allSampleRows.length);
+
+        // Build lookup from anchor rows
+        const anchorKeyMap = new Map<string, number>();
+        for (let ri = anchorStartIdx; ri < anchorEndIdx; ri++) {
+          const row = allSampleRows[ri];
+          const kv = String(row[keyCol] ?? "").trim();
+          if (kv && kv !== "0" && kv !== "missing") {
+            anchorKeyMap.set(kv, ri);
+          }
+        }
+
+        if (anchorKeyMap.size > 0) {
+          let joinedCount = 0;
+
+          // For each non-anchor file's sample rows, try to enrich anchor rows
+          let auxStartIdx = 0;
+          for (let fi = 0; fi < successSchemas.length; fi++) {
+            const schema = successSchemas[fi];
+            const budget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
+            const auxEndIdx = Math.min(auxStartIdx + budget, allSampleRows.length);
+
+            if (fi !== targetAnchor.anchorFileIndex) {
+              const auxHasKey = schema.columns.some(c => normalizeColumnName(c) === normKey);
+              if (auxHasKey) {
+                // Get columns that are unique to this aux file (not in anchor)
+                const anchorNormCols = new Set(anchorSchema.columns.map(c => normalizeColumnName(c)));
+                const auxOnlyCols = canonical.columns.filter(c => {
+                  const norm = normalizeColumnName(c);
+                  return !anchorNormCols.has(norm) && norm !== normKey;
+                });
+
+                if (auxOnlyCols.length > 0) {
+                  for (let ri = auxStartIdx; ri < auxEndIdx; ri++) {
+                    const auxRow = allSampleRows[ri];
+                    if (!auxRow) continue;
+                    const kv = String(auxRow[keyCol] ?? "").trim();
+                    if (kv && anchorKeyMap.has(kv)) {
+                      const anchorIdx = anchorKeyMap.get(kv)!;
+                      // LEFT JOIN: enrich anchor row with aux-only columns
+                      for (const col of auxOnlyCols) {
+                        const val = auxRow[col];
+                        if (val !== null && val !== undefined && val !== 0 && val !== "missing") {
+                          allSampleRows[anchorIdx][col] = val;
+                          joinedCount++;
+                        }
+                      }
+                    }
+                  }
+                  console.log(`[process-import] JOIN enriched ${joinedCount} cells from "${successFileNames[fi]}" into anchor`);
+                }
+              }
+            }
+            auxStartIdx = auxEndIdx;
+          }
+
+          if (joinedCount > 0) {
+            // Update metadata to reflect join was applied
+            if (targetAnchor) {
+              (targetAnchor as any).joinApplied = true;
+              (targetAnchor as any).joinKey = keyCol;
+              (targetAnchor as any).joinedCells = joinedCount;
+            }
+            console.log(`[process-import] Real JOIN completed: ${joinedCount} cells enriched via key "${keyCol}"`);
+          }
+        }
+      } catch (joinErr) {
+        console.warn(`[process-import] JOIN failed (non-fatal):`, joinErr instanceof Error ? joinErr.message : joinErr);
+        // Non-fatal — continue with union-only approach
+      }
+    }
+  }
+
   // ─── Save canonical columns ────────────────────────────────
   await supabase.from("project_columns").delete().eq("project_id", primaryJob.project_id);
   const columnInserts = canonical.columns.map((name, index) => ({
@@ -1692,6 +1794,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
         target_column: targetAnchor.targetColumn,
         target_presence: targetAnchor.targetPresence,
         warnings: targetAnchor.warnings,
+        joinApplied: (targetAnchor as any).joinApplied || false,
+        joinKey: (targetAnchor as any).joinKey || null,
+        joinedCells: (targetAnchor as any).joinedCells || 0,
       } : null,
       imputation_applied: true,
     },
