@@ -21,6 +21,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { format } from "date-fns";
+import { toast } from "sonner";
 
 interface ExportJob {
   id: string;
@@ -44,6 +45,7 @@ export function ExportJobsModal({ open, onOpenChange, projectId }: ExportJobsMod
   const { t } = useTranslation();
   const [jobs, setJobs] = useState<ExportJob[]>([]);
   const [loading, setLoading] = useState(false);
+  const [downloadingJobId, setDownloadingJobId] = useState<string | null>(null);
 
   const fetchJobs = async () => {
     setLoading(true);
@@ -67,18 +69,56 @@ export function ExportJobsModal({ open, onOpenChange, projectId }: ExportJobsMod
   useEffect(() => {
     if (open && projectId) {
       fetchJobs();
-      // Poll for updates while modal is open
       const interval = setInterval(fetchJobs, 5000);
       return () => clearInterval(interval);
     }
   }, [open, projectId]);
 
+  // ── Direct download via signed URL ────────────────────────────
+  const handleDirectDownload = async (job: ExportJob) => {
+    setDownloadingJobId(job.id);
+    try {
+      const { data, error } = await supabase.functions.invoke('get-signed-download-url', {
+        body: { export_job_id: job.id },
+      });
+
+      if (error) throw error;
+
+      if (data?.signed_url) {
+        // Open signed URL directly — browser handles the download
+        window.open(data.signed_url, "_blank");
+
+        if (data.signed_url_generation_ms) {
+          console.log(
+            `[download] direct_storage | signed_url generated in ${data.signed_url_generation_ms}ms`
+          );
+        }
+      } else {
+        throw new Error(data?.error || "Falha ao gerar URL de download");
+      }
+    } catch (err: any) {
+      console.error("Direct download failed, falling back to stored URL:", err);
+
+      // Fallback: use the pre-stored file_url (old behavior)
+      if (job.file_url) {
+        window.open(job.file_url, "_blank");
+        console.log("[download] api_proxy (fallback) | reason:", err.message);
+      } else {
+        toast.error("Download falhou", {
+          description: err.message || "Não foi possível gerar o link de download.",
+        });
+      }
+    } finally {
+      setDownloadingJobId(null);
+    }
+  };
+
   const getStatusIcon = (status: string) => {
     switch (status) {
       case 'completed':
-        return <CheckCircle className="h-4 w-4 text-green-500" />;
+        return <CheckCircle className="h-4 w-4 text-accent" />;
       case 'running':
-        return <Loader2 className="h-4 w-4 text-blue-500 animate-spin" />;
+        return <Loader2 className="h-4 w-4 text-primary animate-spin" />;
       case 'failed':
         return <AlertCircle className="h-4 w-4 text-destructive" />;
       default:
@@ -172,16 +212,19 @@ export function ExportJobsModal({ open, onOpenChange, projectId }: ExportJobsMod
                       </div>
                     </div>
 
-                    {job.status === 'completed' && job.file_url && (
+                    {job.status === 'completed' && (
                       <Button
                         variant="outline"
                         size="sm"
-                        asChild
+                        onClick={() => handleDirectDownload(job)}
+                        disabled={downloadingJobId === job.id}
                       >
-                        <a href={job.file_url} download>
+                        {downloadingJobId === job.id ? (
+                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                        ) : (
                           <Download className="h-4 w-4 mr-1" />
-                          {t('export.download')}
-                        </a>
+                        )}
+                        {t('export.download')}
                       </Button>
                     )}
 
