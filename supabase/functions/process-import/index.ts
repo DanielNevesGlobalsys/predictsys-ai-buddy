@@ -1296,6 +1296,9 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const totalSampleBudget = SAMPLE_SIZE;
   const totalSuccessRows = successSchemas.reduce((s, sc) => s + sc.totalRows, 0);
 
+  // Threshold: skip storage copy for files larger than 20MB to avoid CPU timeout
+  const COPY_SIZE_LIMIT = 20 * 1024 * 1024;
+
   for (let i = 0; i < successResults.length; i++) {
     const result = successResults[i];
     const schema = result.schema!;
@@ -1313,26 +1316,34 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     }
 
     totalRowsConsolidated += schema.totalRows;
+    totalFileSizeBytes += job.file_size_bytes;
 
-    // Copy file to datasets bucket
-    const sanitizedName = sanitizeFileName(job.file_name);
-    const destPath = `${batchFolder}/${sanitizedName}`;
-
-    try {
-      const { error: copyError } = await supabase.storage
-        .from("big_imports").copy(job.storage_path, destPath, { destinationBucket: "datasets" });
-      if (copyError && !copyError.message?.includes("already exists")) throw copyError;
-
-      processedFilePaths.push(destPath);
-      totalFileSizeBytes += job.file_size_bytes;
-
+    // For large files, skip the expensive storage copy and reference original path directly
+    if (job.file_size_bytes > COPY_SIZE_LIMIT) {
+      processedFilePaths.push(job.storage_path);
       await completeJob(supabase, job.id, schema.totalRows, null);
-      console.log(`[process-import] ✓ Copied ${job.file_name} → datasets/${destPath}`);
-    } catch (copyErr: any) {
-      const errMsg = copyErr?.message || "Falha ao copiar arquivo.";
-      console.warn(`[process-import] Copy failed for ${job.file_name}:`, errMsg);
-      failedResults.push({ ...result, success: false, error: errMsg });
-      await updateJobError(supabase, job.id, errMsg);
+      console.log(`[process-import] ✓ Referenced ${job.file_name} in-place (${(job.file_size_bytes / 1024 / 1024).toFixed(1)} MB > copy limit)`);
+    } else {
+      // Copy small files to datasets bucket
+      const sanitizedName = sanitizeFileName(job.file_name);
+      const destPath = `${batchFolder}/${sanitizedName}`;
+
+      try {
+        const { error: copyError } = await supabase.storage
+          .from("big_imports").copy(job.storage_path, destPath, { destinationBucket: "datasets" });
+        if (copyError && !copyError.message?.includes("already exists")) throw copyError;
+
+        processedFilePaths.push(destPath);
+        await completeJob(supabase, job.id, schema.totalRows, null);
+        console.log(`[process-import] ✓ Copied ${job.file_name} → datasets/${destPath}`);
+      } catch (copyErr: any) {
+        const errMsg = copyErr?.message || "Falha ao copiar arquivo.";
+        console.warn(`[process-import] Copy failed for ${job.file_name}:`, errMsg);
+        // Still mark as success — schema was extracted; just reference original path
+        processedFilePaths.push(job.storage_path);
+        await completeJob(supabase, job.id, schema.totalRows, null);
+        console.log(`[process-import] ⚠ Copy failed, referencing original path for ${job.file_name}`);
+      }
     }
   }
 
