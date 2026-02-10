@@ -35,6 +35,8 @@ import {
   FileText,
   Zap,
   HelpCircle,
+  SearchCheck,
+  Loader2,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -74,11 +76,19 @@ const TEMPORAL_CONFIG: Record<string, { label: string; color: string }> = {
   DESCONHECIDO: { label: "—", color: "text-muted-foreground" },
 };
 
+interface VerificationResult {
+  total: number;
+  projectId: string;
+  latestCreatedAt: string | null;
+}
+
 const ColumnInferenceMatrix = ({ projectId, onDataLoaded }: ColumnInferenceMatrixProps) => {
   const { t } = useTranslation();
   const [data, setData] = useState<ColumnInferenceRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [isOpen, setIsOpen] = useState(false);
+  const [verification, setVerification] = useState<VerificationResult | null>(null);
+  const [verifying, setVerifying] = useState(false);
 
   useEffect(() => {
     loadData();
@@ -106,11 +116,83 @@ const ColumnInferenceMatrix = ({ projectId, onDataLoaded }: ColumnInferenceMatri
       }));
       setData(mapped);
       onDataLoaded?.(mapped);
+    } else {
+      setData([]);
+      onDataLoaded?.([]);
     }
     setLoading(false);
   };
 
-  if (loading || data.length === 0) return null;
+  const handleVerify = async () => {
+    setVerifying(true);
+    const { data: rows, error } = await supabase
+      .from("project_column_inference")
+      .select("id, created_at")
+      .eq("project_id", projectId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    const { count } = await supabase
+      .from("project_column_inference")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectId);
+
+    setVerification({
+      total: count || 0,
+      projectId,
+      latestCreatedAt: rows && rows.length > 0 ? rows[0].created_at : null,
+    });
+    setVerifying(false);
+  };
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 p-4 border border-border rounded-xl bg-muted/30">
+        <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+        <span className="text-sm text-muted-foreground">
+          {t("columnInference.loading", "Carregando matriz de inferência…")}
+        </span>
+      </div>
+    );
+  }
+
+  // Empty state with verification button
+  if (data.length === 0) {
+    return (
+      <div className="p-4 border border-border rounded-xl bg-muted/20 space-y-3">
+        <div className="flex items-center gap-2">
+          <BarChart3 className="w-5 h-5 text-muted-foreground" />
+          <span className="font-semibold text-sm text-muted-foreground">
+            {t("columnInference.title", "📊 Inferência por Coluna")}
+          </span>
+          <Badge variant="outline" className="text-xs">
+            {t("columnInference.noData", "Sem dados ainda")}
+          </Badge>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {t("columnInference.noDataDesc", "A matriz de inferência será preenchida automaticamente ao executar a análise do problema. Clique em \"Reanalisar\" no painel de inferência acima.")}
+        </p>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={handleVerify} disabled={verifying}>
+            {verifying ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <SearchCheck className="w-3 h-3 mr-1" />}
+            {t("columnInference.verify", "Verificar Matriz de Inferência")}
+          </Button>
+        </div>
+        {verification && (
+          <div className="text-xs p-2 bg-background border border-border rounded-lg space-y-1">
+            <p><strong>project_id:</strong> <code className="text-xs">{verification.projectId}</code></p>
+            <p><strong>Total de linhas:</strong> {verification.total}</p>
+            <p><strong>Última atualização:</strong> {verification.latestCreatedAt ? new Date(verification.latestCreatedAt).toLocaleString() : "—"}</p>
+            {verification.total === 0 && (
+              <p className="text-amber-600 dark:text-amber-400 font-medium mt-1">
+                ⚠️ Ainda não há inferência persistida. Clique em "Reanalisar" no painel acima.
+              </p>
+            )}
+          </div>
+        )}
+      </div>
+    );
+  }
 
   const targetCount = data.filter(d => d.can_be_target).length;
   const featureCount = data.filter(d => d.can_be_feature).length;
@@ -147,138 +229,152 @@ const ColumnInferenceMatrix = ({ projectId, onDataLoaded }: ColumnInferenceMatri
         </Button>
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <div className="mt-2 border border-border rounded-xl overflow-hidden">
-          <div className="max-h-[400px] overflow-auto">
-            <TooltipProvider delayDuration={200}>
-              <Table>
-                <TableHeader>
-                  <TableRow className="bg-muted/50">
-                    <TableHead className="text-xs font-semibold min-w-[140px]">
-                      {t("columnInference.columnName", "Coluna")}
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold">
-                      {t("columnInference.type", "Tipo")}
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold">
-                      {t("columnInference.semanticRole", "Papel Semântico")}
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold">
-                      {t("columnInference.temporalRole", "Temporal")}
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold text-center">
-                      Target?
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold text-center">
-                      Feature?
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold text-center">
-                      {t("columnInference.confidence", "Conf.")}
-                    </TableHead>
-                    <TableHead className="text-xs font-semibold">
-                      {t("columnInference.blockReason", "Motivo bloqueio")}
-                    </TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {data.map((row) => {
-                    const roleConfig = ROLE_CONFIG[row.semantic_role] || ROLE_CONFIG.DESCONHECIDO;
-                    const temporalConfig = TEMPORAL_CONFIG[row.temporal_role] || TEMPORAL_CONFIG.DESCONHECIDO;
-                    const hasBlocks = row.block_reasons.length > 0;
+        <div className="mt-2 space-y-2">
+          {/* Verification button */}
+          <div className="flex justify-end">
+            <Button variant="ghost" size="sm" onClick={handleVerify} disabled={verifying} className="text-xs">
+              {verifying ? <Loader2 className="w-3 h-3 animate-spin mr-1" /> : <SearchCheck className="w-3 h-3 mr-1" />}
+              {t("columnInference.verify", "Verificar Matriz")}
+            </Button>
+          </div>
+          {verification && (
+            <div className="text-xs p-2 bg-muted/30 border border-border rounded-lg space-y-1">
+              <p><strong>Total:</strong> {verification.total} linhas | <strong>Atualizado:</strong> {verification.latestCreatedAt ? new Date(verification.latestCreatedAt).toLocaleString() : "—"}</p>
+            </div>
+          )}
+          <div className="border border-border rounded-xl overflow-hidden">
+            <div className="max-h-[400px] overflow-auto">
+              <TooltipProvider delayDuration={200}>
+                <Table>
+                  <TableHeader>
+                    <TableRow className="bg-muted/50">
+                      <TableHead className="text-xs font-semibold min-w-[140px]">
+                        {t("columnInference.columnName", "Coluna")}
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold">
+                        {t("columnInference.type", "Tipo")}
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold">
+                        {t("columnInference.semanticRole", "Papel Semântico")}
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold">
+                        {t("columnInference.temporalRole", "Temporal")}
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold text-center">
+                        Target?
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold text-center">
+                        Feature?
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold text-center">
+                        {t("columnInference.confidence", "Conf.")}
+                      </TableHead>
+                      <TableHead className="text-xs font-semibold">
+                        {t("columnInference.blockReason", "Motivo bloqueio")}
+                      </TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {data.map((row) => {
+                      const roleConfig = ROLE_CONFIG[row.semantic_role] || ROLE_CONFIG.DESCONHECIDO;
+                      const temporalConfig = TEMPORAL_CONFIG[row.temporal_role] || TEMPORAL_CONFIG.DESCONHECIDO;
+                      const hasBlocks = row.block_reasons.length > 0;
 
-                    return (
-                      <TableRow
-                        key={row.column_name}
-                        className={hasBlocks ? "bg-destructive/5" : ""}
-                      >
-                        <TableCell className="font-mono text-xs py-2">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <span className="cursor-help">{row.column_name}</span>
-                            </TooltipTrigger>
-                            <TooltipContent side="right" className="max-w-xs">
-                              <div className="space-y-1">
-                                <p className="font-semibold text-xs">{row.column_name}</p>
-                                {row.classification_reasons.map((r, i) => (
-                                  <p key={i} className="text-xs text-muted-foreground">• {r}</p>
-                                ))}
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <Badge variant="outline" className="text-xs">
-                            {row.inferred_type}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <Badge className={`text-xs gap-1 ${roleConfig.color}`}>
-                            {roleConfig.icon}
-                            {roleConfig.label}
-                          </Badge>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <span className={`text-xs font-medium ${temporalConfig.color}`}>
-                            {temporalConfig.label}
-                          </span>
-                        </TableCell>
-                        <TableCell className="py-2 text-center">
-                          {row.can_be_target ? (
-                            <Check className="w-4 h-4 text-accent mx-auto" />
-                          ) : (
-                            <X className="w-4 h-4 text-muted-foreground/40 mx-auto" />
-                          )}
-                        </TableCell>
-                        <TableCell className="py-2 text-center">
-                          {row.can_be_feature ? (
-                            <Check className="w-4 h-4 text-accent mx-auto" />
-                          ) : (
-                            <X className="w-4 h-4 text-muted-foreground/40 mx-auto" />
-                          )}
-                        </TableCell>
-                        <TableCell className="py-2 text-center">
-                          <span className={`text-xs font-medium ${
-                            row.confidence_score >= 0.8 ? "text-accent" :
-                            row.confidence_score >= 0.5 ? "text-secondary" :
-                            "text-muted-foreground"
-                          }`}>
-                            {(row.confidence_score * 100).toFixed(0)}%
-                          </span>
-                        </TableCell>
-                        <TableCell className="py-2">
-                          {hasBlocks ? (
+                      return (
+                        <TableRow
+                          key={row.column_name}
+                          className={hasBlocks ? "bg-destructive/5" : ""}
+                        >
+                          <TableCell className="font-mono text-xs py-2">
                             <Tooltip>
                               <TooltipTrigger asChild>
-                                <div className="flex items-center gap-1 cursor-help">
-                                  <AlertTriangle className="w-3 h-3 text-destructive flex-shrink-0" />
-                                  <span className="text-xs text-destructive truncate max-w-[150px]">
-                                    {row.block_reasons[0]}
-                                  </span>
-                                  {row.block_reasons.length > 1 && (
-                                    <Badge variant="destructive" className="text-xs">
-                                      +{row.block_reasons.length - 1}
-                                    </Badge>
-                                  )}
-                                </div>
+                                <span className="cursor-help">{row.column_name}</span>
                               </TooltipTrigger>
-                              <TooltipContent side="left" className="max-w-xs">
+                              <TooltipContent side="right" className="max-w-xs">
                                 <div className="space-y-1">
-                                  <p className="font-semibold text-xs">Motivos de bloqueio:</p>
-                                  {row.block_reasons.map((r, i) => (
-                                    <p key={i} className="text-xs">• {r}</p>
+                                  <p className="font-semibold text-xs">{row.column_name}</p>
+                                  {row.classification_reasons.map((r, i) => (
+                                    <p key={i} className="text-xs text-muted-foreground">• {r}</p>
                                   ))}
                                 </div>
                               </TooltipContent>
                             </Tooltip>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    );
-                  })}
-                </TableBody>
-              </Table>
-            </TooltipProvider>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <Badge variant="outline" className="text-xs">
+                              {row.inferred_type}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <Badge className={`text-xs gap-1 ${roleConfig.color}`}>
+                              {roleConfig.icon}
+                              {roleConfig.label}
+                            </Badge>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            <span className={`text-xs font-medium ${temporalConfig.color}`}>
+                              {temporalConfig.label}
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-2 text-center">
+                            {row.can_be_target ? (
+                              <Check className="w-4 h-4 text-accent mx-auto" />
+                            ) : (
+                              <X className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                            )}
+                          </TableCell>
+                          <TableCell className="py-2 text-center">
+                            {row.can_be_feature ? (
+                              <Check className="w-4 h-4 text-accent mx-auto" />
+                            ) : (
+                              <X className="w-4 h-4 text-muted-foreground/40 mx-auto" />
+                            )}
+                          </TableCell>
+                          <TableCell className="py-2 text-center">
+                            <span className={`text-xs font-medium ${
+                              row.confidence_score >= 0.8 ? "text-accent" :
+                              row.confidence_score >= 0.5 ? "text-secondary" :
+                              "text-muted-foreground"
+                            }`}>
+                              {(row.confidence_score * 100).toFixed(0)}%
+                            </span>
+                          </TableCell>
+                          <TableCell className="py-2">
+                            {hasBlocks ? (
+                              <Tooltip>
+                                <TooltipTrigger asChild>
+                                  <div className="flex items-center gap-1 cursor-help">
+                                    <AlertTriangle className="w-3 h-3 text-destructive flex-shrink-0" />
+                                    <span className="text-xs text-destructive truncate max-w-[150px]">
+                                      {row.block_reasons[0]}
+                                    </span>
+                                    {row.block_reasons.length > 1 && (
+                                      <Badge variant="destructive" className="text-xs">
+                                        +{row.block_reasons.length - 1}
+                                      </Badge>
+                                    )}
+                                  </div>
+                                </TooltipTrigger>
+                                <TooltipContent side="left" className="max-w-xs">
+                                  <div className="space-y-1">
+                                    <p className="font-semibold text-xs">Motivos de bloqueio:</p>
+                                    {row.block_reasons.map((r, i) => (
+                                      <p key={i} className="text-xs">• {r}</p>
+                                    ))}
+                                  </div>
+                                </TooltipContent>
+                              </Tooltip>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                  </TableBody>
+                </Table>
+              </TooltipProvider>
+            </div>
           </div>
         </div>
       </CollapsibleContent>
