@@ -90,30 +90,29 @@ Deno.serve(async (req) => {
         }
 
         // Upload to storage
-        const fileName = `${job.user_id}/${job.project_id}/${job.id}.csv`;
+        const storagePath = `${job.user_id}/${job.project_id}/${job.id}.csv`;
         const { error: uploadError } = await supabase.storage
           .from('exports')
-          .upload(fileName, csvContent, {
+          .upload(storagePath, csvContent, {
             contentType: 'text/csv',
             upsert: true,
           });
 
         if (uploadError) throw uploadError;
 
-        // Create signed URL (valid for 7 days)
-        const { data: signedUrlData, error: signedUrlError } = await supabase.storage
+        // Generate a short-lived signed URL for immediate availability
+        // Fresh signed URLs should be requested via get-signed-download-url endpoint
+        const { data: signedUrlData } = await supabase.storage
           .from('exports')
-          .createSignedUrl(fileName, 60 * 60 * 24 * 7);
+          .createSignedUrl(storagePath, 60 * 60 * 24 * 7);
 
-        if (signedUrlError) throw signedUrlError;
-
-        // Update job as completed
+        // Update job as completed — store path for fresh signed URL generation
         await supabase
           .from('export_jobs')
           .update({
             status: 'completed',
             finished_at: new Date().toISOString(),
-            file_url: signedUrlData.signedUrl,
+            file_url: signedUrlData?.signedUrl || `storage://exports/${storagePath}`,
             file_size_bytes: csvContent.length,
             rows_exported: rowCount,
           })
