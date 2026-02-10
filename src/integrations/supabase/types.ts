@@ -1043,6 +1043,59 @@ export type Database = {
           },
         ]
       }
+      project_column_inference: {
+        Row: {
+          block_reasons: string[]
+          can_be_feature: boolean
+          can_be_target: boolean
+          classification_reasons: string[]
+          column_name: string
+          confidence_score: number
+          created_at: string
+          id: string
+          inferred_type: string
+          project_id: string
+          semantic_role: string
+          temporal_role: string
+        }
+        Insert: {
+          block_reasons?: string[]
+          can_be_feature?: boolean
+          can_be_target?: boolean
+          classification_reasons?: string[]
+          column_name: string
+          confidence_score?: number
+          created_at?: string
+          id?: string
+          inferred_type?: string
+          project_id: string
+          semantic_role?: string
+          temporal_role?: string
+        }
+        Update: {
+          block_reasons?: string[]
+          can_be_feature?: boolean
+          can_be_target?: boolean
+          classification_reasons?: string[]
+          column_name?: string
+          confidence_score?: number
+          created_at?: string
+          id?: string
+          inferred_type?: string
+          project_id?: string
+          semantic_role?: string
+          temporal_role?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_column_inference_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_columns: {
         Row: {
           column_index: number
