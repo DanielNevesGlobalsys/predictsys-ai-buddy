@@ -112,15 +112,20 @@ function generateSchemaHash(columns: string[]): string {
 // ═══════════════════════════════════════════════════════════
 // Column Name Normalization (accents, spaces, special chars)
 // ═══════════════════════════════════════════════════════════
+const _normalizeCache = new Map<string, string>();
 function normalizeColumnName(name: string): string {
-  return name
+  const cached = _normalizeCache.get(name);
+  if (cached !== undefined) return cached;
+  const result = name
     .trim()
     .toLowerCase()
-    .normalize("NFD").replace(/[\u0300-\u036f]/g, "") // remove accents
-    .replace(/\s+/g, "_")                              // spaces → _
-    .replace(/[^a-z0-9_]/g, "")                        // remove special chars
-    .replace(/_+/g, "_")                               // collapse underscores
-    .replace(/^_|_$/g, "");                             // trim underscores
+    .normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .replace(/_+/g, "_")
+    .replace(/^_|_$/g, "");
+  _normalizeCache.set(name, result);
+  return result;
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -563,6 +568,7 @@ async function extractSchemaCSV(
           lastProgressUpdate = Date.now();
         }
 
+        // Stop reading after collecting enough samples — estimate remaining from bytes
         if (sampleRows.length >= SAMPLE_SIZE) break;
       }
 
@@ -995,47 +1001,37 @@ function normalizeToSchema(
   canonicalColumns: string[],
   canonicalTypes?: Record<string, string>,
 ): Record<string, unknown>[] {
-  // Build mapping: canonical normalized → file column
+  // Pre-compute mapping: canonical column → source file column (once, not per row)
   const fileColMap = new Map<string, string>();
   for (const col of fileColumns) {
     fileColMap.set(normalizeColumnName(col), col);
   }
-
-  // Build canonical normalized map
   const canonNormMap = new Map<string, string>();
   for (const col of canonicalColumns) {
     canonNormMap.set(normalizeColumnName(col), col);
   }
 
+  // Pre-compute the resolved source column for each canonical column
+  const resolvedMap: { canonCol: string; sourceCol: string | null; imputeValue: unknown }[] = [];
+  for (const canonCol of canonicalColumns) {
+    const normKey = normalizeColumnName(canonCol);
+    let sourceCol: string | null = fileColMap.get(normKey) ?? null;
+    if (!sourceCol) {
+      const equivKey = findEquivalentCanonical(normKey, canonNormMap);
+      if (equivKey) sourceCol = fileColMap.get(equivKey) ?? null;
+    }
+    const colType = canonicalTypes?.[canonCol] || "texto";
+    const imputeValue = colType === "numérico" ? 0 : "missing";
+    resolvedMap.push({ canonCol, sourceCol, imputeValue });
+  }
+
   return sampleRows.map(row => {
     const normalized: Record<string, unknown> = {};
-    for (const canonCol of canonicalColumns) {
-      const normKey = normalizeColumnName(canonCol);
-      const fileCol = fileColMap.get(normKey);
-
-      let value: unknown = null;
-
-      if (fileCol) {
-        value = row[fileCol] ?? null;
-      } else {
-        // Try equivalence
-        const equivKey = findEquivalentCanonical(normKey, canonNormMap);
-        if (equivKey) {
-          const eqFileCol = fileColMap.get(equivKey);
-          value = eqFileCol ? (row[eqFileCol] ?? null) : null;
-        }
-      }
-
-      // Missing feature imputation: 0 for numeric, "missing" for categorical
+    for (const { canonCol, sourceCol, imputeValue } of resolvedMap) {
+      let value: unknown = sourceCol ? (row[sourceCol] ?? null) : null;
       if (value === null || value === undefined || String(value).trim() === "") {
-        const colType = canonicalTypes?.[canonCol] || "texto";
-        if (colType === "numérico") {
-          value = 0;
-        } else {
-          value = "missing";
-        }
+        value = imputeValue;
       }
-
       normalized[canonCol] = value;
     }
     return normalized;
@@ -1539,8 +1535,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
 
-  // Proportional sample allocation
-  const totalSampleBudget = SAMPLE_SIZE;
+  // Reduce sample budget for large batches to avoid CPU timeout
+  const totalSampleBudget = successSchemas.length >= 3 ? 3000 : SAMPLE_SIZE;
   const totalSuccessRows = successSchemas.reduce((s, sc) => s + sc.totalRows, 0);
 
   // Threshold: skip storage copy for files larger than 20MB to avoid CPU timeout
