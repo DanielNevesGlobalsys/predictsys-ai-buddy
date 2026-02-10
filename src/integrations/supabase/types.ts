@@ -2003,6 +2003,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
+      calculate_dashboard_kpis: {
+        Args: { p_horizon?: number; p_project_id: string }
+        Returns: Json
+      }
       calculate_time_to_value: {
         Args: {
           p_date_from?: string
