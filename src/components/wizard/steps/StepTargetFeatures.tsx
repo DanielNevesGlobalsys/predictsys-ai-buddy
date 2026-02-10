@@ -12,8 +12,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import TargetPresenceScan from "./TargetPresenceScan";
+import ColumnInferenceMatrix, { type ColumnInferenceRow } from "./ColumnInferenceMatrix";
+import BlockedTargetCandidates from "./BlockedTargetCandidates";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
@@ -59,6 +67,10 @@ const StepTargetFeatures = ({
   const [excludedColumns, setExcludedColumns] = useState<string[]>([]);
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
+
+  // Column inference matrix data
+  const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
+  const columnInferenceMap = useRef(new Map<string, ColumnInferenceRow>());
 
   // Inference panel
   const [appliedTargetColumn, setAppliedTargetColumn] = useState<string | null>(null);
@@ -394,6 +406,24 @@ const StepTargetFeatures = ({
           hasEDA={hasEDA}
         />
 
+        {/* Column Inference Matrix (collapsible) */}
+        {projectData.id && (
+          <ColumnInferenceMatrix
+            projectId={projectData.id}
+            onDataLoaded={(data) => {
+              setColumnInference(data);
+              const map = new Map<string, ColumnInferenceRow>();
+              data.forEach((d) => map.set(d.column_name, d));
+              columnInferenceMap.current = map;
+            }}
+          />
+        )}
+
+        {/* Blocked target candidates */}
+        {columnInference.length > 0 && (
+          <BlockedTargetCandidates columnInference={columnInference} />
+        )}
+
         {/* Inferred problem type badge */}
         {inferredProblemType && (
           <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
@@ -431,16 +461,52 @@ const StepTargetFeatures = ({
                 <SelectValue placeholder={t("stepVariables.selectTarget")} />
               </SelectTrigger>
               <SelectContent className="bg-popover border border-border shadow-lg z-50">
-                {columns.map((col) => (
-                  <SelectItem key={col.name} value={col.name}>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{col.name}</span>
-                      <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
-                        {col.type}
-                      </span>
-                    </div>
-                  </SelectItem>
-                ))}
+                {columns.map((col) => {
+                  const inf = columnInferenceMap.current.get(col.name);
+                  const isBlocked = inf && !inf.can_be_target && inf.block_reasons.length > 0;
+                  const roleBadge = inf?.semantic_role;
+                  const ROLE_SHORT: Record<string, string> = {
+                    ID_TECNICO: "ID", TEMPO: "TEMPO", DIMENSAO_NEGOCIO: "DIM",
+                    MEDIDA_NUMERICA: "NUM", CATEGORICA: "CAT", TEXTO: "TXT",
+                    TARGET_CANDIDATO_EVENTO: "EVENTO", TARGET_CANDIDATO_ESTADO: "ESTADO",
+                    DERIVADA_LEAKAGE: "LEAKAGE", DESCONHECIDO: "?",
+                  };
+
+                  return (
+                    <SelectItem key={col.name} value={col.name} disabled={isBlocked}>
+                      <div className="flex items-center gap-2">
+                        <span className={`font-medium ${isBlocked ? "text-muted-foreground line-through" : ""}`}>
+                          {col.name}
+                        </span>
+                        <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
+                          {col.type}
+                        </span>
+                        {roleBadge && ROLE_SHORT[roleBadge] && (
+                          <Badge
+                            variant={roleBadge === "DERIVADA_LEAKAGE" ? "destructive" : "outline"}
+                            className="text-xs py-0"
+                          >
+                            {ROLE_SHORT[roleBadge]}
+                          </Badge>
+                        )}
+                        {isBlocked && (
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Ban className="w-3 h-3 text-destructive" />
+                              </TooltipTrigger>
+                              <TooltipContent side="right" className="max-w-xs">
+                                {inf.block_reasons.map((r, i) => (
+                                  <p key={i} className="text-xs">• {r}</p>
+                                ))}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                      </div>
+                    </SelectItem>
+                  );
+                })}
               </SelectContent>
             </Select>
             <p className="text-sm text-muted-foreground">
@@ -470,29 +536,71 @@ const StepTargetFeatures = ({
             {availableFeatures.length > 0 ? (
               <>
                 {/* Original columns first */}
-                {availableFeatures.filter(col => !col.isFeature).map((col) => (
-                  <div
-                    key={col.name}
-                    className="flex items-center justify-between p-3 bg-background rounded-lg hover:bg-muted/50 transition-colors"
-                  >
-                    <div className="flex items-center gap-3">
-                      <Checkbox
-                        id={col.name}
-                        checked={selectedFeatures.includes(col.name)}
-                        onCheckedChange={() => toggleFeature(col.name)}
-                      />
-                      <label
-                        htmlFor={col.name}
-                        className="font-medium cursor-pointer"
-                      >
-                        {col.name}
-                      </label>
+                {availableFeatures.filter(col => !col.isFeature).map((col) => {
+                  const inf = columnInferenceMap.current.get(col.name);
+                  const isBlockedFeature = inf && !inf.can_be_feature && inf.block_reasons.length > 0;
+                  const ROLE_BADGE: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+                    ID_TECNICO: { label: "ID", variant: "outline" },
+                    DERIVADA_LEAKAGE: { label: "LEAKAGE", variant: "destructive" },
+                    TARGET_CANDIDATO_EVENTO: { label: "EVENTO", variant: "secondary" },
+                    TARGET_CANDIDATO_ESTADO: { label: "ESTADO", variant: "secondary" },
+                    TEMPO: { label: "TEMPO", variant: "outline" },
+                  };
+                  const badge = inf ? ROLE_BADGE[inf.semantic_role] : undefined;
+
+                  return (
+                    <div
+                      key={col.name}
+                      className={`flex items-center justify-between p-3 rounded-lg transition-colors ${
+                        isBlockedFeature
+                          ? "bg-destructive/5 border border-destructive/20"
+                          : "bg-background hover:bg-muted/50"
+                      }`}
+                    >
+                      <div className="flex items-center gap-3">
+                        <Checkbox
+                          id={col.name}
+                          checked={selectedFeatures.includes(col.name)}
+                          onCheckedChange={() => toggleFeature(col.name)}
+                          disabled={isBlockedFeature}
+                        />
+                        <label
+                          htmlFor={col.name}
+                          className={`font-medium cursor-pointer ${isBlockedFeature ? "text-muted-foreground line-through" : ""}`}
+                        >
+                          {col.name}
+                        </label>
+                        {badge && (
+                          <Badge variant={badge.variant} className="text-xs py-0">
+                            {badge.label}
+                          </Badge>
+                        )}
+                        {inf?.temporal_role === "POS_EVENTO" && (
+                          <Badge variant="destructive" className="text-xs py-0">PÓS-EVENTO</Badge>
+                        )}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
+                          {col.type}
+                        </span>
+                        {isBlockedFeature && inf && (
+                          <TooltipProvider delayDuration={100}>
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <AlertTriangle className="w-3.5 h-3.5 text-destructive cursor-help" />
+                              </TooltipTrigger>
+                              <TooltipContent side="left" className="max-w-xs">
+                                {inf.block_reasons.map((r, i) => (
+                                  <p key={i} className="text-xs">• {r}</p>
+                                ))}
+                              </TooltipContent>
+                            </Tooltip>
+                          </TooltipProvider>
+                        )}
+                      </div>
                     </div>
-                    <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
-                      {col.type}
-                    </span>
-                  </div>
-                ))}
+                  );
+                })}
 
                 {/* Engineered features section */}
                 {availableFeatures.filter(col => col.isFeature).length > 0 && (
