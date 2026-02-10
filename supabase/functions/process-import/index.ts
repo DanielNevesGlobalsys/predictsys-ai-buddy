@@ -139,6 +139,241 @@ const EQUIVALENCE_GROUPS: string[][] = [
   ["cep", "zip", "zipcode", "zip_code", "codigo_postal"],
 ];
 
+// ═══════════════════════════════════════════════════════════
+// Entity Key Auto-Detection
+// ═══════════════════════════════════════════════════════════
+const ENTITY_KEY_PATTERNS = [
+  /^id$/i, /^id_/i, /_id$/i,
+  /^cod/i, /^codigo/i, /^code/i,
+  /^cpf$/i, /^cnpj$/i, /^rg$/i,
+  /^contrato/i, /^contract/i,
+  /^matricula/i, /^enrollment/i,
+  /^cliente/i, /^customer/i,
+  /^student_id$/i, /^user_id$/i, /^account/i,
+  /^parceiro/i, /^partner/i,
+  /^numero/i, /^num_/i, /^nr_/i,
+  /^chave/i, /^key$/i,
+  /^uuid$/i, /^pk$/i,
+  /^nro_/i, /^registro/i,
+];
+
+interface EntityKeyCandidate {
+  column: string;
+  score: number;
+  reason: string;
+  uniqueRatio: number;
+  filesPresent: number;
+  totalFiles: number;
+}
+
+function detectEntityKeys(
+  canonicalColumns: string[],
+  canonicalTypes: Record<string, string>,
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  allSampleRows: Record<string, unknown>[],
+): EntityKeyCandidate[] {
+  const candidates: EntityKeyCandidate[] = [];
+
+  for (const col of canonicalColumns) {
+    const normalized = normalizeColumnName(col);
+    let score = 0;
+    let reason = "";
+
+    // 1. Name pattern match
+    const matchesPattern = ENTITY_KEY_PATTERNS.some(p => p.test(normalized));
+    if (matchesPattern) {
+      score += 40;
+      reason = "Nome corresponde a padrão de chave. ";
+    }
+
+    // 2. Check uniqueness ratio from sample
+    const values = allSampleRows
+      .map(r => r[col])
+      .filter(v => v !== null && v !== undefined && String(v).trim() !== "");
+    
+    if (values.length === 0) continue;
+
+    const uniqueValues = new Set(values.map(v => String(v)));
+    const uniqueRatio = uniqueValues.size / values.length;
+
+    // High cardinality = more likely a key
+    if (uniqueRatio > 0.8) {
+      score += 30;
+      reason += `Alta cardinalidade (${(uniqueRatio * 100).toFixed(0)}% únicos). `;
+    } else if (uniqueRatio > 0.5) {
+      score += 15;
+      reason += `Cardinalidade moderada (${(uniqueRatio * 100).toFixed(0)}% únicos). `;
+    } else {
+      // Low cardinality = unlikely to be a key
+      continue;
+    }
+
+    // 3. Check presence across files
+    const normCol = normalizeColumnName(col);
+    let filesPresent = 0;
+    for (const schema of fileSchemas) {
+      if (schema.columns.some(c => normalizeColumnName(c) === normCol)) {
+        filesPresent++;
+      }
+    }
+
+    if (filesPresent > 1) {
+      score += 20;
+      reason += `Presente em ${filesPresent}/${fileSchemas.length} arquivos. `;
+    }
+
+    // 4. Type bonus: text/numeric keys
+    const colType = canonicalTypes[col];
+    if (colType === "texto" && uniqueRatio > 0.9) {
+      score += 10;
+      reason += "Texto com alta unicidade. ";
+    }
+
+    if (score >= 40) {
+      candidates.push({
+        column: col,
+        score,
+        reason: reason.trim(),
+        uniqueRatio: Math.round(uniqueRatio * 1000) / 1000,
+        filesPresent,
+        totalFiles: fileSchemas.length,
+      });
+    }
+  }
+
+  return candidates.sort((a, b) => b.score - a.score).slice(0, 5);
+}
+
+// ═══════════════════════════════════════════════════════════
+// Target Anchor Detection
+// ═══════════════════════════════════════════════════════════
+interface TargetAnchorResult {
+  anchorFileIndex: number;
+  anchorFileName: string;
+  targetColumn: string | null;
+  targetPresence: { fileName: string; hasTarget: boolean; nullRate: number; rowCount: number }[];
+  strategy: "union" | "anchor_enrichment";
+  strategyReason: string;
+  warnings: string[];
+}
+
+function detectTargetAnchor(
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  projectTargetColumn: string | null,
+  canonicalColumns: string[],
+): TargetAnchorResult | null {
+  if (!projectTargetColumn || fileSchemas.length <= 1) return null;
+
+  const normalizedTarget = normalizeColumnName(projectTargetColumn);
+  const targetPresence: TargetAnchorResult["targetPresence"] = [];
+  const warnings: string[] = [];
+
+  for (let i = 0; i < fileSchemas.length; i++) {
+    const schema = fileSchemas[i];
+    const matchCol = schema.columns.find(c => normalizeColumnName(c) === normalizedTarget);
+
+    if (matchCol) {
+      // Check null rate in sample
+      const nullCount = schema.sampleRows.filter(row => {
+        const v = row[matchCol];
+        return v === null || v === undefined || String(v).trim() === "" || String(v).toLowerCase() === "nan";
+      }).length;
+      const nullRate = schema.sampleRows.length > 0 ? nullCount / schema.sampleRows.length : 1;
+
+      targetPresence.push({
+        fileName: fileNames[i],
+        hasTarget: true,
+        nullRate: Math.round(nullRate * 1000) / 1000,
+        rowCount: schema.totalRows,
+      });
+    } else {
+      targetPresence.push({
+        fileName: fileNames[i],
+        hasTarget: false,
+        nullRate: 1,
+        rowCount: schema.totalRows,
+      });
+    }
+  }
+
+  const filesWithTarget = targetPresence.filter(t => t.hasTarget);
+  const filesWithoutTarget = targetPresence.filter(t => !t.hasTarget);
+
+  // All files have target → union strategy
+  if (filesWithoutTarget.length === 0) {
+    // Validate consistency: check if types are the same
+    const targetTypes = fileSchemas
+      .map(s => {
+        const col = s.columns.find(c => normalizeColumnName(c) === normalizedTarget);
+        return col ? s.columnTypes[col] : null;
+      })
+      .filter(Boolean);
+
+    const uniqueTypes = new Set(targetTypes);
+    if (uniqueTypes.size > 1) {
+      warnings.push(
+        `Target "${projectTargetColumn}" tem tipos diferentes entre arquivos: ${[...uniqueTypes].join(", ")}. ` +
+        `Isso pode causar inconsistência no treino. Considere usar um único arquivo como âncora.`
+      );
+    }
+
+    return {
+      anchorFileIndex: 0,
+      anchorFileName: fileNames[0],
+      targetColumn: projectTargetColumn,
+      targetPresence,
+      strategy: "union",
+      strategyReason: `Target "${projectTargetColumn}" presente em todos os ${fileSchemas.length} arquivos. Usando union-by-name.`,
+      warnings,
+    };
+  }
+
+  // Some files don't have target → anchor strategy
+  if (filesWithTarget.length === 0) {
+    warnings.push(
+      `Target "${projectTargetColumn}" NÃO encontrado em nenhum arquivo. ` +
+      `Verifique se o nome da coluna está correto.`
+    );
+    return {
+      anchorFileIndex: 0,
+      anchorFileName: fileNames[0],
+      targetColumn: projectTargetColumn,
+      targetPresence,
+      strategy: "union",
+      strategyReason: `Target não encontrado em nenhum arquivo. Usando union padrão.`,
+      warnings,
+    };
+  }
+
+  // Select best anchor: lowest null rate, then highest row count
+  const bestAnchor = filesWithTarget.sort((a, b) => {
+    if (a.nullRate !== b.nullRate) return a.nullRate - b.nullRate;
+    return b.rowCount - a.rowCount;
+  })[0];
+
+  const anchorIndex = fileNames.indexOf(bestAnchor.fileName);
+
+  warnings.push(
+    `Target "${projectTargetColumn}" ausente em ${filesWithoutTarget.length} arquivo(s): ` +
+    `${filesWithoutTarget.map(f => f.fileName).join(", ")}. ` +
+    `Esses arquivos serão usados apenas como features auxiliares (se houver chave de ligação).`
+  );
+
+  return {
+    anchorFileIndex: anchorIndex,
+    anchorFileName: bestAnchor.fileName,
+    targetColumn: projectTargetColumn,
+    targetPresence,
+    strategy: "anchor_enrichment",
+    strategyReason:
+      `Target "${projectTargetColumn}" presente em ${filesWithTarget.length}/${fileSchemas.length} arquivos. ` +
+      `Arquivo âncora: "${bestAnchor.fileName}" (null_rate=${(bestAnchor.nullRate * 100).toFixed(1)}%, ${bestAnchor.rowCount} linhas).`,
+    warnings,
+  };
+}
+
 function findEquivalentCanonical(normalizedName: string, existingCanonicals: Map<string, string>): string | null {
   // Direct match
   if (existingCanonicals.has(normalizedName)) return normalizedName;
@@ -758,7 +993,7 @@ function normalizeToSchema(
   sampleRows: Record<string, unknown>[],
   fileColumns: string[],
   canonicalColumns: string[],
-  canonicalNames?: Map<string, string>,
+  canonicalTypes?: Record<string, string>,
 ): Record<string, unknown>[] {
   // Build mapping: canonical normalized → file column
   const fileColMap = new Map<string, string>();
@@ -778,18 +1013,30 @@ function normalizeToSchema(
       const normKey = normalizeColumnName(canonCol);
       const fileCol = fileColMap.get(normKey);
 
+      let value: unknown = null;
+
       if (fileCol) {
-        normalized[canonCol] = row[fileCol] ?? null;
+        value = row[fileCol] ?? null;
       } else {
         // Try equivalence
         const equivKey = findEquivalentCanonical(normKey, canonNormMap);
         if (equivKey) {
           const eqFileCol = fileColMap.get(equivKey);
-          normalized[canonCol] = eqFileCol ? (row[eqFileCol] ?? null) : null;
-        } else {
-          normalized[canonCol] = null;
+          value = eqFileCol ? (row[eqFileCol] ?? null) : null;
         }
       }
+
+      // Missing feature imputation: 0 for numeric, "missing" for categorical
+      if (value === null || value === undefined || String(value).trim() === "") {
+        const colType = canonicalTypes?.[canonCol] || "texto";
+        if (colType === "numérico") {
+          value = 0;
+        } else {
+          value = "missing";
+        }
+      }
+
+      normalized[canonCol] = value;
     }
     return normalized;
   });
@@ -1304,8 +1551,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     const schema = result.schema!;
     const job = batchJobs.find((j: ImportJob) => j.id === result.jobId) as ImportJob;
 
-    // Normalize samples to canonical schema
-    const normalizedSamples = normalizeToSchema(schema.sampleRows, schema.columns, canonical.columns);
+    // Normalize samples to canonical schema (with imputation: 0 for numeric, "missing" for categorical)
+    const normalizedSamples = normalizeToSchema(schema.sampleRows, schema.columns, canonical.columns, canonical.columnTypes);
 
     // Proportional sample allocation
     const sampleBudget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
@@ -1354,12 +1601,58 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   const passesEDAGate = totalRowsConsolidated > 0 && canonical.columns.length > 0 && coveragePct >= 50;
 
   if (!passesEDAGate) {
-    const gateMsg = `EDA Gate falhou: ${totalRowsConsolidated} rows, ${canonical.columns.length} cols, ${coveragePct}% coverage`;
+    // Build specific, actionable error message
+    const reasons: string[] = [];
+    if (totalRowsConsolidated === 0) {
+      reasons.push("Nenhuma linha válida encontrada após consolidação.");
+    }
+    if (canonical.columns.length === 0) {
+      reasons.push("Nenhuma coluna detectada no schema canônico.");
+    }
+    if (coveragePct < 50) {
+      reasons.push(`Apenas ${coveragePct}% dos arquivos foram processados com sucesso (mínimo: 50%).`);
+    }
+    if (failedResults.length > 0) {
+      reasons.push(`Arquivos com falha: ${failedResults.map(r => `"${r.fileName}" (${r.error})`).join("; ")}`);
+    }
+
+    const gateMsg = `Não foi possível consolidar o dataset.\n\n` +
+      `Motivos:\n${reasons.map(r => `• ${r}`).join("\n")}\n\n` +
+      `Ações sugeridas:\n` +
+      `• Verifique se os arquivos estão no formato correto e não estão corrompidos.\n` +
+      `• Confirme que os delimitadores (;  ,  \\t) estão corretos.\n` +
+      `• Tente importar menos arquivos para isolar o problema.`;
+
     console.error(`[process-import] ${gateMsg}`);
     await updateJobError(supabase, primaryJob.id, gateMsg);
     return new Response(JSON.stringify({ success: false, message: gateMsg, file_results: fileResults }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
+  }
+
+  // ─── Phase 5: Entity Key Detection + Target Anchor ─────────
+  const entityKeyCandidates = detectEntityKeys(
+    canonical.columns, canonical.columnTypes, successSchemas, successFileNames, allSampleRows,
+  );
+  if (entityKeyCandidates.length > 0) {
+    console.log(`[process-import] Entity key candidates: ${entityKeyCandidates.map(k => `${k.column}(score=${k.score})`).join(", ")}`);
+  }
+
+  // Try to detect target from project settings
+  const { data: projectData } = await supabase
+    .from("projects")
+    .select("target_column")
+    .eq("id", primaryJob.project_id)
+    .single();
+
+  const targetAnchor = detectTargetAnchor(
+    successSchemas, successFileNames, projectData?.target_column || null, canonical.columns,
+  );
+  if (targetAnchor) {
+    console.log(`[process-import] Target anchor: strategy=${targetAnchor.strategy}, anchor="${targetAnchor.anchorFileName}"`);
+    if (targetAnchor.warnings.length > 0) {
+      console.log(`[process-import] Target warnings: ${targetAnchor.warnings.join(" | ")}`);
+    }
   }
 
   // ─── Save canonical columns ────────────────────────────────
@@ -1391,6 +1684,16 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       rows_consolidated: totalRowsConsolidated,
       delimiter: primaryJob.delimiter || ",",
       encoding: primaryJob.encoding || "utf-8",
+      // New: entity keys and target anchor
+      entity_keys: entityKeyCandidates,
+      target_anchor: targetAnchor ? {
+        strategy: targetAnchor.strategy,
+        anchor_file: targetAnchor.anchorFileName,
+        target_column: targetAnchor.targetColumn,
+        target_presence: targetAnchor.targetPresence,
+        warnings: targetAnchor.warnings,
+      } : null,
+      imputation_applied: true,
     },
   );
 
@@ -1424,6 +1727,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       coverage_pct: coveragePct,
       dataset_path: batchFolder,
       dataset_id: datasetId,
+      entity_keys: entityKeyCandidates.map(k => k.column),
+      target_anchor_strategy: targetAnchor?.strategy || null,
     },
   });
 
@@ -1433,6 +1738,16 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     supabase, primaryJob.project_id, primaryJob.user_id, primaryJob.batch_id, datasetId,
     fileResults, successSchemas, allFileNames, canonical, totalRowsConsolidated, allSampleRows,
   );
+
+  // Build response with rich context
+  const responseWarnings: string[] = [];
+  if (targetAnchor?.warnings) responseWarnings.push(...targetAnchor.warnings);
+  if (entityKeyCandidates.length > 0) {
+    responseWarnings.push(
+      `Chaves de entidade detectadas: ${entityKeyCandidates.map(k => k.column).join(", ")}. ` +
+      `Podem ser usadas para enriquecer features via JOIN em versões futuras.`
+    );
+  }
 
   const responseMessage = failedResults.length > 0
     ? `Importação parcial: ${successResults.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas, ${coveragePct}% coverage`
@@ -1452,6 +1767,14 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     dataset_id: datasetId,
     manifest_generated: !!manifestId,
     manifest_id: manifestId,
+    entity_keys: entityKeyCandidates,
+    target_anchor: targetAnchor ? {
+      strategy: targetAnchor.strategy,
+      anchor_file: targetAnchor.anchorFileName,
+      target_column: targetAnchor.targetColumn,
+    } : null,
+    warnings: responseWarnings,
+    imputation_applied: true,
     file_results: fileResults.map(r => ({
       file: r.fileName, format: r.format, status: r.success ? "OK" : "FAIL",
       rows: r.rowsRead, cols: r.schema?.columns.length || 0, error: r.error || null,
