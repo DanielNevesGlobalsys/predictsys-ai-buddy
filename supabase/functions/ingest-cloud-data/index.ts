@@ -82,6 +82,18 @@ async function executePowerBIQuery(
   if (!response.ok) {
     const errorText = await response.text();
     console.error('[ingest-cloud-data] Power BI query error:', errorText);
+    
+    // Detect specific Power BI error codes for better messages
+    if (errorText.includes('PowerBIFolderNotFound')) {
+      throw new Error(`WORKSPACE_NOT_FOUND: O workspace (ID: ${workspaceId}) não foi encontrado. Verifique se o workspace_id está correto e se o Service Principal tem acesso ao workspace no Power BI.`);
+    }
+    if (errorText.includes('PowerBINotFound') || errorText.includes('DatasetNotFound')) {
+      throw new Error(`DATASET_NOT_FOUND: O dataset (ID: ${datasetId}) não foi encontrado no workspace. Verifique se o dataset_id está correto.`);
+    }
+    if (response.status === 401 || response.status === 403) {
+      throw new Error(`AUTH_ERROR: Sem permissão para acessar o Power BI. Verifique as credenciais (client_id, client_secret, tenant_id) e as permissões do Service Principal.`);
+    }
+    
     throw new Error(`Failed to execute DAX query: ${response.status} - ${errorText}`);
   }
 
@@ -336,6 +348,11 @@ serve(async (req) => {
       } catch (error) {
         const errMsg = error instanceof Error ? error.message : String(error);
         console.error('[ingest-cloud-data] Error fetching data:', errMsg);
+        
+        // Re-throw workspace/dataset/auth errors as-is (already have clear messages)
+        if (errMsg.includes('WORKSPACE_NOT_FOUND') || errMsg.includes('DATASET_NOT_FOUND') || errMsg.includes('AUTH_ERROR')) {
+          throw error;
+        }
         
         if (errMsg.includes('PowerBIEntityNotFound') || errMsg.includes('404')) {
           throw new Error(
