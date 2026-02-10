@@ -1398,6 +1398,94 @@ serve(async (req) => {
 
     console.log(`[infer-problem] Status=${result.status}, Industry=${result.industry.label}, targets=${result.suggested_targets.length}, features=${result.modeling_contract?.features_final.length || 0}`);
 
+    // ── Persist column inference matrix ──
+    try {
+      await supabase.from("project_column_inference").delete().eq("project_id", project_id);
+
+      // Re-run classification to get per-column data (already computed inside runInferenceV3)
+      const classifications = classifyColumns(colsRes.data, numStatsMap, catStatsMap, totalRows);
+      const anchorTimeCol = findAnchorTimeCol(classifications);
+      const bestTargetCol = result.suggested_targets?.[0]?.column || null;
+
+      const columnInferenceRows = classifications.map((cls) => {
+        const numStat = numStatsMap.get(cls.column);
+        const catStat = catStatsMap.get(cls.column);
+        const distinctCount = catStat?.distinct_count || (numStat ? estimateDistinct(numStat, totalRows) : 0);
+        const uniqueRatio = totalRows > 0 ? distinctCount / totalRows : 0;
+
+        // Determine temporal role
+        let temporalRole = "DESCONHECIDO";
+        if (cls.role === "TEMPO") {
+          temporalRole = cls.column === anchorTimeCol ? "PRE_EVENTO" : "DESCONHECIDO";
+        } else if (cls.role === "DERIVADA_LEAKAGE") {
+          temporalRole = "POS_EVENTO";
+        } else if (matchesPatterns(cls.column, LEAKAGE_PATTERNS)) {
+          temporalRole = "POS_EVENTO";
+        }
+
+        // Determine eligibility
+        const canBeTarget =
+          cls.role === "TARGET_CANDIDATO_EVENTO" ||
+          cls.role === "TARGET_CANDIDATO_ESTADO" ||
+          (cls.role === "MEDIDA_NUMERICA" && numStat?.std_value > 0);
+
+        const blockedAsFeature =
+          cls.role === "ID_TECNICO" ||
+          cls.role === "DERIVADA_LEAKAGE" ||
+          (numStat?.std_value === 0) ||
+          (uniqueRatio > 0.2 && cls.role !== "DIMENSAO_NEGOCIO");
+
+        const canBeFeature = !blockedAsFeature && cls.column !== bestTargetCol;
+
+        // Collect block reasons
+        const blockReasons: string[] = [];
+        if (cls.role === "ID_TECNICO") blockReasons.push("ID técnico");
+        if (cls.role === "DERIVADA_LEAKAGE") blockReasons.push("Leakage temporal");
+        if (numStat?.std_value === 0) blockReasons.push("Variância zero (constante)");
+        if (uniqueRatio > 0.2 && cls.role !== "DIMENSAO_NEGOCIO" && cls.role !== "MEDIDA_NUMERICA")
+          blockReasons.push("Alta cardinalidade");
+        if (cls.role === "TARGET_CANDIDATO_ESTADO" && !anchorTimeCol)
+          blockReasons.push("Estado sem janela temporal");
+        if (temporalRole === "POS_EVENTO") blockReasons.push("Coluna pós-evento");
+
+        // Confidence
+        let confidence = 0.7;
+        if (cls.reasons.some(r => r.includes("LLM"))) confidence = 0.85;
+        if (cls.role === "TARGET_CANDIDATO_EVENTO") confidence = 0.85;
+        if (cls.role === "ID_TECNICO") confidence = 0.95;
+        if (cls.role === "TEMPO") confidence = 0.90;
+        if (cls.role === "DESCONHECIDO") confidence = 0.3;
+
+        // Map semantic role for UI
+        let semanticRole = cls.role as string;
+        if (semanticRole === "TARGET_CANDIDATO_EVENTO") semanticRole = "TARGET_CANDIDATO_EVENTO";
+        if (semanticRole === "TARGET_CANDIDATO_ESTADO") semanticRole = "TARGET_CANDIDATO_ESTADO";
+
+        return {
+          project_id,
+          column_name: cls.column,
+          inferred_type: cls.inferred_type,
+          semantic_role: semanticRole,
+          temporal_role: temporalRole,
+          can_be_target: canBeTarget,
+          can_be_feature: canBeFeature,
+          block_reasons: blockReasons,
+          confidence_score: Math.round(confidence * 1000) / 1000,
+          classification_reasons: cls.reasons,
+        };
+      });
+
+      if (columnInferenceRows.length > 0) {
+        const { error: colInfErr } = await supabase
+          .from("project_column_inference")
+          .insert(columnInferenceRows);
+        if (colInfErr) console.error("[infer-problem] Column inference insert error:", colInfErr);
+        else console.log(`[infer-problem] Persisted ${columnInferenceRows.length} column inferences`);
+      }
+    } catch (colInfError) {
+      console.error("[infer-problem] Column inference persistence error:", colInfError);
+    }
+
     // ── Persist to project_problem_inference (legacy) ──
     const inferenceRecord = {
       organization_id: orgId,
