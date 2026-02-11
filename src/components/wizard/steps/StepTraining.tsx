@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Badge } from "@/components/ui/badge";
 import {
   Tooltip,
   TooltipContent,
@@ -11,7 +12,7 @@ import {
 } from "@/components/ui/tooltip";
 import { 
   Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, 
-  HelpCircle, AlertTriangle, Sparkles, Info 
+  HelpCircle, AlertTriangle, Sparkles, Info, XCircle, ArrowLeft
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -54,6 +55,20 @@ interface TrainingErrorDetails {
   preflight_report?: PreflightReport;
   details?: string;
   action?: string;
+  blocked_reason_code?: string;
+}
+
+interface TrainReadiness {
+  edaReady: boolean;
+  modelReady: boolean;
+  hasTarget: boolean;
+  hasFeatures: boolean;
+  hasContract: boolean;
+  contractStatus: string | null;
+  blockedReasonModel: string | null;
+  totalRows: number;
+  canTrain: boolean;
+  blockReasons: string[];
 }
 
 const StepTraining = ({
@@ -75,12 +90,78 @@ const StepTraining = ({
   const [detectedProblemType, setDetectedProblemType] = useState<string | null>(null);
   const [showTypeWarning, setShowTypeWarning] = useState(false);
 
+  const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
+
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
 
   useEffect(() => {
     loadExistingModels();
     detectProblemType();
+    checkTrainReadiness();
   }, [projectData.id]);
+
+  const checkTrainReadiness = async () => {
+    if (!projectData.id) return;
+
+    const blockReasons: string[] = [];
+
+    // Check manifest
+    const { data: manifest } = await supabase
+      .from("import_manifests")
+      .select("eda_ready, model_ready, blocked_reason_model, rows_consolidated")
+      .eq("project_id", projectData.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const edaReady = manifest?.eda_ready !== false;
+    const modelReady = manifest?.model_ready !== false;
+    const totalRows = manifest?.rows_consolidated || projectData.total_rows || 0;
+
+    if (!edaReady) blockReasons.push("Dataset não está pronto para análise (EDA bloqueado).");
+
+    // Check modeling contract
+    const { data: contract } = await supabase
+      .from("project_modeling_contracts")
+      .select("status, features_final, blocked_reasons")
+      .eq("project_id", projectData.id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    const hasContract = !!contract;
+    const contractStatus = contract?.status || null;
+    if (contract?.status === "blocked") {
+      const reasons = contract.blocked_reasons as any;
+      blockReasons.push(`Contrato de modelagem bloqueado: ${Array.isArray(reasons) ? reasons.join("; ") : String(reasons || "")}`);
+    }
+
+    const featuresFinal = contract?.features_final as any[] | null;
+    const hasFeatures = !featuresFinal || (Array.isArray(featuresFinal) && featuresFinal.length >= 2);
+    if (featuresFinal && Array.isArray(featuresFinal) && featuresFinal.length < 2) {
+      blockReasons.push(`Apenas ${featuresFinal.length} feature(s) selecionada(s). Mínimo: 2.`);
+    }
+
+    const hasTarget = !!projectData.target_column;
+    if (!hasTarget) blockReasons.push("Variável alvo (target) não definida.");
+
+    if (totalRows === 0) blockReasons.push("Dataset sem linhas válidas.");
+
+    const canTrain = edaReady && hasTarget && blockReasons.length === 0;
+
+    setTrainReadiness({
+      edaReady,
+      modelReady,
+      hasTarget,
+      hasFeatures,
+      hasContract,
+      contractStatus,
+      blockedReasonModel: manifest?.blocked_reason_model as string | null,
+      totalRows,
+      canTrain,
+      blockReasons,
+    });
+  };
 
   const detectProblemType = async () => {
     if (!projectData.id) return;
@@ -405,6 +486,61 @@ const StepTraining = ({
           </Alert>
         )}
 
+        {/* Pre-train Readiness Panel */}
+        {trainReadiness && !trainingComplete && !isTraining && (
+          <div className={`p-4 rounded-lg border space-y-3 ${
+            trainReadiness.canTrain
+              ? "bg-primary/5 border-primary/20"
+              : "bg-destructive/5 border-destructive/20"
+          }`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-semibold">Pré-checagem de treino</p>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Badge className={trainReadiness.edaReady ? "bg-accent/20 text-accent border-accent/30 text-[10px]" : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                  {trainReadiness.edaReady ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                  EDA
+                </Badge>
+                <Badge className={trainReadiness.hasTarget ? "bg-accent/20 text-accent border-accent/30 text-[10px]" : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                  {trainReadiness.hasTarget ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                  TARGET
+                </Badge>
+                <Badge className={trainReadiness.modelReady ? "bg-accent/20 text-accent border-accent/30 text-[10px]" : "bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]"}>
+                  {trainReadiness.modelReady ? <CheckCircle className="w-3 h-3 mr-1" /> : <AlertTriangle className="w-3 h-3 mr-1" />}
+                  MODEL
+                </Badge>
+              </div>
+            </div>
+
+            {trainReadiness.totalRows > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {trainReadiness.totalRows.toLocaleString()} linhas disponíveis para treino
+              </p>
+            )}
+
+            {!trainReadiness.modelReady && trainReadiness.blockedReasonModel && trainReadiness.canTrain && (
+              <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <span>⚠️ {trainReadiness.blockedReasonModel}. O treino pode prosseguir, mas resultados podem ser limitados.</span>
+              </div>
+            )}
+
+            {trainReadiness.blockReasons.length > 0 && (
+              <div className="space-y-1.5">
+                {trainReadiness.blockReasons.map((reason, i) => (
+                  <div key={i} className="flex items-start gap-2 text-xs text-destructive bg-destructive/5 p-2 rounded border border-destructive/20">
+                    <XCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                    <span>{reason}</span>
+                  </div>
+                ))}
+                <Button variant="outline" size="sm" onClick={onBack} className="mt-2">
+                  <ArrowLeft className="w-4 h-4 mr-1.5" />
+                  Voltar e revisar Target/Features
+                </Button>
+              </div>
+            )}
+          </div>
+        )}
+
         {/* Training status */}
         <div className="text-center py-8">
           {!isTraining && !trainingComplete && !error && (
@@ -421,11 +557,13 @@ const StepTraining = ({
               <Button
                 size="lg"
                 onClick={handleStartTraining}
-                disabled={!projectData.target_column}
+                disabled={!projectData.target_column || (trainReadiness ? !trainReadiness.canTrain : false)}
                 className="bg-gradient-primary hover:shadow-hover transition-all"
               >
                 <Play className="w-5 h-5 mr-2" />
-                {t("stepTraining.trainButton")}
+                {trainReadiness && !trainReadiness.canTrain
+                  ? "Treino bloqueado — revise configurações"
+                  : t("stepTraining.trainButton")}
               </Button>
             </div>
           )}

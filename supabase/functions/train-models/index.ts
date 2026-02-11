@@ -10,7 +10,7 @@ const corsHeaders = {
 
 // ==================== SAMPLING CONSTANTS ====================
 // Minimum absolute rows required for reliable training
-const MIN_ROWS_FOR_TRAIN = 5_000;
+const MIN_ROWS_FOR_TRAIN = 500;
 // Target sample size for train+val+test (healthy model size)
 // IMPORTANT: Keep this low to avoid CPU Time exceeded in Edge Functions
 const TARGET_SAMPLE_SIZE = 12_000;
@@ -556,10 +556,10 @@ function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<str
     else fn++;
   }
   
-  const accuracy = (tp + tn) / (tp + tn + fp + fn) || 0;
-  const precision = tp / (tp + fp) || 0;
-  const recall = tp / (tp + fn) || 0;
-  const f1 = 2 * precision * recall / (precision + recall) || 0;
+  const accuracy = Math.min(1, Math.max(0, (tp + tn) / (tp + tn + fp + fn) || 0));
+  const precision = Math.min(1, Math.max(0, tp / (tp + fp) || 0));
+  const recall = Math.min(1, Math.max(0, tp / (tp + fn) || 0));
+  const f1 = Math.min(1, Math.max(0, 2 * precision * recall / (precision + recall) || 0));
   
   // AUC calculation
   const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
@@ -577,6 +577,8 @@ function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<str
     }
   }
   auc = totalPos * totalNeg > 0 ? auc / (totalPos * totalNeg) : 0.5;
+  // Clamp AUC to [0, 1]
+  auc = Math.min(1, Math.max(0, auc));
   
   return { AUC: auc, F1: f1, Recall: recall, Precisão: precision, Acurácia: accuracy };
 }
@@ -1180,10 +1182,63 @@ serve(async (req) => {
     const { target_column, problem_type } = project;
 
     if (!target_column) {
-      return new Response(JSON.stringify({ error: "Coluna alvo não definida" }), {
+      return new Response(JSON.stringify({ error: "Coluna alvo não definida", action: "review_target" }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ==================== MANIFEST + CONTRACT GATING ====================
+    console.log(`\n=== Training Gating ===`);
+
+    // Check manifest: eda_ready must be true
+    const { data: manifest } = await supabase
+      .from("import_manifests")
+      .select("eda_ready, model_ready, status, blocked_reason_model, eda_strategy")
+      .eq("project_id", project_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (manifest) {
+      console.log(`[Gating] Manifest: eda_ready=${manifest.eda_ready}, model_ready=${manifest.model_ready}, status=${manifest.status}`);
+      if (manifest.eda_ready === false) {
+        return new Response(JSON.stringify({
+          error: "Dataset não está pronto para análise. Corrija a importação (Etapa 2) antes de treinar.",
+          blocked_reason_code: "EDA_NOT_READY",
+          action: "review_import",
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      // model_ready=false is a WARNING, not a block — training can still attempt with available data
+      if (manifest.model_ready === false) {
+        console.warn(`[Gating] ⚠️ model_ready=false: ${manifest.blocked_reason_model}. Proceeding with caution.`);
+      }
+    }
+
+    // Check modeling contract if available
+    const { data: modelingContract } = await supabase
+      .from("project_modeling_contracts")
+      .select("status, features_final, target_definition, blocked_reasons")
+      .eq("project_id", project_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (modelingContract) {
+      console.log(`[Gating] ModelingContract: status=${modelingContract.status}`);
+      if (modelingContract.status === "blocked") {
+        const reasons = modelingContract.blocked_reasons as any;
+        return new Response(JSON.stringify({
+          error: "O contrato de modelagem está bloqueado. Revise Target e Features (Etapa 3).",
+          blocked_reason_code: "CONTRACT_BLOCKED",
+          details: Array.isArray(reasons) ? reasons.join("; ") : String(reasons || ""),
+          action: "review_target",
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      const featuresFinal = modelingContract.features_final as any[];
+      if (featuresFinal && Array.isArray(featuresFinal) && featuresFinal.length < 2) {
+        console.warn(`[Gating] ⚠️ Apenas ${featuresFinal.length} features no contrato. Pode causar modelo fraco.`);
+      }
     }
 
     // Get column info
