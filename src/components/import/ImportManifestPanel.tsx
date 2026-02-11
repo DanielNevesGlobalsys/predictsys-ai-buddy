@@ -49,12 +49,27 @@ interface NullDiagnostic {
   severity?: "ok" | "warning" | "critical";
   probable_cause: string;
   files_with_data: string[];
+  is_critical_column?: boolean;
+  critical_reason?: string;
 }
 
 interface ColumnMapping {
   canonical: string;
   type: string;
   sources: { file: string; original_col: string }[];
+}
+
+interface CoverageStats {
+  critical_columns_pct: number;
+  global_null_pct: number;
+  top_10_null_columns: { column: string; null_pct: number }[];
+  file_contribution: { file: string; rows: number; data_cols: number; null_only_cols: number; contribution_type: "data" | "mostly_null" }[];
+}
+
+interface CriticalColumnTag {
+  column: string;
+  reason: string;
+  source: "intent_contract" | "heuristic";
 }
 
 interface ImportManifest {
@@ -70,7 +85,7 @@ interface ImportManifest {
   rows_consolidated: number;
   rows_difference: number;
   columns_final: number;
-  canonical_schema: Record<string, string>;
+  canonical_schema: Record<string, string> & { _coverage_stats?: CoverageStats; _critical_columns?: CriticalColumnTag[] };
   column_mapping_report: ColumnMapping[];
   null_diagnostic: NullDiagnostic[];
   files: ManifestFile[];
@@ -138,7 +153,10 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
   const files = (manifest.files || []) as ManifestFile[];
   const nullDiag = (manifest.null_diagnostic || []) as NullDiagnostic[];
   const colMapping = (manifest.column_mapping_report || []) as ColumnMapping[];
-  const schema = (manifest.canonical_schema || {}) as Record<string, string>;
+  const rawSchema = manifest.canonical_schema || {};
+  const coverageStats = (rawSchema as any)._coverage_stats as CoverageStats | undefined;
+  const criticalColumns = (rawSchema as any)._critical_columns as CriticalColumnTag[] | undefined;
+  const schema = Object.fromEntries(Object.entries(rawSchema).filter(([k]) => !k.startsWith("_"))) as Record<string, string>;
 
   return (
     <Card className="p-4 space-y-4">
@@ -195,6 +213,68 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
           </p>
         </div>
       </div>
+
+      {/* Coverage Stats */}
+      {coverageStats && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="p-3 bg-muted/30 rounded-lg text-center">
+            <p className={`text-2xl font-bold ${coverageStats.critical_columns_pct > 30 ? "text-destructive" : coverageStats.critical_columns_pct > 10 ? "text-amber-500" : ""}`}>
+              {coverageStats.critical_columns_pct}%
+            </p>
+            <p className="text-xs text-muted-foreground">Colunas 🔴</p>
+          </div>
+          <div className="p-3 bg-muted/30 rounded-lg text-center">
+            <p className={`text-2xl font-bold ${coverageStats.global_null_pct > 30 ? "text-destructive" : coverageStats.global_null_pct > 15 ? "text-amber-500" : ""}`}>
+              {coverageStats.global_null_pct}%
+            </p>
+            <p className="text-xs text-muted-foreground">Nulos global</p>
+          </div>
+          <div className="p-3 bg-muted/30 rounded-lg text-center col-span-2">
+            <div className="flex flex-wrap gap-1 justify-center">
+              {coverageStats.file_contribution.map((fc, i) => (
+                <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
+                  {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
+                  {fc.contribution_type === "mostly_null" && " ⚠️"}
+                </Badge>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Contribuição por arquivo</p>
+          </div>
+        </div>
+      )}
+
+      {/* Top 10 Null Columns */}
+      {coverageStats && coverageStats.top_10_null_columns.length > 0 && (
+        <Collapsible>
+          <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors w-full">
+            <ChevronDown className="w-4 h-4" />
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            Top 10 colunas mais nulas
+          </CollapsibleTrigger>
+          <CollapsibleContent className="mt-2">
+            <div className="space-y-1">
+              {coverageStats.top_10_null_columns.map((c, i) => {
+                const critTag = criticalColumns?.find(ct => ct.column === c.column);
+                return (
+                  <div key={i} className="flex items-center justify-between p-1.5 bg-muted/30 rounded text-xs">
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono truncate max-w-[150px]">{c.column}</span>
+                      {critTag && (
+                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500/50 text-amber-600">
+                          {critTag.source === "intent_contract" ? "📋" : "🔍"} {critTag.reason}
+                        </Badge>
+                      )}
+                    </div>
+                    <span className={`font-mono ${c.null_pct > 50 ? "text-destructive" : c.null_pct >= 30 ? "text-amber-500" : "text-muted-foreground"}`}>
+                      {c.null_pct}%
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
       {/* Row difference warning */}
       {manifest.rows_difference > 0 && (
@@ -292,6 +372,11 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
                     <div className="flex items-center gap-1.5">
                       {nullSeverityIcon(d.severity)}
                       <span className="font-medium">{d.column}</span>
+                      {d.is_critical_column && (
+                        <Badge variant="outline" className="text-[9px] px-1 py-0 border-amber-500/50 text-amber-600">
+                          {d.critical_reason}
+                        </Badge>
+                      )}
                     </div>
                     <Badge variant="outline" className="text-[10px]">{d.null_pct.toFixed(1)}% null</Badge>
                   </div>

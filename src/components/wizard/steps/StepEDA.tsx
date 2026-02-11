@@ -32,6 +32,13 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     if (!projectData.id) return;
 
     const loadBannerInfo = async () => {
+      // Check dataset_ready_for_modeling flag first
+      const { data: project } = await supabase
+        .from("projects")
+        .select("dataset_ready_for_modeling, dataset_blocked_reason")
+        .eq("id", projectData.id!)
+        .single();
+
       // Get latest manifest
       const { data: manifest } = await supabase
         .from("import_manifests")
@@ -49,9 +56,10 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           manifestStatus: manifest.status,
           manifestReason: manifest.status_reason,
         });
-        setHasValidDataset(manifest.status !== "blocked" && manifest.status !== "fail");
+        // Use project-level flag as source of truth
+        const ready = project?.dataset_ready_for_modeling !== false;
+        setHasValidDataset(ready && manifest.status !== "blocked" && manifest.status !== "fail");
       } else {
-        // Fallback to project data
         setBannerInfo({
           totalRows: projectData.total_rows || projectData.dataset_rows || 0,
           columnsCount: projectData.dataset_columns || 0,
@@ -59,6 +67,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           manifestStatus: "ok",
           manifestReason: null,
         });
+        setHasValidDataset(project?.dataset_ready_for_modeling !== false);
       }
     };
 
