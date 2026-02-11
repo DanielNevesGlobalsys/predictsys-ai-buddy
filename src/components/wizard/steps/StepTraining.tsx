@@ -364,12 +364,14 @@ const StepTraining = ({
           model_quality_flag: d.model_quality_flag || "ok",
           can_promote_to_production: d.can_promote_to_production ?? true,
           dashboard_allowed: d.dashboard_allowed ?? true,
+          dashboard_allowed_reason: d.dashboard_allowed_reason || undefined,
           improvement_vs_baseline: d.improvement_vs_baseline ?? 0,
           metrics_valid: d.metrics_valid ?? true,
           metrics_invalid_reasons: d.metrics_invalid_reasons || [],
-          training_warnings: d.training_warnings || [],
+          training_warnings: d.training_warnings || d.warnings || [],
           baseline_summary: d.baseline_summary || {},
-          metrics_summary: d.metrics_summary || {},
+          metrics_summary: d.metrics_summary?.model || d.metrics_summary || {},
+          train_diagnostics: d.train_diagnostics || undefined,
         });
       }
 

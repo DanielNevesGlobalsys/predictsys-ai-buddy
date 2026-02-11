@@ -1220,6 +1220,7 @@ serve(async (req) => {
       });
     }
 
+    const startMs = Date.now();
     console.log(`\n========================================`);
     console.log(`[AutoML] Iniciando treinamento para projeto: ${project_id}`);
     console.log(`========================================\n`);
@@ -1228,82 +1229,153 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get project info
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("*")
-      .eq("id", project_id)
-      .single();
+    // Helper to return structured block response
+    const blockResponse = (code: string, message: string, cta: { label: string; go_to_step?: number } | null, details?: Record<string, unknown>) => {
+      console.error(`[Gating] BLOCKED: ${code} — ${message}`);
+      return new Response(JSON.stringify({
+        status: "blocked",
+        code,
+        message_user: message,
+        message_tech: `Training blocked by gate: ${code}`,
+        cta,
+        details: details || {},
+        error: message,
+        action: cta ? "navigate" : "review_target",
+      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    };
 
-    if (projectError || !project) {
-      console.error("Projeto não encontrado:", projectError);
+    // ==================== SSOT GATING (Etapa 4.2) ====================
+    console.log(`\n=== Training Gating (SSOT) ===`);
+
+    // Parallel fetch all SSOT sources
+    const [projectRes, dsStateRes, selectionRes, modelingDatasetRes, contractRes] = await Promise.all([
+      supabase.from("projects").select("*").eq("id", project_id).single(),
+      supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_modeling_datasets").select("*").eq("project_id", project_id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+    ]);
+
+    const project = projectRes.data;
+    if (!project) {
       return new Response(JSON.stringify({ error: "Projeto não encontrado" }), {
-        status: 404,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { target_column, problem_type } = project;
+    const dsState = dsStateRes.data as any;
+    const selection = selectionRes.data as any;
+    const modelingDataset = modelingDatasetRes.data as any;
+    const modelingContract = contractRes.data as any;
 
-    if (!target_column) {
-      return new Response(JSON.stringify({ error: "Coluna alvo não definida", action: "review_target" }), {
-        status: 400,
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // ==================== MANIFEST + CONTRACT GATING ====================
-    console.log(`\n=== Training Gating ===`);
-
-    // Check manifest: eda_ready must be true
-    const { data: manifest } = await supabase
-      .from("import_manifests")
-      .select("eda_ready, model_ready, status, blocked_reason_model, eda_strategy")
-      .eq("project_id", project_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
-
-    if (manifest) {
-      console.log(`[Gating] Manifest: eda_ready=${manifest.eda_ready}, model_ready=${manifest.model_ready}, status=${manifest.status}`);
+    // ── Gate 1: Dataset (SSOT) ──
+    if (dsState && (dsState.row_count > 0) && (dsState.col_count > 0)) {
+      console.log(`[Gating] Dataset SSOT: ${dsState.row_count} rows, ${dsState.col_count} cols, virtual=${dsState.virtual_manifest}`);
+      if (dsState.eda_ready === false) {
+        return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise (EDA bloqueado).", { label: "Voltar à Etapa 2", go_to_step: 2 });
+      }
+    } else {
+      // Fallback: check manifest
+      const { data: manifest } = await supabase.from("import_manifests")
+        .select("eda_ready, rows_consolidated").eq("project_id", project_id)
+        .order("created_at", { ascending: false }).limit(1).maybeSingle();
+      if (!manifest || manifest.rows_consolidated === 0) {
+        return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 });
+      }
       if (manifest.eda_ready === false) {
-        return new Response(JSON.stringify({
-          error: "Dataset não está pronto para análise. Corrija a importação (Etapa 2) antes de treinar.",
-          blocked_reason_code: "EDA_NOT_READY",
-          action: "review_import",
-        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      // model_ready=false is a WARNING, not a block — training can still attempt with available data
-      if (manifest.model_ready === false) {
-        console.warn(`[Gating] ⚠️ model_ready=false: ${manifest.blocked_reason_model}. Proceeding with caution.`);
+        return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise.", { label: "Voltar à Etapa 2", go_to_step: 2 });
       }
     }
 
-    // Check modeling contract if available
-    const { data: modelingContract } = await supabase
-      .from("project_modeling_contracts")
-      .select("status, features_final, target_definition, blocked_reasons")
-      .eq("project_id", project_id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // ── Gate 2: Selection (SSOT — project_model_selection) ──
+    let target_column: string;
+    let problem_type: string;
+    let currentSelectionVersion = 0;
+    let currentTargetHash: string | null = null;
 
+    if (selection && selection.target_column) {
+      target_column = selection.target_column;
+      problem_type = selection.problem_type || project.problem_type || "classification";
+      currentSelectionVersion = selection.selection_version || 0;
+      currentTargetHash = selection.target_hash || null;
+      console.log(`[Gating] Selection SSOT: target="${target_column}", v${currentSelectionVersion}, hash=${currentTargetHash}`);
+    } else if (project.target_column) {
+      // Legacy fallback
+      target_column = project.target_column;
+      problem_type = project.problem_type || "classification";
+      console.warn(`[Gating] Using legacy project.target_column (no selection record)`);
+    } else {
+      return blockResponse("NO_TARGET_SELECTED", "Nenhum target selecionado. Volte à Etapa 3.", { label: "Selecionar target", go_to_step: 3 });
+    }
+
+    // ── Gate 3: Builder (must be current + matching selection_version) ──
+    const trainingWarningsGlobal: string[] = [];
+    let builderDatasetId: string | null = null;
+
+    if (modelingDataset) {
+      const builderSelVersion = modelingDataset.selection_version_used || 0;
+      const builderIsCurrent = modelingDataset.is_current !== false;
+
+      if (!builderIsCurrent) {
+        return blockResponse("BUILDER_OUTDATED", "O Builder está desatualizado (marcado como stale). Regere o dataset modelável.", { label: "Gerar Builder", go_to_step: 3 });
+      }
+      if (currentSelectionVersion > 0 && builderSelVersion < currentSelectionVersion) {
+        return blockResponse("BUILDER_OUTDATED", `Builder (v${builderSelVersion}) desatualizado vs seleção (v${currentSelectionVersion}). Regere o dataset modelável.`, { label: "Regerar Builder", go_to_step: 3 });
+      }
+
+      const builderStatus = modelingDataset.status;
+      if (builderStatus === "blocked" || builderStatus === "error") {
+        const reasons = Array.isArray(modelingDataset.blocked_reasons) ? modelingDataset.blocked_reasons.join("; ") : String(modelingDataset.blocked_reasons || "");
+        return blockResponse("BUILDER_BLOCKED", `Builder bloqueado: ${reasons}`, { label: "Revisar Target/Features", go_to_step: 3 });
+      }
+
+      // Check TrainingGateReport from builder
+      const buildLog = modelingDataset.build_log as Record<string, any> | null;
+      const tg = buildLog?.training_gate;
+      if (tg && !tg.can_train) {
+        const tgCode = tg.blocked_reason_code || "TRAINING_GATES_FAILED";
+        return blockResponse(tgCode, `Gates de treino falharam: ${tg.blocked_reason_code || "Verifique o relatório do builder"}`, { label: "Revisar Builder", go_to_step: 3 }, { training_gate: tg });
+      }
+      if (tg && tg.status === "WARNING") {
+        trainingWarningsGlobal.push(`Builder warning: ${tg.blocked_reason_code || "Veja relatório"}`);
+      }
+
+      builderDatasetId = modelingDataset.id;
+      console.log(`[Gating] Builder OK: id=${builderDatasetId}, sel_v=${builderSelVersion}, status=${builderStatus}`);
+    } else {
+      // No builder — warn but don't block (legacy path allows direct training)
+      trainingWarningsGlobal.push("Feature Builder não foi executado. Treinando com features brutas.");
+      console.warn(`[Gating] No modeling_dataset found. Training with raw features (legacy path).`);
+    }
+
+    // ── Gate 4: Modeling Contract (optional, WARN only) ──
     if (modelingContract) {
-      console.log(`[Gating] ModelingContract: status=${modelingContract.status}`);
+      console.log(`[Gating] Contract: status=${modelingContract.status}`);
       if (modelingContract.status === "blocked") {
         const reasons = modelingContract.blocked_reasons as any;
-        return new Response(JSON.stringify({
-          error: "O contrato de modelagem está bloqueado. Revise Target e Features (Etapa 3).",
-          blocked_reason_code: "CONTRACT_BLOCKED",
-          details: Array.isArray(reasons) ? reasons.join("; ") : String(reasons || ""),
-          action: "review_target",
-        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      const featuresFinal = modelingContract.features_final as any[];
-      if (featuresFinal && Array.isArray(featuresFinal) && featuresFinal.length < 2) {
-        console.warn(`[Gating] ⚠️ Apenas ${featuresFinal.length} features no contrato. Pode causar modelo fraco.`);
+        return blockResponse("CONTRACT_BLOCKED", "Contrato de modelagem bloqueado. Revise Target e Features (Etapa 3).", { label: "Revisar Target", go_to_step: 3 }, { reasons });
       }
     }
+
+    // ── Compute deterministic seed ──
+    const seedInput = `${project_id}|${currentSelectionVersion}|${builderDatasetId || "legacy"}`;
+    let trainingSeed = 0;
+    for (let i = 0; i < seedInput.length; i++) {
+      trainingSeed = ((trainingSeed << 5) - trainingSeed) + seedInput.charCodeAt(i);
+      trainingSeed |= 0;
+    }
+    trainingSeed = Math.abs(trainingSeed);
+    console.log(`[AutoML] Deterministic seed: ${trainingSeed} (from sel_v=${currentSelectionVersion})`);
+
+    // Legacy manifest check for model_ready warning
+    const { data: manifest } = await supabase.from("import_manifests")
+      .select("model_ready, blocked_reason_model").eq("project_id", project_id)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (manifest?.model_ready === false) {
+      trainingWarningsGlobal.push(`model_ready=false: ${manifest.blocked_reason_model || "Verifique importação"}`);
+    }
+
+    // (Contract gate already handled above in SSOT gating)
 
     // Get column info
     const { data: columns, error: colError } = await supabase
@@ -2688,6 +2760,11 @@ serve(async (req) => {
           min_rows_required: MIN_ROWS_FOR_TRAIN,
           target_sample_size: TARGET_SAMPLE_SIZE,
           max_rows_to_read: MAX_ROWS_TO_READ,
+          // ── SSOT versioning (Etapa 4.2) ──
+          selection_version: currentSelectionVersion,
+          target_hash: currentTargetHash,
+          builder_dataset_id: builderDatasetId,
+          training_seed: trainingSeed,
         },
       })
       .select()
@@ -2798,38 +2875,51 @@ serve(async (req) => {
       console.error("[train-models] Failed to update AI context:", ctxErr);
     }
 
+    const elapsedMs = Date.now() - startMs;
+
     console.log(`\n========================================`);
     console.log(`[AutoML] Treinamento concluído com sucesso!`);
-    console.log(`[AutoML] Modelo: ${strategy.name}`);
+    console.log(`[AutoML] Modelo: ${strategy.name}, elapsed: ${elapsedMs}ms`);
     console.log(`[AutoML] Métrica principal: ${isClassification ? trainResult.metrics.AUC : trainResult.metrics["R²"]}`);
+    console.log(`[AutoML] selection_version=${currentSelectionVersion}, dataset_id=${builderDatasetId}, seed=${trainingSeed}`);
     console.log(`========================================\n`);
 
+    // Build CTAs for UI
+    const ctas: { label: string; go_to_step?: number }[] = [];
+    if (!dashboardAllowed) {
+      ctas.push({ label: "Revisar Target/Features", go_to_step: 3 });
+    }
+
     return new Response(JSON.stringify({ 
-      // ===== STRUCTURED RESPONSE (Etapa 4 Standard) =====
+      // ===== STRUCTURED RESPONSE (Etapa 4.2 Engine) =====
       success: true,
-      status: "SUCCESS",
+      status: "success",
       message: modelQualityFlag === "ok" 
         ? "Treinamento concluído com sucesso" 
         : `Treinamento concluído — modelo ${modelQualityFlag}`,
-      // 2) metrics_summary
-      metrics_summary: detailedMetrics.clamped,
+      // ── SSOT versioning ──
+      selection_version: currentSelectionVersion,
+      target_hash: currentTargetHash,
+      dataset_id: builderDatasetId,
+      row_count_used: Xfinal.length,
+      sample_ratio: totalDatasetRows > 0 ? Xfinal.length / totalDatasetRows : 1,
+      // ── Model info ──
+      model_id: modelData.id,
+      model_quality_flag: modelQualityFlag,
+      dashboard_allowed: dashboardAllowed,
+      can_promote_to_production: canPromoteToProduction,
+      // ── Metrics ──
+      metrics_summary: { primary_metric: primaryMetricKey, model: detailedMetrics.clamped, baseline: baselineMetrics, improvement: improvementVsBaseline },
       metrics_raw: detailedMetrics.raw,
       metrics_valid: detailedMetrics.valid,
       metrics_invalid_reasons: detailedMetrics.invalid_reasons,
-      // 3) baseline_summary
       baseline_summary: baselineMetrics,
       improvement_vs_baseline: improvementVsBaseline,
-      // 4) model_quality_flag
-      model_quality_flag: modelQualityFlag,
-      // 5) can_promote_to_production
-      can_promote_to_production: canPromoteToProduction,
-      // 6) dashboard_allowed
-      dashboard_allowed: dashboardAllowed,
       dashboard_allowed_reason: dashboardAllowedReason,
-      // 8) train_diagnostics (always present)
       train_diagnostics: trainDiagnostics,
-      // 7) training_warnings
-      training_warnings: [
+      // ── Warnings + CTAs ──
+      warnings: [
+        ...trainingWarningsGlobal,
         ...(classMinSamplesWarning ? ["Classe com menos de 50 amostras"] : []),
         ...featureValidation.blocked.map(f => `Feature bloqueada: ${f}`),
         ...targetValidation.issues,
@@ -2837,6 +2927,18 @@ serve(async (req) => {
         ...detailedMetrics.invalid_reasons,
         ...(improvementVsBaseline <= 0 ? [`Modelo não supera baseline (diff: ${improvementVsBaseline.toFixed(4)})`] : []),
       ],
+      training_warnings: [
+        ...trainingWarningsGlobal,
+        ...(classMinSamplesWarning ? ["Classe com menos de 50 amostras"] : []),
+        ...featureValidation.blocked.map(f => `Feature bloqueada: ${f}`),
+        ...targetValidation.issues,
+        ...trainResult.sanity.fail_reasons,
+        ...detailedMetrics.invalid_reasons,
+        ...(improvementVsBaseline <= 0 ? [`Modelo não supera baseline (diff: ${improvementVsBaseline.toFixed(4)})`] : []),
+      ],
+      ctas,
+      // ── Debug ──
+      debug: { seed: trainingSeed, features_count: finalFeatureNames.length, blocked_features_count: featureValidation.blocked.length, elapsed_ms: elapsedMs },
       preflight_report: preflightReport,
       prediction_sanity: {
         passed: trainResult.sanity.passed,
