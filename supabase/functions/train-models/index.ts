@@ -1367,7 +1367,16 @@ serve(async (req) => {
       const contractProblemType = contractTargetDef?.problem_type;
 
       // (a) problem_type mismatch between contract and selection
-      if (contractProblemType && problem_type && contractProblemType !== problem_type) {
+      // Normalize: "binary" and "classification" are equivalent
+      const normalizeProblemType = (t: string) => {
+        const lower = t.toLowerCase();
+        if (lower === "binary" || lower === "classification" || lower === "binary_classification") return "classification";
+        if (lower === "regression" || lower === "continuous") return "regression";
+        return lower;
+      };
+      const normalizedContract = contractProblemType ? normalizeProblemType(contractProblemType) : null;
+      const normalizedSelection = problem_type ? normalizeProblemType(problem_type) : null;
+      if (normalizedContract && normalizedSelection && normalizedContract !== normalizedSelection) {
         contractBlockedReason = `CONTRACT_PROBLEM_TYPE_MISMATCH: contract=${contractProblemType}, selection=${problem_type}`;
         return blockResponse(
           "CONTRACT_PROBLEM_TYPE_MISMATCH",
