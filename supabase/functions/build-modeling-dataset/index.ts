@@ -755,8 +755,8 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Starting for project ${project_id}`);
 
-    // Fetch all context in parallel
-    // ── SSOT: Try project_dataset_state first, fallback to manifest ──
+    // ── FRESH READ: Always read target from project_settings (SSOT for target) ──
+    // The builder NEVER accepts target from the client request body. It reads from the DB.
     const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes] = await Promise.all([
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
@@ -883,13 +883,23 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Intent: ${JSON.stringify(intent)}`);
 
-    // ==================== DETERMINE TARGET ====================
+    // ==================== DETERMINE TARGET (SSOT: fresh from project_settings) ====================
+    // Priority: project_settings.target_column (user's explicit choice) > contract > auto-detect
     let targetColumn = settings?.target_column || null;
     let targetType: "binary" | "multiclass" | "regression" = "binary";
     let targetSource: "direct" | "label_builder" = "direct";
     let labelPlan: LabelPlan | null = null;
     let windowDays: number | null = null;
     const allBlockedReasons: string[] = [];
+
+    // If no target in settings, try existing contract
+    if (!targetColumn && existingContract) {
+      const td = existingContract.target_definition as Record<string, any> | null;
+      if (td?.base_column) targetColumn = td.base_column;
+      else if (td?.derived_target) targetColumn = td.derived_target;
+    }
+
+    console.log(`[build-modeling-dataset] Target source: settings="${settings?.target_column}", contract="${(existingContract?.target_definition as any)?.base_column}", resolved="${targetColumn}"`);
 
     if (targetColumn) {
       const col = enrichedColumns.find(c => c.name === targetColumn);
@@ -1021,6 +1031,20 @@ serve(async (req: Request) => {
     // Use split from gate (may be corrected)
     splitStrategy = trainingGate.split_plan.strategy;
 
+    // ==================== TARGET HASH (for staleness detection) ====================
+    const contractVersion = existingContract?.contract_version || "v1";
+    const targetHashInput = `${project_id}|${targetColumn}|${windowDays || ""}|${anchorTimeCol || ""}|${entityKey || ""}|${contractVersion}`;
+    // Simple hash for staleness detection (not cryptographic)
+    let targetHash = 0;
+    for (let i = 0; i < targetHashInput.length; i++) {
+      const ch = targetHashInput.charCodeAt(i);
+      targetHash = ((targetHash << 5) - targetHash) + ch;
+      targetHash |= 0;
+    }
+    const targetHashStr = `th_${Math.abs(targetHash).toString(36)}`;
+
+    console.log(`[build-modeling-dataset] Target hash: ${targetHashStr}, contract_version: ${contractVersion}`);
+
     // ==================== STATUS ====================
     const totalFeaturesFinal = report.features_final.length + report.features_generated.length;
     const coveragePct = enrichedColumns.length > 0 ? Math.round((report.features_final.length / enrichedColumns.length) * 100) : 0;
@@ -1076,6 +1100,8 @@ serve(async (req: Request) => {
           targetSource,
           labelPlan,
           splitStrategy,
+          target_hash: targetHashStr,
+          contract_version: contractVersion,
           feature_report: {
             features_removed: report.features_removed,
             temporal_features_created: report.temporal_features_created,
@@ -1112,6 +1138,8 @@ serve(async (req: Request) => {
         label_plan: labelPlan,
         window_days: windowDays,
       },
+      target_hash: targetHashStr,
+      contract_version: contractVersion,
       entity_key: entityKey,
       anchor_time_col: anchorTimeCol,
       split_strategy: splitStrategy,
