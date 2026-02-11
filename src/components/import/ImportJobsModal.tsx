@@ -10,6 +10,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { Progress } from "@/components/ui/progress";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { 
   Loader2, 
   CheckCircle, 
@@ -18,7 +20,13 @@ import {
   FileSpreadsheet,
   RefreshCw,
   AlertCircle,
-  Layers
+  Layers,
+  ShieldCheck,
+  ShieldAlert,
+  ShieldX,
+  Play,
+  ChevronDown,
+  ChevronRight,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { format } from "date-fns";
@@ -38,16 +46,49 @@ interface ImportJob {
   batch_id: string | null;
   batch_sequence: number | null;
   is_batch_primary: boolean | null;
+  phase: string | null;
+  total_files: number | null;
+  processed_files: number | null;
+  bytes_total: number | null;
+  bytes_done: number | null;
+}
+
+interface QualityReason {
+  code: string;
+  message: string;
+  severity: string;
+}
+
+interface ImportJobFile {
+  id: string;
+  job_id: string;
+  file_name: string;
+  storage_path: string;
+  file_size_bytes: number;
+  format: string;
+  sequence_index: number;
+  status: string;
+  rows_detected: number | null;
+  cols_detected: number | null;
+  quality_gate: string;
+  quality_reasons: QualityReason[] | null;
+  error_code: string | null;
+  error_message: string | null;
+  retry_count: number;
+  started_at: string | null;
+  finished_at: string | null;
 }
 
 interface BatchGroup {
   batchId: string;
   jobs: ImportJob[];
+  files: ImportJobFile[];
   totalSize: number;
   totalRows: number;
   status: "pending" | "processing" | "completed" | "partial" | "failed";
-  primaryJobName: string;
+  primaryJob: ImportJob;
   createdAt: string;
+  phase: string | null;
 }
 
 interface ImportJobsModalProps {
@@ -57,7 +98,7 @@ interface ImportJobsModalProps {
   onJobCompleted?: () => void;
 }
 
-const POLLING_INTERVAL = 2000; // 2 seconds for faster updates
+const POLLING_INTERVAL = 2000;
 
 const ImportJobsModal = ({
   open,
@@ -68,8 +109,10 @@ const ImportJobsModal = ({
   const { t, i18n } = useTranslation();
   const { toast } = useToast();
   const [jobs, setJobs] = useState<ImportJob[]>([]);
+  const [jobFiles, setJobFiles] = useState<ImportJobFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
   const previousJobsRef = useRef<ImportJob[]>([]);
 
@@ -86,26 +129,31 @@ const ImportJobsModal = ({
     setIsRefreshing(true);
     
     try {
-      const { data, error } = await supabase
-        .from("import_jobs")
-        .select("*")
-        .eq("project_id", projectId)
-        .order("created_at", { ascending: false })
-        .limit(100);
+      // Fetch jobs and job files in parallel
+      const [jobsRes, filesRes] = await Promise.all([
+        supabase
+          .from("import_jobs")
+          .select("*")
+          .eq("project_id", projectId)
+          .order("created_at", { ascending: false })
+          .limit(100),
+        supabase
+          .from("import_job_files")
+          .select("*")
+          .eq("project_id", projectId)
+          .order("sequence_index", { ascending: true })
+          .limit(500),
+      ]);
 
-      if (error) {
-        console.error("Error fetching import jobs:", error);
-        toast({
-          title: t("common.error"),
-          description: t("dataIngestion.import.errors.fetchJobsFailed"),
-          variant: "destructive",
-        });
+      if (jobsRes.error) {
+        console.error("Error fetching import jobs:", jobsRes.error);
         return;
       }
 
-      const newJobs = (data || []) as ImportJob[];
+      const newJobs = (jobsRes.data || []) as ImportJob[];
+      const newFiles = (filesRes.data || []) as unknown as ImportJobFile[];
       
-      // Check if any job completed that was previously processing
+      // Check if any job completed
       const previouslyProcessing = previousJobsRef.current.filter(
         j => j.status === 'processing' || j.status === 'pending'
       );
@@ -120,13 +168,13 @@ const ImportJobsModal = ({
       
       previousJobsRef.current = newJobs;
       setJobs(newJobs);
+      setJobFiles(newFiles);
     } finally {
       setLoading(false);
       setIsRefreshing(false);
     }
-  }, [projectId, onJobCompleted, t, toast]);
+  }, [projectId, onJobCompleted]);
 
-  // Stop polling
   const stopPolling = useCallback(() => {
     if (pollingRef.current) {
       clearInterval(pollingRef.current);
@@ -134,16 +182,12 @@ const ImportJobsModal = ({
     }
   }, []);
 
-  // Start polling if there are active jobs
   const startPolling = useCallback(() => {
     stopPolling();
-    
     pollingRef.current = setInterval(() => {
-      // Check current jobs state using ref to avoid stale closure
       const hasActiveJobs = previousJobsRef.current.some(
         j => j.status === 'pending' || j.status === 'processing'
       );
-      
       if (hasActiveJobs) {
         fetchJobs(false);
       } else {
@@ -152,31 +196,21 @@ const ImportJobsModal = ({
     }, POLLING_INTERVAL);
   }, [fetchJobs, stopPolling]);
 
-  // Initial fetch when modal opens
   useEffect(() => {
     if (open && projectId) {
-      fetchJobs(true).then(() => {
-        startPolling();
-      });
+      fetchJobs(true).then(() => startPolling());
     } else {
       stopPolling();
       setJobs([]);
+      setJobFiles([]);
       previousJobsRef.current = [];
     }
-
-    return () => {
-      stopPolling();
-    };
+    return () => stopPolling();
   }, [open, projectId, fetchJobs, startPolling, stopPolling]);
 
-  // Restart polling when jobs change and there are active ones
   useEffect(() => {
     if (!open) return;
-    
-    const hasActiveJobs = jobs.some(
-      j => j.status === 'pending' || j.status === 'processing'
-    );
-    
+    const hasActiveJobs = jobs.some(j => j.status === 'pending' || j.status === 'processing');
     if (hasActiveJobs && !pollingRef.current) {
       startPolling();
     } else if (!hasActiveJobs) {
@@ -186,32 +220,33 @@ const ImportJobsModal = ({
 
   const handleManualRefresh = () => {
     fetchJobs(false);
-    // Restart polling after manual refresh
-    const hasActiveJobs = jobs.some(
-      j => j.status === 'pending' || j.status === 'processing'
-    );
-    if (hasActiveJobs) {
-      startPolling();
-    }
+    const hasActiveJobs = jobs.some(j => j.status === 'pending' || j.status === 'processing');
+    if (hasActiveJobs) startPolling();
   };
 
   const formatFileSize = (bytes: number) => {
-    if (bytes >= 1024 * 1024 * 1024) {
-      return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
-    }
-    return `${(bytes / 1024 / 1024).toFixed(2)} MB`;
+    if (bytes >= 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
+    if (bytes >= 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+    return `${(bytes / 1024).toFixed(0)} KB`;
   };
 
-  // Group jobs by batch
+  const toggleBatch = (batchId: string) => {
+    setExpandedBatches(prev => {
+      const next = new Set(prev);
+      if (next.has(batchId)) next.delete(batchId);
+      else next.add(batchId);
+      return next;
+    });
+  };
+
+  // Group jobs by batch, enriching with import_job_files
   const groupJobsByBatch = useCallback((): (BatchGroup | ImportJob)[] => {
     const batches = new Map<string, ImportJob[]>();
     const standalone: ImportJob[] = [];
 
     for (const job of jobs) {
       if (job.batch_id) {
-        if (!batches.has(job.batch_id)) {
-          batches.set(job.batch_id, []);
-        }
+        if (!batches.has(job.batch_id)) batches.set(job.batch_id, []);
         batches.get(job.batch_id)!.push(job);
       } else {
         standalone.push(job);
@@ -220,48 +255,57 @@ const ImportJobsModal = ({
 
     const result: (BatchGroup | ImportJob)[] = [];
 
-    // Process batches
     batches.forEach((batchJobs, batchId) => {
-      // Sort by sequence
       batchJobs.sort((a, b) => (a.batch_sequence || 0) - (b.batch_sequence || 0));
-      
+      const primaryJob = batchJobs.find(j => j.is_batch_primary) || batchJobs[0];
       const totalSize = batchJobs.reduce((sum, j) => sum + j.file_size_bytes, 0);
       const totalRows = batchJobs.reduce((sum, j) => sum + (j.rows_processed || 0), 0);
-      const primaryJob = batchJobs.find(j => j.is_batch_primary) || batchJobs[0];
-      
-      // Determine batch status
-      let status: BatchGroup["status"] = "pending";
-      const allCompleted = batchJobs.every(j => j.status === "completed");
-      const allFailed = batchJobs.every(j => j.status === "failed");
-      const anyProcessing = batchJobs.some(j => j.status === "processing");
-      const anyFailed = batchJobs.some(j => j.status === "failed");
-      const anyCompleted = batchJobs.some(j => j.status === "completed");
 
-      if (allCompleted) {
-        status = "completed";
-      } else if (allFailed) {
-        status = "failed";
-      } else if (anyProcessing) {
-        status = "processing";
-      } else if (anyCompleted && anyFailed) {
-        status = "partial";
+      // Get import_job_files for this batch (linked to primary job)
+      const batchFiles = jobFiles.filter(f => f.job_id === primaryJob.id);
+
+      let status: BatchGroup["status"] = "pending";
+      if (batchFiles.length > 0) {
+        const allCompleted = batchFiles.every(f => f.status === "completed");
+        const allFailed = batchFiles.every(f => f.status === "failed");
+        const anyProcessing = batchFiles.some(f => f.status === "processing");
+        const anyCompleted = batchFiles.some(f => f.status === "completed");
+        const anyFailed = batchFiles.some(f => f.status === "failed");
+
+        if (allCompleted) status = "completed";
+        else if (allFailed) status = "failed";
+        else if (anyProcessing) status = "processing";
+        else if (anyCompleted && anyFailed) status = "partial";
+        else if (primaryJob.status === "completed") status = "completed";
+      } else {
+        // Fallback to legacy logic
+        const allCompleted = batchJobs.every(j => j.status === "completed");
+        const allFailed = batchJobs.every(j => j.status === "failed");
+        const anyProcessing = batchJobs.some(j => j.status === "processing");
+        const anyCompleted = batchJobs.some(j => j.status === "completed");
+        const anyFailed = batchJobs.some(j => j.status === "failed");
+
+        if (allCompleted) status = "completed";
+        else if (allFailed) status = "failed";
+        else if (anyProcessing) status = "processing";
+        else if (anyCompleted && anyFailed) status = "partial";
       }
 
       result.push({
         batchId,
         jobs: batchJobs,
+        files: batchFiles,
         totalSize,
         totalRows,
         status,
-        primaryJobName: primaryJob.file_name,
+        primaryJob,
         createdAt: primaryJob.created_at,
+        phase: primaryJob.phase,
       });
     });
 
-    // Add standalone jobs
     result.push(...standalone);
 
-    // Sort by created_at descending
     result.sort((a, b) => {
       const dateA = 'createdAt' in a ? a.createdAt : a.created_at;
       const dateB = 'createdAt' in b ? b.createdAt : b.created_at;
@@ -269,12 +313,9 @@ const ImportJobsModal = ({
     });
 
     return result;
-  }, [jobs]);
+  }, [jobs, jobFiles]);
 
   const getStatusBadge = (status: string, progress?: number) => {
-    // Normalize progress: completed jobs should show 100%
-    const displayProgress = status === 'completed' ? 100 : (progress ?? 0);
-    
     switch (status) {
       case 'completed':
         return (
@@ -287,7 +328,7 @@ const ImportJobsModal = ({
         return (
           <Badge variant="secondary">
             <Loader2 className="w-3 h-3 mr-1 animate-spin" />
-            {displayProgress > 0 ? `${displayProgress}%` : t("dataIngestion.import.statusProcessing")}
+            {(progress ?? 0) > 0 ? `${progress}%` : t("dataIngestion.import.statusProcessing")}
           </Badge>
         );
       case 'failed':
@@ -299,9 +340,9 @@ const ImportJobsModal = ({
         );
       case 'partial':
         return (
-          <Badge variant="secondary" className="bg-orange-500/20 text-orange-700 dark:text-orange-400">
+          <Badge variant="secondary" className="bg-warning/20 text-warning-foreground">
             <AlertCircle className="w-3 h-3 mr-1" />
-            {t("dataIngestion.import.statusPartial") || "Partial"}
+            Parcial
           </Badge>
         );
       default:
@@ -314,23 +355,50 @@ const ImportJobsModal = ({
     }
   };
 
+  const getQualityGateIcon = (gate: string) => {
+    switch (gate) {
+      case 'approved':
+        return <ShieldCheck className="w-3.5 h-3.5 text-accent" />;
+      case 'warn':
+        return <ShieldAlert className="w-3.5 h-3.5 text-muted-foreground" />;
+      case 'blocked':
+        return <ShieldX className="w-3.5 h-3.5 text-destructive" />;
+      default:
+        return <Clock className="w-3.5 h-3.5 text-muted-foreground" />;
+    }
+  };
+
+  const getFileStatusIcon = (status: string) => {
+    switch (status) {
+      case 'completed': return <CheckCircle className="w-3.5 h-3.5 text-accent" />;
+      case 'failed': return <XCircle className="w-3.5 h-3.5 text-destructive" />;
+      case 'processing': return <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />;
+      default: return <Clock className="w-3.5 h-3.5 text-muted-foreground" />;
+    }
+  };
+
   const retryJob = async (jobId: string, batchId?: string | null) => {
     try {
       if (batchId) {
-        // Reset all jobs in batch
+        // Reset failed files back to pending
+        await supabase
+          .from("import_job_files")
+          .update({ status: 'pending', error_code: null, error_message: null, retry_count: 0 })
+          .eq('job_id', jobId)
+          .eq('status', 'failed');
+
+        // Reset primary job
         await supabase
           .from("import_jobs")
-          .update({ status: 'pending', progress: 0, error_message: null })
-          .eq('batch_id', batchId);
+          .update({ status: 'processing', phase: 'ingest', progress: 0, error_message: null })
+          .eq('id', jobId);
       } else {
-        // Reset single job
         await supabase
           .from("import_jobs")
           .update({ status: 'pending', progress: 0, error_message: null })
           .eq('id', jobId);
       }
 
-      // Trigger processing again
       await supabase.functions.invoke("process-import", {
         body: { job_id: jobId, batch_id: batchId },
       });
@@ -352,15 +420,228 @@ const ImportJobsModal = ({
     }
   };
 
-  const groupedItems = groupJobsByBatch();
+  const resumePending = async (primaryJob: ImportJob) => {
+    try {
+      // Simply re-invoke — the function will find the next pending file
+      await supabase.functions.invoke("process-import", {
+        body: { job_id: primaryJob.id, batch_id: primaryJob.batch_id },
+      });
 
-  const isBatchGroup = (item: BatchGroup | ImportJob): item is BatchGroup => {
-    return 'batchId' in item;
+      toast({
+        title: "Retomando importação",
+        description: "Processamento dos arquivos pendentes reiniciado.",
+      });
+
+      fetchJobs();
+      startPolling();
+    } catch (error) {
+      console.error("Resume error:", error);
+      toast({ title: t("common.error"), description: "Falha ao retomar.", variant: "destructive" });
+    }
   };
+
+  const groupedItems = groupJobsByBatch();
+  const isBatchGroup = (item: BatchGroup | ImportJob): item is BatchGroup => 'batchId' in item;
+
+  // ─── Render helpers ───
+
+  const renderFileRow = (file: ImportJobFile) => {
+    const hasReasons = file.quality_reasons && file.quality_reasons.length > 0;
+    const reasonsText = hasReasons
+      ? file.quality_reasons!.map(r => r.message).join("\n")
+      : "";
+
+    return (
+      <div key={file.id} className="flex items-center gap-2 py-1.5 text-sm">
+        <div className="flex items-center gap-1.5 min-w-0 flex-1">
+          {getFileStatusIcon(file.status)}
+          <span className="truncate text-muted-foreground">{file.file_name}</span>
+          <span className="text-xs text-muted-foreground/60 flex-shrink-0">
+            {formatFileSize(file.file_size_bytes)}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          {file.rows_detected && file.rows_detected > 0 && (
+            <span className="text-xs text-muted-foreground">{file.rows_detected.toLocaleString()} rows</span>
+          )}
+          {file.quality_gate && file.quality_gate !== 'pending' && (
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="cursor-help">{getQualityGateIcon(file.quality_gate)}</span>
+                </TooltipTrigger>
+                {hasReasons && (
+                  <TooltipContent side="left" className="max-w-xs">
+                    <div className="space-y-1 text-xs">
+                      {file.quality_reasons!.map((r, i) => (
+                        <div key={i} className="flex items-start gap-1">
+                          <span className={r.severity === 'error' ? 'text-destructive' : r.severity === 'warn' ? 'text-orange-500' : 'text-muted-foreground'}>
+                            {r.severity === 'error' ? '✗' : r.severity === 'warn' ? '⚠' : '✓'}
+                          </span>
+                          <span>{r.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </TooltipContent>
+                )}
+              </Tooltip>
+            </TooltipProvider>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderBatchGroup = (batch: BatchGroup) => {
+    const isExpanded = expandedBatches.has(batch.batchId);
+    const hasFiles = batch.files.length > 0;
+    const completedFiles = batch.files.filter(f => f.status === 'completed').length;
+    const failedFiles = batch.files.filter(f => f.status === 'failed').length;
+    const pendingFiles = batch.files.filter(f => f.status === 'pending').length;
+    const totalFiles = hasFiles ? batch.files.length : batch.jobs.length;
+    const processedCount = hasFiles ? completedFiles + failedFiles : (batch.primaryJob.processed_files || 0);
+    const overallProgress = totalFiles > 0 ? Math.round((processedCount / totalFiles) * 100) : 0;
+
+    const isActive = batch.status === 'processing' || batch.status === 'pending';
+    const canResume = pendingFiles > 0 && !isActive && completedFiles > 0;
+    const canRetry = (batch.status === 'failed' || batch.status === 'partial') && failedFiles > 0;
+    const phaseLabel = batch.phase === 'consolidate' ? 'Consolidando...' : batch.phase === 'ingest' ? `Processando ${processedCount}/${totalFiles}` : null;
+
+    return (
+      <div key={batch.batchId} className="border border-border rounded-lg overflow-hidden">
+        {/* Header */}
+        <div
+          className="p-4 cursor-pointer hover:bg-muted/30 transition-colors"
+          onClick={() => toggleBatch(batch.batchId)}
+        >
+          <div className="flex items-start justify-between">
+            <div className="flex items-center gap-2 min-w-0 flex-1">
+              {isExpanded ? <ChevronDown className="w-4 h-4 text-muted-foreground flex-shrink-0" /> : <ChevronRight className="w-4 h-4 text-muted-foreground flex-shrink-0" />}
+              <Layers className="w-4 h-4 text-primary flex-shrink-0" />
+              <div className="min-w-0">
+                <p className="font-medium truncate">{batch.primaryJob.file_name}</p>
+                <p className="text-sm text-muted-foreground">
+                  {totalFiles} arquivo{totalFiles !== 1 ? 's' : ''} • {formatFileSize(batch.totalSize)}
+                  {batch.totalRows > 0 && ` • ${batch.totalRows.toLocaleString()} linhas`}
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              {phaseLabel && isActive && (
+                <span className="text-xs text-primary font-medium">{phaseLabel}</span>
+              )}
+              {getStatusBadge(batch.status, batch.primaryJob.progress || overallProgress)}
+            </div>
+          </div>
+
+          {/* Overall progress bar */}
+          {isActive && (
+            <div className="mt-3 ml-10">
+              <Progress value={batch.primaryJob.progress || overallProgress} className="h-2" />
+              <div className="flex justify-between mt-1 text-xs text-muted-foreground">
+                <span>{completedFiles} completo{completedFiles !== 1 ? 's' : ''}{failedFiles > 0 && `, ${failedFiles} falha${failedFiles !== 1 ? 's' : ''}`}</span>
+                <span>{batch.primaryJob.progress || overallProgress}%</span>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Expanded files list */}
+        {isExpanded && (
+          <div className="border-t border-border bg-muted/10 px-4 py-3 space-y-0.5">
+            {hasFiles ? (
+              <>
+                {batch.files.map(renderFileRow)}
+
+                {/* Error details */}
+                {batch.files.filter(f => f.status === 'failed' && f.error_message).map(file => (
+                  <div key={`err-${file.id}`} className="flex items-start gap-2 p-2 mt-2 bg-destructive/10 rounded text-sm">
+                    <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-medium text-destructive">{file.file_name}:</p>
+                      <p className="text-destructive/80 text-xs">{file.error_message}</p>
+                    </div>
+                  </div>
+                ))}
+              </>
+            ) : (
+              // Legacy: show jobs list
+              batch.jobs.map(job => (
+                <div key={job.id} className="flex items-center justify-between text-sm py-1">
+                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                    {getFileStatusIcon(job.status)}
+                    <span className="truncate text-muted-foreground">{job.file_name}</span>
+                    <span className="text-xs text-muted-foreground/60">{formatFileSize(job.file_size_bytes)}</span>
+                  </div>
+                </div>
+              ))
+            )}
+
+            {/* Action buttons */}
+            <div className="flex items-center gap-2 pt-3 mt-2 border-t border-border/50">
+              <span className="text-xs text-muted-foreground flex-1">
+                {format(new Date(batch.createdAt), 'PPp', { locale: getDateLocale() })}
+              </span>
+              {canResume && (
+                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); resumePending(batch.primaryJob); }}>
+                  <Play className="w-3 h-3 mr-1" />
+                  Retomar
+                </Button>
+              )}
+              {canRetry && (
+                <Button variant="outline" size="sm" onClick={(e) => { e.stopPropagation(); retryJob(batch.primaryJob.id, batch.batchId); }}>
+                  <RefreshCw className="w-3 h-3 mr-1" />
+                  {t("dataIngestion.import.retry")}
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderStandaloneJob = (job: ImportJob) => (
+    <div key={job.id} className="p-4 border border-border rounded-lg space-y-2">
+      <div className="flex items-start justify-between">
+        <div className="flex-1 min-w-0">
+          <p className="font-medium truncate">{job.file_name}</p>
+          <p className="text-sm text-muted-foreground">
+            {formatFileSize(job.file_size_bytes)}
+            {job.rows_processed && ` • ${job.rows_processed.toLocaleString()} ${t("dataIngestion.import.rows")}`}
+          </p>
+        </div>
+        {getStatusBadge(job.status, job.progress)}
+      </div>
+
+      {(job.status === 'processing' || job.status === 'pending') && (
+        <Progress value={job.status === 'pending' ? 5 : (job.progress || 0)} className="h-2" />
+      )}
+
+      {job.status === 'failed' && job.error_message && (
+        <div className="flex items-start gap-2 p-2 bg-destructive/10 rounded text-sm">
+          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+          <p className="text-destructive">{job.error_message}</p>
+        </div>
+      )}
+
+      <div className="flex items-center justify-between text-xs text-muted-foreground">
+        <span>{format(new Date(job.created_at), 'PPp', { locale: getDateLocale() })}</span>
+        {job.finished_at && <span>{format(new Date(job.finished_at), 'PPp', { locale: getDateLocale() })}</span>}
+      </div>
+
+      {job.status === 'failed' && (
+        <Button variant="outline" size="sm" onClick={() => retryJob(job.id)} className="mt-2">
+          <RefreshCw className="w-4 h-4 mr-1" />
+          {t("dataIngestion.import.retry")}
+        </Button>
+      )}
+    </div>
+  );
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-[650px]">
+      <DialogContent className="sm:max-w-[680px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <FileSpreadsheet className="w-5 h-5" />
@@ -372,18 +653,13 @@ const ImportJobsModal = ({
         </DialogHeader>
 
         <div className="flex justify-end mb-2">
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleManualRefresh}
-            disabled={loading || isRefreshing}
-          >
+          <Button variant="ghost" size="sm" onClick={handleManualRefresh} disabled={loading || isRefreshing}>
             <RefreshCw className={`w-4 h-4 mr-1 ${isRefreshing ? 'animate-spin' : ''}`} />
             {t("common.refresh")}
           </Button>
         </div>
 
-        <ScrollArea className="max-h-[450px]">
+        <ScrollArea className="max-h-[500px]">
           {loading && jobs.length === 0 ? (
             <div className="flex items-center justify-center py-8">
               <Loader2 className="w-6 h-6 animate-spin text-muted-foreground" />
@@ -395,177 +671,11 @@ const ImportJobsModal = ({
             </div>
           ) : (
             <div className="space-y-3">
-              {groupedItems.map((item) => {
-                if (isBatchGroup(item)) {
-                  // Render batch group
-                  return (
-                    <div
-                      key={item.batchId}
-                      className="p-4 border border-border rounded-lg space-y-3"
-                    >
-                      {/* Batch header */}
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            <Layers className="w-4 h-4 text-primary" />
-                            <p className="font-medium truncate">{item.primaryJobName}</p>
-                          </div>
-                          <p className="text-sm text-muted-foreground">
-                            {item.jobs.length} {item.jobs.length === 1 
-                              ? t("dataIngestion.batchImport.file") 
-                              : t("dataIngestion.batchImport.filesPlural")} • {formatFileSize(item.totalSize)}
-                            {item.totalRows > 0 && ` • ${item.totalRows.toLocaleString()} ${t("dataIngestion.import.rows")}`}
-                          </p>
-                        </div>
-                        {getStatusBadge(item.status)}
-                      </div>
-
-                      {/* Progress for processing/pending batches */}
-                      {(item.status === 'processing' || item.status === 'pending') && (
-                        <div className="space-y-1">
-                          {item.jobs.map((job) => {
-                            // Show progress for processing jobs, or pending indicator
-                            if (job.status === 'processing' || job.status === 'pending') {
-                              const progress = job.progress || 0;
-                              return (
-                                <div key={job.id} className="space-y-1">
-                                  <div className="flex justify-between text-xs text-muted-foreground">
-                                    <span className="truncate max-w-[200px]">{job.file_name}</span>
-                                    <span>{job.status === 'pending' ? t("dataIngestion.import.statusPending") : `${progress}%`}</span>
-                                  </div>
-                                  <div className="w-full bg-muted rounded-full h-1.5">
-                                    <div 
-                                      className={`h-1.5 rounded-full transition-all ${job.status === 'pending' ? 'bg-muted-foreground/30' : 'bg-primary'}`}
-                                      style={{ width: job.status === 'pending' ? '5%' : `${progress}%` }}
-                                    />
-                                  </div>
-                                </div>
-                              );
-                            }
-                            return null;
-                          })}
-                        </div>
-                      )}
-
-                      {/* Files list for batch */}
-                      <div className="space-y-1 pl-4 border-l-2 border-muted">
-                        {item.jobs.map((job) => (
-                          <div key={job.id} className="flex items-center justify-between text-sm py-1">
-                            <div className="flex items-center gap-2 min-w-0 flex-1">
-                              <span className="truncate text-muted-foreground">
-                                {job.batch_sequence}. {job.file_name.replace(item.primaryJobName, '').replace(/^_part\d+$/, '') || job.file_name}
-                              </span>
-                              <span className="text-xs text-muted-foreground flex-shrink-0">
-                                {formatFileSize(job.file_size_bytes)}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-1">
-                              {job.status === 'completed' && <CheckCircle className="w-3 h-3 text-accent" />}
-                              {job.status === 'failed' && <XCircle className="w-3 h-3 text-destructive" />}
-                              {job.status === 'processing' && <Loader2 className="w-3 h-3 animate-spin text-primary" />}
-                              {job.status === 'pending' && <Clock className="w-3 h-3 text-muted-foreground" />}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Error messages */}
-                      {item.jobs.filter(j => j.status === 'failed' && j.error_message).map((job) => (
-                        <div key={`error-${job.id}`} className="flex items-start gap-2 p-2 bg-destructive/10 rounded text-sm">
-                          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-                          <div>
-                            <p className="font-medium text-destructive">{job.file_name}:</p>
-                            <p className="text-destructive/80">{job.error_message}</p>
-                          </div>
-                        </div>
-                      ))}
-
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>
-                          {t("dataIngestion.import.createdAt")}: {format(new Date(item.createdAt), 'PPp', { locale: getDateLocale() })}
-                        </span>
-                        {(item.status === 'failed' || item.status === 'partial') && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => {
-                              const primaryJob = item.jobs.find(j => j.is_batch_primary);
-                              if (primaryJob) {
-                                retryJob(primaryJob.id, item.batchId);
-                              }
-                            }}
-                          >
-                            <RefreshCw className="w-3 h-3 mr-1" />
-                            {t("dataIngestion.import.retry")}
-                          </Button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                } else {
-                  // Render standalone job
-                  const job = item;
-                  return (
-                    <div
-                      key={job.id}
-                      className="p-4 border border-border rounded-lg space-y-2"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{job.file_name}</p>
-                          <p className="text-sm text-muted-foreground">
-                            {formatFileSize(job.file_size_bytes)}
-                            {job.rows_processed && ` • ${job.rows_processed.toLocaleString()} ${t("dataIngestion.import.rows")}`}
-                          </p>
-                        </div>
-                        {getStatusBadge(job.status, job.progress)}
-                      </div>
-
-                      {/* Progress bar for processing/pending jobs */}
-                      {(job.status === 'processing' || job.status === 'pending') && (
-                        <div className="w-full bg-muted rounded-full h-2">
-                          <div 
-                            className={`h-2 rounded-full transition-all ${job.status === 'pending' ? 'bg-muted-foreground/30' : 'bg-primary'}`}
-                            style={{ width: job.status === 'pending' ? '5%' : `${job.progress || 0}%` }}
-                          />
-                        </div>
-                      )}
-
-                      {/* Error message */}
-                      {job.status === 'failed' && job.error_message && (
-                        <div className="flex items-start gap-2 p-2 bg-destructive/10 rounded text-sm">
-                          <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-                          <p className="text-destructive">{job.error_message}</p>
-                        </div>
-                      )}
-
-                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                        <span>
-                          {t("dataIngestion.import.createdAt")}: {format(new Date(job.created_at), 'PPp', { locale: getDateLocale() })}
-                        </span>
-                        {job.finished_at && (
-                          <span>
-                            {t("dataIngestion.import.finishedAt")}: {format(new Date(job.finished_at), 'PPp', { locale: getDateLocale() })}
-                          </span>
-                        )}
-                      </div>
-
-                      {/* Retry button for failed jobs */}
-                      {job.status === 'failed' && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => retryJob(job.id)}
-                          className="mt-2"
-                        >
-                          <RefreshCw className="w-4 h-4 mr-1" />
-                          {t("dataIngestion.import.retry")}
-                        </Button>
-                      )}
-                    </div>
-                  );
-                }
-              })}
+              {groupedItems.map((item) =>
+                isBatchGroup(item)
+                  ? renderBatchGroup(item)
+                  : renderStandaloneJob(item)
+              )}
             </div>
           )}
         </ScrollArea>
