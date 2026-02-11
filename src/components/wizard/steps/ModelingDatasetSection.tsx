@@ -93,7 +93,7 @@ interface Props {
   /** Must persist the current target/settings to DB before build starts */
   onSaveBeforeBuild?: () => Promise<boolean>;
   /** Called after a successful build so parent can refresh preflight etc. */
-  onBuildComplete?: () => void;
+  onBuildComplete?: () => void | Promise<void>;
 }
 
 const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, onBuildComplete }: Props) => {
@@ -182,6 +182,11 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, on
 
       if (data.status === "READY" || data.status === "WARNING") {
         toast.success(`Dataset construído! Target: ${data.target?.column || targetColumn}`);
+        await loadPersisted();
+        await loadSelectionVersion();
+        onBuildComplete?.();
+      } else if (data.status === "SELECTION_CHANGED_RETRY") {
+        toast.warning("Seleção mudou durante a construção. Atualize e reconstrua o dataset.");
         await loadPersisted();
         await loadSelectionVersion();
         onBuildComplete?.();

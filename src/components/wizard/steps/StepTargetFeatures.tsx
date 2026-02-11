@@ -837,10 +837,14 @@ const StepTargetFeatures = ({
           projectId={projectData.id}
           targetColumn={targetColumn}
           onSaveBeforeBuild={handleSaveSettings}
-          onBuildComplete={() => {
-            // Re-run preflight and reload dataset state after builder completes
+          onBuildComplete={async () => {
+            // Full cache bust: reload SSOT, selection version, THEN bump preflight
+            await Promise.all([
+              ds.load(),
+              loadSelectionVersion(),
+            ]);
+            // Bump preflight AFTER fresh data is loaded
             setPreflightRefreshKey(k => k + 1);
-            ds.load();
           }}
         />
 
