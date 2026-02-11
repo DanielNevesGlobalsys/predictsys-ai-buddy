@@ -757,7 +757,7 @@ serve(async (req: Request) => {
 
     // ── FRESH READ: Always read target from project_settings (SSOT for target) ──
     // The builder NEVER accepts target from the client request body. It reads from the DB.
-    const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes] = await Promise.all([
+    const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes, selectionRes] = await Promise.all([
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("import_manifests").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
@@ -767,6 +767,7 @@ serve(async (req: Request) => {
       supabase.from("project_settings").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_problem_inference").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const aiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
@@ -778,6 +779,7 @@ serve(async (req: Request) => {
     const settings = settingsRes.data;
     const inference = inferenceRes.data;
     const existingContract = contractRes.data;
+    const modelSelection = selectionRes.data as { target_column: string | null; selection_version: number; selected_features: string[]; problem_type: string | null; target_hash: string | null } | null;
 
     // ── Determine row_count from SSOT (dataset_state > manifest > project) ──
     let totalRows = 0;
@@ -883,23 +885,24 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Intent: ${JSON.stringify(intent)}`);
 
-    // ==================== DETERMINE TARGET (SSOT: fresh from project_settings) ====================
-    // Priority: project_settings.target_column (user's explicit choice) > contract > auto-detect
-    let targetColumn = settings?.target_column || null;
+    // ==================== DETERMINE TARGET (SSOT: project_model_selection > project_settings > contract > auto) ====================
+    // Priority: model_selection.target_column (versioned) > settings.target_column > contract > auto-detect
+    const selectionVersion = modelSelection?.selection_version || 0;
+    let targetColumn = modelSelection?.target_column || settings?.target_column || null;
     let targetType: "binary" | "multiclass" | "regression" = "binary";
     let targetSource: "direct" | "label_builder" = "direct";
     let labelPlan: LabelPlan | null = null;
     let windowDays: number | null = null;
     const allBlockedReasons: string[] = [];
 
-    // If no target in settings, try existing contract
+    console.log(`[build-modeling-dataset] Target source: selection="${modelSelection?.target_column}" (v${selectionVersion}), settings="${settings?.target_column}", resolved="${targetColumn}"`);
+
+    // If no target in selection or settings, try existing contract
     if (!targetColumn && existingContract) {
       const td = existingContract.target_definition as Record<string, any> | null;
       if (td?.base_column) targetColumn = td.base_column;
       else if (td?.derived_target) targetColumn = td.derived_target;
     }
-
-    console.log(`[build-modeling-dataset] Target source: settings="${settings?.target_column}", contract="${(existingContract?.target_definition as any)?.base_column}", resolved="${targetColumn}"`);
 
     if (targetColumn) {
       const col = enrichedColumns.find(c => c.name === targetColumn);
@@ -1061,8 +1064,11 @@ serve(async (req: Request) => {
 
     const modelingDatasetReady = status === "ready" || status === "warning";
 
-    // ==================== PERSIST ====================
-    await supabase.from("project_modeling_datasets").delete().eq("project_id", project_id);
+    // Mark old datasets as not current
+    await supabase.from("project_modeling_datasets")
+      .update({ is_current: false, stale_reason: "NEW_BUILD" })
+      .eq("project_id", project_id)
+      .eq("is_current", true);
 
     const { data: saved, error: saveErr } = await supabase
       .from("project_modeling_datasets")
@@ -1088,6 +1094,9 @@ serve(async (req: Request) => {
         leakage_report: report.leakage_columns,
         split_strategy: splitStrategy,
         status,
+        selection_version_used: selectionVersion,
+        is_current: true,
+        stale_reason: null,
         blocked_reasons: allBlockedReasons,
         build_log: {
           intent,

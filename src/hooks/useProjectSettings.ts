@@ -98,6 +98,45 @@ export function useProjectSettings(projectId: string | undefined) {
         return false;
       }
 
+      // Also upsert project_model_selection for versioned SSOT
+      // Increment selection_version on each save
+      const { data: existing } = await supabase
+        .from("project_model_selection" as any)
+        .select("selection_version")
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      const currentVersion = (existing as any)?.selection_version || 0;
+      const newVersion = currentVersion + 1;
+
+      // Compute target_hash
+      const hashInput = `${projectId}|${payload.target_column}|${newVersion}`;
+      let hash = 0;
+      for (let i = 0; i < hashInput.length; i++) {
+        const ch = hashInput.charCodeAt(i);
+        hash = ((hash << 5) - hash) + ch;
+        hash |= 0;
+      }
+      const targetHash = `th_${Math.abs(hash).toString(36)}`;
+
+      await supabase.from("project_model_selection" as any).upsert({
+        project_id: projectId,
+        organization_id: payload.org_id || null,
+        target_column: payload.target_column,
+        problem_type: payload.problem_type,
+        selected_features: payload.feature_columns,
+        excluded_features: payload.excluded_columns,
+        selection_version: newVersion,
+        target_hash: targetHash,
+        updated_at: new Date().toISOString(),
+      } as any, { onConflict: "project_id" } as any);
+
+      // Mark existing modeling datasets as stale if target changed
+      await supabase.from("project_modeling_datasets" as any)
+        .update({ is_current: false, stale_reason: "TARGET_CHANGED" } as any)
+        .eq("project_id", projectId)
+        .eq("is_current", true);
+
       setSettings({
         ...record,
         updated_at: new Date().toISOString(),

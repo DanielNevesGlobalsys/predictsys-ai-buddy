@@ -104,11 +104,27 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: 
   // Track if the current target differs from the last built target
   const lastBuiltTarget = persisted?.target_column;
   const buildTargetHash = (persisted?.build_log as any)?.target_hash || null;
+  const builderSelVersion = (persisted as any)?.selection_version_used || 0;
+  const [currentSelVersion, setCurrentSelVersion] = useState(0);
   const isStale = !!lastBuiltTarget && lastBuiltTarget !== "__none__" && lastBuiltTarget !== targetColumn;
+  const isVersionStale = currentSelVersion > 0 && builderSelVersion > 0 && builderSelVersion < currentSelVersion;
 
   useEffect(() => {
-    if (projectId) loadPersisted();
+    if (projectId) {
+      loadPersisted();
+      loadSelectionVersion();
+    }
   }, [projectId]);
+
+  const loadSelectionVersion = async () => {
+    if (!projectId) return;
+    const { data } = await supabase
+      .from("project_model_selection" as any)
+      .select("selection_version")
+      .eq("project_id", projectId)
+      .maybeSingle();
+    if (data) setCurrentSelVersion((data as any).selection_version || 0);
+  };
 
   const loadPersisted = async () => {
     if (!projectId) return;
@@ -117,6 +133,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: 
       .from("project_modeling_datasets")
       .select("*")
       .eq("project_id", projectId)
+      .eq("is_current", true)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -257,11 +274,11 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: 
               {displayData.status}
             </Badge>
           )}
-          <Button size="sm" variant={isStale ? "default" : displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
+          <Button size="sm" variant={(isStale || isVersionStale) ? "default" : displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
             {building ? (
               <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Construindo...</>
-            ) : isStale ? (
-              <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir (target mudou)</>
+            ) : (isStale || isVersionStale) ? (
+              <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir (seleção mudou)</>
             ) : displayData ? (
               <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir</>
             ) : (
@@ -271,23 +288,29 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: 
         </div>
       </div>
 
-      {/* Stale warning: target changed since last build */}
-      {isStale && displayData && (
+      {/* Stale warning: target changed or version outdated */}
+      {(isStale || isVersionStale) && displayData && (
         <Alert className="bg-amber-500/5 border-amber-500/20">
           <AlertTriangle className="w-4 h-4 text-amber-500" />
           <AlertDescription className="text-xs">
-            <strong>Dataset desatualizado:</strong> Target mudou de <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{lastBuiltTarget}</code> para <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{targetColumn}</code>. Clique em "Reconstruir" para atualizar.
+            <strong>Dataset desatualizado:</strong>{" "}
+            {isStale
+              ? <>Target mudou de <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{lastBuiltTarget}</code> para <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{targetColumn}</code>.</>
+              : <>Seleção atualizada (v{currentSelVersion}) mas builder usa v{builderSelVersion}.</>
+            }
+            {" "}Clique em "Reconstruir" para atualizar.
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Target used in last build */}
-      {displayData?.target?.column && !isStale && (
+      {/* Target used in last build + version info */}
+      {displayData?.target?.column && !isStale && !isVersionStale && (
         <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
           <Target className="w-3 h-3" />
           <span>Target usado no builder: <strong>{displayData.target.column}</strong></span>
           {(displayData as any).target_hash && <span className="font-mono text-[10px]">({(displayData as any).target_hash})</span>}
           {(displayData as any).contract_version && <span>v{(displayData as any).contract_version}</span>}
+          {builderSelVersion > 0 && <Badge variant="outline" className="text-[10px]">sel v{builderSelVersion}</Badge>}
         </div>
       )}
 

@@ -28,6 +28,7 @@ import type { ProjectData } from "../WizardContainer";
 import type { FeatureExpression } from "@/lib/featureEngineering";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
+import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
@@ -86,6 +87,7 @@ const StepTargetFeatures = ({
 
   // Inference panel
   const [appliedTargetColumn, setAppliedTargetColumn] = useState<string | null>(null);
+  const [selectionVersion, setSelectionVersion] = useState<number | null>(null);
   const [hasEDA, setHasEDA] = useState(false);
   const inferenceAutoLoaded = useRef(false);
 
@@ -105,6 +107,7 @@ const StepTargetFeatures = ({
       loadColumns();
       checkEDA();
       ds.load();
+      loadSelectionVersion();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -112,6 +115,16 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  const loadSelectionVersion = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_model_selection" as any)
+      .select("selection_version")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data) setSelectionVersion((data as any).selection_version);
+  };
 
   // Coverage stats from fallback
   const coverageStats = ds.fallback?.coverageStats as CoverageStats | null;
@@ -337,6 +350,10 @@ const StepTargetFeatures = ({
         title: t("lysSuggestions.settingsSaved", "Configuração salva!"),
         description: t("lysSuggestions.settingsSavedDesc", "Target, features e configurações foram persistidos."),
       });
+
+      // Reload selection version after save
+      await loadSelectionVersion();
+
       return true;
     }
     return false;
@@ -804,8 +821,19 @@ const StepTargetFeatures = ({
           )}
         </div>
 
+        {/* Selection Version Badge */}
+        {selectionVersion !== null && (
+          <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg text-xs text-muted-foreground">
+            <Save className="w-3.5 h-3.5" />
+            <span>Seleção <strong>v{selectionVersion}</strong> salva</span>
+          </div>
+        )}
+
         {/* === Dataset Modelável Section === */}
         <ModelingDatasetSection projectId={projectData.id} targetColumn={targetColumn} onSaveBeforeBuild={handleSaveSettings} />
+
+        {/* === Training Preflight Panel === */}
+        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} />
 
         {/* Preflight Checklist */}
         {targetColumn && (
