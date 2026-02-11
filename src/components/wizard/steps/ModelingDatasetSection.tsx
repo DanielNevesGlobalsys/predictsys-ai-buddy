@@ -94,9 +94,13 @@ interface Props {
   onSaveBeforeBuild?: () => Promise<boolean>;
   /** Called after a successful build so parent can refresh preflight etc. */
   onBuildComplete?: () => void | Promise<void>;
+  /** When true, disables the build button (e.g. materialization in progress) */
+  disabled?: boolean;
+  /** Reason shown as tooltip when disabled */
+  disabledReason?: string;
 }
 
-const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, onBuildComplete }: Props) => {
+const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, onBuildComplete, disabled, disabledReason }: Props) => {
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState<ModelingDatasetResult | null>(null);
   const [persisted, setPersisted] = useState<PersistedDataset | null>(null);
@@ -145,7 +149,35 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, on
   };
 
   const handleBuild = useCallback(async () => {
-    if (!projectId) return;
+    if (!projectId || disabled) return;
+
+    // Pre-build gate: check for unmaterialized derived features
+    try {
+      const { data: features } = await supabase
+        .from("project_features")
+        .select("name")
+        .eq("project_id", projectId)
+        .eq("enabled", true);
+
+      if (features && features.length > 0) {
+        const { data: cols } = await supabase
+          .from("project_columns")
+          .select("column_name")
+          .eq("project_id", projectId);
+
+        const colNames = new Set((cols || []).map((c: any) => c.column_name));
+        const unmaterialized = features.filter((f: any) => !colNames.has(f.name));
+
+        if (unmaterialized.length > 0) {
+          toast.error(
+            `${unmaterialized.length} feature(s) derivada(s) ainda não materializada(s). Aguarde a materialização concluir antes de construir o dataset.`
+          );
+          return;
+        }
+      }
+    } catch (checkErr) {
+      console.warn("Pre-build feature check failed:", checkErr);
+    }
 
     // CRITICAL: Save current target/settings to DB BEFORE building
     // This prevents the race condition where the builder reads stale settings
@@ -284,7 +316,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, on
               {displayData.status}
             </Badge>
           )}
-          <Button size="sm" variant={(isStale || isVersionStale) ? "default" : displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
+          <Button size="sm" variant={(isStale || isVersionStale) ? "default" : displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn || disabled} title={disabled ? disabledReason : undefined}>
             {building ? (
               <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Construindo...</>
             ) : (isStale || isVersionStale) ? (

@@ -49,6 +49,7 @@ interface FeatureEngineeringSectionProps {
   columns: { column_name: string; inferred_type: string }[];
   onFeaturesChanged?: () => void;
   onMaterializationComplete?: () => void;
+  onMaterializingChange?: (isMaterializing: boolean) => void;
 }
 
 export default function FeatureEngineeringSection({
@@ -56,6 +57,7 @@ export default function FeatureEngineeringSection({
   columns,
   onFeaturesChanged,
   onMaterializationComplete,
+  onMaterializingChange,
 }: FeatureEngineeringSectionProps) {
   const { t } = useTranslation();
   const [features, setFeatures] = useState<ProjectFeature[]>([]);
@@ -99,6 +101,7 @@ export default function FeatureEngineeringSection({
 
   const triggerMaterialization = async () => {
     setMaterializing(true);
+    onMaterializingChange?.(true);
     try {
       const { data: session } = await supabase.auth.getSession();
       const token = session?.session?.access_token;
@@ -127,6 +130,7 @@ export default function FeatureEngineeringSection({
       toast.error("Erro ao materializar features derivadas");
     } finally {
       setMaterializing(false);
+      onMaterializingChange?.(false);
     }
   };
 
