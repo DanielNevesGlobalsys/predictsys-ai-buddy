@@ -209,9 +209,12 @@ const StepTargetFeatures = ({
       }
 
       const cols: ColumnInfo[] = [];
+      // Track seen names (lowercase) to deduplicate physical columns vs derived features
+      const seenLower = new Set<string>();
 
       if (colData && colData.length > 0) {
         for (const col of colData) {
+          seenLower.add(col.column_name.toLowerCase());
           cols.push({
             name: col.column_name,
             type: col.inferred_type,
@@ -220,10 +223,22 @@ const StepTargetFeatures = ({
         }
       }
 
+      // Only add derived features that are NOT already in project_columns (physical)
       if (featureData && featureData.length > 0) {
         for (const feature of featureData) {
+          if (seenLower.has(feature.name.toLowerCase())) {
+            // Already exists as physical column — skip to avoid duplicate
+            // Find the physical column and mark it as derived+materialized
+            const physIdx = cols.findIndex(c => c.name.toLowerCase() === feature.name.toLowerCase());
+            if (physIdx >= 0) {
+              cols[physIdx].isFeature = true;
+              cols[physIdx].featureLabel = feature.label + " (materializado)";
+            }
+            continue;
+          }
           const expr = feature.expression as FeatureExpression | null;
           const hasError = !expr || !expr.type;
+          seenLower.add(feature.name.toLowerCase());
           cols.push({
             name: feature.name,
             type: "numérico",
@@ -629,6 +644,11 @@ const StepTargetFeatures = ({
                         <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">
                           {col.type}
                         </span>
+                        {col.isFeature && (
+                          <Badge variant="secondary" className="text-[10px] py-0">
+                            {col.featureLabel?.includes("materializado") ? "derivado ✓" : "derivado"}
+                          </Badge>
+                        )}
                         {roleBadge && ROLE_SHORT[roleBadge] && (
                           <Badge
                             variant={roleBadge === "DERIVADA_LEAKAGE" ? "destructive" : "outline"}
