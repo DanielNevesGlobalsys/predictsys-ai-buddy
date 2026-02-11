@@ -81,6 +81,10 @@ const StepTargetFeatures = ({
   // SSOT dataset state
   const ds = useDatasetState(projectData.id);
 
+  // Builder version mismatch tracking
+  const [builderVersionUsed, setBuilderVersionUsed] = useState<number | null>(null);
+  const [isRebuilding, setIsRebuilding] = useState(false);
+
   // Column inference matrix data
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
   const columnInferenceMap = useRef(new Map<string, ColumnInferenceRow>());
@@ -111,6 +115,7 @@ const StepTargetFeatures = ({
       checkEDA();
       ds.load();
       loadSelectionVersion();
+      loadBuilderVersion();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -118,6 +123,20 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  const loadBuilderVersion = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_modeling_datasets" as any)
+      .select("selection_version_used")
+      .eq("project_id", projectData.id)
+      .eq("is_current", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (data) setBuilderVersionUsed((data as any).selection_version_used ?? null);
+    else setBuilderVersionUsed(null);
+  };
 
   const loadSelectionVersion = async () => {
     if (!projectData.id) return;
@@ -852,16 +871,32 @@ const StepTargetFeatures = ({
           </div>
         )}
 
+        {/* Builder Version Mismatch Banner */}
+        {selectionVersion !== null && builderVersionUsed !== null && selectionVersion !== builderVersionUsed && (
+          <div className="p-4 rounded-lg border border-destructive/30 bg-destructive/5 space-y-2">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-destructive" />
+              <p className="text-sm font-semibold text-destructive">
+                Builder desatualizado (built v{builderVersionUsed}, current v{selectionVersion})
+              </p>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              A seleção de target/features mudou desde o último build. Regere o Dataset Modelável abaixo para poder treinar.
+            </p>
+          </div>
+        )}
+
         {/* === Dataset Modelável Section === */}
         <ModelingDatasetSection
           projectId={projectData.id}
           targetColumn={targetColumn}
           onSaveBeforeBuild={handleSaveSettings}
           onBuildComplete={async () => {
-            // Full cache bust: reload SSOT, selection version, THEN bump preflight
+            // Full cache bust: reload SSOT, selection version, builder version, THEN bump preflight
             await Promise.all([
               ds.load(),
               loadSelectionVersion(),
+              loadBuilderVersion(),
             ]);
             // Bump preflight AFTER fresh data is loaded
             setPreflightRefreshKey(k => k + 1);

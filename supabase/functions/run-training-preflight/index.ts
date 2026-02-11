@@ -284,13 +284,21 @@ serve(async (req: Request) => {
 
     // Find first block for CTA
     const firstBlock = gates.find(g => g.status === "BLOCK");
-    const blockedReasonCode = firstBlock?.gate?.toUpperCase() + "_BLOCK" || null;
+    // Use explicit BUILDER_OUTDATED code when builder version mismatch is the issue
+    let blockedReasonCode: string | null = null;
+    if (firstBlock) {
+      if (firstBlock.gate === "builder" && firstBlock.details?.stale_reason) {
+        blockedReasonCode = "BUILDER_OUTDATED";
+      } else {
+        blockedReasonCode = firstBlock.gate?.toUpperCase() + "_BLOCK";
+      }
+    }
 
     const ctaMap: Record<string, string> = {
       dataset: "Voltar e importar dados",
       intent: "Gerar Intent Contract",
       selection: "Voltar e selecionar target",
-      builder: "Gerar Dataset Modelável",
+      builder: "Voltar para Etapa 4 e Regerar Dataset Modelável",
       training_gate: "Revisar configuração do modelo",
     };
 

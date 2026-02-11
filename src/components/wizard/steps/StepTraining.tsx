@@ -144,6 +144,10 @@ const StepTraining = ({
     if (data) setSelectionVersion((data as any).selection_version);
   }, [projectData.id]);
 
+  // Track whether we already checked for builder outdated redirect
+  const [builderOutdatedChecked, setBuilderOutdatedChecked] = useState(false);
+  const [builderOutdated, setBuilderOutdated] = useState(false);
+
   useEffect(() => {
     loadExistingModels();
     detectProblemType();
@@ -151,9 +155,37 @@ const StepTraining = ({
     // Force SSOT reload + selection version on mount
     ds.load();
     loadSelectionVersion();
+    // Run preflight and check for BUILDER_OUTDATED — auto-redirect to step 4
+    runPreflightGuard();
     // Bump preflight key to force fresh check
     setPreflightRefreshKey(k => k + 1);
   }, [projectData.id]);
+
+  const runPreflightGuard = useCallback(async () => {
+    if (!projectData.id) return;
+    try {
+      const { data, error: fnErr } = await supabase.functions.invoke("run-training-preflight", {
+        body: { project_id: projectData.id },
+      });
+      if (fnErr || !data) return;
+      const result = data as any;
+      if (!result.builder_is_current || result.blocked_reason_code === "BUILDER_OUTDATED") {
+        setBuilderOutdated(true);
+        const currentV = result.selection_version_current || "?";
+        const builtV = result.selection_version_used_by_builder ?? "?";
+        toast.warning(
+          `Seleção mudou para v${currentV} (builder em v${builtV}). Volte à Etapa 4 e Regere o Dataset Modelável.`,
+          { duration: 8000 }
+        );
+        // Auto-redirect to step 4
+        onBack();
+      }
+      setBuilderOutdatedChecked(true);
+    } catch (err) {
+      console.error("[StepTraining] preflight guard error:", err);
+      setBuilderOutdatedChecked(true);
+    }
+  }, [projectData.id, onBack]);
 
   const checkTrainReadiness = async () => {
     if (!projectData.id) return;
