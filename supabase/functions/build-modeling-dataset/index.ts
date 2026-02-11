@@ -1151,6 +1151,27 @@ serve(async (req: Request) => {
       });
     }
 
+    // ── POST-BUILD: Sync project_dataset_state SSOT with builder results ──
+    const diagnosticsUpdate: Record<string, any> = {
+      ...(datasetState?.diagnostics as Record<string, any> || {}),
+      builder_dataset_id: saved.id,
+      selection_version_used: selectionVersion,
+      builder_status: status,
+      builder_updated_at: new Date().toISOString(),
+    };
+
+    await supabase.from("project_dataset_state")
+      .update({
+        model_ready: modelingDatasetReady,
+        row_count: totalRows,
+        col_count: totalFeaturesFinal + 1,
+        diagnostics: diagnosticsUpdate,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("project_id", project_id);
+
+    console.log(`[build-modeling-dataset] Synced project_dataset_state: model_ready=${modelingDatasetReady}, builder_dataset_id=${saved.id}`);
+
     // ── POST-BUILD: Re-check selection_version for race condition ──
     if (selectionVersion > 0) {
       const { data: postCheck } = await supabase
@@ -1164,6 +1185,10 @@ serve(async (req: Request) => {
         await supabase.from("project_modeling_datasets")
           .update({ is_current: false, stale_reason: "SELECTION_CHANGED_DURING_BUILD" })
           .eq("id", saved.id);
+        // Also revert dataset_state model_ready
+        await supabase.from("project_dataset_state")
+          .update({ model_ready: false, diagnostics: { ...diagnosticsUpdate, builder_status: "stale", stale_reason: "SELECTION_CHANGED_DURING_BUILD" } })
+          .eq("project_id", project_id);
         return new Response(JSON.stringify({
           status: "SELECTION_CHANGED_RETRY",
           error: "Seleção mudou durante a construção do dataset. Atualize a página e gere o builder novamente.",

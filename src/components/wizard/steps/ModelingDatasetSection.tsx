@@ -92,9 +92,11 @@ interface Props {
   targetColumn: string;
   /** Must persist the current target/settings to DB before build starts */
   onSaveBeforeBuild?: () => Promise<boolean>;
+  /** Called after a successful build so parent can refresh preflight etc. */
+  onBuildComplete?: () => void;
 }
 
-const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: Props) => {
+const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild, onBuildComplete }: Props) => {
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState<ModelingDatasetResult | null>(null);
   const [persisted, setPersisted] = useState<PersistedDataset | null>(null);
@@ -181,9 +183,12 @@ const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: 
       if (data.status === "READY" || data.status === "WARNING") {
         toast.success(`Dataset construído! Target: ${data.target?.column || targetColumn}`);
         await loadPersisted();
+        await loadSelectionVersion();
+        onBuildComplete?.();
       } else if (data.status === "BLOCKED" || data.status === "BLOCKED_FEATURE_BUILDER") {
         toast.warning("Dataset bloqueado — veja os motivos abaixo.");
         await loadPersisted();
+        onBuildComplete?.();
       }
     } catch (err) {
       console.error("Build error:", err);
