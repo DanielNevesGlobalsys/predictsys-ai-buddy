@@ -1044,6 +1044,7 @@ function normalizeToSchema(
 interface NullDiagnosticEntry {
   column: string;
   null_pct: number;
+  severity: "ok" | "warning" | "critical";
   probable_cause: string;
   files_with_data: string[];
 }
@@ -1064,31 +1065,37 @@ function computeNullDiagnostic(
     }).length;
     const nullPct = (nullCount / allSampleRows.length) * 100;
 
-    if (nullPct > 50) {
-      // Check which files had this column
-      const filesWithData: string[] = [];
-      const normCol = normalizeColumnName(col);
-      for (let i = 0; i < fileSchemas.length; i++) {
-        const hasCol = fileSchemas[i].columns.some(c => normalizeColumnName(c) === normCol);
-        if (hasCol) filesWithData.push(fileNames[i]);
-      }
+    // Classify severity: 🟢 <30%, 🟡 30-50%, 🔴 >50%
+    const severity: "ok" | "warning" | "critical" =
+      nullPct > 50 ? "critical" : nullPct >= 30 ? "warning" : "ok";
 
-      let cause = "Coluna ausente em parte dos arquivos.";
-      if (filesWithData.length === fileSchemas.length) {
-        cause = "Provável mismatch de nome/tipo/parse entre arquivos. Valores perdidos na conversão.";
-      } else if (filesWithData.length === 0) {
-        cause = "Coluna não encontrada em nenhum arquivo (possível coluna derivada).";
-      } else {
-        cause = `Coluna presente apenas em ${filesWithData.length}/${fileSchemas.length} arquivos.`;
-      }
+    // Only report non-OK columns
+    if (severity === "ok") continue;
 
-      diagnostics.push({
-        column: col,
-        null_pct: Math.round(nullPct * 10) / 10,
-        probable_cause: cause,
-        files_with_data: filesWithData,
-      });
+    // Check which files had this column
+    const filesWithData: string[] = [];
+    const normCol = normalizeColumnName(col);
+    for (let i = 0; i < fileSchemas.length; i++) {
+      const hasCol = fileSchemas[i].columns.some(c => normalizeColumnName(c) === normCol);
+      if (hasCol) filesWithData.push(fileNames[i]);
     }
+
+    let cause = "Coluna ausente em parte dos arquivos.";
+    if (filesWithData.length === fileSchemas.length) {
+      cause = "Provável mismatch de nome/tipo/parse entre arquivos. Valores perdidos na conversão.";
+    } else if (filesWithData.length === 0) {
+      cause = "Coluna não encontrada em nenhum arquivo (possível coluna derivada).";
+    } else {
+      cause = `Coluna presente apenas em ${filesWithData.length}/${fileSchemas.length} arquivos.`;
+    }
+
+    diagnostics.push({
+      column: col,
+      null_pct: Math.round(nullPct * 10) / 10,
+      severity,
+      probable_cause: cause,
+      files_with_data: filesWithData,
+    });
   }
 
   return diagnostics.sort((a, b) => b.null_pct - a.null_pct);
@@ -1171,26 +1178,34 @@ async function createImportManifest(
     const filesWarn = files.filter(f => f.status === "warn").length;
     const filesFail = files.filter(f => f.status === "fail").length;
 
-    let overallStatus: "ok" | "warn" | "fail" = "ok";
+    let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
     let statusReason: string | null = null;
 
-    if (filesFail > 0 && filesOk === 0) {
-      overallStatus = "fail";
-      statusReason = "Todos os arquivos falharam no processamento.";
+    // BLOCKED gating: critical structural failures
+    const criticalCols = nullDiag.filter(d => d.severity === "critical").length;
+    const criticalRatio = canonical.columns.length > 0 ? criticalCols / canonical.columns.length : 0;
+
+    if (totalRowsConsolidated === 0) {
+      overallStatus = "blocked";
+      statusReason = "Dataset consolidado tem 0 linhas. Verifique se os arquivos contêm dados válidos.";
+    } else if (filesFail > 0 && filesOk === 0) {
+      overallStatus = "blocked";
+      statusReason = "Todos os arquivos falharam no processamento. Verifique os formatos e tente novamente.";
+    } else if (criticalRatio >= 0.8) {
+      overallStatus = "blocked";
+      statusReason = `${criticalCols} de ${canonical.columns.length} colunas (${Math.round(criticalRatio * 100)}%) estão em estado crítico (>50% NULL). O dataset não é utilizável para modelagem.`;
+    } else if (canonical.columns.length === 0) {
+      overallStatus = "blocked";
+      statusReason = "Nenhuma coluna detectada no schema. Verifique se os arquivos possuem cabeçalhos válidos.";
     } else if (filesFail > 0) {
       overallStatus = "warn";
       statusReason = `${filesFail} arquivo(s) falharam. Dataset parcial.`;
-    } else if (nullDiag.some(d => d.null_pct > 80)) {
+    } else if (nullDiag.some(d => d.severity === "critical")) {
       overallStatus = "warn";
-      statusReason = "Colunas com >80% NULL detectadas — possível mismatch de schema.";
+      statusReason = `${criticalCols} coluna(s) com >50% NULL detectada(s) — possível mismatch de schema.`;
     } else if (filesWarn > 0) {
       overallStatus = "warn";
       statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`;
-    }
-
-    if (totalRowsConsolidated === 0) {
-      overallStatus = "fail";
-      statusReason = "Nenhuma linha consolidada. Verifique os arquivos e schemas.";
     }
 
     const { data: manifestData, error: manifestError } = await supabase.from("import_manifests").insert({

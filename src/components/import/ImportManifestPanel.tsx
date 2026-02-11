@@ -46,6 +46,7 @@ interface ManifestFile {
 interface NullDiagnostic {
   column: string;
   null_pct: number;
+  severity?: "ok" | "warning" | "critical";
   probable_cause: string;
   files_with_data: string[];
 }
@@ -73,7 +74,7 @@ interface ImportManifest {
   column_mapping_report: ColumnMapping[];
   null_diagnostic: NullDiagnostic[];
   files: ManifestFile[];
-  status: "ok" | "warn" | "fail";
+  status: "ok" | "warn" | "fail" | "blocked";
   status_reason: string | null;
 }
 
@@ -122,9 +123,16 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
   };
 
   const statusBadge = (s: string) => {
-    if (s === "ok") return <Badge className="bg-accent/20 text-accent border-accent/30">OK</Badge>;
-    if (s === "warn") return <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">WARN</Badge>;
+    if (s === "ok") return <Badge className="bg-accent/20 text-accent border-accent/30">APPROVED</Badge>;
+    if (s === "warn") return <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">APPROVED</Badge>;
+    if (s === "blocked") return <Badge variant="destructive">BLOCKED</Badge>;
     return <Badge variant="destructive">FAIL</Badge>;
+  };
+
+  const nullSeverityIcon = (severity?: string) => {
+    if (severity === "critical") return <span title=">50% NULL" className="text-destructive">🔴</span>;
+    if (severity === "warning") return <span title="30-50% NULL" className="text-amber-500">🟡</span>;
+    return <span title="<30% NULL" className="text-accent">🟢</span>;
   };
 
   const files = (manifest.files || []) as ManifestFile[];
@@ -150,7 +158,11 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
 
       {/* Status reason */}
       {manifest.status !== "ok" && manifest.status_reason && (
-        <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/30 rounded-lg text-sm">
+        <div className={`flex items-start gap-2 p-3 border rounded-lg text-sm ${
+          manifest.status === "blocked"
+            ? "bg-destructive/10 border-destructive/30"
+            : "bg-destructive/10 border-destructive/30"
+        }`}>
           <AlertCircle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
           <span className="text-destructive">{manifest.status_reason}</span>
         </div>
@@ -271,9 +283,16 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
           <CollapsibleContent className="mt-2">
             <div className="space-y-2">
               {nullDiag.map((d, i) => (
-                <div key={i} className="p-2 bg-amber-500/5 border border-amber-500/20 rounded text-xs space-y-1">
+                <div key={i} className={`p-2 border rounded text-xs space-y-1 ${
+                  d.severity === "critical"
+                    ? "bg-destructive/5 border-destructive/20"
+                    : "bg-amber-500/5 border-amber-500/20"
+                }`}>
                   <div className="flex items-center justify-between">
-                    <span className="font-medium">{d.column}</span>
+                    <div className="flex items-center gap-1.5">
+                      {nullSeverityIcon(d.severity)}
+                      <span className="font-medium">{d.column}</span>
+                    </div>
                     <Badge variant="outline" className="text-[10px]">{d.null_pct.toFixed(1)}% null</Badge>
                   </div>
                   <p className="text-muted-foreground">{d.probable_cause}</p>
