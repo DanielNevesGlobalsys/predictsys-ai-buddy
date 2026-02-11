@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban, Database, CheckCircle, XCircle } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -50,6 +50,28 @@ interface ColumnInfo {
   featureHasError?: boolean;
 }
 
+// Manifest readiness info for gating
+interface ManifestReadiness {
+  edaReady: boolean;
+  modelReady: boolean;
+  manifestStatus: string;
+  blockedReasonModel: string | null;
+  blockedReasonEda: string | null;
+  edaStrategy: string;
+  edaScope: string | null;
+  totalRows: number;
+  columnsCount: number;
+  totalFiles: number;
+  coverageStats: CoverageStats | null;
+}
+
+interface CoverageStats {
+  critical_columns_pct: number;
+  global_null_pct: number;
+  top_10_null_columns: { column: string; null_pct: number }[];
+  file_contribution: { file: string; rows: number; data_cols: number; null_only_cols: number; contribution_type: "data" | "mostly_null" }[];
+}
+
 const StepTargetFeatures = ({
   projectData,
   onNext,
@@ -68,9 +90,8 @@ const StepTargetFeatures = ({
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
 
-  // Dataset readiness gate
-  const [datasetBlocked, setDatasetBlocked] = useState(false);
-  const [datasetBlockedReason, setDatasetBlockedReason] = useState<string | null>(null);
+  // Manifest-based readiness (replaces old dataset_ready_for_modeling check)
+  const [manifestInfo, setManifestInfo] = useState<ManifestReadiness | null>(null);
 
   // Column inference matrix data
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
@@ -96,7 +117,7 @@ const StepTargetFeatures = ({
     if (projectData.id) {
       loadColumns();
       checkEDA();
-      checkDatasetReady();
+      loadManifestReadiness();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -105,17 +126,34 @@ const StepTargetFeatures = ({
     }
   }, [projectData.id]);
 
-  // Check dataset_ready_for_modeling flag
-  const checkDatasetReady = async () => {
+  // Load manifest readiness info (replaces old checkDatasetReady)
+  const loadManifestReadiness = async () => {
     if (!projectData.id) return;
-    const { data } = await supabase
-      .from("projects")
-      .select("dataset_ready_for_modeling, dataset_blocked_reason")
-      .eq("id", projectData.id)
+    const { data: manifest } = await supabase
+      .from("import_manifests")
+      .select("rows_consolidated, columns_final, total_files, status, status_reason, eda_ready, model_ready, eda_strategy, eda_scope, blocked_reason_eda, blocked_reason_model, canonical_schema")
+      .eq("project_id", projectData.id!)
+      .order("created_at", { ascending: false })
+      .limit(1)
       .single();
-    if (data && data.dataset_ready_for_modeling === false) {
-      setDatasetBlocked(true);
-      setDatasetBlockedReason(data.dataset_blocked_reason);
+
+    if (manifest) {
+      const rawSchema = manifest.canonical_schema as Record<string, any> || {};
+      const coverageStats = rawSchema._coverage_stats as CoverageStats | undefined;
+
+      setManifestInfo({
+        edaReady: manifest.eda_ready !== false,
+        modelReady: manifest.model_ready !== false,
+        manifestStatus: manifest.status,
+        blockedReasonModel: manifest.blocked_reason_model as string | null,
+        blockedReasonEda: manifest.blocked_reason_eda as string | null,
+        edaStrategy: (manifest.eda_strategy as string) || "UNION_BY_NAME",
+        edaScope: manifest.eda_scope as string | null,
+        totalRows: manifest.rows_consolidated,
+        columnsCount: manifest.columns_final,
+        totalFiles: manifest.total_files,
+        coverageStats: coverageStats || null,
+      });
     }
   };
 
@@ -262,11 +300,9 @@ const StepTargetFeatures = ({
     setTargetColumn(target.column);
     setAppliedTargetColumn(target.column);
 
-    // Map inference problem type to project problem type
     const problemType = target.type === "regression" ? "regression" : "classification";
     setInferredProblemType(problemType);
 
-    // Select predictors (recommended by inference) - filter to existing columns
     const colNames = new Set(columns.map((c) => c.name));
     const recommended = predictors
       .filter((p) => colNames.has(p.column) && p.column !== target.column)
@@ -276,20 +312,17 @@ const StepTargetFeatures = ({
       setSelectedFeatures(recommended);
     }
 
-    // Build excluded list
     const recommendedSet = new Set(recommended);
     const excluded = columns
       .filter((c) => c.name !== target.column && !recommendedSet.has(c.name))
       .map((c) => c.name);
     setExcludedColumns(excluded);
 
-    // Track config change
     if (initialTargetRef.current && target.column !== initialTargetRef.current && !hasChangedConfig.current) {
       hasChangedConfig.current = true;
       onConfigChange?.();
     }
 
-    // Audit log
     if (projectData.id) {
       logProjectAuditEvent(
         projectData.id,
@@ -330,7 +363,6 @@ const StepTargetFeatures = ({
     });
 
     if (saved) {
-      // Persist targeting stage in AI context
       appendContext("targeting", {
         selected_problem: problemType || "",
         selected_target: targetColumn,
@@ -369,6 +401,17 @@ const StepTargetFeatures = ({
   const availableFeatures = columns.filter((col) => col.name !== targetColumn);
   const effectiveProblemType = inferredProblemType || projectData.problem_type;
 
+  // ── Gating logic ──
+  // Hard block: manifest status is blocked/fail OR eda_ready=false
+  const isHardBlocked = manifestInfo
+    ? (manifestInfo.manifestStatus === "blocked" || manifestInfo.manifestStatus === "fail" || !manifestInfo.edaReady)
+    : false;
+
+  // Soft warning: model_ready=false but eda_ready=true (schema divergence, high nulls, etc.)
+  const hasModelWarning = manifestInfo
+    ? (manifestInfo.edaReady && !manifestInfo.modelReady)
+    : false;
+
   if (loadingColumns) {
     return (
       <Card className="bg-gradient-card shadow-card p-8">
@@ -399,15 +442,15 @@ const StepTargetFeatures = ({
     );
   }
 
-  if (datasetBlocked) {
+  // Hard block screen
+  if (isHardBlocked) {
+    const reason = manifestInfo?.blockedReasonEda || manifestInfo?.blockedReasonModel || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis.";
     return (
       <Card className="bg-gradient-card shadow-card p-8">
         <div className="text-center py-12 space-y-4">
           <Ban className="w-12 h-12 text-destructive/50 mx-auto" />
           <h2 className="text-xl font-display font-bold text-destructive">Dataset não está pronto para modelagem</h2>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">
-            {datasetBlockedReason || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis."}
-          </p>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">{reason}</p>
           <p className="text-xs text-muted-foreground">
             Volte à Etapa 2 (Importação) e corrija os problemas indicados no Resumo de Importação.
           </p>
@@ -420,6 +463,17 @@ const StepTargetFeatures = ({
       </Card>
     );
   }
+
+  // Preflight checklist items
+  const preflightChecks = [
+    { label: "Manifest carregado", ok: !!manifestInfo, detail: manifestInfo ? `${manifestInfo.totalFiles} arquivo(s)` : "Sem manifest" },
+    { label: "Linhas consolidadas > 0", ok: (manifestInfo?.totalRows || 0) > 0, detail: `${(manifestInfo?.totalRows || 0).toLocaleString()} linhas` },
+    { label: "Colunas detectadas > 0", ok: columns.length > 0, detail: `${columns.length} colunas` },
+    { label: "Target definido", ok: !!targetColumn, detail: targetColumn || "—" },
+    { label: "Features selecionadas", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} features` },
+    { label: "EDA pronto", ok: manifestInfo?.edaReady !== false, detail: manifestInfo?.edaReady === false ? "BLOCKED" : "OK" },
+    { label: "Modelo pronto", ok: manifestInfo?.modelReady !== false, detail: manifestInfo?.modelReady === false ? (manifestInfo?.blockedReasonModel || "BLOCKED") : "OK" },
+  ];
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -435,6 +489,82 @@ const StepTargetFeatures = ({
             {t("stepVariables.subtitle")}
           </p>
         </div>
+
+        {/* Coverage Report Banner */}
+        {manifestInfo && (
+          <div className={`p-4 rounded-lg border space-y-3 ${
+            hasModelWarning
+              ? "bg-amber-500/5 border-amber-500/30"
+              : "bg-primary/5 border-primary/20"
+          }`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div className="flex items-center gap-3">
+                <Database className={`w-5 h-5 ${hasModelWarning ? "text-amber-500" : "text-primary"}`} />
+                <div>
+                  <p className="text-sm font-semibold">Coverage do Consolidado</p>
+                  <p className="text-xs text-muted-foreground">
+                    {manifestInfo.totalRows.toLocaleString()} linhas • {manifestInfo.columnsCount} colunas • {manifestInfo.totalFiles} arquivo(s)
+                  </p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                {manifestInfo.edaReady ? (
+                  <Badge className="bg-accent/20 text-accent border-accent/30">EDA: OK</Badge>
+                ) : (
+                  <Badge variant="destructive">EDA: BLOCKED</Badge>
+                )}
+                {manifestInfo.modelReady ? (
+                  <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: OK</Badge>
+                ) : (
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
+                    <AlertTriangle className="w-3 h-3 mr-1" />
+                    MODEL: WARN
+                  </Badge>
+                )}
+              </div>
+            </div>
+
+            {/* Coverage stats */}
+            {manifestInfo.coverageStats && (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="p-2 bg-muted/30 rounded text-center">
+                  <p className={`text-lg font-bold ${manifestInfo.coverageStats.critical_columns_pct > 30 ? "text-destructive" : manifestInfo.coverageStats.critical_columns_pct > 10 ? "text-amber-500" : ""}`}>
+                    {manifestInfo.coverageStats.critical_columns_pct}%
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">Colunas 🔴 (&gt;50% NULL)</p>
+                </div>
+                <div className="p-2 bg-muted/30 rounded text-center">
+                  <p className={`text-lg font-bold ${manifestInfo.coverageStats.global_null_pct > 30 ? "text-destructive" : manifestInfo.coverageStats.global_null_pct > 15 ? "text-amber-500" : ""}`}>
+                    {manifestInfo.coverageStats.global_null_pct}%
+                  </p>
+                  <p className="text-[10px] text-muted-foreground">Nulos global</p>
+                </div>
+                <div className="p-2 bg-muted/30 rounded text-center col-span-2">
+                  <div className="flex flex-wrap gap-1 justify-center">
+                    {manifestInfo.coverageStats.file_contribution.map((fc, i) => (
+                      <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
+                        {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
+                        {fc.contribution_type === "mostly_null" && " ⚠️"}
+                      </Badge>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-muted-foreground mt-1">Contribuição por arquivo</p>
+                </div>
+              </div>
+            )}
+
+            {/* Model warning */}
+            {hasModelWarning && manifestInfo.blockedReasonModel && (
+              <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+                <span>
+                  <strong>Atenção:</strong> {manifestInfo.blockedReasonModel}
+                  {" "}Você pode configurar target e features, mas o treino pode ser bloqueado até os dados serem corrigidos.
+                </span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Problem Inference Panel (replaces old Lys suggestions) */}
         <ProblemInferencePanel
@@ -716,6 +846,31 @@ const StepTargetFeatures = ({
             </p>
           )}
         </div>
+
+        {/* Preflight Checklist */}
+        {targetColumn && (
+          <div className="p-4 rounded-lg border border-border bg-muted/10 space-y-2">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <CheckCircle className="w-4 h-4 text-primary" />
+              Checklist Técnico — Pré-modelagem
+            </h4>
+            <div className="grid gap-1">
+              {preflightChecks.map((check, i) => (
+                <div key={i} className="flex items-center justify-between text-xs py-1">
+                  <div className="flex items-center gap-2">
+                    {check.ok ? (
+                      <CheckCircle className="w-3.5 h-3.5 text-accent" />
+                    ) : (
+                      <XCircle className="w-3.5 h-3.5 text-destructive" />
+                    )}
+                    <span className={check.ok ? "" : "text-destructive"}>{check.label}</span>
+                  </div>
+                  <span className="text-muted-foreground font-mono truncate max-w-[200px]">{check.detail}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
