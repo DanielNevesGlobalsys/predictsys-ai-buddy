@@ -27,6 +27,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import type { FeatureExpression } from "@/lib/featureEngineering";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
+import ModelingDatasetSection from "./ModelingDatasetSection";
 import ProblemInferencePanel from "./ProblemInferencePanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
@@ -846,6 +847,9 @@ const StepTargetFeatures = ({
             </p>
           )}
         </div>
+
+        {/* === Dataset Modelável Section === */}
+        <ModelingDatasetSection projectId={projectData.id} targetColumn={targetColumn} />
 
         {/* Preflight Checklist */}
         {targetColumn && (
