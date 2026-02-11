@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -80,6 +80,11 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack }: Props) => {
       setLoading(false);
     }
   }, [projectId]);
+
+  // Auto-run on mount
+  useEffect(() => {
+    runPreflight();
+  }, [runPreflight]);
 
   const statusColor = (s: string) =>
     s === "PASS" ? "text-accent" : s === "WARN" ? "text-amber-500" : "text-destructive";
