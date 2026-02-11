@@ -4,7 +4,8 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { 
   Database, Loader2, CheckCircle, XCircle, AlertTriangle, 
-  Package, Sparkles, Target, Clock, Users, Layers
+  Package, Sparkles, Target, Clock, Users, Layers, Trash2, 
+  Shield, BarChart3, FileWarning
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -12,6 +13,7 @@ import { toast } from "sonner";
 interface ModelingDatasetResult {
   status: string;
   modeling_dataset_id?: string;
+  modeling_dataset_ready?: boolean;
   target?: {
     column: string;
     type: string;
@@ -26,13 +28,32 @@ interface ModelingDatasetResult {
     final_count: number;
     generated_count: number;
     blocked_count: number;
+    removed_count?: number;
     final: string[];
     generated: { name: string; type: string; description: string }[];
     blocked: { name: string; reason: string }[];
+    removed?: { col: string; reason: string }[];
   };
-  leakage_report?: { column: string; reason: string }[];
+  feature_report?: {
+    temporal_features_created: string[];
+    aggregation_features_created: string[];
+    missing_flags_created: string[];
+    imputation_applied: { numeric: string; categorical: string };
+    overfit_risk_score: number;
+    overfit_warning: string | null;
+  };
+  leakage_check?: {
+    leakage_detected: boolean;
+    leakage_columns: { column: string; reason: string }[];
+  };
   dataset_stats?: {
-    row_count: number;
+    total_linhas: number;
+    total_features_final: number;
+    features_geradas_auto: number;
+    features_removidas: number;
+    flags_missing_criadas: number;
+    features_temporais_criadas: number;
+    agregacoes_criadas: number;
     column_count: number;
     coverage_pct: number;
   };
@@ -58,6 +79,7 @@ interface PersistedDataset {
   blocked_reasons: any;
   label_plan: any;
   window_days: number | null;
+  build_log: any;
   updated_at: string;
 }
 
@@ -71,8 +93,8 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
   const [result, setResult] = useState<ModelingDatasetResult | null>(null);
   const [persisted, setPersisted] = useState<PersistedDataset | null>(null);
   const [loadingPersisted, setLoadingPersisted] = useState(true);
+  const [expandRemoved, setExpandRemoved] = useState(false);
 
-  // Load existing modeling dataset on mount
   useEffect(() => {
     if (projectId) loadPersisted();
   }, [projectId]);
@@ -88,9 +110,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
       .limit(1)
       .maybeSingle();
 
-    if (data) {
-      setPersisted(data as unknown as PersistedDataset);
-    }
+    if (data) setPersisted(data as unknown as PersistedDataset);
     setLoadingPersisted(false);
   };
 
@@ -118,10 +138,10 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
       const data = response.data as ModelingDatasetResult;
       setResult(data);
 
-      if (data.status === "READY") {
+      if (data.status === "READY" || data.status === "WARNING") {
         toast.success("Dataset modelável construído com sucesso!");
         await loadPersisted();
-      } else if (data.status === "BLOCKED") {
+      } else if (data.status === "BLOCKED" || data.status === "BLOCKED_FEATURE_BUILDER") {
         toast.warning("Dataset bloqueado — veja os motivos abaixo.");
         await loadPersisted();
       }
@@ -133,7 +153,11 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
     }
   }, [projectId]);
 
-  const displayData = result || (persisted ? {
+  // Build display data from result or persisted
+  const buildLog = persisted?.build_log as Record<string, any> | null;
+  const featureReportFromLog = buildLog?.feature_report || null;
+
+  const displayData: ModelingDatasetResult | null = result || (persisted ? {
     status: persisted.status.toUpperCase(),
     target: {
       column: persisted.target_column,
@@ -149,13 +173,32 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
       final_count: Array.isArray(persisted.features_final) ? persisted.features_final.length : 0,
       generated_count: Array.isArray(persisted.features_generated) ? persisted.features_generated.length : 0,
       blocked_count: Array.isArray(persisted.features_blocked) ? persisted.features_blocked.length : 0,
+      removed_count: featureReportFromLog?.features_removed?.length || 0,
       final: Array.isArray(persisted.features_final) ? persisted.features_final : [],
       generated: Array.isArray(persisted.features_generated) ? persisted.features_generated : [],
       blocked: Array.isArray(persisted.features_blocked) ? persisted.features_blocked : [],
+      removed: featureReportFromLog?.features_removed || [],
     },
-    leakage_report: Array.isArray(persisted.leakage_report) ? persisted.leakage_report : [],
+    feature_report: featureReportFromLog ? {
+      temporal_features_created: featureReportFromLog.temporal_features_created || [],
+      aggregation_features_created: featureReportFromLog.aggregation_features_created || [],
+      missing_flags_created: featureReportFromLog.missing_flags_created || [],
+      imputation_applied: featureReportFromLog.imputation_applied || { numeric: "median", categorical: "missing" },
+      overfit_risk_score: featureReportFromLog.overfit_risk_score || 0,
+      overfit_warning: featureReportFromLog.overfit_warning || null,
+    } : undefined,
+    leakage_check: {
+      leakage_detected: Array.isArray(persisted.leakage_report) && persisted.leakage_report.length > 0,
+      leakage_columns: Array.isArray(persisted.leakage_report) ? persisted.leakage_report : [],
+    },
     dataset_stats: {
-      row_count: persisted.row_count,
+      total_linhas: persisted.row_count,
+      total_features_final: (Array.isArray(persisted.features_final) ? persisted.features_final.length : 0) + (Array.isArray(persisted.features_generated) ? persisted.features_generated.length : 0),
+      features_geradas_auto: Array.isArray(persisted.features_generated) ? persisted.features_generated.length : 0,
+      features_removidas: featureReportFromLog?.features_removed?.length || 0,
+      flags_missing_criadas: featureReportFromLog?.missing_flags_created?.length || 0,
+      features_temporais_criadas: featureReportFromLog?.temporal_features_created?.length || 0,
+      agregacoes_criadas: featureReportFromLog?.aggregation_features_created?.length || 0,
       column_count: persisted.column_count,
       coverage_pct: persisted.coverage_pct,
     },
@@ -163,120 +206,81 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
   } : null);
 
   const isReady = displayData?.status === "READY";
-  const isBlocked = displayData?.status === "BLOCKED";
+  const isWarning = displayData?.status === "WARNING";
+  const isBlocked = displayData?.status === "BLOCKED" || displayData?.status === "BLOCKED_FEATURE_BUILDER";
+
+  const statusBadgeClass = isReady
+    ? "bg-accent/20 text-accent border-accent/30"
+    : isWarning
+    ? "bg-amber-500/20 text-amber-600 border-amber-500/30"
+    : "bg-destructive/20 text-destructive border-destructive/30";
+
+  const stats = displayData?.dataset_stats;
+  const report = displayData?.feature_report;
 
   return (
     <div className="p-4 rounded-lg border border-border bg-muted/5 space-y-4">
+      {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Package className="w-5 h-5 text-primary" />
-          <h4 className="text-sm font-semibold">📦 Dataset Modelável</h4>
+          <h4 className="text-sm font-semibold">📦 Dataset Modelável (Feature Builder)</h4>
         </div>
         <div className="flex items-center gap-2">
           {displayData && (
-            <Badge className={
-              isReady 
-                ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
-                : isBlocked
-                ? "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"
-                : "bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]"
-            }>
-              {isReady ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+            <Badge className={`${statusBadgeClass} text-[10px]`}>
+              {isReady ? <CheckCircle className="w-3 h-3 mr-1" /> : isWarning ? <AlertTriangle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
               {displayData.status}
             </Badge>
           )}
-          <Button
-            size="sm"
-            variant={displayData ? "outline" : "default"}
-            onClick={handleBuild}
-            disabled={building || !targetColumn}
-          >
+          <Button size="sm" variant={displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
             {building ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                Construindo...
-              </>
+              <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Construindo...</>
             ) : displayData ? (
-              <>
-                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                Reconstruir
-              </>
+              <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir</>
             ) : (
-              <>
-                <Database className="w-3.5 h-3.5 mr-1.5" />
-                Construir dataset
-              </>
+              <><Database className="w-3.5 h-3.5 mr-1.5" />Construir dataset</>
             )}
           </Button>
         </div>
       </div>
 
       {!targetColumn && !displayData && (
-        <p className="text-xs text-muted-foreground">
-          Selecione um target acima antes de construir o dataset modelável.
-        </p>
+        <p className="text-xs text-muted-foreground">Selecione um target acima antes de construir o dataset modelável.</p>
       )}
 
-      {/* Results display */}
       {displayData && (
         <div className="space-y-3">
           {/* Summary grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            <div className="p-2 bg-muted/30 rounded text-center">
-              <div className="flex items-center justify-center gap-1 mb-1">
-                <Target className="w-3 h-3 text-primary" />
-                <p className="text-[10px] text-muted-foreground">Target</p>
-              </div>
-              <p className="text-xs font-semibold truncate" title={displayData.target?.column}>
-                {displayData.target?.column || "—"}
-              </p>
-              <p className="text-[10px] text-muted-foreground">
-                {displayData.target?.type} • {displayData.target?.source === "label_builder" ? "derivado" : "direto"}
-              </p>
-            </div>
-            <div className="p-2 bg-muted/30 rounded text-center">
-              <div className="flex items-center justify-center gap-1 mb-1">
-                <Users className="w-3 h-3 text-primary" />
-                <p className="text-[10px] text-muted-foreground">Entity Key</p>
-              </div>
-              <p className="text-xs font-semibold truncate">
-                {displayData.entity_key || "—"}
-              </p>
-            </div>
-            <div className="p-2 bg-muted/30 rounded text-center">
-              <div className="flex items-center justify-center gap-1 mb-1">
-                <Clock className="w-3 h-3 text-primary" />
-                <p className="text-[10px] text-muted-foreground">Tempo</p>
-              </div>
-              <p className="text-xs font-semibold truncate">
-                {displayData.anchor_time_col || "—"}
-              </p>
-              {displayData.target?.window_days && (
-                <p className="text-[10px] text-muted-foreground">Janela: {displayData.target.window_days}d</p>
-              )}
-            </div>
-            <div className="p-2 bg-muted/30 rounded text-center">
-              <div className="flex items-center justify-center gap-1 mb-1">
-                <Layers className="w-3 h-3 text-primary" />
-                <p className="text-[10px] text-muted-foreground">Features</p>
-              </div>
-              <p className="text-xs font-semibold">
-                {(displayData.features?.final_count || 0) + (displayData.features?.generated_count || 0)}
-              </p>
-              <p className="text-[10px] text-muted-foreground">
-                {displayData.features?.final_count || 0} dir + {displayData.features?.generated_count || 0} gen
-              </p>
-            </div>
+            <SummaryCell icon={<Target className="w-3 h-3 text-primary" />} label="Target" value={displayData.target?.column || "—"} sub={`${displayData.target?.type} • ${displayData.target?.source === "label_builder" ? "derivado" : "direto"}`} />
+            <SummaryCell icon={<Users className="w-3 h-3 text-primary" />} label="Entity Key" value={displayData.entity_key || "—"} />
+            <SummaryCell icon={<Clock className="w-3 h-3 text-primary" />} label="Tempo" value={displayData.anchor_time_col || "—"} sub={displayData.target?.window_days ? `Janela: ${displayData.target.window_days}d` : undefined} />
+            <SummaryCell icon={<Layers className="w-3 h-3 text-primary" />} label="Features" value={String(stats?.total_features_final || 0)} sub={`${displayData.features?.final_count || 0} dir + ${displayData.features?.generated_count || 0} gen`} />
           </div>
 
-          {/* Dataset stats */}
-          {displayData.dataset_stats && (
-            <div className="flex items-center gap-4 text-xs text-muted-foreground">
-              <span>{displayData.dataset_stats.row_count.toLocaleString()} linhas</span>
-              <span>{displayData.dataset_stats.column_count} colunas</span>
-              <span>Coverage: {displayData.dataset_stats.coverage_pct}%</span>
+          {/* Dataset stats bar */}
+          {stats && (
+            <div className="flex flex-wrap items-center gap-3 text-[11px] text-muted-foreground border-t border-border/50 pt-2">
+              <span>{stats.total_linhas.toLocaleString()} linhas</span>
+              <span>{stats.column_count} colunas</span>
+              <span>Coverage: {stats.coverage_pct}%</span>
               <span>Split: {displayData.split_strategy}</span>
+              {stats.features_removidas > 0 && <span className="text-destructive">🗑 {stats.features_removidas} removidas</span>}
+              {stats.features_temporais_criadas > 0 && <span className="text-accent">⏱ {stats.features_temporais_criadas} temporais</span>}
+              {stats.agregacoes_criadas > 0 && <span className="text-accent">📊 {stats.agregacoes_criadas} agregações</span>}
+              {stats.flags_missing_criadas > 0 && <span>🚩 {stats.flags_missing_criadas} missing flags</span>}
             </div>
+          )}
+
+          {/* Overfit warning */}
+          {report?.overfit_warning && (
+            <Alert className="bg-amber-500/5 border-amber-500/20">
+              <BarChart3 className="w-4 h-4 text-amber-500" />
+              <AlertDescription className="text-xs">
+                <strong>Risco de Overfitting ({Math.round(report.overfit_risk_score * 100)}%):</strong> {report.overfit_warning}
+              </AlertDescription>
+            </Alert>
           )}
 
           {/* Label builder plan */}
@@ -287,33 +291,59 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
             </div>
           )}
 
-          {/* Generated features */}
+          {/* Imputation info */}
+          {report?.imputation_applied && (
+            <div className="p-2 bg-muted/30 rounded text-[11px] flex flex-wrap gap-4">
+              <span><strong>Imputação numérica:</strong> {report.imputation_applied.numeric}</span>
+              <span><strong>Imputação categórica:</strong> {report.imputation_applied.categorical}</span>
+            </div>
+          )}
+
+          {/* Generated features by category */}
           {displayData.features && displayData.features.generated_count > 0 && (
             <div className="space-y-1">
-              <p className="text-[11px] font-medium text-muted-foreground">Features geradas automaticamente:</p>
+              <p className="text-[11px] font-medium text-muted-foreground">Features geradas automaticamente ({displayData.features.generated_count}):</p>
               <div className="flex flex-wrap gap-1">
-                {displayData.features.generated.slice(0, 8).map((f: any, i: number) => (
-                  <Badge key={i} variant="secondary" className="text-[10px]">
-                    <Sparkles className="w-2.5 h-2.5 mr-1" />
+                {displayData.features.generated.slice(0, 10).map((f: any, i: number) => (
+                  <Badge key={i} variant="secondary" className="text-[10px]" title={f.description}>
+                    {f.type === "temporal" ? "⏱" : f.type === "aggregation" ? "📊" : f.type === "missing_flag" ? "🚩" : f.type === "one_hot" ? "🔢" : f.type === "frequency_encoding" ? "📈" : "✨"}{" "}
                     {f.name || f}
                   </Badge>
                 ))}
-                {displayData.features.generated.length > 8 && (
-                  <Badge variant="outline" className="text-[10px]">
-                    +{displayData.features.generated.length - 8} mais
-                  </Badge>
+                {displayData.features.generated.length > 10 && (
+                  <Badge variant="outline" className="text-[10px]">+{displayData.features.generated.length - 10} mais</Badge>
                 )}
               </div>
+            </div>
+          )}
+
+          {/* Removed features */}
+          {displayData.features?.removed && displayData.features.removed.length > 0 && (
+            <div className="space-y-1">
+              <button onClick={() => setExpandRemoved(!expandRemoved)} className="text-[11px] font-medium text-destructive/80 hover:text-destructive flex items-center gap-1">
+                <Trash2 className="w-3 h-3" />
+                {displayData.features.removed.length} features removidas (hard-block)
+                <span className="text-[9px]">{expandRemoved ? "▲" : "▼"}</span>
+              </button>
+              {expandRemoved && (
+                <div className="flex flex-wrap gap-1">
+                  {displayData.features.removed.map((f: any, i: number) => (
+                    <Badge key={i} variant="destructive" className="text-[10px]" title={f.reason}>
+                      {f.col}: {f.reason.split(":")[0]}
+                    </Badge>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
           {/* Blocked features */}
           {displayData.features && displayData.features.blocked_count > 0 && (
             <div className="space-y-1">
-              <p className="text-[11px] font-medium text-muted-foreground">Features bloqueadas:</p>
+              <p className="text-[11px] font-medium text-muted-foreground">Features bloqueadas ({displayData.features.blocked_count}):</p>
               <div className="flex flex-wrap gap-1">
                 {displayData.features.blocked.slice(0, 5).map((f: any, i: number) => (
-                  <Badge key={i} variant="destructive" className="text-[10px]">
+                  <Badge key={i} variant="outline" className="text-[10px] border-destructive/30 text-destructive">
                     {f.name}: {f.reason}
                   </Badge>
                 ))}
@@ -322,12 +352,12 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
           )}
 
           {/* Leakage report */}
-          {displayData.leakage_report && displayData.leakage_report.length > 0 && (
-            <Alert className="bg-amber-500/5 border-amber-500/20">
-              <AlertTriangle className="w-4 h-4 text-amber-500" />
+          {displayData.leakage_check?.leakage_detected && (
+            <Alert className="bg-destructive/5 border-destructive/20">
+              <Shield className="w-4 h-4 text-destructive" />
               <AlertDescription className="text-xs">
-                <strong>Leakage detectado:</strong>{" "}
-                {displayData.leakage_report.map((l: any) => `${l.column} (${l.reason})`).join(", ")}
+                <strong>⚠️ Leakage detectado:</strong>{" "}
+                {displayData.leakage_check.leakage_columns.map(l => `${l.column} (${l.reason})`).join(", ")}
               </AlertDescription>
             </Alert>
           )}
@@ -335,9 +365,9 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
           {/* Blocked reasons */}
           {isBlocked && displayData.blocked_reasons && displayData.blocked_reasons.length > 0 && (
             <Alert className="bg-destructive/5 border-destructive/20">
-              <XCircle className="w-4 h-4 text-destructive" />
+              <FileWarning className="w-4 h-4 text-destructive" />
               <AlertDescription className="text-xs space-y-1">
-                <p className="font-medium">Dataset bloqueado — próximos passos:</p>
+                <p className="font-medium">BLOCKED_FEATURE_BUILDER — próximos passos:</p>
                 {displayData.blocked_reasons.map((r: string, i: number) => (
                   <p key={i}>• {r}</p>
                 ))}
@@ -349,5 +379,19 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
     </div>
   );
 };
+
+// Small reusable summary cell
+function SummaryCell({ icon, label, value, sub }: { icon: React.ReactNode; label: string; value: string; sub?: string }) {
+  return (
+    <div className="p-2 bg-muted/30 rounded text-center">
+      <div className="flex items-center justify-center gap-1 mb-1">
+        {icon}
+        <p className="text-[10px] text-muted-foreground">{label}</p>
+      </div>
+      <p className="text-xs font-semibold truncate" title={value}>{value}</p>
+      {sub && <p className="text-[10px] text-muted-foreground">{sub}</p>}
+    </div>
+  );
+}
 
 export default ModelingDatasetSection;
