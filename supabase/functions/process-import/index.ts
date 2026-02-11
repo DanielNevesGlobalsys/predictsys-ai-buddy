@@ -17,6 +17,7 @@ const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024; // 50 MB for CSV sampling
 const PARQUET_MEMORY_LIMIT = 400 * 1024 * 1024; // 400 MB for Parquet in-memory
 const RETRY_MAX = 3;
 const RETRY_BASE_DELAY_MS = 1000;
+const MAX_FILES_PER_CHUNK = 5; // Process at most 5 files per Edge Function invocation to avoid CPU timeout
 
 // ═══════════════════════════════════════════════════════════
 // Types
@@ -1756,8 +1757,8 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 // ═══════════════════════════════════════════════════════════
 // Batch import (multi-file → consolidated dataset)
 // ═══════════════════════════════════════════════════════════
-async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise<Response> {
-  console.log(`[process-import] Processing batch: ${primaryJob.batch_id}`);
+async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOffset = 0): Promise<Response> {
+  console.log(`[process-import] Processing batch: ${primaryJob.batch_id}, chunkOffset=${chunkOffset}`);
 
   const { data: batchJobs, error: batchError } = await supabase
     .from("import_jobs").select("*").eq("batch_id", primaryJob.batch_id)
@@ -1782,14 +1783,20 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
 
   console.log(`[process-import] Batch: ${batchJobs.length} files, ${(totalBatchSize / 1024 / 1024).toFixed(2)} MB total`);
 
-  // ─── Phase 1: Extract schema from each file ────────────────
-  const fileResults: FileProcessResult[] = [];
-  const fileSchemas: FileSchema[] = [];
-  const batchFolder = `${primaryJob.user_id}/${primaryJob.project_id}/${primaryJob.batch_id}`;
+  // ─── Phase 1: Extract schema from files in current chunk ───
+  const chunkEnd = Math.min(chunkOffset + MAX_FILES_PER_CHUNK, batchJobs.length);
+  const isLastChunk = chunkEnd >= batchJobs.length;
 
-  for (let i = 0; i < batchJobs.length; i++) {
+  // Process only the current chunk of files
+  for (let i = chunkOffset; i < chunkEnd; i++) {
     const job = batchJobs[i] as ImportJob;
     const format = detectFileFormat(job.file_name, job.storage_path);
+
+    // Skip already processed jobs (completed in a previous chunk)
+    if (job.status === "completed" || job.status === "failed") {
+      console.log(`[process-import] [${i + 1}/${batchJobs.length}] ${job.file_name} already ${job.status}, skipping`);
+      continue;
+    }
 
     console.log(`[process-import] [${i + 1}/${batchJobs.length}] ${job.file_name} (${format})`);
 
@@ -1801,25 +1808,146 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
       };
 
       const schema = await processFileUnified(supabase, job, progressCallback);
-      fileSchemas.push(schema);
 
-      fileResults.push({
-        success: true, jobId: job.id, fileName: job.file_name,
-        format, schema, rowsRead: schema.totalRows, coveragePct: 100,
-      });
+      // Store extracted schema summary in headers_json for later consolidation (cap samples to 200 per file)
+      const storedSchema = {
+        columns: schema.columns,
+        columnTypes: schema.columnTypes,
+        totalRows: schema.totalRows,
+        sampleRows: schema.sampleRows.slice(0, 200),
+        format: schema.format,
+        schemaHash: schema.schemaHash,
+      };
+      await supabase.from("import_jobs").update({
+        headers_json: storedSchema,
+        headers_hash: schema.schemaHash,
+        status: "completed",
+        progress: 100,
+        rows_processed: schema.totalRows,
+        finished_at: new Date().toISOString(),
+      }).eq("id", job.id);
 
       console.log(`[process-import] ✓ ${job.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows, hash=${schema.schemaHash}`);
 
     } catch (e) {
       const msg = e instanceof Error ? e.message : "Erro ao processar";
       console.error(`[process-import] ✗ ${job.file_name}: ${msg}`);
+      await updateJobError(supabase, job.id, msg);
+    }
+  }
 
+  // If not the last chunk, self-invoke for the next chunk
+  if (!isLastChunk) {
+    console.log(`[process-import] Chunk ${chunkOffset}-${chunkEnd - 1} done. Scheduling next chunk at offset ${chunkEnd}`);
+
+    // Update primary job progress
+    const overallProgress = Math.round((chunkEnd / batchJobs.length) * 70);
+    await updateJobProgress(supabase, primaryJob.id, overallProgress, 0);
+
+    // Self-invoke for next chunk (fire-and-forget style, but we await to ensure it starts)
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+    try {
+      const invokeRes = await fetch(`${supabaseUrl}/functions/v1/process-import`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseServiceKey}`,
+        },
+        body: JSON.stringify({
+          job_id: primaryJob.id,
+          batch_id: primaryJob.batch_id,
+          chunk_offset: chunkEnd,
+        }),
+      });
+      // Consume response body to prevent resource leak
+      await invokeRes.text();
+      console.log(`[process-import] Next chunk invoked (offset=${chunkEnd}), status=${invokeRes.status}`);
+    } catch (invokeErr) {
+      console.error(`[process-import] Failed to invoke next chunk:`, invokeErr);
+      // Don't fail the whole batch — the user can retry
+    }
+
+    return new Response(JSON.stringify({
+      success: true,
+      message: `Chunk ${chunkOffset + 1}-${chunkEnd} de ${batchJobs.length} processado. Continuando...`,
+      chunk_offset: chunkOffset,
+      chunk_end: chunkEnd,
+      total_files: batchJobs.length,
+      is_last_chunk: false,
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+  }
+
+  // ─── Last chunk: Reconstruct schemas from stored data ──────
+  // Re-read all jobs to get their final status
+  const { data: finalJobs } = await supabase
+    .from("import_jobs").select("*").eq("batch_id", primaryJob.batch_id)
+    .order("batch_sequence", { ascending: true });
+
+  const allJobs = (finalJobs || batchJobs) as ImportJob[];
+
+  // Reconstruct FileSchema objects from stored headers_json (no re-download needed)
+  const fileResults: FileProcessResult[] = [];
+  const fileSchemas: FileSchema[] = [];
+
+  for (const job of allJobs) {
+    const format = detectFileFormat(job.file_name, job.storage_path);
+
+    if (job.status === "completed" && job.headers_json && typeof job.headers_json === "object" && !Array.isArray(job.headers_json)) {
+      // Reconstruct schema from stored data
+      const stored = job.headers_json as any;
+      if (stored.columns && Array.isArray(stored.columns)) {
+        const schema: FileSchema = {
+          columns: stored.columns,
+          columnTypes: stored.columnTypes || {},
+          totalRows: stored.totalRows || (job as any).rows_processed || 0,
+          sampleRows: stored.sampleRows || [],
+          format: stored.format || format,
+          schemaHash: stored.schemaHash || generateSchemaHash(stored.columns),
+        };
+        fileSchemas.push(schema);
+        fileResults.push({
+          success: true, jobId: job.id, fileName: job.file_name,
+          format, schema, rowsRead: schema.totalRows, coveragePct: 100,
+        });
+        console.log(`[process-import] Restored schema for ${job.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows`);
+        continue;
+      }
+    }
+
+    if (job.status === "completed" && job.headers_json && Array.isArray(job.headers_json)) {
+      // Legacy format: headers_json is just column names array — need to re-extract
+      // But use a minimal sample to save CPU
+      try {
+        const schema = await processFileUnified(supabase, job);
+        fileSchemas.push(schema);
+        fileResults.push({
+          success: true, jobId: job.id, fileName: job.file_name,
+          format, schema, rowsRead: schema.totalRows, coveragePct: 100,
+        });
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : "Erro ao re-processar";
+        console.warn(`[process-import] Re-extract failed for ${job.file_name}: ${msg}`);
+        fileResults.push({
+          success: false, jobId: job.id, fileName: job.file_name,
+          format, error: msg, rowsRead: 0, coveragePct: 0,
+        });
+      }
+      continue;
+    }
+
+    if (job.status === "failed") {
       fileResults.push({
         success: false, jobId: job.id, fileName: job.file_name,
-        format, error: msg, rowsRead: 0, coveragePct: 0,
+        format, error: (job as any).error_message || "Failed", rowsRead: 0, coveragePct: 0,
       });
-
-      await updateJobError(supabase, job.id, msg);
+    } else {
+      // Unexpected status — skip
+      console.warn(`[process-import] Job ${job.file_name} in unexpected status: ${job.status}`);
+      fileResults.push({
+        success: false, jobId: job.id, fileName: job.file_name,
+        format, error: `Status inesperado: ${job.status}`, rowsRead: 0, coveragePct: 0,
+      });
     }
   }
 
@@ -2223,7 +2351,7 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { job_id, batch_id } = await req.json();
+    const { job_id, batch_id, chunk_offset } = await req.json();
 
     if (!job_id) {
       return new Response(JSON.stringify({ success: false, message: "job_id is required" }), {
@@ -2231,7 +2359,8 @@ serve(async (req) => {
       });
     }
 
-    console.log(`[process-import] Starting job: ${job_id}, batch: ${batch_id || "none"}`);
+    const chunkOffsetNum = typeof chunk_offset === "number" ? chunk_offset : 0;
+    console.log(`[process-import] Starting job: ${job_id}, batch: ${batch_id || "none"}, chunk_offset: ${chunkOffsetNum}`);
 
     const { data: job, error: jobError } = await supabase.from("import_jobs").select("*").eq("id", job_id).single();
 
@@ -2241,7 +2370,8 @@ serve(async (req) => {
       });
     }
 
-    if (job.status !== "pending") {
+    // For chunked re-entry, allow "processing" status on the primary job
+    if (chunkOffsetNum === 0 && job.status !== "pending") {
       return new Response(JSON.stringify({ success: true, message: `Job is already ${job.status}` }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -2255,7 +2385,7 @@ serve(async (req) => {
     }
 
     if (job.batch_id) {
-      return await processBatchImport(supabase, job as ImportJob);
+      return await processBatchImport(supabase, job as ImportJob, chunkOffsetNum);
     } else {
       return await processSingleImport(supabase, job as ImportJob);
     }
