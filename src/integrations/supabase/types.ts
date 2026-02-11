@@ -312,16 +312,24 @@ export type Database = {
       import_manifests: {
         Row: {
           batch_id: string | null
+          blocked_reason_eda: string | null
+          blocked_reason_model: string | null
           canonical_schema: Json | null
           column_mapping_report: Json | null
           columns_final: number
           created_at: string
           dataset_id: string | null
+          eda_dataset_id: string | null
+          eda_ready: boolean | null
+          eda_scope: string | null
+          eda_strategy: string | null
           files: Json
           files_fail: number
           files_ok: number
           files_warn: number
           id: string
+          model_dataset_id: string | null
+          model_ready: boolean | null
           null_diagnostic: Json | null
           project_id: string
           rows_consolidated: number
@@ -334,16 +342,24 @@ export type Database = {
         }
         Insert: {
           batch_id?: string | null
+          blocked_reason_eda?: string | null
+          blocked_reason_model?: string | null
           canonical_schema?: Json | null
           column_mapping_report?: Json | null
           columns_final?: number
           created_at?: string
           dataset_id?: string | null
+          eda_dataset_id?: string | null
+          eda_ready?: boolean | null
+          eda_scope?: string | null
+          eda_strategy?: string | null
           files?: Json
           files_fail?: number
           files_ok?: number
           files_warn?: number
           id?: string
+          model_dataset_id?: string | null
+          model_ready?: boolean | null
           null_diagnostic?: Json | null
           project_id: string
           rows_consolidated?: number
@@ -356,16 +372,24 @@ export type Database = {
         }
         Update: {
           batch_id?: string | null
+          blocked_reason_eda?: string | null
+          blocked_reason_model?: string | null
           canonical_schema?: Json | null
           column_mapping_report?: Json | null
           columns_final?: number
           created_at?: string
           dataset_id?: string | null
+          eda_dataset_id?: string | null
+          eda_ready?: boolean | null
+          eda_scope?: string | null
+          eda_strategy?: string | null
           files?: Json
           files_fail?: number
           files_ok?: number
           files_warn?: number
           id?: string
+          model_dataset_id?: string | null
+          model_ready?: boolean | null
           null_diagnostic?: Json | null
           project_id?: string
           rows_consolidated?: number
@@ -380,6 +404,20 @@ export type Database = {
           {
             foreignKeyName: "import_manifests_dataset_id_fkey"
             columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_manifests_eda_dataset_id_fkey"
+            columns: ["eda_dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_manifests_model_dataset_id_fkey"
+            columns: ["model_dataset_id"]
             isOneToOne: false
             referencedRelation: "project_datasets"
             referencedColumns: ["id"]
