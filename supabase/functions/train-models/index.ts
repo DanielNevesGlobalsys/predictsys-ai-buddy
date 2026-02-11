@@ -1348,13 +1348,65 @@ serve(async (req) => {
       console.warn(`[Gating] No modeling_dataset found. Training with raw features (legacy path).`);
     }
 
-    // ── Gate 4: Modeling Contract (optional, WARN only) ──
+    // ── Gate 4: Modeling Contract (guardrail only — NEVER overrides selection SSOT) ──
+    // Contract is NOT required. If absent → continue. If outdated → WARN only.
+    // Contract can only BLOCK for strong incompatibilities:
+    //   (a) intent.problem_type != selection.problem_type
+    //   (b) LabelGate fail (target invalid)
+    //   (c) LeakageGate/SanityGate fail
+    let contractUsed = false;
+    let contractBlockedReason: string | null = null;
+    let contractWarning: string | null = null;
+
     if (modelingContract) {
-      console.log(`[Gating] Contract: status=${modelingContract.status}`);
+      contractUsed = true;
+      console.log(`[Gating] Contract: status=${modelingContract.status}, version=${modelingContract.contract_version}`);
+
+      // Check for strong incompatibilities only
+      const contractTargetDef = modelingContract.target_definition as any;
+      const contractProblemType = contractTargetDef?.problem_type;
+
+      // (a) problem_type mismatch between contract and selection
+      if (contractProblemType && problem_type && contractProblemType !== problem_type) {
+        contractBlockedReason = `CONTRACT_PROBLEM_TYPE_MISMATCH: contract=${contractProblemType}, selection=${problem_type}`;
+        return blockResponse(
+          "CONTRACT_PROBLEM_TYPE_MISMATCH",
+          `Tipo de problema incompatível: contrato diz "${contractProblemType}" mas seleção diz "${problem_type}". Corrija na Etapa 3.`,
+          { label: "Revisar Target", go_to_step: 3 },
+          { contract_problem_type: contractProblemType, selection_problem_type: problem_type }
+        );
+      }
+
+      // (b)+(c) Check leakage_flags and blocked features from contract as guardrails
+      const leakageFlags = (modelingContract.leakage_flags as any[]) || [];
+      const criticalLeakage = leakageFlags.filter((f: any) => f.reason?.toLowerCase().includes("critical") || f.reason?.toLowerCase().includes("leakage"));
+      if (criticalLeakage.length > 0) {
+        contractBlockedReason = `CONTRACT_LEAKAGE_DETECTED: ${criticalLeakage.map((f: any) => f.col).join(", ")}`;
+        return blockResponse(
+          "CONTRACT_LEAKAGE_DETECTED",
+          `Contrato detectou leakage crítico em: ${criticalLeakage.map((f: any) => f.col).join(", ")}. Remova essas features.`,
+          { label: "Revisar Features", go_to_step: 3 },
+          { leakage_flags: criticalLeakage }
+        );
+      }
+
+      // If contract status is "blocked" but none of the above strong incompatibilities → WARN only
       if (modelingContract.status === "blocked") {
         const reasons = modelingContract.blocked_reasons as any;
-        return blockResponse("CONTRACT_BLOCKED", "Contrato de modelagem bloqueado. Revise Target e Features (Etapa 3).", { label: "Revisar Target", go_to_step: 3 }, { reasons });
+        contractWarning = `Contrato com status=blocked (${JSON.stringify(reasons)}), mas sem incompatibilidade forte. Continuando com WARN.`;
+        trainingWarningsGlobal.push(contractWarning);
+        console.warn(`[Gating] Contract blocked but no strong incompatibility — downgrading to WARN`);
       }
+
+      // Check if contract is outdated vs current selection
+      const contractTargetCol = contractTargetDef?.base_column || contractTargetDef?.derived_target;
+      if (contractTargetCol && contractTargetCol !== target_column) {
+        contractWarning = `Contrato desatualizado: target do contrato="${contractTargetCol}" ≠ seleção="${target_column}". Usando seleção (SSOT).`;
+        trainingWarningsGlobal.push(contractWarning);
+        console.warn(`[Gating] Contract outdated target: ${contractTargetCol} vs selection: ${target_column}`);
+      }
+    } else {
+      console.log(`[Gating] No modeling contract found — continuing without contract (not required).`);
     }
 
     // ── Compute deterministic seed ──
@@ -2903,6 +2955,10 @@ serve(async (req) => {
       dataset_id: builderDatasetId,
       row_count_used: Xfinal.length,
       sample_ratio: totalDatasetRows > 0 ? Xfinal.length / totalDatasetRows : 1,
+      // ── Contract guardrail info ──
+      contract_used: contractUsed,
+      contract_blocked_reason: contractBlockedReason,
+      contract_warning: contractWarning,
       // ── Model info ──
       model_id: modelData.id,
       model_quality_flag: modelQualityFlag,
