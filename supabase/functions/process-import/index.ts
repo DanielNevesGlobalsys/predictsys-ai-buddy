@@ -17,7 +17,7 @@ const SAMPLE_BYTES_LIMIT = 50 * 1024 * 1024; // 50 MB for CSV sampling
 const PARQUET_MEMORY_LIMIT = 400 * 1024 * 1024; // 400 MB for Parquet in-memory
 const RETRY_MAX = 3;
 const RETRY_BASE_DELAY_MS = 1000;
-const MAX_FILES_PER_CHUNK = 5; // Process at most 5 files per Edge Function invocation to avoid CPU timeout
+const FILE_SAMPLE_CAP = 200; // Max sample rows stored per file
 
 // ═══════════════════════════════════════════════════════════
 // Types
@@ -38,6 +38,35 @@ interface ImportJob {
   headers_json: string[] | null;
   headers_hash: string | null;
   dataset_id: string | null;
+  phase: string;
+  total_files: number;
+  processed_files: number;
+  bytes_total: number;
+  bytes_done: number;
+}
+
+interface ImportJobFile {
+  id: string;
+  job_id: string;
+  project_id: string;
+  user_id: string;
+  file_name: string;
+  storage_path: string;
+  file_size_bytes: number;
+  format: string;
+  sequence_index: number;
+  status: string;
+  rows_detected: number;
+  cols_detected: number;
+  schema_json: any;
+  schema_hash: string | null;
+  sample_json: any;
+  checkpoint_cursor: any;
+  quality_gate: string;
+  quality_reasons: any[];
+  error_code: string | null;
+  error_message: string | null;
+  retry_count: number;
 }
 
 type FileFormat = "csv" | "parquet" | "excel" | "json";
@@ -66,6 +95,121 @@ interface CanonicalSchema {
   columns: string[];
   columnTypes: Record<string, string>;
   sourceFiles: number;
+}
+
+interface QualityGateResult {
+  gate: "approved" | "warn" | "blocked";
+  reasons: { code: string; message: string; severity: "info" | "warn" | "error" }[];
+}
+
+// ═══════════════════════════════════════════════════════════
+// Event logging helper
+// ═══════════════════════════════════════════════════════════
+async function logEvent(
+  supabase: any,
+  jobId: string,
+  projectId: string,
+  eventType: string,
+  message: string,
+  severity: "info" | "warn" | "error" = "info",
+  fileId?: string,
+  metadata?: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await supabase.from("import_job_events").insert({
+      job_id: jobId,
+      file_id: fileId || null,
+      project_id: projectId,
+      event_type: eventType,
+      severity,
+      message,
+      metadata: metadata || {},
+    });
+  } catch (e) {
+    console.warn(`[process-import] Failed to log event ${eventType}:`, e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// Quality Gates per file (format-specific + schema drift)
+// ═══════════════════════════════════════════════════════════
+function evaluateFileQualityGate(
+  schema: FileSchema,
+  fileName: string,
+  fileSize: number,
+  referenceSchemaHash?: string | null,
+): QualityGateResult {
+  const reasons: QualityGateResult["reasons"] = [];
+  let gate: QualityGateResult["gate"] = "approved";
+
+  // Gate 1: Empty file
+  if (schema.totalRows === 0) {
+    reasons.push({ code: "EMPTY_FILE", message: `Arquivo "${fileName}" tem 0 linhas.`, severity: "error" });
+    return { gate: "blocked", reasons };
+  }
+
+  // Gate 2: No columns
+  if (schema.columns.length === 0) {
+    reasons.push({ code: "NO_COLUMNS", message: `Nenhuma coluna detectada em "${fileName}".`, severity: "error" });
+    return { gate: "blocked", reasons };
+  }
+
+  // Gate 3: Too few rows
+  if (schema.totalRows < 10) {
+    reasons.push({ code: "FEW_ROWS", message: `Apenas ${schema.totalRows} linhas em "${fileName}".`, severity: "warn" });
+    gate = "warn";
+  }
+
+  // Gate 4: Schema drift (compared to first/reference file)
+  if (referenceSchemaHash && schema.schemaHash !== referenceSchemaHash) {
+    reasons.push({
+      code: "SCHEMA_DRIFT",
+      message: `Schema de "${fileName}" difere do arquivo de referência. Colunas serão unificadas via union-by-name.`,
+      severity: "warn",
+    });
+    if (gate !== "blocked") gate = "warn";
+  }
+
+  // Gate 5: Format-specific checks
+  if (schema.format === "excel" && fileSize > 100 * 1024 * 1024) {
+    reasons.push({ code: "LARGE_EXCEL", message: `Excel muito grande (${(fileSize / 1024 / 1024).toFixed(0)} MB). Conversão para CSV recomendada.`, severity: "warn" });
+    if (gate !== "blocked") gate = "warn";
+  }
+
+  if (schema.format === "parquet" && fileSize > PARQUET_MEMORY_LIMIT) {
+    reasons.push({ code: "LARGE_PARQUET", message: `Parquet excede limite de memória (${(PARQUET_MEMORY_LIMIT / 1024 / 1024).toFixed(0)} MB).`, severity: "error" });
+    return { gate: "blocked", reasons };
+  }
+
+  // Gate 6: High null ratio in sample
+  if (schema.sampleRows.length > 0) {
+    let totalCells = 0;
+    let nullCells = 0;
+    for (const row of schema.sampleRows.slice(0, 100)) {
+      for (const col of schema.columns) {
+        totalCells++;
+        const v = row[col];
+        if (v === null || v === undefined || String(v).trim() === "") nullCells++;
+      }
+    }
+    const nullPct = totalCells > 0 ? (nullCells / totalCells) * 100 : 0;
+    if (nullPct > 80) {
+      reasons.push({ code: "HIGH_NULL_RATE", message: `${nullPct.toFixed(0)}% de células vazias na amostra de "${fileName}".`, severity: "warn" });
+      if (gate !== "blocked") gate = "warn";
+    }
+  }
+
+  // Gate 7: Column count sanity
+  if (schema.columns.length > 1000) {
+    reasons.push({ code: "TOO_MANY_COLS", message: `${schema.columns.length} colunas detectadas — possível parse incorreto.`, severity: "error" });
+    return { gate: "blocked", reasons };
+  }
+
+  if (reasons.length === 0) {
+    reasons.push({ code: "OK", message: "Arquivo passou em todas as validações.", severity: "info" });
+  }
+
+  return { gate, reasons };
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -186,14 +330,12 @@ function detectEntityKeys(
     let score = 0;
     let reason = "";
 
-    // 1. Name pattern match
     const matchesPattern = ENTITY_KEY_PATTERNS.some(p => p.test(normalized));
     if (matchesPattern) {
       score += 40;
       reason = "Nome corresponde a padrão de chave. ";
     }
 
-    // 2. Check uniqueness ratio from sample
     const values = allSampleRows
       .map(r => r[col])
       .filter(v => v !== null && v !== undefined && String(v).trim() !== "");
@@ -203,7 +345,6 @@ function detectEntityKeys(
     const uniqueValues = new Set(values.map(v => String(v)));
     const uniqueRatio = uniqueValues.size / values.length;
 
-    // High cardinality = more likely a key
     if (uniqueRatio > 0.8) {
       score += 30;
       reason += `Alta cardinalidade (${(uniqueRatio * 100).toFixed(0)}% únicos). `;
@@ -211,11 +352,9 @@ function detectEntityKeys(
       score += 15;
       reason += `Cardinalidade moderada (${(uniqueRatio * 100).toFixed(0)}% únicos). `;
     } else {
-      // Low cardinality = unlikely to be a key
       continue;
     }
 
-    // 3. Check presence across files
     const normCol = normalizeColumnName(col);
     let filesPresent = 0;
     for (const schema of fileSchemas) {
@@ -229,7 +368,6 @@ function detectEntityKeys(
       reason += `Presente em ${filesPresent}/${fileSchemas.length} arquivos. `;
     }
 
-    // 4. Type bonus: text/numeric keys
     const colType = canonicalTypes[col];
     if (colType === "texto" && uniqueRatio > 0.9) {
       score += 10;
@@ -281,7 +419,6 @@ function detectTargetAnchor(
     const matchCol = schema.columns.find(c => normalizeColumnName(c) === normalizedTarget);
 
     if (matchCol) {
-      // Check null rate in sample
       const nullCount = schema.sampleRows.filter(row => {
         const v = row[matchCol];
         return v === null || v === undefined || String(v).trim() === "" || String(v).toLowerCase() === "nan";
@@ -307,9 +444,7 @@ function detectTargetAnchor(
   const filesWithTarget = targetPresence.filter(t => t.hasTarget);
   const filesWithoutTarget = targetPresence.filter(t => !t.hasTarget);
 
-  // All files have target → union strategy
   if (filesWithoutTarget.length === 0) {
-    // Validate consistency: check if types are the same
     const targetTypes = fileSchemas
       .map(s => {
         const col = s.columns.find(c => normalizeColumnName(c) === normalizedTarget);
@@ -336,7 +471,6 @@ function detectTargetAnchor(
     };
   }
 
-  // Some files don't have target → anchor strategy
   if (filesWithTarget.length === 0) {
     warnings.push(
       `Target "${projectTargetColumn}" NÃO encontrado em nenhum arquivo. ` +
@@ -353,7 +487,6 @@ function detectTargetAnchor(
     };
   }
 
-  // Select best anchor: lowest null rate, then highest row count
   const bestAnchor = filesWithTarget.sort((a, b) => {
     if (a.nullRate !== b.nullRate) return a.nullRate - b.nullRate;
     return b.rowCount - a.rowCount;
@@ -381,10 +514,7 @@ function detectTargetAnchor(
 }
 
 function findEquivalentCanonical(normalizedName: string, existingCanonicals: Map<string, string>): string | null {
-  // Direct match
   if (existingCanonicals.has(normalizedName)) return normalizedName;
-
-  // Check equivalence groups
   for (const group of EQUIVALENCE_GROUPS) {
     if (group.includes(normalizedName)) {
       for (const equiv of group) {
@@ -392,15 +522,12 @@ function findEquivalentCanonical(normalizedName: string, existingCanonicals: Map
       }
     }
   }
-
-  // Fuzzy: try removing common prefixes/suffixes
   const stripped = normalizedName
     .replace(/^(cod_?|codigo_?|id_?|num_?|nr_?)/, "")
     .replace(/(_id|_cod|_codigo|_num)$/, "");
   if (stripped && stripped !== normalizedName && existingCanonicals.has(stripped)) {
     return stripped;
   }
-
   return null;
 }
 
@@ -487,7 +614,7 @@ function autoDetectDelimiter(headerLine: string): string {
 
 async function extractSchemaCSV(
   supabase: any,
-  job: ImportJob,
+  job: { storage_path: string; file_size_bytes: number; delimiter: string; encoding: string; file_name: string },
   onProgress?: (p: number, r: number) => Promise<void>,
 ): Promise<FileSchema> {
   const signedUrl = await getSignedUrl(supabase, job.storage_path);
@@ -534,14 +661,11 @@ async function extractSchemaCSV(
         if (!line.trim()) continue;
 
         if (isHeaderLine) {
-          // Auto-detect delimiter if not explicitly set
           if (!delimiter) {
             detectedDelimiter = autoDetectDelimiter(line);
           }
           headers = parseCSVLine(line, detectedDelimiter);
           isHeaderLine = false;
-
-          // Validate column count consistency with first 5 data lines
           console.log(`[process-import] CSV headers: ${headers.length} cols, delimiter="${detectedDelimiter}"`);
           continue;
         }
@@ -551,16 +675,11 @@ async function extractSchemaCSV(
 
         if (sampleRows.length < SAMPLE_SIZE) {
           const values = parseCSVLine(line, detectedDelimiter);
-          
-          // Check for misaligned rows (different column count)
           if (values.length !== headers.length && sampleRows.length < 5) {
             console.warn(`[process-import] CSV row ${rowCount}: expected ${headers.length} cols, got ${values.length}`);
           }
-
           const row: Record<string, unknown> = {};
-          headers.forEach((h, idx) => {
-            row[h] = values[idx] ?? null;
-          });
+          headers.forEach((h, idx) => { row[h] = values[idx] ?? null; });
           sampleRows.push(row);
         }
 
@@ -569,14 +688,12 @@ async function extractSchemaCSV(
           lastProgressUpdate = Date.now();
         }
 
-        // Stop reading after collecting enough samples — estimate remaining from bytes
         if (sampleRows.length >= SAMPLE_SIZE) break;
       }
 
       if (sampleRows.length >= SAMPLE_SIZE) break;
     }
 
-    // Flush remaining
     leftover += decoder.decode();
     if (leftover.trim() && !isHeaderLine) {
       const line = leftover.replace(/\r$/, "");
@@ -592,7 +709,6 @@ async function extractSchemaCSV(
       }
     }
 
-    // Estimate total rows
     const avgBytesPerRow = rowCount > 0 ? bytesForRows / rowCount : 100;
     let estimatedRowCount: number;
     if (job.file_size_bytes <= totalBytesRead) {
@@ -604,7 +720,6 @@ async function extractSchemaCSV(
     }
 
     const columnTypes = inferColumnTypes(headers, sampleRows);
-
     console.log(`[process-import] CSV schema: ${headers.length} cols, ~${estimatedRowCount} rows, ${sampleRows.length} sampled`);
 
     return {
@@ -622,7 +737,7 @@ async function extractSchemaCSV(
 
 async function extractSchemaParquet(
   supabase: any,
-  job: ImportJob,
+  job: { storage_path: string; file_size_bytes: number; file_name: string },
   onProgress?: (p: number, r: number) => Promise<void>,
 ): Promise<FileSchema> {
   if (job.file_size_bytes > PARQUET_MEMORY_LIMIT) {
@@ -649,7 +764,6 @@ async function extractSchemaParquet(
   });
 
   if (onProgress) await onProgress(70, allRows.length);
-
   if (allRows.length === 0) throw new Error("Arquivo Parquet vazio ou ilegível.");
 
   const headers = Object.keys(allRows[0]);
@@ -668,7 +782,6 @@ async function extractSchemaParquet(
   });
 
   const columnTypes = inferColumnTypes(headers, sampleRows);
-
   console.log(`[process-import] Parquet schema: ${headers.length} cols, ${totalRows} rows, ${sampleRows.length} sampled`);
 
   return {
@@ -683,7 +796,7 @@ async function extractSchemaParquet(
 
 async function extractSchemaExcel(
   supabase: any,
-  job: ImportJob,
+  job: { storage_path: string; file_size_bytes: number; file_name: string },
   onProgress?: (p: number, r: number) => Promise<void>,
 ): Promise<FileSchema> {
   if (job.file_size_bytes > PARQUET_MEMORY_LIMIT) {
@@ -711,19 +824,14 @@ async function extractSchemaExcel(
 
   if (onProgress) await onProgress(60, 0);
 
-  // Detect actual header row (skip empty or title rows)
   let headerRowIdx = 0;
   for (let i = 0; i < Math.min(5, jsonData.length); i++) {
     const row = jsonData[i] as unknown[];
     const nonEmpty = row.filter(v => v !== null && v !== undefined && String(v).trim() !== "").length;
-    if (nonEmpty >= 2) {
-      headerRowIdx = i;
-      break;
-    }
+    if (nonEmpty >= 2) { headerRowIdx = i; break; }
   }
 
   const rawHeaders = (jsonData[headerRowIdx] as unknown[]);
-  // Filter out "phantom" empty columns at the end
   let lastNonEmptyCol = rawHeaders.length - 1;
   while (lastNonEmptyCol >= 0 && (rawHeaders[lastNonEmptyCol] === null || rawHeaders[lastNonEmptyCol] === undefined || String(rawHeaders[lastNonEmptyCol]).trim() === "")) {
     lastNonEmptyCol--;
@@ -737,16 +845,13 @@ async function extractSchemaExcel(
 
   const sampleRows = sampledRows.map(row => {
     const obj: Record<string, unknown> = {};
-    headers.forEach((header, i) => {
-      obj[header] = (row as unknown[])[i] ?? null;
-    });
+    headers.forEach((header, i) => { obj[header] = (row as unknown[])[i] ?? null; });
     return obj;
   });
 
   if (onProgress) await onProgress(80, totalRows);
 
   const columnTypes = inferColumnTypes(headers, sampleRows);
-
   console.log(`[process-import] Excel schema: ${headers.length} cols, ${totalRows} rows, sheet="${sheetName}"`);
 
   return {
@@ -761,13 +866,12 @@ async function extractSchemaExcel(
 
 async function extractSchemaJSON(
   supabase: any,
-  job: ImportJob,
+  job: { storage_path: string; file_size_bytes: number; file_name: string },
   onProgress?: (p: number, r: number) => Promise<void>,
 ): Promise<FileSchema> {
   const signedUrl = await getSignedUrl(supabase, job.storage_path);
   if (onProgress) await onProgress(10, 0);
 
-  // Download — for very large JSON, only grab first portion
   const maxBytes = Math.min(job.file_size_bytes, SAMPLE_BYTES_LIMIT);
   const res = job.file_size_bytes <= SAMPLE_BYTES_LIMIT
     ? await downloadFile(signedUrl)
@@ -778,21 +882,14 @@ async function extractSchemaJSON(
 
   let records: Record<string, unknown>[];
 
-  // Detect JSON Lines vs JSON Array
   const trimmed = text.trim();
   if (trimmed.startsWith("[")) {
-    // Regular JSON array
     const data = JSON.parse(trimmed);
-    if (Array.isArray(data)) {
-      records = data;
-    } else {
-      throw new Error("JSON root is not an array");
-    }
+    if (Array.isArray(data)) { records = data; }
+    else { throw new Error("JSON root is not an array"); }
   } else if (trimmed.startsWith("{")) {
-    // Could be JSON Lines or a wrapper object
     const lines = trimmed.split("\n").filter(l => l.trim());
     if (lines.length > 1) {
-      // Try JSON Lines
       records = [];
       for (const line of lines) {
         try {
@@ -800,13 +897,10 @@ async function extractSchemaJSON(
           if (typeof obj === "object" && obj !== null && !Array.isArray(obj)) {
             records.push(obj);
           }
-        } catch {
-          // Skip unparseable lines
-        }
+        } catch { /* Skip unparseable lines */ }
       }
       if (records.length === 0) throw new Error("Não foi possível parsear JSON Lines.");
     } else {
-      // Single wrapper object — look for common array keys
       const data = JSON.parse(trimmed);
       const arrayKeys = ["data", "records", "results", "rows", "items"];
       let found = false;
@@ -817,9 +911,7 @@ async function extractSchemaJSON(
           break;
         }
       }
-      if (!found) {
-        records = [data]; // Single record
-      }
+      if (!found) { records = [data]; }
     }
   } else {
     throw new Error("JSON inválido: não começa com [ ou {");
@@ -829,12 +921,10 @@ async function extractSchemaJSON(
 
   if (onProgress) await onProgress(60, records.length);
 
-  // Flatten nested objects one level deep
   const flattenedRecords = records.map(record => {
     const flat: Record<string, unknown> = {};
     for (const [key, value] of Object.entries(record)) {
       if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-        // Flatten nested object
         for (const [nestedKey, nestedValue] of Object.entries(value as Record<string, unknown>)) {
           flat[`${key}.${nestedKey}`] = nestedValue;
         }
@@ -845,7 +935,6 @@ async function extractSchemaJSON(
     return flat;
   });
 
-  // Collect all unique keys
   const keysSet = new Set<string>();
   for (const record of flattenedRecords) {
     Object.keys(record).forEach(key => keysSet.add(key));
@@ -860,7 +949,6 @@ async function extractSchemaJSON(
     return obj;
   });
 
-  // If file was truncated, estimate
   const isPartial = job.file_size_bytes > SAMPLE_BYTES_LIMIT;
   const estimatedTotal = isPartial
     ? Math.round(totalRows * (job.file_size_bytes / text.length))
@@ -869,7 +957,6 @@ async function extractSchemaJSON(
   if (onProgress) await onProgress(80, estimatedTotal);
 
   const columnTypes = inferColumnTypes(headers, sampleRows);
-
   console.log(`[process-import] JSON schema: ${headers.length} cols, ${estimatedTotal} rows (${isPartial ? "estimated" : "exact"})`);
 
   return {
@@ -899,7 +986,6 @@ function buildCanonicalSchema(
     return { columns: [], columnTypes: {}, sourceFiles: 0, columnMapping: [] };
   }
 
-  // Map: normalizedName → canonical display name (first seen)
   const canonicalNames = new Map<string, string>();
   const columnOrder: string[] = [];
   const mappingEntries = new Map<string, ColumnMappingEntry>();
@@ -910,18 +996,14 @@ function buildCanonicalSchema(
 
     for (const col of schema.columns) {
       const normalized = normalizeColumnName(col);
-      
-      // Try direct match or equivalence
       let canonicalKey = canonicalNames.has(normalized) ? normalized : findEquivalentCanonical(normalized, canonicalNames);
       
       if (canonicalKey) {
-        // Column exists — add source mapping
         const entry = mappingEntries.get(canonicalKey)!;
         entry.sources.push({ file: fileName, original_col: col });
       } else {
-        // New column
         canonicalKey = normalized;
-        const displayName = col; // preserve original casing from first file
+        const displayName = col;
         canonicalNames.set(normalized, displayName);
         columnOrder.push(displayName);
         mappingEntries.set(normalized, {
@@ -933,7 +1015,6 @@ function buildCanonicalSchema(
     }
   }
 
-  // Merge types with coercion: prefer numérico > categórico > texto
   const mergedTypes: Record<string, string> = {};
   for (const col of columnOrder) {
     const normalized = normalizeColumnName(col);
@@ -951,16 +1032,13 @@ function buildCanonicalSchema(
     if (types.length === 0) {
       mergedTypes[col] = "texto";
     } else {
-      // Type coercion: if any file has "numérico" and another has "texto", try "numérico" (will attempt conversion)
       const hasNumeric = types.includes("numérico");
       const hasText = types.includes("texto");
       if (hasNumeric && !hasText) {
         mergedTypes[col] = "numérico";
       } else if (hasNumeric && hasText) {
-        // Mixed — keep numérico, backend will try conversion
         mergedTypes[col] = "numérico";
       } else {
-        // Use most common type
         const typeCounts = new Map<string, number>();
         for (const t of types) typeCounts.set(t, (typeCounts.get(t) || 0) + 1);
         let bestType = "texto";
@@ -972,12 +1050,10 @@ function buildCanonicalSchema(
       }
     }
 
-    // Update mapping entry type
     const entry = mappingEntries.get(normalized);
     if (entry) entry.type = mergedTypes[col];
   }
 
-  // Build column mapping array
   const columnMapping: ColumnMappingEntry[] = [];
   for (const [, entry] of mappingEntries) {
     columnMapping.push(entry);
@@ -1002,7 +1078,6 @@ function normalizeToSchema(
   canonicalColumns: string[],
   canonicalTypes?: Record<string, string>,
 ): Record<string, unknown>[] {
-  // Pre-compute mapping: canonical column → source file column (once, not per row)
   const fileColMap = new Map<string, string>();
   for (const col of fileColumns) {
     fileColMap.set(normalizeColumnName(col), col);
@@ -1012,7 +1087,6 @@ function normalizeToSchema(
     canonNormMap.set(normalizeColumnName(col), col);
   }
 
-  // Pre-compute the resolved source column for each canonical column
   const resolvedMap: { canonCol: string; sourceCol: string | null; imputeValue: unknown }[] = [];
   for (const canonCol of canonicalColumns) {
     const normKey = normalizeColumnName(canonCol);
@@ -1040,7 +1114,7 @@ function normalizeToSchema(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Critical Column Detection via IntentContract or Heuristics
+// Critical Column Detection
 // ═══════════════════════════════════════════════════════════
 const CRITICAL_HEURISTIC_PATTERNS: { pattern: RegExp; reason: string }[] = [
   { pattern: /^(id|cod|codigo|code|chave|key|cpf|cnpj|matricula|contrato|uuid|pk)/i, reason: "chave/identificador" },
@@ -1065,34 +1139,22 @@ function detectCriticalColumns(
   const tags: CriticalColumnTag[] = [];
   const seen = new Set<string>();
 
-  // 1) If IntentContract exists, use it to tag critical columns
   if (intentContract) {
     const ic = intentContract;
-    const criticalHints: string[] = [];
-    if (ic.requires_time_column) criticalHints.push("temporal");
-    if (ic.problem_type === "classification") criticalHints.push("status/target potencial");
-    if (ic.problem_type === "regression") criticalHints.push("financeiro", "contagem");
-    if (ic.recommended_entity_key) criticalHints.push("chave/identificador");
-
     for (const col of canonicalColumns) {
       const norm = normalizeColumnName(col);
       const colType = canonicalTypes[col] || "texto";
 
-      // Entity key match
       if (ic.recommended_entity_key && norm.includes(normalizeColumnName(ic.recommended_entity_key))) {
         tags.push({ column: col, reason: "chave de entidade (IntentContract)", source: "intent_contract" });
         seen.add(col);
         continue;
       }
-
-      // Date columns if requires_time_column
       if (ic.requires_time_column && colType === "data") {
         tags.push({ column: col, reason: "coluna temporal (IntentContract)", source: "intent_contract" });
         seen.add(col);
         continue;
       }
-
-      // Financial columns for regression/revenue objectives
       if (["regression", "timeseries"].includes(ic.problem_type) && colType === "numérico") {
         for (const p of CRITICAL_HEURISTIC_PATTERNS.filter(p => p.reason === "financeiro" || p.reason === "contagem")) {
           if (p.pattern.test(norm)) {
@@ -1102,8 +1164,6 @@ function detectCriticalColumns(
           }
         }
       }
-
-      // Status/flag columns for classification
       if (ic.problem_type === "classification" && colType === "categórico") {
         for (const p of CRITICAL_HEURISTIC_PATTERNS.filter(p => p.reason === "status/target potencial")) {
           if (p.pattern.test(norm)) {
@@ -1116,7 +1176,6 @@ function detectCriticalColumns(
     }
   }
 
-  // 2) Fallback heuristics for columns not yet tagged
   for (const col of canonicalColumns) {
     if (seen.has(col)) continue;
     const norm = normalizeColumnName(col);
@@ -1133,13 +1192,23 @@ function detectCriticalColumns(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Coverage Stats for Manifest
+// Coverage Stats + NULL Diagnostic + EDA Strategy
 // ═══════════════════════════════════════════════════════════
 interface CoverageStats {
   critical_columns_pct: number;
   global_null_pct: number;
   top_10_null_columns: { column: string; null_pct: number }[];
   file_contribution: { file: string; rows: number; data_cols: number; null_only_cols: number; contribution_type: "data" | "mostly_null" }[];
+}
+
+interface NullDiagnosticEntry {
+  column: string;
+  null_pct: number;
+  severity: "ok" | "warning" | "critical";
+  probable_cause: string;
+  files_with_data: string[];
+  is_critical_column?: boolean;
+  critical_reason?: string;
 }
 
 function computeCoverageStats(
@@ -1149,27 +1218,21 @@ function computeCoverageStats(
   allSampleRows: Record<string, unknown>[],
   nullDiag: NullDiagnosticEntry[],
 ): CoverageStats {
-  // % of columns with critical severity
   const criticalCount = nullDiag.filter(d => d.severity === "critical").length;
   const critical_columns_pct = canonicalColumns.length > 0
-    ? Math.round((criticalCount / canonicalColumns.length) * 1000) / 10
-    : 0;
+    ? Math.round((criticalCount / canonicalColumns.length) * 1000) / 10 : 0;
 
-  // Global null %
   let totalCells = 0;
   let totalNulls = 0;
   for (const row of allSampleRows) {
     for (const col of canonicalColumns) {
       totalCells++;
       const v = row[col];
-      if (v === null || v === undefined || String(v).trim() === "" || v === "missing") {
-        totalNulls++;
-      }
+      if (v === null || v === undefined || String(v).trim() === "" || v === "missing") totalNulls++;
     }
   }
   const global_null_pct = totalCells > 0 ? Math.round((totalNulls / totalCells) * 1000) / 10 : 0;
 
-  // Top 10 null columns (including OK ones, sorted by null%)
   const colNulls: { column: string; null_pct: number }[] = [];
   for (const col of canonicalColumns) {
     const nullCount = allSampleRows.filter(row => {
@@ -1182,36 +1245,16 @@ function computeCoverageStats(
   colNulls.sort((a, b) => b.null_pct - a.null_pct);
   const top_10_null_columns = colNulls.slice(0, 10);
 
-  // File contribution analysis
   const file_contribution = fileSchemas.map((schema, i) => {
     const fileName = fileNames[i] || `file_${i + 1}`;
     const normSchemaCols = new Set(schema.columns.map(c => normalizeColumnName(c)));
     const dataCols = canonicalColumns.filter(c => normSchemaCols.has(normalizeColumnName(c))).length;
     const nullOnlyCols = canonicalColumns.length - dataCols;
     const contributionType: "data" | "mostly_null" = dataCols >= canonicalColumns.length * 0.5 ? "data" : "mostly_null";
-    return {
-      file: fileName,
-      rows: schema.totalRows,
-      data_cols: dataCols,
-      null_only_cols: nullOnlyCols,
-      contribution_type: contributionType,
-    };
+    return { file: fileName, rows: schema.totalRows, data_cols: dataCols, null_only_cols: nullOnlyCols, contribution_type: contributionType };
   });
 
   return { critical_columns_pct, global_null_pct, top_10_null_columns, file_contribution };
-}
-
-// ═══════════════════════════════════════════════════════════
-// NULL Diagnostic: detect columns with high NULL from schema mismatch
-// ═══════════════════════════════════════════════════════════
-interface NullDiagnosticEntry {
-  column: string;
-  null_pct: number;
-  severity: "ok" | "warning" | "critical";
-  probable_cause: string;
-  files_with_data: string[];
-  is_critical_column?: boolean;
-  critical_reason?: string;
 }
 
 function computeNullDiagnostic(
@@ -1239,7 +1282,6 @@ function computeNullDiagnostic(
     const severity: "ok" | "warning" | "critical" =
       nullPct > 50 ? "critical" : nullPct >= 30 ? "warning" : "ok";
 
-    // Only report non-OK columns
     if (severity === "ok") continue;
 
     const filesWithData: string[] = [];
@@ -1260,30 +1302,18 @@ function computeNullDiagnostic(
 
     const critTag = criticalMap.get(col);
     diagnostics.push({
-      column: col,
-      null_pct: Math.round(nullPct * 10) / 10,
-      severity,
-      probable_cause: cause,
-      files_with_data: filesWithData,
-      is_critical_column: !!critTag,
-      critical_reason: critTag?.reason,
+      column: col, null_pct: Math.round(nullPct * 10) / 10, severity, probable_cause: cause,
+      files_with_data: filesWithData, is_critical_column: !!critTag, critical_reason: critTag?.reason,
     });
   }
 
   return diagnostics.sort((a, b) => {
-    // Critical columns first, then by null_pct desc
     if (a.is_critical_column && !b.is_critical_column) return -1;
     if (!a.is_critical_column && b.is_critical_column) return 1;
     return b.null_pct - a.null_pct;
   });
 }
 
-// ═══════════════════════════════════════════════════════════
-// Import Manifest Generator
-// ═══════════════════════════════════════════════════════════
-// ═══════════════════════════════════════════════════════════
-// EDA Strategy Selection
-// ═══════════════════════════════════════════════════════════
 interface EdaStrategyResult {
   strategy: "UNION_BY_NAME" | "INTERSECTION_ONLY" | "ANCHOR_FILE_EDA";
   scope: string;
@@ -1301,16 +1331,10 @@ function chooseEdaStrategy(
     return { strategy: "UNION_BY_NAME", scope: "union", reason: "Arquivo único — union completo." };
   }
 
-  // Compute common columns across ALL files
-  const colSetsNormalized = fileSchemas.map(s =>
-    new Set(s.columns.map(c => normalizeColumnName(c)))
-  );
+  const colSetsNormalized = fileSchemas.map(s => new Set(s.columns.map(c => normalizeColumnName(c))));
   const allNormalized = new Set(canonicalColumns.map(c => normalizeColumnName(c)));
-  const commonCols = [...allNormalized].filter(nc =>
-    colSetsNormalized.every(set => set.has(nc))
-  );
+  const commonCols = [...allNormalized].filter(nc => colSetsNormalized.every(set => set.has(nc)));
 
-  // If canonical schema is large enough and we have rows, UNION_BY_NAME is viable
   if (canonicalColumns.length >= 20 && commonCols.length >= 6) {
     return {
       strategy: "UNION_BY_NAME",
@@ -1319,235 +1343,26 @@ function chooseEdaStrategy(
     };
   }
 
-  // If enough common columns, intersection is viable
   if (commonCols.length >= 6) {
     return {
       strategy: "INTERSECTION_ONLY",
       scope: `intersection (${commonCols.length} colunas comuns)`,
-      reason: `${commonCols.length} colunas comuns detectadas. Usando somente colunas presentes em todos os arquivos.`,
+      reason: `${commonCols.length} colunas comuns detectadas.`,
     };
   }
 
-  // Fallback: use the largest file as anchor
   let bestIdx = 0;
   let bestRows = 0;
   for (let i = 0; i < fileSchemas.length; i++) {
-    if (fileSchemas[i].totalRows > bestRows) {
-      bestRows = fileSchemas[i].totalRows;
-      bestIdx = i;
-    }
+    if (fileSchemas[i].totalRows > bestRows) { bestRows = fileSchemas[i].totalRows; bestIdx = i; }
   }
 
   return {
     strategy: "ANCHOR_FILE_EDA",
     scope: `anchor (${fileNames[bestIdx]})`,
     anchor_file: fileNames[bestIdx],
-    reason: `Poucas colunas comuns (${commonCols.length}). Usando arquivo âncora "${fileNames[bestIdx]}" (${bestRows} linhas).`,
+    reason: `Poucas colunas comuns (${commonCols.length}). Usando arquivo âncora "${fileNames[bestIdx]}".`,
   };
-}
-
-async function createImportManifest(
-  supabase: any,
-  projectId: string,
-  userId: string,
-  batchId: string | null,
-  datasetId: string | null,
-  fileResults: FileProcessResult[],
-  fileSchemas: FileSchema[],
-  fileNames: string[],
-  canonical: CanonicalSchema & { columnMapping?: ColumnMappingEntry[] },
-  totalRowsConsolidated: number,
-  allSampleRows: Record<string, unknown>[],
-): Promise<void> {
-  try {
-    const rowsSum = fileSchemas.reduce((s, sc) => s + sc.totalRows, 0);
-
-    // Fetch IntentContract if available
-    let intentContract: any = null;
-    try {
-      const { data: aiCtx } = await supabase
-        .from("project_ai_context")
-        .select("context")
-        .eq("project_id", projectId)
-        .single();
-      if (aiCtx?.context?.intent) {
-        const intentData = aiCtx.context.intent;
-        if (Array.isArray(intentData)) {
-          intentContract = intentData[intentData.length - 1];
-        } else {
-          intentContract = intentData;
-        }
-      }
-    } catch { /* no intent contract yet */ }
-
-    // Detect critical columns
-    const criticalTags = detectCriticalColumns(canonical.columns, canonical.columnTypes, intentContract);
-    console.log(`[process-import] Critical columns detected: ${criticalTags.length} (${criticalTags.filter(t => t.source === "intent_contract").length} from IntentContract)`);
-
-    const nullDiag = computeNullDiagnostic(canonical.columns, fileSchemas, fileNames, allSampleRows, criticalTags);
-
-    // Compute coverage stats
-    const coverageStats = computeCoverageStats(canonical.columns, fileSchemas, fileNames, allSampleRows, nullDiag);
-
-    // Choose EDA strategy
-    const edaStrategy = chooseEdaStrategy(fileSchemas, fileNames, canonical.columns, nullDiag);
-    console.log(`[process-import] EDA strategy: ${edaStrategy.strategy} — ${edaStrategy.reason}`);
-
-    // Build per-file entries
-    const files = fileResults.map((result, i) => {
-      const schema = result.schema;
-      const nullPctByCol: { col: string; pct: number }[] = [];
-      const missingCols: string[] = [];
-
-      if (schema && allSampleRows.length > 0) {
-        for (const col of schema.columns) {
-          const nullCount = schema.sampleRows.filter(row => {
-            const v = row[col];
-            return v === null || v === undefined || String(v).trim() === "";
-          }).length;
-          const pct = schema.sampleRows.length > 0 ? Math.round((nullCount / schema.sampleRows.length) * 1000) / 10 : 0;
-          if (pct > 0) nullPctByCol.push({ col, pct });
-        }
-        nullPctByCol.sort((a, b) => b.pct - a.pct);
-
-        for (const canonCol of canonical.columns) {
-          const normCanon = normalizeColumnName(canonCol);
-          const hasCol = schema.columns.some(c => normalizeColumnName(c) === normCanon);
-          if (!hasCol) missingCols.push(canonCol);
-        }
-      }
-
-      let status: "ok" | "warn" | "fail" = "ok";
-      const parseWarnings: string[] = [];
-
-      if (!result.success) {
-        status = "fail";
-        if (result.error) parseWarnings.push(result.error);
-      } else if (missingCols.length > 0) {
-        status = "warn";
-        parseWarnings.push(`${missingCols.length} coluna(s) ausente(s): ${missingCols.slice(0, 3).join(", ")}${missingCols.length > 3 ? "..." : ""}`);
-      }
-
-      return {
-        file_id: result.jobId,
-        file_name: result.fileName,
-        format: result.format,
-        size_mb: schema ? Math.round((schema.sampleRows.length * 100) / 100) : 0,
-        rows_detected: result.rowsRead,
-        rows_loaded: result.rowsRead,
-        cols_detected: schema?.columns.length || 0,
-        schema_detected: schema?.columnTypes || {},
-        null_pct_by_col: nullPctByCol.slice(0, 10),
-        parse_warnings: parseWarnings,
-        status,
-        missing_cols: missingCols,
-      };
-    });
-
-    const filesOk = files.filter(f => f.status === "ok").length;
-    const filesWarn = files.filter(f => f.status === "warn").length;
-    const filesFail = files.filter(f => f.status === "fail").length;
-
-    // ── Separate EDA vs MODEL gating ──
-    // EDA blocks ONLY if truly unusable
-    let edaReady = true;
-    let blockedReasonEda: string | null = null;
-
-    if (totalRowsConsolidated === 0) {
-      edaReady = false;
-      blockedReasonEda = "Dataset consolidado tem 0 linhas.";
-    } else if (canonical.columns.length === 0) {
-      edaReady = false;
-      blockedReasonEda = "Nenhuma coluna detectada.";
-    } else if (filesFail > 0 && filesOk === 0) {
-      edaReady = false;
-      blockedReasonEda = "Todos os arquivos falharam no processamento.";
-    }
-
-    // MODEL blocks on stricter criteria
-    let modelReady = edaReady; // can't model if can't even EDA
-    let blockedReasonModel: string | null = null;
-
-    const criticalCols = nullDiag.filter(d => d.severity === "critical").length;
-    const criticalRatio = canonical.columns.length > 0 ? criticalCols / canonical.columns.length : 0;
-
-    if (!edaReady) {
-      modelReady = false;
-      blockedReasonModel = blockedReasonEda;
-    } else if (criticalRatio >= 0.8) {
-      modelReady = false;
-      blockedReasonModel = `${criticalCols} de ${canonical.columns.length} colunas (${Math.round(criticalRatio * 100)}%) estão em estado crítico (>50% NULL). O dataset não é utilizável para modelagem.`;
-    }
-
-    // Overall status for manifest (backward compat): 
-    // Schema divergence = WARN, not BLOCKED
-    let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
-    let statusReason: string | null = null;
-
-    if (!edaReady) {
-      overallStatus = "blocked";
-      statusReason = blockedReasonEda;
-    } else if (!modelReady) {
-      overallStatus = "warn";
-      statusReason = blockedReasonModel;
-    } else if (filesFail > 0) {
-      overallStatus = "warn";
-      statusReason = `${filesFail} arquivo(s) falharam. Dataset parcial.`;
-    } else if (nullDiag.some(d => d.severity === "critical")) {
-      overallStatus = "warn";
-      statusReason = `${criticalCols} coluna(s) com >50% NULL detectada(s) — possível mismatch de schema.`;
-    } else if (filesWarn > 0) {
-      overallStatus = "warn";
-      statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`;
-    }
-
-    const { data: manifestData, error: manifestError } = await supabase.from("import_manifests").insert({
-      project_id: projectId,
-      user_id: userId,
-      batch_id: batchId,
-      dataset_id: datasetId,
-      total_files: fileResults.length,
-      files_ok: filesOk,
-      files_warn: filesWarn,
-      files_fail: filesFail,
-      rows_sum: rowsSum,
-      rows_consolidated: totalRowsConsolidated,
-      rows_difference: Math.max(0, rowsSum - totalRowsConsolidated),
-      columns_final: canonical.columns.length,
-      canonical_schema: {
-        ...canonical.columnTypes,
-        _coverage_stats: coverageStats,
-        _critical_columns: criticalTags,
-      },
-      column_mapping_report: canonical.columnMapping || [],
-      null_diagnostic: nullDiag,
-      files,
-      status: overallStatus,
-      status_reason: statusReason,
-      // New fields
-      eda_ready: edaReady,
-      model_ready: modelReady,
-      eda_strategy: edaStrategy.strategy,
-      eda_scope: edaStrategy.scope,
-      eda_dataset_id: datasetId, // EDA always uses the consolidated dataset when available
-      model_dataset_id: modelReady ? datasetId : null,
-      blocked_reason_eda: blockedReasonEda,
-      blocked_reason_model: blockedReasonModel,
-    }).select("id").single();
-
-    // Persist dataset_ready_for_modeling on project (model gating)
-    await supabase.from("projects").update({
-      dataset_ready_for_modeling: modelReady,
-      dataset_blocked_reason: modelReady ? null : blockedReasonModel,
-    }).eq("id", projectId);
-
-    const manifestId = manifestData?.id || null;
-    console.log(`[process-import] Manifest created: status=${overallStatus}, eda_ready=${edaReady}, model_ready=${modelReady}, strategy=${edaStrategy.strategy}, ${files.length} files, ${totalRowsConsolidated} rows, manifest_id=${manifestId}`);
-    return manifestId;
-  } catch (e) {
-    console.error("[process-import] Failed to create manifest:", e);
-    return null;
-  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1563,14 +1378,12 @@ function inferColumnTypes(headers: string[], sampleRows: Record<string, unknown>
 
     if (values.length === 0) { types[header] = "texto"; continue; }
 
-    // Native type checks (for Parquet/JSON)
     const nativeNumberCount = values.filter(v => typeof v === "number").length;
     if (nativeNumberCount >= values.length * 0.8) { types[header] = "numérico"; continue; }
 
     const nativeBoolCount = values.filter(v => typeof v === "boolean").length;
     if (nativeBoolCount >= values.length * 0.8) { types[header] = "categórico"; continue; }
 
-    // String-based inference
     const numericCount = values.filter(v => {
       const str = String(v).replace(",", ".").trim();
       return !isNaN(Number(str)) && str !== "";
@@ -1607,14 +1420,14 @@ async function updateJobProgress(supabase: any, jobId: string, progress: number,
 async function updateJobError(supabase: any, jobId: string, errorMessage: string): Promise<void> {
   await supabase
     .from("import_jobs")
-    .update({ status: "failed", progress: 0, error_message: errorMessage, finished_at: new Date().toISOString() })
+    .update({ status: "failed", phase: "failed", progress: 0, error_message: errorMessage, finished_at: new Date().toISOString() })
     .eq("id", jobId);
 }
 
 async function completeJob(supabase: any, jobId: string, rowsProcessed: number, datasetId: string | null): Promise<void> {
   await supabase
     .from("import_jobs")
-    .update({ status: "completed", progress: 100, rows_processed: rowsProcessed, finished_at: new Date().toISOString(), dataset_id: datasetId })
+    .update({ status: "completed", phase: "done", progress: 100, rows_processed: rowsProcessed, finished_at: new Date().toISOString(), dataset_id: datasetId })
     .eq("id", jobId);
 }
 
@@ -1640,11 +1453,11 @@ async function createDatasetRecord(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Unified file processing: extract schema for any format
+// Unified file processing
 // ═══════════════════════════════════════════════════════════
 async function processFileUnified(
   supabase: any,
-  job: ImportJob,
+  job: { storage_path: string; file_size_bytes: number; file_name: string; delimiter: string; encoding: string },
   onProgress?: (p: number, r: number) => Promise<void>,
 ): Promise<FileSchema> {
   const format = detectFileFormat(job.file_name, job.storage_path);
@@ -1660,10 +1473,161 @@ async function processFileUnified(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Single file import
+// Import Manifest Generator
+// ═══════════════════════════════════════════════════════════
+async function createImportManifest(
+  supabase: any,
+  projectId: string,
+  userId: string,
+  batchId: string | null,
+  datasetId: string | null,
+  fileResults: FileProcessResult[],
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  canonical: CanonicalSchema & { columnMapping?: ColumnMappingEntry[] },
+  totalRowsConsolidated: number,
+  allSampleRows: Record<string, unknown>[],
+): Promise<string | null> {
+  try {
+    const rowsSum = fileSchemas.reduce((s, sc) => s + sc.totalRows, 0);
+
+    let intentContract: any = null;
+    try {
+      const { data: aiCtx } = await supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectId)
+        .single();
+      if (aiCtx?.context?.intent) {
+        const intentData = aiCtx.context.intent;
+        intentContract = Array.isArray(intentData) ? intentData[intentData.length - 1] : intentData;
+      }
+    } catch { /* no intent contract yet */ }
+
+    const criticalTags = detectCriticalColumns(canonical.columns, canonical.columnTypes, intentContract);
+    const nullDiag = computeNullDiagnostic(canonical.columns, fileSchemas, fileNames, allSampleRows, criticalTags);
+    const coverageStats = computeCoverageStats(canonical.columns, fileSchemas, fileNames, allSampleRows, nullDiag);
+    const edaStrategy = chooseEdaStrategy(fileSchemas, fileNames, canonical.columns, nullDiag);
+
+    const files = fileResults.map((result, i) => {
+      const schema = result.schema;
+      const nullPctByCol: { col: string; pct: number }[] = [];
+      const missingCols: string[] = [];
+
+      if (schema && allSampleRows.length > 0) {
+        for (const col of schema.columns) {
+          const nullCount = schema.sampleRows.filter(row => {
+            const v = row[col];
+            return v === null || v === undefined || String(v).trim() === "";
+          }).length;
+          const pct = schema.sampleRows.length > 0 ? Math.round((nullCount / schema.sampleRows.length) * 1000) / 10 : 0;
+          if (pct > 0) nullPctByCol.push({ col, pct });
+        }
+        nullPctByCol.sort((a, b) => b.pct - a.pct);
+
+        for (const canonCol of canonical.columns) {
+          const normCanon = normalizeColumnName(canonCol);
+          const hasCol = schema.columns.some(c => normalizeColumnName(c) === normCanon);
+          if (!hasCol) missingCols.push(canonCol);
+        }
+      }
+
+      let status: "ok" | "warn" | "fail" = "ok";
+      const parseWarnings: string[] = [];
+
+      if (!result.success) {
+        status = "fail";
+        if (result.error) parseWarnings.push(result.error);
+      } else if (missingCols.length > 0) {
+        status = "warn";
+        parseWarnings.push(`${missingCols.length} coluna(s) ausente(s): ${missingCols.slice(0, 3).join(", ")}${missingCols.length > 3 ? "..." : ""}`);
+      }
+
+      return {
+        file_id: result.jobId, file_name: result.fileName, format: result.format,
+        size_mb: schema ? Math.round((schema.sampleRows.length * 100) / 100) : 0,
+        rows_detected: result.rowsRead, rows_loaded: result.rowsRead,
+        cols_detected: schema?.columns.length || 0, schema_detected: schema?.columnTypes || {},
+        null_pct_by_col: nullPctByCol.slice(0, 10), parse_warnings: parseWarnings,
+        status, missing_cols: missingCols,
+      };
+    });
+
+    const filesOk = files.filter(f => f.status === "ok").length;
+    const filesWarn = files.filter(f => f.status === "warn").length;
+    const filesFail = files.filter(f => f.status === "fail").length;
+
+    let edaReady = true;
+    let blockedReasonEda: string | null = null;
+
+    if (totalRowsConsolidated === 0) {
+      edaReady = false;
+      blockedReasonEda = "Dataset consolidado tem 0 linhas.";
+    } else if (canonical.columns.length === 0) {
+      edaReady = false;
+      blockedReasonEda = "Nenhuma coluna detectada.";
+    } else if (filesFail > 0 && filesOk === 0) {
+      edaReady = false;
+      blockedReasonEda = "Todos os arquivos falharam no processamento.";
+    }
+
+    let modelReady = edaReady;
+    let blockedReasonModel: string | null = null;
+
+    const criticalCols = nullDiag.filter(d => d.severity === "critical").length;
+    const criticalRatio = canonical.columns.length > 0 ? criticalCols / canonical.columns.length : 0;
+
+    if (!edaReady) {
+      modelReady = false;
+      blockedReasonModel = blockedReasonEda;
+    } else if (criticalRatio >= 0.8) {
+      modelReady = false;
+      blockedReasonModel = `${criticalCols} de ${canonical.columns.length} colunas (${Math.round(criticalRatio * 100)}%) estão em estado crítico (>50% NULL).`;
+    }
+
+    let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
+    let statusReason: string | null = null;
+
+    if (!edaReady) { overallStatus = "blocked"; statusReason = blockedReasonEda; }
+    else if (!modelReady) { overallStatus = "warn"; statusReason = blockedReasonModel; }
+    else if (filesFail > 0) { overallStatus = "warn"; statusReason = `${filesFail} arquivo(s) falharam. Dataset parcial.`; }
+    else if (nullDiag.some(d => d.severity === "critical")) { overallStatus = "warn"; statusReason = `${criticalCols} coluna(s) com >50% NULL.`; }
+    else if (filesWarn > 0) { overallStatus = "warn"; statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`; }
+
+    const { data: manifestData } = await supabase.from("import_manifests").insert({
+      project_id: projectId, user_id: userId, batch_id: batchId, dataset_id: datasetId,
+      total_files: fileResults.length, files_ok: filesOk, files_warn: filesWarn, files_fail: filesFail,
+      rows_sum: rowsSum, rows_consolidated: totalRowsConsolidated,
+      rows_difference: Math.max(0, rowsSum - totalRowsConsolidated),
+      columns_final: canonical.columns.length,
+      canonical_schema: { ...canonical.columnTypes, _coverage_stats: coverageStats, _critical_columns: criticalTags },
+      column_mapping_report: canonical.columnMapping || [],
+      null_diagnostic: nullDiag, files, status: overallStatus, status_reason: statusReason,
+      eda_ready: edaReady, model_ready: modelReady, eda_strategy: edaStrategy.strategy,
+      eda_scope: edaStrategy.scope, eda_dataset_id: datasetId,
+      model_dataset_id: modelReady ? datasetId : null,
+      blocked_reason_eda: blockedReasonEda, blocked_reason_model: blockedReasonModel,
+    }).select("id").single();
+
+    await supabase.from("projects").update({
+      dataset_ready_for_modeling: modelReady,
+      dataset_blocked_reason: modelReady ? null : blockedReasonModel,
+    }).eq("id", projectId);
+
+    const manifestId = manifestData?.id || null;
+    console.log(`[process-import] Manifest created: status=${overallStatus}, eda_ready=${edaReady}, model_ready=${modelReady}, manifest_id=${manifestId}`);
+    return manifestId;
+  } catch (e) {
+    console.error("[process-import] Failed to create manifest:", e);
+    return null;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// PHASE A: Single file import (unchanged flow)
 // ═══════════════════════════════════════════════════════════
 async function processSingleImport(supabase: any, job: ImportJob): Promise<Response> {
-  await supabase.from("import_jobs").update({ status: "processing", progress: 0, updated_at: new Date().toISOString() }).eq("id", job.id);
+  await supabase.from("import_jobs").update({ status: "processing", phase: "ingest", progress: 0, updated_at: new Date().toISOString() }).eq("id", job.id);
 
   try {
     const progressCallback = async (p: number, r: number) => {
@@ -1679,7 +1643,17 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
       });
     }
 
-    // Save columns
+    // Quality gate
+    const gate = evaluateFileQualityGate(schema, job.file_name, job.file_size_bytes);
+    await logEvent(supabase, job.id, job.project_id, "quality_gate", `Gate: ${gate.gate} — ${gate.reasons.map(r => r.message).join("; ")}`, gate.gate === "blocked" ? "error" : gate.gate === "warn" ? "warn" : "info");
+
+    if (gate.gate === "blocked") {
+      await updateJobError(supabase, job.id, gate.reasons.map(r => r.message).join("; "));
+      return new Response(JSON.stringify({ success: false, message: gate.reasons.map(r => r.message).join("; "), quality_gate: gate }), {
+        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     await supabase.from("project_columns").delete().eq("project_id", job.project_id);
     const columnInserts = schema.columns.map((name, index) => ({
       project_id: job.project_id, column_name: name, column_index: index,
@@ -1687,7 +1661,6 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
     }));
     await supabase.from("project_columns").insert(columnInserts);
 
-    // Copy to datasets bucket
     const sanitizedName = sanitizeFileName(job.file_name);
     const datasetPath = `${job.user_id}/${job.project_id}/${sanitizedName}`;
 
@@ -1706,17 +1679,16 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
         file_type: schema.format,
         rows_estimated: schema.format === "csv",
         ...(schema.format === "csv" ? { delimiter: job.delimiter, encoding: job.encoding } : {}),
+        quality_gate: gate,
       },
     );
 
-    // Update project
     await supabase.from("projects").update({
       dataset_filename: datasetPath, dataset_rows: sampleRowsCount,
       dataset_columns: schema.columns.length, total_rows: schema.totalRows,
       sample_rows: sampleRowsCount, status: "data_uploaded",
     }).eq("id", job.project_id);
 
-    // Log
     await supabase.from("project_data_ingestion_logs").insert({
       project_id: job.project_id, status: "success",
       rows_read: schema.totalRows, rows_sampled: sampleRowsCount,
@@ -1726,28 +1698,25 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 
     await completeJob(supabase, job.id, schema.totalRows, datasetId);
 
-    // Create manifest for single file
     const singleCanonical = { columns: schema.columns, columnTypes: schema.columnTypes, sourceFiles: 1, columnMapping: schema.columns.map(c => ({ canonical: c, type: schema.columnTypes[c] || "texto", sources: [{ file: job.file_name, original_col: c }] })) };
     const singleFileResult: FileProcessResult = { success: true, jobId: job.id, fileName: job.file_name, format: schema.format, schema, rowsRead: schema.totalRows, coveragePct: 100 };
     const manifestId = await createImportManifest(supabase, job.project_id, job.user_id, null, datasetId, [singleFileResult], [schema], [job.file_name], singleCanonical, schema.totalRows, schema.sampleRows);
 
-    console.log(`[process-import] Job ${job.id} completed: ${schema.format.toUpperCase()}, ${schema.totalRows} rows, ${schema.columns.length} cols, manifest_generated=${!!manifestId}`);
+    await logEvent(supabase, job.id, job.project_id, "job_completed", `Importação concluída: ${schema.totalRows} linhas, ${schema.columns.length} colunas`);
 
     return new Response(JSON.stringify({
       success: true,
       message: `Importação concluída: ~${schema.totalRows.toLocaleString()} linhas`,
-      rows_processed: schema.totalRows,
-      columns: schema.columns.length,
-      format: schema.format,
-      dataset_id: datasetId,
-      manifest_generated: !!manifestId,
-      manifest_id: manifestId,
+      rows_processed: schema.totalRows, columns: schema.columns.length, format: schema.format,
+      dataset_id: datasetId, manifest_generated: !!manifestId, manifest_id: manifestId,
+      quality_gate: gate,
     }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error: unknown) {
     const msg = error instanceof Error ? error.message : "Erro desconhecido";
     console.error(`[process-import] Error on job ${job.id}:`, msg);
     await updateJobError(supabase, job.id, msg);
+    await logEvent(supabase, job.id, job.project_id, "job_failed", msg, "error");
     return new Response(JSON.stringify({ success: false, message: msg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
@@ -1755,11 +1724,12 @@ async function processSingleImport(supabase: any, job: ImportJob): Promise<Respo
 }
 
 // ═══════════════════════════════════════════════════════════
-// Batch import (multi-file → consolidated dataset)
+// PHASE A: Batch import — register files + process 1 at a time
 // ═══════════════════════════════════════════════════════════
-async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOffset = 0): Promise<Response> {
-  console.log(`[process-import] Processing batch: ${primaryJob.batch_id}, chunkOffset=${chunkOffset}`);
+async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise<Response> {
+  console.log(`[process-import] Batch import: job=${primaryJob.id}, batch=${primaryJob.batch_id}`);
 
+  // Fetch all jobs in this batch
   const { data: batchJobs, error: batchError } = await supabase
     .from("import_jobs").select("*").eq("batch_id", primaryJob.batch_id)
     .order("batch_sequence", { ascending: true });
@@ -1781,230 +1751,311 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOff
     });
   }
 
-  console.log(`[process-import] Batch: ${batchJobs.length} files, ${(totalBatchSize / 1024 / 1024).toFixed(2)} MB total`);
+  // Update primary job with totals
+  await supabase.from("import_jobs").update({
+    status: "processing",
+    phase: "ingest",
+    total_files: batchJobs.length,
+    bytes_total: totalBatchSize,
+    updated_at: new Date().toISOString(),
+  }).eq("id", primaryJob.id);
 
-  // ─── Phase 1: Extract schema from files in current chunk ───
-  const chunkEnd = Math.min(chunkOffset + MAX_FILES_PER_CHUNK, batchJobs.length);
-  const isLastChunk = chunkEnd >= batchJobs.length;
+  // ─── Step 1: Register all files in import_job_files (idempotent) ───
+  const { data: existingFiles } = await supabase
+    .from("import_job_files")
+    .select("id, file_name, status")
+    .eq("job_id", primaryJob.id);
 
-  // Process only the current chunk of files
-  for (let i = chunkOffset; i < chunkEnd; i++) {
-    const job = batchJobs[i] as ImportJob;
-    const format = detectFileFormat(job.file_name, job.storage_path);
+  if (!existingFiles || existingFiles.length === 0) {
+    // First call: register all files
+    const fileInserts = batchJobs.map((job: ImportJob, i: number) => ({
+      job_id: primaryJob.id,
+      project_id: primaryJob.project_id,
+      user_id: primaryJob.user_id,
+      file_name: job.file_name,
+      storage_path: job.storage_path,
+      file_size_bytes: job.file_size_bytes,
+      format: detectFileFormat(job.file_name, job.storage_path),
+      sequence_index: i,
+      status: "pending",
+      quality_gate: "pending",
+    }));
 
-    // Skip already processed jobs (completed in a previous chunk)
-    if (job.status === "completed" || job.status === "failed") {
-      console.log(`[process-import] [${i + 1}/${batchJobs.length}] ${job.file_name} already ${job.status}, skipping`);
-      continue;
-    }
-
-    console.log(`[process-import] [${i + 1}/${batchJobs.length}] ${job.file_name} (${format})`);
-
-    await supabase.from("import_jobs").update({ status: "processing", progress: 0, updated_at: new Date().toISOString() }).eq("id", job.id);
-
-    try {
-      const progressCallback = async (p: number, r: number) => {
-        await updateJobProgress(supabase, job.id, p, r);
-      };
-
-      const schema = await processFileUnified(supabase, job, progressCallback);
-
-      // Store extracted schema summary in headers_json for later consolidation (cap samples to 200 per file)
-      const storedSchema = {
-        columns: schema.columns,
-        columnTypes: schema.columnTypes,
-        totalRows: schema.totalRows,
-        sampleRows: schema.sampleRows.slice(0, 200),
-        format: schema.format,
-        schemaHash: schema.schemaHash,
-      };
-      await supabase.from("import_jobs").update({
-        headers_json: storedSchema,
-        headers_hash: schema.schemaHash,
-        status: "completed",
-        progress: 100,
-        rows_processed: schema.totalRows,
-        finished_at: new Date().toISOString(),
-      }).eq("id", job.id);
-
-      console.log(`[process-import] ✓ ${job.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows, hash=${schema.schemaHash}`);
-
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : "Erro ao processar";
-      console.error(`[process-import] ✗ ${job.file_name}: ${msg}`);
-      await updateJobError(supabase, job.id, msg);
-    }
+    await supabase.from("import_job_files").insert(fileInserts);
+    await logEvent(supabase, primaryJob.id, primaryJob.project_id, "job_started", `Batch registrado: ${batchJobs.length} arquivos, ${(totalBatchSize / 1024 / 1024).toFixed(1)} MB`);
+    console.log(`[process-import] Registered ${batchJobs.length} files in import_job_files`);
   }
 
-  // If not the last chunk, self-invoke for the next chunk
-  if (!isLastChunk) {
-    console.log(`[process-import] Chunk ${chunkOffset}-${chunkEnd - 1} done. Scheduling next chunk at offset ${chunkEnd}`);
+  // ─── Step 2: Find next pending file and process it ───
+  const { data: pendingFiles } = await supabase
+    .from("import_job_files")
+    .select("*")
+    .eq("job_id", primaryJob.id)
+    .eq("status", "pending")
+    .order("sequence_index", { ascending: true })
+    .limit(1);
+
+  if (!pendingFiles || pendingFiles.length === 0) {
+    // All files processed — move to consolidation
+    return await runConsolidation(supabase, primaryJob, batchJobs);
+  }
+
+  const fileRecord = pendingFiles[0] as ImportJobFile;
+  const batchJob = batchJobs.find((j: ImportJob) => j.file_name === fileRecord.file_name && j.storage_path === fileRecord.storage_path) as ImportJob;
+
+  if (!batchJob) {
+    // File not found in batch — mark as failed and continue
+    await supabase.from("import_job_files").update({
+      status: "failed", error_code: "FILE_NOT_FOUND", error_message: "Job correspondente não encontrado no lote.",
+      quality_gate: "blocked", finished_at: new Date().toISOString(),
+    }).eq("id", fileRecord.id);
+    await logEvent(supabase, primaryJob.id, primaryJob.project_id, "file_failed", `Arquivo "${fileRecord.file_name}" não encontrado no lote.`, "error", fileRecord.id);
+    return await selfInvokeNext(supabase, primaryJob);
+  }
+
+  // ─── Step 3: Process this single file ───
+  console.log(`[process-import] Processing file: ${fileRecord.file_name} (${fileRecord.sequence_index + 1}/${batchJobs.length})`);
+
+  await supabase.from("import_job_files").update({
+    status: "processing", started_at: new Date().toISOString(),
+  }).eq("id", fileRecord.id);
+
+  await supabase.from("import_jobs").update({
+    status: "processing", progress: 0, updated_at: new Date().toISOString(),
+  }).eq("id", batchJob.id);
+
+  await logEvent(supabase, primaryJob.id, primaryJob.project_id, "file_started", `Processando "${fileRecord.file_name}" (${(fileRecord.file_size_bytes / 1024 / 1024).toFixed(1)} MB)`, "info", fileRecord.id);
+
+  // Get reference schema hash (from first completed file) for schema drift detection
+  const { data: refFile } = await supabase
+    .from("import_job_files")
+    .select("schema_hash")
+    .eq("job_id", primaryJob.id)
+    .eq("status", "completed")
+    .order("sequence_index", { ascending: true })
+    .limit(1)
+    .maybeSingle();
+
+  const referenceSchemaHash = refFile?.schema_hash || null;
+
+  try {
+    const progressCallback = async (p: number, r: number) => {
+      await updateJobProgress(supabase, batchJob.id, p, r);
+    };
+
+    const schema = await processFileUnified(supabase, batchJob, progressCallback);
+
+    // Quality gate
+    const gate = evaluateFileQualityGate(schema, fileRecord.file_name, fileRecord.file_size_bytes, referenceSchemaHash);
+
+    // Store results in import_job_files
+    await supabase.from("import_job_files").update({
+      status: gate.gate === "blocked" ? "failed" : "completed",
+      rows_detected: schema.totalRows,
+      cols_detected: schema.columns.length,
+      schema_json: { columns: schema.columns, columnTypes: schema.columnTypes, schemaHash: schema.schemaHash, format: schema.format, totalRows: schema.totalRows },
+      schema_hash: schema.schemaHash,
+      sample_json: schema.sampleRows.slice(0, FILE_SAMPLE_CAP),
+      quality_gate: gate.gate,
+      quality_reasons: gate.reasons,
+      error_code: gate.gate === "blocked" ? gate.reasons[0]?.code || "QUALITY_BLOCKED" : null,
+      error_message: gate.gate === "blocked" ? gate.reasons.map(r => r.message).join("; ") : null,
+      finished_at: new Date().toISOString(),
+    }).eq("id", fileRecord.id);
+
+    // Also store in legacy headers_json for backward compat
+    await supabase.from("import_jobs").update({
+      headers_json: { columns: schema.columns, columnTypes: schema.columnTypes, totalRows: schema.totalRows, sampleRows: schema.sampleRows.slice(0, FILE_SAMPLE_CAP), format: schema.format, schemaHash: schema.schemaHash },
+      headers_hash: schema.schemaHash,
+      status: gate.gate === "blocked" ? "failed" : "completed",
+      progress: 100,
+      rows_processed: schema.totalRows,
+      finished_at: new Date().toISOString(),
+    }).eq("id", batchJob.id);
 
     // Update primary job progress
-    const overallProgress = Math.round((chunkEnd / batchJobs.length) * 70);
-    await updateJobProgress(supabase, primaryJob.id, overallProgress, 0);
+    const { count: completedCount } = await supabase
+      .from("import_job_files")
+      .select("*", { count: "exact", head: true })
+      .eq("job_id", primaryJob.id)
+      .in("status", ["completed", "failed"]);
 
-    // Self-invoke for next chunk (fire-and-forget style, but we await to ensure it starts)
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    try {
-      const invokeRes = await fetch(`${supabaseUrl}/functions/v1/process-import`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${supabaseServiceKey}`,
-        },
-        body: JSON.stringify({
-          job_id: primaryJob.id,
-          batch_id: primaryJob.batch_id,
-          chunk_offset: chunkEnd,
-        }),
-      });
-      // Consume response body to prevent resource leak
-      await invokeRes.text();
-      console.log(`[process-import] Next chunk invoked (offset=${chunkEnd}), status=${invokeRes.status}`);
-    } catch (invokeErr) {
-      console.error(`[process-import] Failed to invoke next chunk:`, invokeErr);
-      // Don't fail the whole batch — the user can retry
-    }
+    const processedFiles = completedCount || 0;
+    const overallProgress = Math.round((processedFiles / batchJobs.length) * 70);
+    await supabase.from("import_jobs").update({
+      processed_files: processedFiles,
+      bytes_done: fileRecord.file_size_bytes + (primaryJob.bytes_done || 0),
+      progress: overallProgress,
+      updated_at: new Date().toISOString(),
+    }).eq("id", primaryJob.id);
 
-    return new Response(JSON.stringify({
-      success: true,
-      message: `Chunk ${chunkOffset + 1}-${chunkEnd} de ${batchJobs.length} processado. Continuando...`,
-      chunk_offset: chunkOffset,
-      chunk_end: chunkEnd,
-      total_files: batchJobs.length,
-      is_last_chunk: false,
-    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    await logEvent(
+      supabase, primaryJob.id, primaryJob.project_id,
+      gate.gate === "blocked" ? "file_failed" : "file_completed",
+      `${fileRecord.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows, gate=${gate.gate}`,
+      gate.gate === "blocked" ? "error" : gate.gate === "warn" ? "warn" : "info",
+      fileRecord.id,
+      { quality_gate: gate, schema_hash: schema.schemaHash },
+    );
+
+    console.log(`[process-import] ✓ ${fileRecord.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows, gate=${gate.gate}`);
+
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : "Erro ao processar";
+    console.error(`[process-import] ✗ ${fileRecord.file_name}: ${msg}`);
+
+    await supabase.from("import_job_files").update({
+      status: "failed",
+      error_code: "PROCESSING_ERROR",
+      error_message: msg,
+      quality_gate: "blocked",
+      quality_reasons: [{ code: "PROCESSING_ERROR", message: msg, severity: "error" }],
+      retry_count: fileRecord.retry_count + 1,
+      finished_at: new Date().toISOString(),
+    }).eq("id", fileRecord.id);
+
+    await updateJobError(supabase, batchJob.id, msg);
+    await logEvent(supabase, primaryJob.id, primaryJob.project_id, "file_failed", `${fileRecord.file_name}: ${msg}`, "error", fileRecord.id);
   }
 
-  // ─── Last chunk: Reconstruct schemas from stored data ──────
-  // Re-read all jobs to get their final status
-  const { data: finalJobs } = await supabase
-    .from("import_jobs").select("*").eq("batch_id", primaryJob.batch_id)
-    .order("batch_sequence", { ascending: true });
+  // ─── Step 4: Self-invoke for next file ───
+  return await selfInvokeNext(supabase, primaryJob);
+}
 
-  const allJobs = (finalJobs || batchJobs) as ImportJob[];
+// ═══════════════════════════════════════════════════════════
+// Self-invoke helper (for sequential processing)
+// ═══════════════════════════════════════════════════════════
+async function selfInvokeNext(supabase: any, primaryJob: ImportJob): Promise<Response> {
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
 
-  // Reconstruct FileSchema objects from stored headers_json (no re-download needed)
+  // Check if there are more pending files
+  const { data: pendingFiles } = await supabase
+    .from("import_job_files")
+    .select("id")
+    .eq("job_id", primaryJob.id)
+    .eq("status", "pending")
+    .limit(1);
+
+  const hasMore = pendingFiles && pendingFiles.length > 0;
+
+  try {
+    // Self-invoke — the next call will either process the next file or run consolidation
+    const invokeRes = await fetch(`${supabaseUrl}/functions/v1/process-import`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${supabaseServiceKey}`,
+      },
+      body: JSON.stringify({
+        job_id: primaryJob.id,
+        batch_id: primaryJob.batch_id,
+      }),
+    });
+    await invokeRes.text(); // consume body
+    console.log(`[process-import] Self-invoked: hasMore=${hasMore}, status=${invokeRes.status}`);
+  } catch (invokeErr) {
+    console.error(`[process-import] Failed to self-invoke:`, invokeErr);
+  }
+
+  return new Response(JSON.stringify({
+    success: true,
+    message: hasMore ? "Arquivo processado, continuando..." : "Todos os arquivos processados, consolidando...",
+    phase: hasMore ? "ingest" : "consolidate",
+  }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
+// ═══════════════════════════════════════════════════════════
+// PHASE B: Consolidation — build canonical schema from persisted data
+// ═══════════════════════════════════════════════════════════
+async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs: ImportJob[]): Promise<Response> {
+  console.log(`[process-import] Starting consolidation for batch ${primaryJob.batch_id}`);
+
+  await supabase.from("import_jobs").update({
+    phase: "consolidate", progress: 75, updated_at: new Date().toISOString(),
+  }).eq("id", primaryJob.id);
+
+  await logEvent(supabase, primaryJob.id, primaryJob.project_id, "consolidation_started", `Consolidando ${batchJobs.length} arquivos`);
+
+  // Read all file records with their schemas
+  const { data: allFiles } = await supabase
+    .from("import_job_files")
+    .select("*")
+    .eq("job_id", primaryJob.id)
+    .order("sequence_index", { ascending: true });
+
+  if (!allFiles || allFiles.length === 0) {
+    await updateJobError(supabase, primaryJob.id, "Nenhum arquivo encontrado para consolidação.");
+    return new Response(JSON.stringify({ success: false, message: "No files found" }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  const completedFiles = (allFiles as ImportJobFile[]).filter(f => f.status === "completed");
+  const failedFiles = (allFiles as ImportJobFile[]).filter(f => f.status === "failed");
+
+  if (completedFiles.length === 0) {
+    const errMsg = failedFiles.length > 0
+      ? `Todos os arquivos falharam: ${failedFiles[0].error_message || "erro desconhecido"}`
+      : "Nenhum arquivo processado com sucesso.";
+    await updateJobError(supabase, primaryJob.id, errMsg);
+    await logEvent(supabase, primaryJob.id, primaryJob.project_id, "job_failed", errMsg, "error");
+    return new Response(JSON.stringify({ success: false, message: errMsg }), {
+      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+
+  // Reconstruct FileSchema objects from import_job_files (no re-download!)
   const fileResults: FileProcessResult[] = [];
   const fileSchemas: FileSchema[] = [];
+  const fileNames: string[] = [];
 
-  for (const job of allJobs) {
-    const format = detectFileFormat(job.file_name, job.storage_path);
-
-    if (job.status === "completed" && job.headers_json && typeof job.headers_json === "object" && !Array.isArray(job.headers_json)) {
-      // Reconstruct schema from stored data
-      const stored = job.headers_json as any;
-      if (stored.columns && Array.isArray(stored.columns)) {
-        const schema: FileSchema = {
-          columns: stored.columns,
-          columnTypes: stored.columnTypes || {},
-          totalRows: stored.totalRows || (job as any).rows_processed || 0,
-          sampleRows: stored.sampleRows || [],
-          format: stored.format || format,
-          schemaHash: stored.schemaHash || generateSchemaHash(stored.columns),
-        };
-        fileSchemas.push(schema);
-        fileResults.push({
-          success: true, jobId: job.id, fileName: job.file_name,
-          format, schema, rowsRead: schema.totalRows, coveragePct: 100,
-        });
-        console.log(`[process-import] Restored schema for ${job.file_name}: ${schema.columns.length} cols, ${schema.totalRows} rows`);
-        continue;
-      }
-    }
-
-    if (job.status === "completed" && job.headers_json && Array.isArray(job.headers_json)) {
-      // Legacy format: headers_json is just column names array — need to re-extract
-      // But use a minimal sample to save CPU
-      try {
-        const schema = await processFileUnified(supabase, job);
-        fileSchemas.push(schema);
-        fileResults.push({
-          success: true, jobId: job.id, fileName: job.file_name,
-          format, schema, rowsRead: schema.totalRows, coveragePct: 100,
-        });
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : "Erro ao re-processar";
-        console.warn(`[process-import] Re-extract failed for ${job.file_name}: ${msg}`);
-        fileResults.push({
-          success: false, jobId: job.id, fileName: job.file_name,
-          format, error: msg, rowsRead: 0, coveragePct: 0,
-        });
-      }
-      continue;
-    }
-
-    if (job.status === "failed") {
+  for (const file of allFiles as ImportJobFile[]) {
+    if (file.status === "completed" && file.schema_json) {
+      const stored = file.schema_json as any;
+      const schema: FileSchema = {
+        columns: stored.columns || [],
+        columnTypes: stored.columnTypes || {},
+        totalRows: stored.totalRows || file.rows_detected || 0,
+        sampleRows: (file.sample_json as Record<string, unknown>[]) || [],
+        format: (stored.format || file.format) as FileFormat,
+        schemaHash: stored.schemaHash || file.schema_hash || generateSchemaHash(stored.columns || []),
+      };
+      fileSchemas.push(schema);
+      fileNames.push(file.file_name);
       fileResults.push({
-        success: false, jobId: job.id, fileName: job.file_name,
-        format, error: (job as any).error_message || "Failed", rowsRead: 0, coveragePct: 0,
+        success: true, jobId: file.id, fileName: file.file_name,
+        format: schema.format, schema, rowsRead: schema.totalRows, coveragePct: 100,
       });
     } else {
-      // Unexpected status — skip
-      console.warn(`[process-import] Job ${job.file_name} in unexpected status: ${job.status}`);
       fileResults.push({
-        success: false, jobId: job.id, fileName: job.file_name,
-        format, error: `Status inesperado: ${job.status}`, rowsRead: 0, coveragePct: 0,
+        success: false, jobId: file.id, fileName: file.file_name,
+        format: file.format as FileFormat, error: file.error_message || "Failed",
+        rowsRead: 0, coveragePct: 0,
       });
     }
   }
 
-  const successResults = fileResults.filter(r => r.success);
-  const failedResults = fileResults.filter(r => !r.success);
+  // Build canonical schema
+  const canonical = buildCanonicalSchema(fileSchemas, fileNames);
 
-  if (successResults.length === 0) {
-    const errMsg = failedResults.length > 0
-      ? `Todos os arquivos falharam: ${failedResults[0].error}`
-      : "Nenhum arquivo processado";
-    await updateJobError(supabase, primaryJob.id, errMsg);
-    return new Response(JSON.stringify({
-      success: false, message: errMsg,
-      file_results: fileResults.map(r => ({ file: r.fileName, format: r.format, status: r.success ? "OK" : "FAIL", error: r.error })),
-    }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-  }
-
-  // ─── Phase 2: Build canonical schema ───────────────────────
-  const successSchemas = successResults.map(r => r.schema!);
-  const successFileNames = successResults.map(r => r.fileName);
-  const canonical = buildCanonicalSchema(successSchemas, successFileNames);
-
-  // Log schema divergences (using normalization)
-  for (const result of successResults) {
-    if (result.schema!.schemaHash !== successSchemas[0].schemaHash) {
-      const missing = canonical.columns.filter(c =>
-        !result.schema!.columns.some(fc => normalizeColumnName(fc) === normalizeColumnName(c))
-      );
-      const extra = result.schema!.columns.filter(fc =>
-        !canonical.columns.some(c => normalizeColumnName(c) === normalizeColumnName(fc))
-      );
-      console.log(`[process-import] Schema divergence in ${result.fileName}: missing=[${missing.join(",")}] extra=[${extra.join(",")}]`);
-    }
-  }
-
-  // ─── Phase 3: Normalize + consolidate ──────────────────────
+  // Normalize + consolidate samples
   let allSampleRows: Record<string, unknown>[] = [];
   let totalRowsConsolidated = 0;
+  const totalSuccessRows = fileSchemas.reduce((s, sc) => s + sc.totalRows, 0);
+  const totalSampleBudget = fileSchemas.length >= 3 ? 3000 : SAMPLE_SIZE;
+
   const processedFilePaths: string[] = [];
   let totalFileSizeBytes = 0;
-
-  // Reduce sample budget for large batches to avoid CPU timeout
-  const totalSampleBudget = successSchemas.length >= 3 ? 3000 : SAMPLE_SIZE;
-  const totalSuccessRows = successSchemas.reduce((s, sc) => s + sc.totalRows, 0);
-
-  // Threshold: skip storage copy for files larger than 20MB to avoid CPU timeout
   const COPY_SIZE_LIMIT = 20 * 1024 * 1024;
 
-  for (let i = 0; i < successResults.length; i++) {
-    const result = successResults[i];
-    const schema = result.schema!;
-    const job = batchJobs.find((j: ImportJob) => j.id === result.jobId) as ImportJob;
+  for (let i = 0; i < completedFiles.length; i++) {
+    const file = completedFiles[i];
+    const schemaIdx = fileNames.indexOf(file.file_name);
+    if (schemaIdx < 0) continue;
+    const schema = fileSchemas[schemaIdx];
 
-    // Normalize samples to canonical schema (with imputation: 0 for numeric, "missing" for categorical)
     const normalizedSamples = normalizeToSchema(schema.sampleRows, schema.columns, canonical.columns, canonical.columnTypes);
-
-    // Proportional sample allocation
     const sampleBudget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
     const samplesToAdd = normalizedSamples.slice(0, sampleBudget);
 
@@ -2013,202 +2064,49 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOff
     }
 
     totalRowsConsolidated += schema.totalRows;
-    totalFileSizeBytes += job.file_size_bytes;
+    totalFileSizeBytes += file.file_size_bytes;
 
-    // For large files, skip the expensive storage copy and reference original path directly
-    if (job.file_size_bytes > COPY_SIZE_LIMIT) {
-      processedFilePaths.push(job.storage_path);
-      await completeJob(supabase, job.id, schema.totalRows, null);
-      console.log(`[process-import] ✓ Referenced ${job.file_name} in-place (${(job.file_size_bytes / 1024 / 1024).toFixed(1)} MB > copy limit)`);
+    if (file.file_size_bytes > COPY_SIZE_LIMIT) {
+      processedFilePaths.push(file.storage_path);
     } else {
-      // Copy small files to datasets bucket
-      const sanitizedName = sanitizeFileName(job.file_name);
+      const sanitizedName = sanitizeFileName(file.file_name);
+      const batchFolder = `${primaryJob.user_id}/${primaryJob.project_id}/batch_${primaryJob.batch_id}`;
       const destPath = `${batchFolder}/${sanitizedName}`;
-
       try {
         const { error: copyError } = await supabase.storage
-          .from("big_imports").copy(job.storage_path, destPath, { destinationBucket: "datasets" });
+          .from("big_imports").copy(file.storage_path, destPath, { destinationBucket: "datasets" });
         if (copyError && !copyError.message?.includes("already exists")) throw copyError;
-
         processedFilePaths.push(destPath);
-        await completeJob(supabase, job.id, schema.totalRows, null);
-        console.log(`[process-import] ✓ Copied ${job.file_name} → datasets/${destPath}`);
-      } catch (copyErr: any) {
-        const errMsg = copyErr?.message || "Falha ao copiar arquivo.";
-        console.warn(`[process-import] Copy failed for ${job.file_name}:`, errMsg);
-        // Still mark as success — schema was extracted; just reference original path
-        processedFilePaths.push(job.storage_path);
-        await completeJob(supabase, job.id, schema.totalRows, null);
-        console.log(`[process-import] ⚠ Copy failed, referencing original path for ${job.file_name}`);
+      } catch {
+        processedFilePaths.push(file.storage_path);
       }
     }
   }
 
-  // ─── Phase 4: EDA Gate ─────────────────────────────────────
-  // EDA blocks ONLY on structural failures: 0 rows, 0 columns, or ALL files failed
-  const coveragePct = batchJobs.length > 0
-    ? Math.round((successResults.length / batchJobs.length) * 100)
-    : 0;
-  const passesEDAGate = totalRowsConsolidated > 0 && canonical.columns.length > 0 && successResults.length > 0;
+  // EDA Gate
+  const passesEDAGate = totalRowsConsolidated > 0 && canonical.columns.length > 0 && completedFiles.length > 0;
 
   if (!passesEDAGate) {
-    // Build specific, actionable error message
     const reasons: string[] = [];
-    if (totalRowsConsolidated === 0) {
-      reasons.push("Nenhuma linha válida encontrada após consolidação.");
-    }
-    if (canonical.columns.length === 0) {
-      reasons.push("Nenhuma coluna detectada no schema canônico.");
-    }
-    if (successResults.length === 0) {
-      reasons.push("Todos os arquivos falharam no processamento.");
-    }
-    if (failedResults.length > 0) {
-      reasons.push(`Arquivos com falha: ${failedResults.map(r => `"${r.fileName}" (${r.error})`).join("; ")}`);
-    }
-
-    const gateMsg = `Não foi possível consolidar o dataset.\n\n` +
-      `Motivos:\n${reasons.map(r => `• ${r}`).join("\n")}\n\n` +
-      `Ações sugeridas:\n` +
-      `• Verifique se os arquivos estão no formato correto e não estão corrompidos.\n` +
-      `• Confirme que os delimitadores (;  ,  \\t) estão corretos.\n` +
-      `• Tente importar menos arquivos para isolar o problema.`;
-
-    console.error(`[process-import] ${gateMsg}`);
+    if (totalRowsConsolidated === 0) reasons.push("Nenhuma linha válida.");
+    if (canonical.columns.length === 0) reasons.push("Nenhuma coluna detectada.");
+    const gateMsg = `Consolidação falhou: ${reasons.join("; ")}`;
     await updateJobError(supabase, primaryJob.id, gateMsg);
-    return new Response(JSON.stringify({ success: false, message: gateMsg, file_results: fileResults }), {
+    await logEvent(supabase, primaryJob.id, primaryJob.project_id, "job_failed", gateMsg, "error");
+    return new Response(JSON.stringify({ success: false, message: gateMsg }), {
       status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 
-  // ─── Phase 5: Entity Key Detection + Target Anchor ─────────
-  const entityKeyCandidates = detectEntityKeys(
-    canonical.columns, canonical.columnTypes, successSchemas, successFileNames, allSampleRows,
-  );
-  if (entityKeyCandidates.length > 0) {
-    console.log(`[process-import] Entity key candidates: ${entityKeyCandidates.map(k => `${k.column}(score=${k.score})`).join(", ")}`);
-  }
+  // Entity Key Detection + Target Anchor
+  const entityKeyCandidates = detectEntityKeys(canonical.columns, canonical.columnTypes, fileSchemas, fileNames, allSampleRows);
 
-  // Try to detect target from project settings
   const { data: projectData } = await supabase
-    .from("projects")
-    .select("target_column")
-    .eq("id", primaryJob.project_id)
-    .single();
+    .from("projects").select("target_column").eq("id", primaryJob.project_id).single();
 
-  const targetAnchor = detectTargetAnchor(
-    successSchemas, successFileNames, projectData?.target_column || null, canonical.columns,
-  );
-  if (targetAnchor) {
-    console.log(`[process-import] Target anchor: strategy=${targetAnchor.strategy}, anchor="${targetAnchor.anchorFileName}"`);
-    if (targetAnchor.warnings.length > 0) {
-      console.log(`[process-import] Target warnings: ${targetAnchor.warnings.join(" | ")}`);
-    }
-  }
+  const targetAnchor = detectTargetAnchor(fileSchemas, fileNames, projectData?.target_column || null, canonical.columns);
 
-  // ─── Phase 5b: Real JOIN for small files (anchor_enrichment) ──
-  const JOIN_SIZE_LIMIT = 50 * 1024 * 1024; // 50MB total
-  if (
-    targetAnchor?.strategy === "anchor_enrichment" &&
-    entityKeyCandidates.length > 0 &&
-    totalFileSizeBytes <= JOIN_SIZE_LIMIT &&
-    successSchemas.length > 1
-  ) {
-    const bestKey = entityKeyCandidates[0];
-    const keyCol = bestKey.column;
-    const normKey = normalizeColumnName(keyCol);
-
-    // Check the key exists in anchor + at least one aux file
-    const anchorSchema = successSchemas[targetAnchor.anchorFileIndex];
-    const anchorHasKey = anchorSchema?.columns.some(c => normalizeColumnName(c) === normKey);
-
-    if (anchorHasKey) {
-      console.log(`[process-import] Attempting real JOIN: key="${keyCol}", anchor="${targetAnchor.anchorFileName}"`);
-
-      try {
-        // Build anchor index: key_value → row_index in allSampleRows
-        // First, figure out which sample rows belong to the anchor
-        let anchorStartIdx = 0;
-        for (let i = 0; i < targetAnchor.anchorFileIndex; i++) {
-          const schema = successSchemas[i];
-          const budget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
-          anchorStartIdx += Math.min(budget, schema.sampleRows.length);
-        }
-        const anchorBudget = Math.max(10, Math.ceil((anchorSchema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
-        const anchorEndIdx = Math.min(anchorStartIdx + anchorBudget, allSampleRows.length);
-
-        // Build lookup from anchor rows
-        const anchorKeyMap = new Map<string, number>();
-        for (let ri = anchorStartIdx; ri < anchorEndIdx; ri++) {
-          const row = allSampleRows[ri];
-          const kv = String(row[keyCol] ?? "").trim();
-          if (kv && kv !== "0" && kv !== "missing") {
-            anchorKeyMap.set(kv, ri);
-          }
-        }
-
-        if (anchorKeyMap.size > 0) {
-          let joinedCount = 0;
-
-          // For each non-anchor file's sample rows, try to enrich anchor rows
-          let auxStartIdx = 0;
-          for (let fi = 0; fi < successSchemas.length; fi++) {
-            const schema = successSchemas[fi];
-            const budget = Math.max(10, Math.ceil((schema.totalRows / Math.max(totalSuccessRows, 1)) * totalSampleBudget));
-            const auxEndIdx = Math.min(auxStartIdx + budget, allSampleRows.length);
-
-            if (fi !== targetAnchor.anchorFileIndex) {
-              const auxHasKey = schema.columns.some(c => normalizeColumnName(c) === normKey);
-              if (auxHasKey) {
-                // Get columns that are unique to this aux file (not in anchor)
-                const anchorNormCols = new Set(anchorSchema.columns.map(c => normalizeColumnName(c)));
-                const auxOnlyCols = canonical.columns.filter(c => {
-                  const norm = normalizeColumnName(c);
-                  return !anchorNormCols.has(norm) && norm !== normKey;
-                });
-
-                if (auxOnlyCols.length > 0) {
-                  for (let ri = auxStartIdx; ri < auxEndIdx; ri++) {
-                    const auxRow = allSampleRows[ri];
-                    if (!auxRow) continue;
-                    const kv = String(auxRow[keyCol] ?? "").trim();
-                    if (kv && anchorKeyMap.has(kv)) {
-                      const anchorIdx = anchorKeyMap.get(kv)!;
-                      // LEFT JOIN: enrich anchor row with aux-only columns
-                      for (const col of auxOnlyCols) {
-                        const val = auxRow[col];
-                        if (val !== null && val !== undefined && val !== 0 && val !== "missing") {
-                          allSampleRows[anchorIdx][col] = val;
-                          joinedCount++;
-                        }
-                      }
-                    }
-                  }
-                  console.log(`[process-import] JOIN enriched ${joinedCount} cells from "${successFileNames[fi]}" into anchor`);
-                }
-              }
-            }
-            auxStartIdx = auxEndIdx;
-          }
-
-          if (joinedCount > 0) {
-            // Update metadata to reflect join was applied
-            if (targetAnchor) {
-              (targetAnchor as any).joinApplied = true;
-              (targetAnchor as any).joinKey = keyCol;
-              (targetAnchor as any).joinedCells = joinedCount;
-            }
-            console.log(`[process-import] Real JOIN completed: ${joinedCount} cells enriched via key "${keyCol}"`);
-          }
-        }
-      } catch (joinErr) {
-        console.warn(`[process-import] JOIN failed (non-fatal):`, joinErr instanceof Error ? joinErr.message : joinErr);
-        // Non-fatal — continue with union-only approach
-      }
-    }
-  }
-
-  // ─── Save canonical columns ────────────────────────────────
+  // Save canonical columns
   await supabase.from("project_columns").delete().eq("project_id", primaryJob.project_id);
   const columnInserts = canonical.columns.map((name, index) => ({
     project_id: primaryJob.project_id, column_name: name, column_index: index,
@@ -2216,39 +2114,27 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOff
   }));
   await supabase.from("project_columns").insert(columnInserts);
 
-  // ─── Create consolidated dataset ──────────────────────────
+  // Create consolidated dataset
+  const batchFolder = `${primaryJob.user_id}/${primaryJob.project_id}/batch_${primaryJob.batch_id}`;
   const sampleRowsCount = Math.min(allSampleRows.length, totalSampleBudget);
+  const coveragePct = batchJobs.length > 0 ? Math.round((completedFiles.length / batchJobs.length) * 100) : 0;
+
   const datasetId = await createDatasetRecord(
     supabase, primaryJob.project_id, primaryJob.user_id, primaryJob.file_name,
     batchFolder, totalFileSizeBytes, totalRowsConsolidated, sampleRowsCount,
     canonical.columns.length,
-    successResults.length > 1 ? "batch_import" : "upload",
+    completedFiles.length > 1 ? "batch_import" : "upload",
     {
       batch_id: primaryJob.batch_id,
       files_count: batchJobs.length,
-      files_processed: successResults.length,
-      files_failed: failedResults.length,
+      files_processed: completedFiles.length,
+      files_failed: failedFiles.length,
       file_paths: processedFilePaths,
-      file_names: batchJobs.map((j: ImportJob) => j.file_name),
-      file_formats: successResults.map(r => r.format),
+      file_names: fileNames,
       canonical_schema_hash: generateSchemaHash(canonical.columns),
-      canonical_columns: canonical.columns.length,
       coverage_pct: coveragePct,
-      rows_consolidated: totalRowsConsolidated,
-      delimiter: primaryJob.delimiter || ",",
-      encoding: primaryJob.encoding || "utf-8",
-      // New: entity keys and target anchor
       entity_keys: entityKeyCandidates,
-      target_anchor: targetAnchor ? {
-        strategy: targetAnchor.strategy,
-        anchor_file: targetAnchor.anchorFileName,
-        target_column: targetAnchor.targetColumn,
-        target_presence: targetAnchor.targetPresence,
-        warnings: targetAnchor.warnings,
-        joinApplied: (targetAnchor as any).joinApplied || false,
-        joinKey: (targetAnchor as any).joinKey || null,
-        joinedCells: (targetAnchor as any).joinedCells || 0,
-      } : null,
+      target_anchor: targetAnchor ? { strategy: targetAnchor.strategy, anchor_file: targetAnchor.anchorFileName, target_column: targetAnchor.targetColumn } : null,
       imputation_applied: true,
     },
   );
@@ -2257,84 +2143,67 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob, chunkOff
     await supabase.from("import_jobs").update({ dataset_id: datasetId }).eq("batch_id", primaryJob.batch_id);
   }
 
-  // Update project
   await supabase.from("projects").update({
     dataset_filename: batchFolder, dataset_rows: sampleRowsCount,
     dataset_columns: canonical.columns.length, total_rows: totalRowsConsolidated,
     sample_rows: sampleRowsCount, status: "data_uploaded",
   }).eq("id", primaryJob.project_id);
 
-  // Log
   await supabase.from("project_data_ingestion_logs").insert({
     project_id: primaryJob.project_id,
-    status: failedResults.length > 0 ? "partial" : "success",
+    status: failedFiles.length > 0 ? "partial" : "success",
     rows_read: totalRowsConsolidated, rows_sampled: sampleRowsCount,
     completed_at: new Date().toISOString(),
     metadata: {
       batch_id: primaryJob.batch_id,
-      files_processed: successResults.length,
-      files_failed: failedResults.length,
-      file_results: fileResults.map(r => ({
-        file: r.fileName, format: r.format, status: r.success ? "OK" : "FAIL",
-        rows: r.rowsRead, cols: r.schema?.columns.length || 0, error: r.error || null,
-        schema_hash: r.schema?.schemaHash || null,
-      })),
+      files_processed: completedFiles.length,
+      files_failed: failedFiles.length,
       canonical_schema: { columns: canonical.columns, column_count: canonical.columns.length },
       coverage_pct: coveragePct,
-      dataset_path: batchFolder,
       dataset_id: datasetId,
-      entity_keys: entityKeyCandidates.map(k => k.column),
-      target_anchor_strategy: targetAnchor?.strategy || null,
+      engine_version: "v3",
     },
   });
 
-  // ─── Create Import Manifest ─────────────────────────────────
-  const allFileNames = batchJobs.map((j: ImportJob) => j.file_name);
+  // Create Import Manifest
+  const allFileNames = (allFiles as ImportJobFile[]).map(f => f.file_name);
   const manifestId = await createImportManifest(
     supabase, primaryJob.project_id, primaryJob.user_id, primaryJob.batch_id, datasetId,
-    fileResults, successSchemas, allFileNames, canonical, totalRowsConsolidated, allSampleRows,
+    fileResults, fileSchemas, allFileNames, canonical, totalRowsConsolidated, allSampleRows,
   );
 
-  // Build response with rich context
-  const responseWarnings: string[] = [];
-  if (targetAnchor?.warnings) responseWarnings.push(...targetAnchor.warnings);
-  if (entityKeyCandidates.length > 0) {
-    responseWarnings.push(
-      `Chaves de entidade detectadas: ${entityKeyCandidates.map(k => k.column).join(", ")}. ` +
-      `Podem ser usadas para enriquecer features via JOIN em versões futuras.`
-    );
-  }
+  // Complete primary job
+  await supabase.from("import_jobs").update({
+    status: "completed", phase: "done", progress: 100,
+    processed_files: completedFiles.length,
+    bytes_done: totalFileSizeBytes,
+    rows_processed: totalRowsConsolidated,
+    finished_at: new Date().toISOString(),
+  }).eq("id", primaryJob.id);
 
-  const responseMessage = failedResults.length > 0
-    ? `Importação parcial: ${successResults.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas, ${coveragePct}% coverage`
-    : `Batch consolidado: ${successResults.length} arquivos, ~${totalRowsConsolidated.toLocaleString()} linhas, ${canonical.columns.length} colunas`;
+  const responseMessage = failedFiles.length > 0
+    ? `Importação parcial: ${completedFiles.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas`
+    : `Batch consolidado: ${completedFiles.length} arquivos, ~${totalRowsConsolidated.toLocaleString()} linhas, ${canonical.columns.length} colunas`;
 
-  console.log(`[process-import] Batch ${primaryJob.batch_id} done. ${responseMessage}, manifest_generated=${!!manifestId}`);
+  await logEvent(supabase, primaryJob.id, primaryJob.project_id, "consolidation_completed", responseMessage);
+  await logEvent(supabase, primaryJob.id, primaryJob.project_id, "job_completed", responseMessage);
+
+  console.log(`[process-import] Batch ${primaryJob.batch_id} done. ${responseMessage}`);
 
   return new Response(JSON.stringify({
-    success: true,
-    message: responseMessage,
-    rows_processed: totalRowsConsolidated,
-    columns: canonical.columns.length,
-    files_processed: successResults.length,
-    files_failed: failedResults.length,
-    coverage_pct: coveragePct,
-    canonical_schema: { columns: canonical.columns, types: canonical.columnTypes },
-    dataset_id: datasetId,
-    manifest_generated: !!manifestId,
-    manifest_id: manifestId,
+    success: true, message: responseMessage,
+    rows_processed: totalRowsConsolidated, columns: canonical.columns.length,
+    files_processed: completedFiles.length, files_failed: failedFiles.length,
+    coverage_pct: coveragePct, dataset_id: datasetId,
+    manifest_generated: !!manifestId, manifest_id: manifestId,
     entity_keys: entityKeyCandidates,
-    target_anchor: targetAnchor ? {
-      strategy: targetAnchor.strategy,
-      anchor_file: targetAnchor.anchorFileName,
-      target_column: targetAnchor.targetColumn,
-    } : null,
-    warnings: responseWarnings,
-    imputation_applied: true,
-    file_results: fileResults.map(r => ({
-      file: r.fileName, format: r.format, status: r.success ? "OK" : "FAIL",
-      rows: r.rowsRead, cols: r.schema?.columns.length || 0, error: r.error || null,
-    })),
+    target_anchor: targetAnchor ? { strategy: targetAnchor.strategy, anchor_file: targetAnchor.anchorFileName } : null,
+    quality_summary: {
+      approved: completedFiles.filter(f => f.quality_gate === "approved").length,
+      warn: completedFiles.filter(f => f.quality_gate === "warn").length,
+      blocked: failedFiles.filter(f => f.quality_gate === "blocked").length,
+    },
+    engine_version: "v3",
   }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 }
 
@@ -2351,7 +2220,7 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { job_id, batch_id, chunk_offset } = await req.json();
+    const { job_id, batch_id } = await req.json();
 
     if (!job_id) {
       return new Response(JSON.stringify({ success: false, message: "job_id is required" }), {
@@ -2359,8 +2228,7 @@ serve(async (req) => {
       });
     }
 
-    const chunkOffsetNum = typeof chunk_offset === "number" ? chunk_offset : 0;
-    console.log(`[process-import] Starting job: ${job_id}, batch: ${batch_id || "none"}, chunk_offset: ${chunkOffsetNum}`);
+    console.log(`[process-import] Starting: job=${job_id}, batch=${batch_id || "none"}`);
 
     const { data: job, error: jobError } = await supabase.from("import_jobs").select("*").eq("id", job_id).single();
 
@@ -2370,8 +2238,8 @@ serve(async (req) => {
       });
     }
 
-    // For chunked re-entry, allow "processing" status on the primary job
-    if (chunkOffsetNum === 0 && job.status !== "pending") {
+    // For batch jobs: allow re-entry when status is "processing" (self-invocation pattern)
+    if (!job.batch_id && job.status !== "pending") {
       return new Response(JSON.stringify({ success: true, message: `Job is already ${job.status}` }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
@@ -2385,7 +2253,7 @@ serve(async (req) => {
     }
 
     if (job.batch_id) {
-      return await processBatchImport(supabase, job as ImportJob, chunkOffsetNum);
+      return await processBatchImport(supabase, job as ImportJob);
     } else {
       return await processSingleImport(supabase, job as ImportJob);
     }
