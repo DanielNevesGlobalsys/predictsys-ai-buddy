@@ -756,8 +756,10 @@ serve(async (req: Request) => {
     console.log(`[build-modeling-dataset] Starting for project ${project_id}`);
 
     // Fetch all context in parallel
-    const [aiCtxRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes] = await Promise.all([
+    // ── SSOT: Try project_dataset_state first, fallback to manifest ──
+    const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes] = await Promise.all([
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("import_manifests").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_columns").select("column_name, inferred_type").eq("project_id", project_id).order("column_index"),
       supabase.from("project_categorical_stats").select("column_name, distinct_count").eq("project_id", project_id),
@@ -768,6 +770,7 @@ serve(async (req: Request) => {
     ]);
 
     const aiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
+    const datasetState = datasetStateRes.data;
     const manifest = manifestRes.data;
     const projectColumns = columnsRes.data || [];
     const catStats = catStatsRes.data || [];
@@ -776,18 +779,74 @@ serve(async (req: Request) => {
     const inference = inferenceRes.data;
     const existingContract = contractRes.data;
 
-    if (!manifest) {
+    // ── Determine row_count from SSOT (dataset_state > manifest > project) ──
+    let totalRows = 0;
+    let dataSourceType = "upload";
+    let isVirtualManifest = false;
+
+    if (datasetState && datasetState.row_count > 0) {
+      totalRows = datasetState.row_count;
+      dataSourceType = datasetState.source_type || "upload";
+      isVirtualManifest = datasetState.virtual_manifest || false;
+      console.log(`[build-modeling-dataset] SSOT: dataset_state found. rows=${totalRows}, source=${dataSourceType}`);
+    } else if (manifest && manifest.rows_consolidated > 0) {
+      totalRows = manifest.rows_consolidated;
+      console.log(`[build-modeling-dataset] Fallback: manifest found. rows=${totalRows}`);
+      // Auto-populate dataset_state from manifest for future consistency
+      await supabase.from("project_dataset_state").upsert({
+        project_id,
+        organization_id: project.organization_id,
+        source_type: "upload",
+        active_dataset_ref: manifest.dataset_id || null,
+        row_count: manifest.rows_consolidated,
+        col_count: manifest.columns_final,
+        eda_ready: manifest.eda_ready !== false,
+        model_ready: manifest.model_ready !== false,
+        manifest_id: manifest.id,
+        virtual_manifest: false,
+        last_success_at: new Date().toISOString(),
+        active_schema_json: manifest.canonical_schema || [],
+        diagnostics: { auto_populated_from: "manifest", manifest_id: manifest.id },
+      }, { onConflict: "project_id" });
+    } else {
+      // No dataset state and no manifest — check if we have columns at all (db/lake source)
+      if (projectColumns.length > 0) {
+        // Try to get row count from project
+        const { data: projData } = await supabase.from("projects").select("total_rows, dataset_rows").eq("id", project_id).single();
+        totalRows = projData?.total_rows || projData?.dataset_rows || 0;
+        if (totalRows > 0) {
+          isVirtualManifest = true;
+          dataSourceType = "db";
+          console.log(`[build-modeling-dataset] Virtual manifest mode. rows=${totalRows}, cols=${projectColumns.length}`);
+          // Create dataset_state for future
+          await supabase.from("project_dataset_state").upsert({
+            project_id,
+            organization_id: project.organization_id,
+            source_type: "db",
+            row_count: totalRows,
+            col_count: projectColumns.length,
+            eda_ready: true,
+            model_ready: true,
+            virtual_manifest: true,
+            last_success_at: new Date().toISOString(),
+            diagnostics: { reason: "auto_created_from_columns", no_manifest: true },
+          }, { onConflict: "project_id" });
+        }
+      }
+    }
+
+    if (totalRows === 0) {
       return new Response(JSON.stringify({
         status: "BLOCKED_FEATURE_BUILDER",
-        blocked_reasons: ["Nenhum manifesto de importação encontrado. Faça o upload dos dados primeiro."],
+        blocked_reasons: ["NO_ACTIVE_DATASET: Nenhum dataset ativo encontrado. Importe dados ou conecte uma fonte."],
         modeling_dataset_ready: false,
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    if (manifest.rows_consolidated === 0) {
+    if (projectColumns.length === 0) {
       return new Response(JSON.stringify({
         status: "BLOCKED_FEATURE_BUILDER",
-        blocked_reasons: ["Nenhuma linha consolidada no dataset. Reimporte os dados."],
+        blocked_reasons: ["Nenhuma coluna detectada no projeto. Execute o EDA primeiro."],
         modeling_dataset_ready: false,
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
@@ -795,7 +854,7 @@ serve(async (req: Request) => {
     // Build enriched column list
     const catMap = new Map(catStats.map((c: any) => [c.column_name, c.distinct_count as number]));
     const numMap = new Map(numStats.map((n: any) => [n.column_name, { null_count: n.null_count, mean: n.mean_value, std: n.std_value }]));
-    const totalRows = manifest.rows_consolidated;
+    const warnings: string[] = isVirtualManifest ? ["VIRTUAL_MANIFEST_IN_USE: Pipeline operando sem manifesto de importação real."] : [];
 
     const enrichedColumns: EnrichedColumn[] = projectColumns.map((col: any) => {
       const numInfo = numMap.get(col.column_name);
@@ -986,9 +1045,9 @@ serve(async (req: Request) => {
       .insert({
         project_id,
         organization_id: project.organization_id,
-        dataset_id: manifest.dataset_id,
+        dataset_id: manifest?.dataset_id || datasetState?.active_dataset_ref || null,
         intent_version: aiCtx?.intent?.version || "v1",
-        manifest_version: manifest.id,
+        manifest_version: manifest?.id || null,
         entity_key: entityKey,
         anchor_time_col: anchorTimeCol,
         target_column: targetColumn,

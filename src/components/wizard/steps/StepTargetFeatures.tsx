@@ -33,6 +33,7 @@ import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
 import { logProjectAuditEvent } from "@/lib/auditLog";
+import { useDatasetState } from "@/hooks/useDatasetState";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -50,22 +51,7 @@ interface ColumnInfo {
   featureLabel?: string;
   featureHasError?: boolean;
 }
-
-// Manifest readiness info for gating
-interface ManifestReadiness {
-  edaReady: boolean;
-  modelReady: boolean;
-  manifestStatus: string;
-  blockedReasonModel: string | null;
-  blockedReasonEda: string | null;
-  edaStrategy: string;
-  edaScope: string | null;
-  totalRows: number;
-  columnsCount: number;
-  totalFiles: number;
-  coverageStats: CoverageStats | null;
-}
-
+// CoverageStats from manifest diagnostics
 interface CoverageStats {
   critical_columns_pct: number;
   global_null_pct: number;
@@ -91,8 +77,8 @@ const StepTargetFeatures = ({
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
 
-  // Manifest-based readiness (replaces old dataset_ready_for_modeling check)
-  const [manifestInfo, setManifestInfo] = useState<ManifestReadiness | null>(null);
+  // SSOT dataset state
+  const ds = useDatasetState(projectData.id);
 
   // Column inference matrix data
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
@@ -118,7 +104,7 @@ const StepTargetFeatures = ({
     if (projectData.id) {
       loadColumns();
       checkEDA();
-      loadManifestReadiness();
+      ds.load();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -127,36 +113,8 @@ const StepTargetFeatures = ({
     }
   }, [projectData.id]);
 
-  // Load manifest readiness info (replaces old checkDatasetReady)
-  const loadManifestReadiness = async () => {
-    if (!projectData.id) return;
-    const { data: manifest } = await supabase
-      .from("import_manifests")
-      .select("rows_consolidated, columns_final, total_files, status, status_reason, eda_ready, model_ready, eda_strategy, eda_scope, blocked_reason_eda, blocked_reason_model, canonical_schema")
-      .eq("project_id", projectData.id!)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (manifest) {
-      const rawSchema = manifest.canonical_schema as Record<string, any> || {};
-      const coverageStats = rawSchema._coverage_stats as CoverageStats | undefined;
-
-      setManifestInfo({
-        edaReady: manifest.eda_ready !== false,
-        modelReady: manifest.model_ready !== false,
-        manifestStatus: manifest.status,
-        blockedReasonModel: manifest.blocked_reason_model as string | null,
-        blockedReasonEda: manifest.blocked_reason_eda as string | null,
-        edaStrategy: (manifest.eda_strategy as string) || "UNION_BY_NAME",
-        edaScope: manifest.eda_scope as string | null,
-        totalRows: manifest.rows_consolidated,
-        columnsCount: manifest.columns_final,
-        totalFiles: manifest.total_files,
-        coverageStats: coverageStats || null,
-      });
-    }
-  };
+  // Coverage stats from fallback
+  const coverageStats = ds.fallback?.coverageStats as CoverageStats | null;
 
   // Auto-load inference when EDA is available
   useEffect(() => {
@@ -402,16 +360,9 @@ const StepTargetFeatures = ({
   const availableFeatures = columns.filter((col) => col.name !== targetColumn);
   const effectiveProblemType = inferredProblemType || projectData.problem_type;
 
-  // ── Gating logic ──
-  // Hard block: manifest status is blocked/fail OR eda_ready=false
-  const isHardBlocked = manifestInfo
-    ? (manifestInfo.manifestStatus === "blocked" || manifestInfo.manifestStatus === "fail" || !manifestInfo.edaReady)
-    : false;
-
-  // Soft warning: model_ready=false but eda_ready=true (schema divergence, high nulls, etc.)
-  const hasModelWarning = manifestInfo
-    ? (manifestInfo.edaReady && !manifestInfo.modelReady)
-    : false;
+  // ── Gating logic (uses SSOT) ──
+  const isHardBlocked = ds.loaded && !ds.edaReady;
+  const hasModelWarning = ds.loaded && ds.edaReady && !ds.modelReady;
 
   if (loadingColumns) {
     return (
@@ -445,7 +396,7 @@ const StepTargetFeatures = ({
 
   // Hard block screen
   if (isHardBlocked) {
-    const reason = manifestInfo?.blockedReasonEda || manifestInfo?.blockedReasonModel || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis.";
+    const reason = ds.fallback?.blockedReasonEda || ds.fallback?.blockedReasonModel || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis.";
     return (
       <Card className="bg-gradient-card shadow-card p-8">
         <div className="text-center py-12 space-y-4">
@@ -467,13 +418,13 @@ const StepTargetFeatures = ({
 
   // Preflight checklist items
   const preflightChecks = [
-    { label: "Manifest carregado", ok: !!manifestInfo, detail: manifestInfo ? `${manifestInfo.totalFiles} arquivo(s)` : "Sem manifest" },
-    { label: "Linhas consolidadas > 0", ok: (manifestInfo?.totalRows || 0) > 0, detail: `${(manifestInfo?.totalRows || 0).toLocaleString()} linhas` },
+    { label: "Dataset ativo", ok: ds.hasManifest, detail: ds.isVirtual ? "virtual manifest" : ds.fallback?.manifestId ? "manifest real" : "Sem manifest" },
+    { label: "Linhas consolidadas > 0", ok: ds.rowCount > 0, detail: `${ds.rowCount.toLocaleString()} linhas` },
     { label: "Colunas detectadas > 0", ok: columns.length > 0, detail: `${columns.length} colunas` },
     { label: "Target definido", ok: !!targetColumn, detail: targetColumn || "—" },
     { label: "Features selecionadas", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} features` },
-    { label: "EDA pronto", ok: manifestInfo?.edaReady !== false, detail: manifestInfo?.edaReady === false ? "BLOCKED" : "OK" },
-    { label: "Modelo pronto", ok: manifestInfo?.modelReady !== false, detail: manifestInfo?.modelReady === false ? (manifestInfo?.blockedReasonModel || "BLOCKED") : "OK" },
+    { label: "EDA pronto", ok: ds.edaReady, detail: ds.edaReady ? "OK" : "BLOCKED" },
+    { label: "Modelo pronto", ok: ds.modelReady, detail: ds.modelReady ? "OK" : (ds.fallback?.blockedReasonModel || "BLOCKED") },
   ];
 
   return (
@@ -492,7 +443,7 @@ const StepTargetFeatures = ({
         </div>
 
         {/* Coverage Report Banner */}
-        {manifestInfo && (
+        {ds.loaded && ds.rowCount > 0 && (
           <div className={`p-4 rounded-lg border space-y-3 ${
             hasModelWarning
               ? "bg-amber-500/5 border-amber-500/30"
@@ -502,19 +453,23 @@ const StepTargetFeatures = ({
               <div className="flex items-center gap-3">
                 <Database className={`w-5 h-5 ${hasModelWarning ? "text-amber-500" : "text-primary"}`} />
                 <div>
-                  <p className="text-sm font-semibold">Coverage do Consolidado</p>
+                  <p className="text-sm font-semibold">
+                    Coverage do Consolidado
+                    {ds.isVirtual && <Badge variant="outline" className="ml-2 text-[10px]">virtual</Badge>}
+                  </p>
                   <p className="text-xs text-muted-foreground">
-                    {manifestInfo.totalRows.toLocaleString()} linhas • {manifestInfo.columnsCount} colunas • {manifestInfo.totalFiles} arquivo(s)
+                    {ds.rowCount.toLocaleString()} linhas • {ds.colCount} colunas
+                    {!ds.isVirtual && ds.fallback?.totalFiles ? ` • ${ds.fallback.totalFiles} arquivo(s)` : ""}
                   </p>
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {manifestInfo.edaReady ? (
+                {ds.edaReady ? (
                   <Badge className="bg-accent/20 text-accent border-accent/30">EDA: OK</Badge>
                 ) : (
                   <Badge variant="destructive">EDA: BLOCKED</Badge>
                 )}
-                {manifestInfo.modelReady ? (
+                {ds.modelReady ? (
                   <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: OK</Badge>
                 ) : (
                   <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
@@ -526,23 +481,23 @@ const StepTargetFeatures = ({
             </div>
 
             {/* Coverage stats */}
-            {manifestInfo.coverageStats && (
+            {coverageStats && (
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
                 <div className="p-2 bg-muted/30 rounded text-center">
-                  <p className={`text-lg font-bold ${manifestInfo.coverageStats.critical_columns_pct > 30 ? "text-destructive" : manifestInfo.coverageStats.critical_columns_pct > 10 ? "text-amber-500" : ""}`}>
-                    {manifestInfo.coverageStats.critical_columns_pct}%
+                  <p className={`text-lg font-bold ${coverageStats.critical_columns_pct > 30 ? "text-destructive" : coverageStats.critical_columns_pct > 10 ? "text-amber-500" : ""}`}>
+                    {coverageStats.critical_columns_pct}%
                   </p>
                   <p className="text-[10px] text-muted-foreground">Colunas 🔴 (&gt;50% NULL)</p>
                 </div>
                 <div className="p-2 bg-muted/30 rounded text-center">
-                  <p className={`text-lg font-bold ${manifestInfo.coverageStats.global_null_pct > 30 ? "text-destructive" : manifestInfo.coverageStats.global_null_pct > 15 ? "text-amber-500" : ""}`}>
-                    {manifestInfo.coverageStats.global_null_pct}%
+                  <p className={`text-lg font-bold ${coverageStats.global_null_pct > 30 ? "text-destructive" : coverageStats.global_null_pct > 15 ? "text-amber-500" : ""}`}>
+                    {coverageStats.global_null_pct}%
                   </p>
                   <p className="text-[10px] text-muted-foreground">Nulos global</p>
                 </div>
                 <div className="p-2 bg-muted/30 rounded text-center col-span-2">
                   <div className="flex flex-wrap gap-1 justify-center">
-                    {manifestInfo.coverageStats.file_contribution.map((fc, i) => (
+                    {coverageStats.file_contribution.map((fc, i) => (
                       <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
                         {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
                         {fc.contribution_type === "mostly_null" && " ⚠️"}
@@ -555,18 +510,17 @@ const StepTargetFeatures = ({
             )}
 
             {/* Model warning */}
-            {hasModelWarning && manifestInfo.blockedReasonModel && (
+            {hasModelWarning && ds.fallback?.blockedReasonModel && (
               <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
                 <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
                 <span>
-                  <strong>Atenção:</strong> {manifestInfo.blockedReasonModel}
+                  <strong>Atenção:</strong> {ds.fallback.blockedReasonModel}
                   {" "}Você pode configurar target e features, mas o treino pode ser bloqueado até os dados serem corrigidos.
                 </span>
               </div>
             )}
           </div>
         )}
-
         {/* Problem Inference Panel (replaces old Lys suggestions) */}
         <ProblemInferencePanel
           inference={inference}

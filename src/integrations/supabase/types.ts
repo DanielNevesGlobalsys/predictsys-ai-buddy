@@ -1286,6 +1286,82 @@ export type Database = {
           },
         ]
       }
+      project_dataset_state: {
+        Row: {
+          active_dataset_ref: string | null
+          active_schema_json: Json | null
+          col_count: number
+          diagnostics: Json | null
+          eda_ready: boolean
+          last_job_id: string | null
+          last_success_at: string | null
+          manifest_id: string | null
+          model_ready: boolean
+          organization_id: string
+          project_id: string
+          row_count: number
+          source_type: string
+          updated_at: string
+          virtual_manifest: boolean
+        }
+        Insert: {
+          active_dataset_ref?: string | null
+          active_schema_json?: Json | null
+          col_count?: number
+          diagnostics?: Json | null
+          eda_ready?: boolean
+          last_job_id?: string | null
+          last_success_at?: string | null
+          manifest_id?: string | null
+          model_ready?: boolean
+          organization_id: string
+          project_id: string
+          row_count?: number
+          source_type?: string
+          updated_at?: string
+          virtual_manifest?: boolean
+        }
+        Update: {
+          active_dataset_ref?: string | null
+          active_schema_json?: Json | null
+          col_count?: number
+          diagnostics?: Json | null
+          eda_ready?: boolean
+          last_job_id?: string | null
+          last_success_at?: string | null
+          manifest_id?: string | null
+          model_ready?: boolean
+          organization_id?: string
+          project_id?: string
+          row_count?: number
+          source_type?: string
+          updated_at?: string
+          virtual_manifest?: boolean
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_dataset_state_manifest_id_fkey"
+            columns: ["manifest_id"]
+            isOneToOne: false
+            referencedRelation: "import_manifests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_dataset_state_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_dataset_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_datasets: {
         Row: {
           columns_count: number | null
