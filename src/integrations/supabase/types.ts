@@ -222,10 +222,169 @@ export type Database = {
         }
         Relationships: []
       }
+      import_job_events: {
+        Row: {
+          created_at: string
+          event_type: string
+          file_id: string | null
+          id: string
+          job_id: string
+          message: string
+          metadata: Json | null
+          project_id: string
+          severity: string
+        }
+        Insert: {
+          created_at?: string
+          event_type: string
+          file_id?: string | null
+          id?: string
+          job_id: string
+          message: string
+          metadata?: Json | null
+          project_id: string
+          severity?: string
+        }
+        Update: {
+          created_at?: string
+          event_type?: string
+          file_id?: string | null
+          id?: string
+          job_id?: string
+          message?: string
+          metadata?: Json | null
+          project_id?: string
+          severity?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_job_events_file_id_fkey"
+            columns: ["file_id"]
+            isOneToOne: false
+            referencedRelation: "import_job_files"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_job_events_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "import_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_job_events_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      import_job_files: {
+        Row: {
+          checkpoint_cursor: Json | null
+          cols_detected: number | null
+          created_at: string
+          error_code: string | null
+          error_message: string | null
+          file_name: string
+          file_size_bytes: number
+          finished_at: string | null
+          format: string
+          id: string
+          job_id: string
+          project_id: string
+          quality_gate: string
+          quality_reasons: Json | null
+          retry_count: number
+          rows_detected: number | null
+          sample_json: Json | null
+          schema_hash: string | null
+          schema_json: Json | null
+          sequence_index: number
+          started_at: string | null
+          status: string
+          storage_path: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          checkpoint_cursor?: Json | null
+          cols_detected?: number | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          file_name: string
+          file_size_bytes?: number
+          finished_at?: string | null
+          format?: string
+          id?: string
+          job_id: string
+          project_id: string
+          quality_gate?: string
+          quality_reasons?: Json | null
+          retry_count?: number
+          rows_detected?: number | null
+          sample_json?: Json | null
+          schema_hash?: string | null
+          schema_json?: Json | null
+          sequence_index?: number
+          started_at?: string | null
+          status?: string
+          storage_path: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          checkpoint_cursor?: Json | null
+          cols_detected?: number | null
+          created_at?: string
+          error_code?: string | null
+          error_message?: string | null
+          file_name?: string
+          file_size_bytes?: number
+          finished_at?: string | null
+          format?: string
+          id?: string
+          job_id?: string
+          project_id?: string
+          quality_gate?: string
+          quality_reasons?: Json | null
+          retry_count?: number
+          rows_detected?: number | null
+          sample_json?: Json | null
+          schema_hash?: string | null
+          schema_json?: Json | null
+          sequence_index?: number
+          started_at?: string | null
+          status?: string
+          storage_path?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "import_job_files_job_id_fkey"
+            columns: ["job_id"]
+            isOneToOne: false
+            referencedRelation: "import_jobs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "import_job_files_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       import_jobs: {
         Row: {
           batch_id: string | null
           batch_sequence: number | null
+          bytes_done: number | null
+          bytes_total: number | null
           created_at: string
           dataset_id: string | null
           delimiter: string
@@ -238,17 +397,22 @@ export type Database = {
           headers_json: Json | null
           id: string
           is_batch_primary: boolean | null
+          phase: string | null
+          processed_files: number | null
           progress: number | null
           project_id: string
           rows_processed: number | null
           status: string
           storage_path: string
+          total_files: number | null
           updated_at: string
           user_id: string
         }
         Insert: {
           batch_id?: string | null
           batch_sequence?: number | null
+          bytes_done?: number | null
+          bytes_total?: number | null
           created_at?: string
           dataset_id?: string | null
           delimiter?: string
@@ -261,17 +425,22 @@ export type Database = {
           headers_json?: Json | null
           id?: string
           is_batch_primary?: boolean | null
+          phase?: string | null
+          processed_files?: number | null
           progress?: number | null
           project_id: string
           rows_processed?: number | null
           status?: string
           storage_path: string
+          total_files?: number | null
           updated_at?: string
           user_id: string
         }
         Update: {
           batch_id?: string | null
           batch_sequence?: number | null
+          bytes_done?: number | null
+          bytes_total?: number | null
           created_at?: string
           dataset_id?: string | null
           delimiter?: string
@@ -284,11 +453,14 @@ export type Database = {
           headers_json?: Json | null
           id?: string
           is_batch_primary?: boolean | null
+          phase?: string | null
+          processed_files?: number | null
           progress?: number | null
           project_id?: string
           rows_processed?: number | null
           status?: string
           storage_path?: string
+          total_files?: number | null
           updated_at?: string
           user_id?: string
         }
