@@ -91,6 +91,12 @@ interface ImportManifest {
   files: ManifestFile[];
   status: "ok" | "warn" | "fail" | "blocked";
   status_reason: string | null;
+  eda_ready?: boolean;
+  model_ready?: boolean;
+  eda_strategy?: string;
+  eda_scope?: string | null;
+  blocked_reason_eda?: string | null;
+  blocked_reason_model?: string | null;
 }
 
 interface ImportManifestPanelProps {
@@ -144,6 +150,17 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
     return <Badge variant="destructive">FAIL</Badge>;
   };
 
+  const edaBadge = () => {
+    if (manifest!.eda_ready === false) return <Badge variant="destructive">EDA: BLOCKED</Badge>;
+    if (manifest!.status === "warn") return <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">EDA: WARN</Badge>;
+    return <Badge className="bg-accent/20 text-accent border-accent/30">EDA: OK</Badge>;
+  };
+
+  const modelBadge = () => {
+    if (manifest!.model_ready === false) return <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">MODEL: BLOCKED</Badge>;
+    return <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: OK</Badge>;
+  };
+
   const nullSeverityIcon = (severity?: string) => {
     if (severity === "critical") return <span title=">50% NULL" className="text-destructive">🔴</span>;
     if (severity === "warning") return <span title="30-50% NULL" className="text-amber-500">🟡</span>;
@@ -161,17 +178,20 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
   return (
     <Card className="p-4 space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2">
           <Layers className="w-5 h-5 text-primary" />
           <h3 className="font-semibold text-sm">
             {t("dataIngestion.manifest.title", { defaultValue: "Resumo de Importação" })}
           </h3>
-          {statusBadge(manifest.status)}
         </div>
-        <span className="text-xs text-muted-foreground">
-          {new Date(manifest.created_at).toLocaleString()}
-        </span>
+        <div className="flex items-center gap-2">
+          {edaBadge()}
+          {modelBadge()}
+          <span className="text-xs text-muted-foreground">
+            {new Date(manifest.created_at).toLocaleString()}
+          </span>
+        </div>
       </div>
 
       {/* Status reason */}

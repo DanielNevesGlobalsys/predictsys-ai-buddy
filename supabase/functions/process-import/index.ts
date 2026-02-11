@@ -1280,6 +1280,71 @@ function computeNullDiagnostic(
 // ═══════════════════════════════════════════════════════════
 // Import Manifest Generator
 // ═══════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// EDA Strategy Selection
+// ═══════════════════════════════════════════════════════════
+interface EdaStrategyResult {
+  strategy: "UNION_BY_NAME" | "INTERSECTION_ONLY" | "ANCHOR_FILE_EDA";
+  scope: string;
+  anchor_file?: string;
+  reason: string;
+}
+
+function chooseEdaStrategy(
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  canonicalColumns: string[],
+  nullDiag: NullDiagnosticEntry[],
+): EdaStrategyResult {
+  if (fileSchemas.length <= 1) {
+    return { strategy: "UNION_BY_NAME", scope: "union", reason: "Arquivo único — union completo." };
+  }
+
+  // Compute common columns across ALL files
+  const colSetsNormalized = fileSchemas.map(s =>
+    new Set(s.columns.map(c => normalizeColumnName(c)))
+  );
+  const allNormalized = new Set(canonicalColumns.map(c => normalizeColumnName(c)));
+  const commonCols = [...allNormalized].filter(nc =>
+    colSetsNormalized.every(set => set.has(nc))
+  );
+
+  // If canonical schema is large enough and we have rows, UNION_BY_NAME is viable
+  if (canonicalColumns.length >= 20 && commonCols.length >= 6) {
+    return {
+      strategy: "UNION_BY_NAME",
+      scope: `union (${canonicalColumns.length} colunas, ${commonCols.length} comuns)`,
+      reason: `Schema canônico com ${canonicalColumns.length} colunas, ${commonCols.length} comuns entre todos os arquivos.`,
+    };
+  }
+
+  // If enough common columns, intersection is viable
+  if (commonCols.length >= 6) {
+    return {
+      strategy: "INTERSECTION_ONLY",
+      scope: `intersection (${commonCols.length} colunas comuns)`,
+      reason: `${commonCols.length} colunas comuns detectadas. Usando somente colunas presentes em todos os arquivos.`,
+    };
+  }
+
+  // Fallback: use the largest file as anchor
+  let bestIdx = 0;
+  let bestRows = 0;
+  for (let i = 0; i < fileSchemas.length; i++) {
+    if (fileSchemas[i].totalRows > bestRows) {
+      bestRows = fileSchemas[i].totalRows;
+      bestIdx = i;
+    }
+  }
+
+  return {
+    strategy: "ANCHOR_FILE_EDA",
+    scope: `anchor (${fileNames[bestIdx]})`,
+    anchor_file: fileNames[bestIdx],
+    reason: `Poucas colunas comuns (${commonCols.length}). Usando arquivo âncora "${fileNames[bestIdx]}" (${bestRows} linhas).`,
+  };
+}
+
 async function createImportManifest(
   supabase: any,
   projectId: string,
@@ -1306,7 +1371,6 @@ async function createImportManifest(
         .single();
       if (aiCtx?.context?.intent) {
         const intentData = aiCtx.context.intent;
-        // Get the latest version
         if (Array.isArray(intentData)) {
           intentContract = intentData[intentData.length - 1];
         } else {
@@ -1323,6 +1387,10 @@ async function createImportManifest(
 
     // Compute coverage stats
     const coverageStats = computeCoverageStats(canonical.columns, fileSchemas, fileNames, allSampleRows, nullDiag);
+
+    // Choose EDA strategy
+    const edaStrategy = chooseEdaStrategy(fileSchemas, fileNames, canonical.columns, nullDiag);
+    console.log(`[process-import] EDA strategy: ${edaStrategy.strategy} — ${edaStrategy.reason}`);
 
     // Build per-file entries
     const files = fileResults.map((result, i) => {
@@ -1379,24 +1447,48 @@ async function createImportManifest(
     const filesWarn = files.filter(f => f.status === "warn").length;
     const filesFail = files.filter(f => f.status === "fail").length;
 
-    let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
-    let statusReason: string | null = null;
+    // ── Separate EDA vs MODEL gating ──
+    // EDA blocks ONLY if truly unusable
+    let edaReady = true;
+    let blockedReasonEda: string | null = null;
+
+    if (totalRowsConsolidated === 0) {
+      edaReady = false;
+      blockedReasonEda = "Dataset consolidado tem 0 linhas.";
+    } else if (canonical.columns.length === 0) {
+      edaReady = false;
+      blockedReasonEda = "Nenhuma coluna detectada.";
+    } else if (filesFail > 0 && filesOk === 0) {
+      edaReady = false;
+      blockedReasonEda = "Todos os arquivos falharam no processamento.";
+    }
+
+    // MODEL blocks on stricter criteria
+    let modelReady = edaReady; // can't model if can't even EDA
+    let blockedReasonModel: string | null = null;
 
     const criticalCols = nullDiag.filter(d => d.severity === "critical").length;
     const criticalRatio = canonical.columns.length > 0 ? criticalCols / canonical.columns.length : 0;
 
-    if (totalRowsConsolidated === 0) {
-      overallStatus = "blocked";
-      statusReason = "Dataset consolidado tem 0 linhas. Verifique se os arquivos contêm dados válidos.";
-    } else if (filesFail > 0 && filesOk === 0) {
-      overallStatus = "blocked";
-      statusReason = "Todos os arquivos falharam no processamento. Verifique os formatos e tente novamente.";
+    if (!edaReady) {
+      modelReady = false;
+      blockedReasonModel = blockedReasonEda;
     } else if (criticalRatio >= 0.8) {
+      modelReady = false;
+      blockedReasonModel = `${criticalCols} de ${canonical.columns.length} colunas (${Math.round(criticalRatio * 100)}%) estão em estado crítico (>50% NULL). O dataset não é utilizável para modelagem.`;
+    }
+
+    // Overall status for manifest (backward compat): 
+    // Schema divergence = WARN, not BLOCKED
+    let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
+    let statusReason: string | null = null;
+
+    if (!edaReady) {
       overallStatus = "blocked";
-      statusReason = `${criticalCols} de ${canonical.columns.length} colunas (${Math.round(criticalRatio * 100)}%) estão em estado crítico (>50% NULL). O dataset não é utilizável para modelagem.`;
-    } else if (canonical.columns.length === 0) {
-      overallStatus = "blocked";
-      statusReason = "Nenhuma coluna detectada no schema. Verifique se os arquivos possuem cabeçalhos válidos.";
+      statusReason = blockedReasonEda;
+    } else if (!modelReady) {
+      overallStatus = "warn";
+      statusReason = blockedReasonModel;
     } else if (filesFail > 0) {
       overallStatus = "warn";
       statusReason = `${filesFail} arquivo(s) falharam. Dataset parcial.`;
@@ -1407,8 +1499,6 @@ async function createImportManifest(
       overallStatus = "warn";
       statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`;
     }
-
-    const datasetReady = overallStatus !== "blocked" && overallStatus !== "fail";
 
     const { data: manifestData, error: manifestError } = await supabase.from("import_manifests").insert({
       project_id: projectId,
@@ -1433,16 +1523,25 @@ async function createImportManifest(
       files,
       status: overallStatus,
       status_reason: statusReason,
+      // New fields
+      eda_ready: edaReady,
+      model_ready: modelReady,
+      eda_strategy: edaStrategy.strategy,
+      eda_scope: edaStrategy.scope,
+      eda_dataset_id: datasetId, // EDA always uses the consolidated dataset when available
+      model_dataset_id: modelReady ? datasetId : null,
+      blocked_reason_eda: blockedReasonEda,
+      blocked_reason_model: blockedReasonModel,
     }).select("id").single();
 
-    // Persist dataset_ready_for_modeling on project
+    // Persist dataset_ready_for_modeling on project (model gating)
     await supabase.from("projects").update({
-      dataset_ready_for_modeling: datasetReady,
-      dataset_blocked_reason: datasetReady ? null : statusReason,
+      dataset_ready_for_modeling: modelReady,
+      dataset_blocked_reason: modelReady ? null : blockedReasonModel,
     }).eq("id", projectId);
 
     const manifestId = manifestData?.id || null;
-    console.log(`[process-import] Manifest created: ${overallStatus}, dataset_ready=${datasetReady}, ${files.length} files, ${totalRowsConsolidated} rows, coverage=${coverageStats.global_null_pct}% null, manifest_id=${manifestId}`);
+    console.log(`[process-import] Manifest created: status=${overallStatus}, eda_ready=${edaReady}, model_ready=${modelReady}, strategy=${edaStrategy.strategy}, ${files.length} files, ${totalRowsConsolidated} rows, manifest_id=${manifestId}`);
     return manifestId;
   } catch (e) {
     console.error("[process-import] Failed to create manifest:", e);
