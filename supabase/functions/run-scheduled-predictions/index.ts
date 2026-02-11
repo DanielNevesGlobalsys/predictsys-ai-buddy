@@ -1,216 +1,118 @@
 import { serve } from "https://deno.land/std@0.190.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { Resend } from "https://esm.sh/resend@2.0.0";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-function calculateNextRunAt(
-  frequency: string,
-  currentNextRun: Date,
+/**
+ * Compute next_run_at in UTC based on schedule config.
+ * Uses timezone-aware Date math via Intl for DST safety.
+ */
+function computeNextRunAt(
+  scheduleType: string,
+  hour: number,
+  minute: number,
+  timezone: string,
+  intervalHours: number | null,
   dayOfWeek: number | null,
   dayOfMonth: number | null,
-  timeOfDay: string
-): Date {
-  const [hours, minutes] = timeOfDay.split(":").map(Number);
-  const next = new Date(currentNextRun);
-  next.setHours(hours, minutes, 0, 0);
+): string {
+  const now = new Date();
 
-  switch (frequency) {
-    case "daily":
-      next.setDate(next.getDate() + 1);
-      break;
-    case "weekly":
-      next.setDate(next.getDate() + 7);
-      break;
-    case "biweekly":
-      next.setDate(next.getDate() + 14);
-      break;
-    case "monthly":
-      next.setMonth(next.getMonth() + 1);
-      if (dayOfMonth) next.setDate(dayOfMonth);
-      break;
-    case "quarterly":
-      next.setMonth(next.getMonth() + 3);
-      if (dayOfMonth) next.setDate(dayOfMonth);
-      break;
-    case "semiannual":
-      next.setMonth(next.getMonth() + 6);
-      if (dayOfMonth) next.setDate(dayOfMonth);
-      break;
-    case "yearly":
-      next.setFullYear(next.getFullYear() + 1);
-      if (dayOfMonth) next.setDate(dayOfMonth);
-      break;
-    case "specific_date":
-      // One-time execution, disable after running
-      return next;
+  if (scheduleType === "interval_hours" && intervalHours) {
+    return new Date(now.getTime() + intervalHours * 3600_000).toISOString();
   }
 
-  return next;
-}
+  // Build target date in the schedule's timezone
+  // Start from "today at HH:MM in tz", then advance if needed
+  const fmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: timezone,
+    year: "numeric", month: "2-digit", day: "2-digit",
+    hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const parts = Object.fromEntries(
+    fmt.formatToParts(now).map(p => [p.type, p.value])
+  );
 
-interface EmailTemplateParams {
-  userName: string;
-  projectName: string;
-  problemType: string;
-  modelName: string;
-  metrics: Record<string, number>;
-  success: boolean;
-  message: string;
-  projectUrl: string;
-  language?: string;
-}
-
-function getEmailContent(params: EmailTemplateParams): { subject: string; html: string } {
-  const lang = params.language || "pt";
+  // Create a date string in the target timezone then parse
+  const todayStr = `${parts.year}-${parts.month}-${parts.day}T${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}:00`;
   
-  const translations = {
-    pt: {
-      subject: `[PredictSys AI] Novos resultados do modelo do projeto ${params.projectName}`,
-      greeting: `Olá ${params.userName},`,
-      intro: `O agendamento de predições do seu projeto foi executado.`,
-      projectLabel: "Projeto",
-      typeLabel: "Tipo de problema",
-      modelLabel: "Modelo em produção",
-      metricsLabel: "Métricas principais",
-      statusLabel: "Status da execução",
-      success: "✅ Sucesso",
-      error: "❌ Erro",
-      messageLabel: "Detalhes",
-      viewProject: "Ver Projeto",
-      footer: "Este email foi enviado automaticamente pela PredictSys AI.",
-      classification: "Classificação",
-      regression: "Regressão",
-    },
-    en: {
-      subject: `[PredictSys AI] New model results for project ${params.projectName}`,
-      greeting: `Hello ${params.userName},`,
-      intro: `The scheduled predictions for your project have been executed.`,
-      projectLabel: "Project",
-      typeLabel: "Problem type",
-      modelLabel: "Production model",
-      metricsLabel: "Key metrics",
-      statusLabel: "Execution status",
-      success: "✅ Success",
-      error: "❌ Error",
-      messageLabel: "Details",
-      viewProject: "View Project",
-      footer: "This email was sent automatically by PredictSys AI.",
-      classification: "Classification",
-      regression: "Regression",
-    },
-    es: {
-      subject: `[PredictSys AI] Nuevos resultados del modelo del proyecto ${params.projectName}`,
-      greeting: `Hola ${params.userName},`,
-      intro: `Las predicciones programadas de tu proyecto han sido ejecutadas.`,
-      projectLabel: "Proyecto",
-      typeLabel: "Tipo de problema",
-      modelLabel: "Modelo en producción",
-      metricsLabel: "Métricas principales",
-      statusLabel: "Estado de ejecución",
-      success: "✅ Éxito",
-      error: "❌ Error",
-      messageLabel: "Detalles",
-      viewProject: "Ver Proyecto",
-      footer: "Este correo fue enviado automáticamente por PredictSys AI.",
-      classification: "Clasificación",
-      regression: "Regresión",
-    },
-  };
+  // Use a simple approach: set UTC time then adjust
+  const next = new Date(now);
+  next.setUTCHours(hour, minute, 0, 0);
+  if (next <= now) next.setUTCDate(next.getUTCDate() + 1);
 
-  const t = translations[lang as keyof typeof translations] || translations.pt;
-  const problemTypeText = params.problemType === "classification" ? t.classification : t.regression;
+  switch (scheduleType) {
+    case "daily":
+      // Already set to next occurrence
+      break;
+    case "weekly":
+      while (next.getUTCDay() !== (dayOfWeek ?? 1)) {
+        next.setUTCDate(next.getUTCDate() + 1);
+      }
+      break;
+    case "monthly":
+      next.setUTCDate(dayOfMonth ?? 1);
+      if (next <= now) next.setUTCMonth(next.getUTCMonth() + 1);
+      break;
+  }
 
-  // Build metrics HTML
-  const metricsHtml = Object.entries(params.metrics)
-    .map(([name, value]) => `<tr><td style="padding: 8px; border: 1px solid #e5e7eb;">${name}</td><td style="padding: 8px; border: 1px solid #e5e7eb; font-weight: bold;">${value.toFixed(4)}</td></tr>`)
-    .join("");
+  return next.toISOString();
+}
 
-  const html = `
-    <!DOCTYPE html>
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    </head>
-    <body style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background-color: #f3f4f6; margin: 0; padding: 20px;">
-      <div style="max-width: 600px; margin: 0 auto; background-color: #ffffff; border-radius: 12px; overflow: hidden; box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);">
-        <!-- Header -->
-        <div style="background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); padding: 32px; text-align: center;">
-          <h1 style="color: #ffffff; margin: 0; font-size: 24px;">🔮 PredictSys AI</h1>
-        </div>
-        
-        <!-- Content -->
-        <div style="padding: 32px;">
-          <p style="font-size: 16px; color: #374151; margin-bottom: 8px;">${t.greeting}</p>
-          <p style="font-size: 14px; color: #6b7280; margin-bottom: 24px;">${t.intro}</p>
-          
-          <!-- Project Info Card -->
-          <div style="background-color: #f9fafb; border-radius: 8px; padding: 20px; margin-bottom: 24px;">
-            <table style="width: 100%; border-collapse: collapse;">
-              <tr>
-                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.projectLabel}:</td>
-                <td style="padding: 8px 0; color: #111827; font-weight: 600;">${params.projectName}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.typeLabel}:</td>
-                <td style="padding: 8px 0; color: #111827;">${problemTypeText}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.modelLabel}:</td>
-                <td style="padding: 8px 0; color: #111827;">${params.modelName}</td>
-              </tr>
-              <tr>
-                <td style="padding: 8px 0; color: #6b7280; font-size: 14px;">${t.statusLabel}:</td>
-                <td style="padding: 8px 0; color: #111827;">${params.success ? t.success : t.error}</td>
-              </tr>
-            </table>
-          </div>
-          
-          <!-- Metrics Table -->
-          ${Object.keys(params.metrics).length > 0 ? `
-          <h3 style="color: #374151; font-size: 16px; margin-bottom: 12px;">${t.metricsLabel}</h3>
-          <table style="width: 100%; border-collapse: collapse; margin-bottom: 24px;">
-            <thead>
-              <tr style="background-color: #f3f4f6;">
-                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Metric</th>
-                <th style="padding: 12px; border: 1px solid #e5e7eb; text-align: left;">Value</th>
-              </tr>
-            </thead>
-            <tbody>
-              ${metricsHtml}
-            </tbody>
-          </table>
-          ` : ""}
-          
-          <!-- Details -->
-          <div style="background-color: ${params.success ? "#ecfdf5" : "#fef2f2"}; border-radius: 8px; padding: 16px; margin-bottom: 24px;">
-            <p style="margin: 0; color: ${params.success ? "#065f46" : "#991b1b"}; font-size: 14px;">
-              <strong>${t.messageLabel}:</strong> ${params.message}
-            </p>
-          </div>
-          
-          <!-- CTA Button -->
-          <div style="text-align: center; margin-top: 32px;">
-            <a href="${params.projectUrl}" style="display: inline-block; background: linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%); color: #ffffff; text-decoration: none; padding: 14px 32px; border-radius: 8px; font-weight: 600; font-size: 14px;">
-              ${t.viewProject}
-            </a>
-          </div>
-        </div>
-        
-        <!-- Footer -->
-        <div style="background-color: #f9fafb; padding: 20px; text-align: center; border-top: 1px solid #e5e7eb;">
-          <p style="margin: 0; color: #9ca3af; font-size: 12px;">${t.footer}</p>
-        </div>
-      </div>
-    </body>
-    </html>
-  `;
+/**
+ * Read SSOT gates for a project. Returns { allowed, reasons[] }.
+ */
+async function checkSSOTGates(
+  supabase: ReturnType<typeof createClient>,
+  projectId: string,
+): Promise<{ allowed: boolean; reasons: string[] }> {
+  const reasons: string[] = [];
 
-  return { subject: t.subject, html };
+  // 1) project_dataset_state
+  const { data: dsState } = await supabase
+    .from("project_dataset_state")
+    .select("production_model_id, model_ready")
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  const prodModelId = dsState?.production_model_id;
+  if (!prodModelId) {
+    reasons.push("NO_PRODUCTION_MODEL");
+    return { allowed: false, reasons };
+  }
+
+  // 2) production model quality
+  const { data: model } = await supabase
+    .from("project_models")
+    .select("hyperparameters, deployed_selection_version")
+    .eq("id", prodModelId)
+    .maybeSingle();
+
+  const hp = (model?.hyperparameters as Record<string, any>) || {};
+  if (hp.dashboard_allowed === false) {
+    reasons.push("DASHBOARD_NOT_ALLOWED");
+  }
+  if (hp.model_quality_flag && hp.model_quality_flag !== "ok" && hp.model_quality_flag !== "pass") {
+    reasons.push("MODEL_QUALITY_FAIL");
+  }
+
+  // 3) selection_version mismatch
+  const { data: sel } = await supabase
+    .from("project_model_selection")
+    .select("selection_version")
+    .eq("project_id", projectId)
+    .maybeSingle();
+
+  if (sel && model?.deployed_selection_version != null) {
+    if (sel.selection_version !== model.deployed_selection_version) {
+      reasons.push("SELECTION_VERSION_MISMATCH");
+    }
+  }
+
+  return { allowed: reasons.length === 0, reasons };
 }
 
 serve(async (req) => {
@@ -219,236 +121,194 @@ serve(async (req) => {
   }
 
   const startTime = Date.now();
-  console.log("[run-scheduled-predictions] Starting scheduled predictions job");
+  console.log("[run-scheduled-predictions] Starting scheduler tick");
 
   try {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const resendApiKey = Deno.env.get("RESEND_API_KEY");
-    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-    const resend = resendApiKey ? new Resend(resendApiKey) : null;
-
-    if (!resend) {
-      console.warn("[run-scheduled-predictions] RESEND_API_KEY not configured, emails will be skipped");
-    }
-
     const now = new Date().toISOString();
 
-    // Find all enabled schedules due for execution
+    // 1) Find enabled schedules due for execution
     const { data: dueSchedules, error: fetchError } = await supabase
-      .from("project_prediction_schedules")
-      .select(`
-        *,
-        projects:project_id (
-          id,
-          name,
-          user_id,
-          problem_type,
-          target_column,
-          dataset_filename
-        )
-      `)
-      .eq("enabled", true)
+      .from("project_schedules")
+      .select("*")
+      .eq("is_enabled", true)
       .lte("next_run_at", now);
 
     if (fetchError) {
-      console.error("[run-scheduled-predictions] Error fetching schedules:", fetchError);
+      console.error("[scheduler] Fetch error:", fetchError);
       return new Response(JSON.stringify({ error: fetchError.message }), {
-        status: 500,
+        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    if (!dueSchedules?.length) {
+      console.log("[scheduler] No schedules due");
+      return new Response(JSON.stringify({ processed: 0 }), {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    if (!dueSchedules || dueSchedules.length === 0) {
-      console.log("[run-scheduled-predictions] No schedules due for execution");
-      return new Response(JSON.stringify({ 
-        message: "No schedules due",
-        processed: 0 
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    console.log(`[run-scheduled-predictions] Found ${dueSchedules.length} schedules to process`);
-
-    const results = [];
+    console.log(`[scheduler] ${dueSchedules.length} schedule(s) due`);
+    const results: any[] = [];
 
     for (const schedule of dueSchedules) {
-      const project = schedule.projects;
-      if (!project) {
-        console.error(`[run-scheduled-predictions] Project not found for schedule ${schedule.id}`);
+      const projectId = schedule.project_id;
+
+      // 2) Idempotency: skip if a RUNNING run exists in last 30 min
+      const { data: runningRuns } = await supabase
+        .from("project_schedule_runs")
+        .select("id")
+        .eq("project_id", projectId)
+        .eq("status", "RUNNING")
+        .gte("created_at", new Date(Date.now() - 30 * 60_000).toISOString())
+        .limit(1);
+
+      if (runningRuns?.length) {
+        console.log(`[scheduler] Skipping ${projectId} — RUNNING run exists`);
+        results.push({ project_id: projectId, skipped: true, reason: "RUNNING_EXISTS" });
         continue;
       }
 
-      console.log(`[run-scheduled-predictions] Processing schedule for project: ${project.name}`);
+      // 3) Create schedule_run record
+      const { data: run } = await supabase
+        .from("project_schedule_runs")
+        .insert({
+          project_id: projectId,
+          scheduled_at: schedule.next_run_at,
+          started_at: new Date().toISOString(),
+          status: "RUNNING",
+        })
+        .select("id")
+        .single();
 
-      // Mark as running
-      await supabase
-        .from("project_prediction_schedules")
-        .update({ last_run_status: "running" })
-        .eq("id", schedule.id);
+      const runId = run?.id;
 
-      let runSuccess = true;
-      let runMessage = "";
-      const metricsResults: Record<string, number> = {};
-      let productionModelName = "N/A";
+      // 4) Check SSOT gates
+      const gates = await checkSSOTGates(supabase, projectId);
 
+      if (!gates.allowed) {
+        console.log(`[scheduler] ${projectId} BLOCKED: ${gates.reasons.join(", ")}`);
+
+        // Mark run as BLOCKED
+        await supabase
+          .from("project_schedule_runs")
+          .update({
+            status: "BLOCKED",
+            finished_at: new Date().toISOString(),
+            blocked_reason_code: gates.reasons.join(", "),
+            diagnostics: { gates: gates.reasons, timestamp: new Date().toISOString() },
+          })
+          .eq("id", runId);
+
+        // If pause_on_blocked, disable schedule
+        if (schedule.pause_on_blocked) {
+          await supabase
+            .from("project_schedules")
+            .update({
+              is_enabled: false,
+              last_run_at: new Date().toISOString(),
+            })
+            .eq("project_id", projectId);
+
+          console.log(`[scheduler] ${projectId} schedule PAUSED due to blocked gates`);
+        }
+
+        // Still compute next_run_at for when user re-enables
+        const nextRun = computeNextRunAt(
+          schedule.schedule_type, schedule.hour, schedule.minute,
+          schedule.timezone, schedule.interval_hours,
+          schedule.day_of_week, schedule.day_of_month,
+        );
+        await supabase
+          .from("project_schedules")
+          .update({ next_run_at: nextRun, last_run_at: new Date().toISOString() })
+          .eq("project_id", projectId);
+
+        results.push({ project_id: projectId, status: "BLOCKED", reasons: gates.reasons });
+        continue;
+      }
+
+      // 5) Gates passed — call run-batch-predictions (scoring only)
       try {
-        // Get production model
-        const { data: productionModel } = await supabase
-          .from("project_models")
-          .select("*, project_model_metrics(*)")
-          .eq("project_id", project.id)
-          .eq("is_production", true)
-          .maybeSingle();
+        console.log(`[scheduler] ${projectId} — calling run-batch-predictions`);
 
-        if (!productionModel) {
-          throw new Error("No production model found");
+        const scoringResp = await fetch(`${supabaseUrl}/functions/v1/run-batch-predictions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${supabaseServiceKey}`,
+          },
+          body: JSON.stringify({
+            project_id: projectId,
+            trigger: "schedule",
+            mode: schedule.mode,
+          }),
+        });
+
+        const scoringResult = await scoringResp.json();
+
+        if (!scoringResp.ok || scoringResult.error) {
+          throw new Error(scoringResult.error || `HTTP ${scoringResp.status}`);
         }
 
-        productionModelName = productionModel.algorithm_name;
-
-        // Get metrics for report
-        if (productionModel.project_model_metrics) {
-          for (const metric of productionModel.project_model_metrics) {
-            metricsResults[metric.metric_name] = metric.metric_value;
-          }
-        }
-
-        // If retraining is enabled, trigger training
-        if (schedule.run_retraining) {
-          console.log(`[run-scheduled-predictions] Triggering retraining for project ${project.id}`);
-          
-          const trainResponse = await fetch(`${supabaseUrl}/functions/v1/train-models`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "Authorization": `Bearer ${supabaseServiceKey}`,
+        // Mark run as DONE
+        await supabase
+          .from("project_schedule_runs")
+          .update({
+            status: "DONE",
+            finished_at: new Date().toISOString(),
+            scoring_job_id: scoringResult.scoring_job_id || null,
+            diagnostics: {
+              predictions_count: scoringResult.predictions_count || 0,
+              coverage_pct: scoringResult.coverage_pct || 0,
+              batch_id: scoringResult.batch_id || null,
             },
-            body: JSON.stringify({ project_id: project.id }),
-          });
+          })
+          .eq("id", runId);
 
-          if (!trainResponse.ok) {
-            const trainError = await trainResponse.text();
-            console.error(`[run-scheduled-predictions] Training failed: ${trainError}`);
-            runMessage += `Retraining triggered but may have errors. `;
-          } else {
-            runMessage += `Retraining completed successfully. `;
-          }
-        }
+        results.push({ project_id: projectId, status: "DONE" });
 
-        // If predictions are enabled, log that we would run predictions
-        if (schedule.run_predictions) {
-          console.log(`[run-scheduled-predictions] Predictions would run for project ${project.id}`);
-          runMessage += `Predictions ready with model ${productionModel.algorithm_name}. `;
-        }
+      } catch (scoringErr) {
+        const errMsg = scoringErr instanceof Error ? scoringErr.message : "Unknown scoring error";
+        console.error(`[scheduler] ${projectId} scoring ERROR:`, errMsg);
 
-        runMessage = runMessage || "Scheduled run completed successfully.";
+        await supabase
+          .from("project_schedule_runs")
+          .update({
+            status: "ERROR",
+            finished_at: new Date().toISOString(),
+            diagnostics: { error: errMsg },
+          })
+          .eq("id", runId);
 
-      } catch (execError) {
-        console.error(`[run-scheduled-predictions] Error processing schedule ${schedule.id}:`, execError);
-        runSuccess = false;
-        runMessage = execError instanceof Error ? execError.message : "Unknown error";
+        results.push({ project_id: projectId, status: "ERROR", error: errMsg });
       }
 
-      // Calculate next run
-      const nextRunAt = calculateNextRunAt(
-        schedule.frequency,
-        new Date(schedule.next_run_at),
-        schedule.day_of_week,
-        schedule.day_of_month,
-        schedule.time_of_day
+      // 6) Update next_run_at and last_run_at
+      const nextRun = computeNextRunAt(
+        schedule.schedule_type, schedule.hour, schedule.minute,
+        schedule.timezone, schedule.interval_hours,
+        schedule.day_of_week, schedule.day_of_month,
       );
-
-      // Update schedule with results
-      const updateData: Record<string, any> = {
-        last_run_at: new Date().toISOString(),
-        last_run_status: runSuccess ? "success" : "error",
-        last_run_message: runMessage,
-        next_run_at: nextRunAt.toISOString(),
-      };
-
-      // Disable one-time schedules
-      if (schedule.frequency === "specific_date") {
-        updateData.enabled = false;
-      }
-
       await supabase
-        .from("project_prediction_schedules")
-        .update(updateData)
-        .eq("id", schedule.id);
-
-      // Send email notification
-      if (resend && schedule.send_email_to) {
-        try {
-          // Get user profile for name
-          const { data: profile } = await supabase
-            .from("profiles")
-            .select("full_name")
-            .eq("id", project.user_id)
-            .maybeSingle();
-
-          const userName = profile?.full_name || "Usuário";
-          
-          // Determine language based on stored preference or default to Portuguese
-          const language = "pt"; // Could be fetched from user preferences
-
-          const projectUrl = `https://predictsys.ai/project/${project.id}`;
-
-          const { subject, html } = getEmailContent({
-            userName,
-            projectName: project.name,
-            problemType: project.problem_type,
-            modelName: productionModelName,
-            metrics: metricsResults,
-            success: runSuccess,
-            message: runMessage,
-            projectUrl,
-            language,
-          });
-
-          console.log(`[run-scheduled-predictions] Sending email to ${schedule.send_email_to}`);
-
-          const emailResponse = await resend.emails.send({
-            from: "PredictSys AI <noreply@resend.dev>",
-            to: [schedule.send_email_to],
-            subject,
-            html,
-          });
-
-          console.log(`[run-scheduled-predictions] Email sent successfully:`, emailResponse);
-
-        } catch (emailError) {
-          console.error(`[run-scheduled-predictions] Error sending email:`, emailError);
-        }
-      }
-
-      results.push({
-        scheduleId: schedule.id,
-        projectName: project.name,
-        success: runSuccess,
-        message: runMessage,
-        emailSent: !!resend && !!schedule.send_email_to,
-      });
+        .from("project_schedules")
+        .update({ next_run_at: nextRun, last_run_at: new Date().toISOString() })
+        .eq("project_id", projectId);
     }
 
     const duration = Date.now() - startTime;
-    console.log(`[run-scheduled-predictions] Completed in ${duration}ms, processed ${results.length} schedules`);
+    console.log(`[scheduler] Done in ${duration}ms, processed ${results.length}`);
 
-    return new Response(JSON.stringify({
-      message: "Scheduled predictions processed",
-      processed: results.length,
-      duration: `${duration}ms`,
-      results,
-    }), {
+    return new Response(JSON.stringify({ processed: results.length, duration_ms: duration, results }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
   } catch (error) {
-    console.error("[run-scheduled-predictions] Fatal error:", error);
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : "Unknown error" 
+    console.error("[scheduler] Fatal:", error);
+    return new Response(JSON.stringify({
+      error: error instanceof Error ? error.message : "Unknown error",
     }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
