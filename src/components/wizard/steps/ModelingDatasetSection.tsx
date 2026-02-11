@@ -9,6 +9,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import TrainingGateReport, { type TrainingGateData } from "./TrainingGateReport";
 
 interface ModelingDatasetResult {
   status: string;
@@ -46,6 +47,7 @@ interface ModelingDatasetResult {
     leakage_detected: boolean;
     leakage_columns: { column: string; reason: string }[];
   };
+  training_gate?: TrainingGateData;
   dataset_stats?: {
     total_linhas: number;
     total_features_final: number;
@@ -156,6 +158,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
   // Build display data from result or persisted
   const buildLog = persisted?.build_log as Record<string, any> | null;
   const featureReportFromLog = buildLog?.feature_report || null;
+  const trainingGateFromLog = buildLog?.training_gate as TrainingGateData | null;
 
   const displayData: ModelingDatasetResult | null = result || (persisted ? {
     status: persisted.status.toUpperCase(),
@@ -352,7 +355,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
           )}
 
           {/* Leakage report */}
-          {displayData.leakage_check?.leakage_detected && (
+          {displayData.leakage_check?.leakage_detected && !displayData.training_gate && (
             <Alert className="bg-destructive/5 border-destructive/20">
               <Shield className="w-4 h-4 text-destructive" />
               <AlertDescription className="text-xs">
@@ -362,12 +365,17 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
             </Alert>
           )}
 
+          {/* Training Gate Report (4.3) */}
+          {(displayData.training_gate || trainingGateFromLog) && (
+            <TrainingGateReport gate={displayData.training_gate || trainingGateFromLog!} />
+          )}
+
           {/* Blocked reasons */}
           {isBlocked && displayData.blocked_reasons && displayData.blocked_reasons.length > 0 && (
             <Alert className="bg-destructive/5 border-destructive/20">
               <FileWarning className="w-4 h-4 text-destructive" />
               <AlertDescription className="text-xs space-y-1">
-                <p className="font-medium">BLOCKED_FEATURE_BUILDER — próximos passos:</p>
+                <p className="font-medium">BLOCKED — próximos passos:</p>
                 {displayData.blocked_reasons.map((r: string, i: number) => (
                   <p key={i}>• {r}</p>
                 ))}

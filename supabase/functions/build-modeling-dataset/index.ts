@@ -39,7 +39,7 @@ interface EnrichedColumn {
 
 interface GeneratedFeature {
   name: string;
-  type: string; // count, recency, frequency, aggregation, one_hot, frequency_encoding, temporal, missing_flag
+  type: string;
   source_columns: string[];
   description: string;
 }
@@ -62,6 +62,43 @@ interface FeatureReport {
   overfit_warning: string | null;
   leakage_detected: boolean;
   leakage_columns: { column: string; reason: string }[];
+}
+
+interface TrainingGateReport {
+  can_train: boolean;
+  status: "READY" | "WARNING" | "BLOCKED";
+  blocked_reason_code: string | null;
+  label_report: {
+    target_col: string;
+    problem_type: string;
+    n_rows: number;
+    n_classes: number | null;
+    positive_rate: number | null;
+    dominant_class_rate: number | null;
+    unique_ratio: number | null;
+    warnings: string[];
+  };
+  leakage_report: {
+    leakage_detected: boolean;
+    leakage_columns: { column: string; reason: string }[];
+    notes: string[];
+  };
+  split_plan: {
+    strategy: string;
+    anchor_time_col: string | null;
+    train_frac: number;
+    val_frac: number;
+    test_frac: number;
+  };
+  sanity_report: {
+    min_rows_ok: boolean;
+    min_features_ok: boolean;
+    missing_global_pct: number;
+    overfit_risk_score: number;
+    warnings: string[];
+  };
+  dashboard_allowed_precheck: boolean;
+  next_action: string;
 }
 
 // ==================== COLUMN ANALYSIS HELPERS ====================
@@ -109,7 +146,6 @@ function detectLabelStrategy(
   const objective = (intent.objective || "").toLowerCase();
   const blockedReasons: string[] = [];
 
-  // 1. Direct target: event column matching intent
   for (const ec of eventCols) {
     const col = columns.find(c => c.name === ec);
     if (!col) continue;
@@ -129,7 +165,6 @@ function detectLabelStrategy(
     }
   }
 
-  // 2. Churn/inadimplência/conversão need time window
   const needsTimeWindow = /churn|inadimpl|convers|atrit|evas|cancel|retenc|reten/.test(objective);
   if (needsTimeWindow) {
     if (timeCols.length === 0) {
@@ -166,7 +201,6 @@ function detectLabelStrategy(
     };
   }
 
-  // 3. Regression
   if (intent.problem_type === "regression") {
     const numericCols = columns.filter(c =>
       isNumericType(c.type) && !isIdColumn(c.name, (c.distinct_count || 0) / 100) && !isTimeColumn(c.name)
@@ -234,28 +268,24 @@ function buildFeatureReport(
 
     const uniqueRatio = totalRows > 0 ? (col.distinct_count || 0) / totalRows : 0;
 
-    // ID_TECNICO
     if (isIdColumn(col.name, uniqueRatio > 0.5 ? uniqueRatio : 0)) {
       features_removed.push({ col: col.name, reason: "ID_TECNICO: Identificador técnico removido automaticamente" });
       blockedSet.add(col.name);
       continue;
     }
 
-    // Variância zero (std ≈ 0 for numerics)
     if (isNumericType(col.type) && col.std !== undefined && col.std < 1e-10) {
       features_removed.push({ col: col.name, reason: "VARIANCIA_ZERO: Coluna sem variabilidade" });
       blockedSet.add(col.name);
       continue;
     }
 
-    // unique_ratio > 0.95 (near-unique text columns)
     if (isTextType(col.type) && uniqueRatio > 0.95) {
       features_removed.push({ col: col.name, reason: `UNIQUE_RATIO_ALTO: ${Math.round(uniqueRatio * 100)}% valores únicos` });
       blockedSet.add(col.name);
       continue;
     }
 
-    // Leakage from contract
     if (leakageCols.includes(col.name)) {
       features_removed.push({ col: col.name, reason: "DERIVADA_LEAKAGE: Marcada como leakage pelo contrato" });
       leakage_report.push({ column: col.name, reason: "Marcada como leakage pelo contrato de modelagem" });
@@ -263,7 +293,6 @@ function buildFeatureReport(
       continue;
     }
 
-    // High-cardinality text (> 100 unique values, not encodable)
     if (isTextType(col.type) && (col.distinct_count || 0) > 100) {
       features_blocked.push({ name: col.name, reason: `Texto com alta cardinalidade (${col.distinct_count} valores únicos)` });
       blockedSet.add(col.name);
@@ -272,7 +301,6 @@ function buildFeatureReport(
 
     // ── 2.2 Temporal leakage: post-event columns ──
     if (anchorTimeCol && isTimeColumn(col.name) && col.name !== anchorTimeCol) {
-      // Heuristic: columns with "updated", "modified", "resultado", "saida" patterns likely post-event
       const postEventPatterns = /^(updated|modified|resultado|saida|output|resposta|dt_saida|dt_resultado|data_fim|end_date|finished|completed|closed)/i;
       if (postEventPatterns.test(normalizeColName(col.name))) {
         features_removed.push({ col: col.name, reason: "LEAKAGE_TEMPORAL: Coluna temporal pós-evento detectada" });
@@ -294,7 +322,6 @@ function buildFeatureReport(
       { name: "feat_fim_de_mes", type: "temporal", source_columns: [anchorTimeCol], description: "Indicador fim-de-mês (dia >= 25)" },
     ];
 
-    // Look for creation date to compute age
     const creationCols = columns.filter(c => /^(created|data_cri|dt_cri|data_cadastro|data_registro)/i.test(normalizeColName(c.name)));
     if (creationCols.length > 0) {
       temporalFeatures.push({
@@ -305,20 +332,17 @@ function buildFeatureReport(
       });
     }
 
-    // Recency features if entity key exists
     if (entityKey) {
       temporalFeatures.push(
         { name: `feat_recency_days_${normalizeColName(anchorTimeCol)}`, type: "recency", source_columns: [anchorTimeCol, entityKey], description: `Dias desde último registro por ${entityKey}` },
         { name: `feat_frequency_30d`, type: "frequency", source_columns: [anchorTimeCol, entityKey], description: `Frequência de eventos nos últimos 30 dias por ${entityKey}` },
       );
 
-      // Rolling aggregations (count, sum, avg over 30d window)
       const windowDays = intent.time_horizon_days || 30;
       temporalFeatures.push(
         { name: `feat_rolling_count_${windowDays}d`, type: "temporal", source_columns: [anchorTimeCol, entityKey], description: `Contagem rolling ${windowDays}d por ${entityKey}` },
       );
 
-      // Rolling aggregations on numerics
       const numericForRolling = columns.filter(c =>
         isNumericType(c.type) && c.name !== targetCol && !blockedSet.has(c.name) && !isIdColumn(c.name, 0)
       ).slice(0, 3);
@@ -369,7 +393,6 @@ function buildFeatureReport(
   }
 
   // ── 3.3 Missing handling ──
-  // Create is_missing flags for columns with significant nulls
   for (const col of columns) {
     if (col.name === targetCol || blockedSet.has(col.name)) continue;
     const nullPct = col.null_pct || 0;
@@ -393,7 +416,6 @@ function buildFeatureReport(
   for (const cc of catCols) {
     const dc = cc.distinct_count || 0;
     if (dc <= 10) {
-      // Low cardinality → one-hot
       features_generated.push({
         name: `feat_onehot_${normalizeColName(cc.name)}`,
         type: "one_hot",
@@ -401,7 +423,6 @@ function buildFeatureReport(
         description: `One-hot encoding de ${cc.name} (${dc} categorias)`,
       });
     } else if (dc <= 50) {
-      // Medium cardinality → frequency encoding
       features_generated.push({
         name: `feat_freq_${normalizeColName(cc.name)}`,
         type: "frequency_encoding",
@@ -409,7 +430,6 @@ function buildFeatureReport(
         description: `Frequency encoding de ${cc.name} (${dc} categorias → top 50 + other)`,
       });
     }
-    // >50 already blocked above (>100) or let pass as medium (50-100)
     if (dc > 50 && dc <= 100) {
       features_generated.push({
         name: `feat_freq_${normalizeColName(cc.name)}`,
@@ -450,6 +470,245 @@ function buildFeatureReport(
     overfit_warning,
     leakage_detected: leakage_report.length > 0,
     leakage_columns: leakage_report,
+  };
+}
+
+// ==================== TRAINING GATE (4.3) ====================
+
+function runTrainingGate(
+  targetCol: string,
+  targetType: "binary" | "multiclass" | "regression",
+  enrichedColumns: EnrichedColumn[],
+  report: FeatureReport,
+  totalRows: number,
+  anchorTimeCol: string | null,
+  splitStrategy: string,
+  intent: IntentContract,
+): TrainingGateReport {
+  const labelWarnings: string[] = [];
+  const leakageNotes: string[] = [];
+  const sanityWarnings: string[] = [];
+  let blocked_reason_code: string | null = null;
+  let can_train = true;
+
+  const targetColData = enrichedColumns.find(c => c.name === targetCol);
+  const problemType = intent.problem_type || "classification";
+
+  // ========== LABEL GATE ==========
+
+  // 2.1 Target existence
+  if (!targetColData) {
+    blocked_reason_code = "BLOCKED_LABEL_MISSING";
+    can_train = false;
+    labelWarnings.push(`Target "${targetCol}" não encontrado no dataset.`);
+  }
+
+  const nClasses = targetColData?.distinct_count || null;
+  const uniqueRatio = targetColData && totalRows > 0
+    ? (targetColData.distinct_count || 0) / totalRows
+    : null;
+
+  if (targetColData && can_train) {
+    // 2.2 Type vs problem_type
+    if (problemType === "classification" || problemType === "binary" || problemType === "multiclass") {
+      if (isTextType(targetColData.type) && (nClasses || 0) > 50) {
+        blocked_reason_code = "BLOCKED_TARGET_INVALID";
+        can_train = false;
+        labelWarnings.push(`Target é texto com alta cardinalidade (${nClasses} classes). Máximo permitido: 50.`);
+      }
+      if ((nClasses || 0) < 2) {
+        blocked_reason_code = "BLOCKED_TARGET_NO_VARIATION";
+        can_train = false;
+        labelWarnings.push("Target possui menos de 2 classes distintas. Sem variação para classificação.");
+      }
+    }
+    if (problemType === "regression") {
+      if (isTextType(targetColData.type)) {
+        blocked_reason_code = "BLOCKED_TARGET_INVALID";
+        can_train = false;
+        labelWarnings.push("Target é texto/categoria, mas o problema é regressão. Selecione coluna numérica.");
+      }
+    }
+
+    // 2.3 Distribution checks
+    if (can_train && (problemType === "classification" || problemType === "binary")) {
+      if (nClasses === 2) {
+        // Estimate positive rate heuristically: if we have mean for numeric binary (0/1), mean ≈ positive_rate
+        const meanVal = targetColData.mean;
+        if (meanVal !== undefined && meanVal !== null) {
+          if (meanVal < 0.005) {
+            labelWarnings.push(`WARNING_IMBALANCED: Taxa positiva estimada em ${(meanVal * 100).toFixed(2)}% (< 0.5%). Desbalanceamento severo.`);
+          }
+          if (meanVal > 0.995 || meanVal < 0.005) {
+            // Check for degenerate
+            if (meanVal > 0.995) {
+              blocked_reason_code = "BLOCKED_TARGET_DEGENERATE";
+              can_train = false;
+              labelWarnings.push("Classe dominante > 99.5%. Target degenerado — sem contraste para treino.");
+            }
+          }
+        }
+      }
+    }
+    if (can_train && problemType === "regression") {
+      if (targetColData.std !== undefined && targetColData.std < 1e-10) {
+        blocked_reason_code = "BLOCKED_TARGET_DEGENERATE";
+        can_train = false;
+        labelWarnings.push("Target numérico com desvio padrão ≈ 0. Sem variação para regressão.");
+      }
+    }
+
+    // 2.4 ID disfarçado
+    if (can_train && isTextType(targetColData.type) && (uniqueRatio || 0) > 0.2) {
+      blocked_reason_code = "BLOCKED_TARGET_LOOKS_LIKE_ID";
+      can_train = false;
+      labelWarnings.push(`Target parece um identificador (unique_ratio = ${Math.round((uniqueRatio || 0) * 100)}%). Selecione outro target.`);
+    }
+  }
+
+  // Compute positive_rate and dominant_class_rate for report
+  let positive_rate: number | null = null;
+  let dominant_class_rate: number | null = null;
+  if (targetColData && (problemType === "classification" || problemType === "binary") && nClasses === 2) {
+    const meanVal = targetColData.mean;
+    if (meanVal !== undefined && meanVal !== null) {
+      positive_rate = meanVal;
+      dominant_class_rate = Math.max(meanVal, 1 - meanVal);
+    }
+  }
+
+  // ========== LEAKAGE GATE ==========
+
+  // 3.1 From FeatureReport
+  if (report.leakage_detected) {
+    leakageNotes.push(`Leakage detectado pelo Feature Builder em ${report.leakage_columns.length} coluna(s).`);
+    // Only block if critical
+    if (report.leakage_columns.length >= 3) {
+      blocked_reason_code = "BLOCKED_LEAKAGE";
+      can_train = false;
+      leakageNotes.push("BLOCKED: Leakage estrutural em múltiplas colunas.");
+    }
+  }
+
+  // 3.2 Token-based leakage check on feature names
+  const LEAKAGE_TOKENS = /\b(target|label|resultado|aprovado|cancelado|status_final|y_true|y_pred|output_final)\b/i;
+  for (const feat of report.features_final) {
+    if (LEAKAGE_TOKENS.test(normalizeColName(feat)) && feat !== targetCol) {
+      leakageNotes.push(`Possível leakage: feature "${feat}" contém token suspeito.`);
+      report.leakage_columns.push({ column: feat, reason: "Token suspeito de leakage no nome da feature" });
+    }
+  }
+
+  // ========== SPLIT GATE ==========
+
+  let splitPlan = {
+    strategy: splitStrategy,
+    anchor_time_col: anchorTimeCol,
+    train_frac: 0.7,
+    val_frac: 0.15,
+    test_frac: 0.15,
+  };
+
+  if (anchorTimeCol) {
+    if (splitStrategy !== "temporal") {
+      splitPlan.strategy = "temporal";
+      sanityWarnings.push("Split corrigido para temporal (anchor_time_col presente).");
+    }
+  } else {
+    if (splitStrategy === "temporal") {
+      // Temporal split requested but no time column
+      if (can_train) {
+        sanityWarnings.push("Split temporal solicitado mas sem coluna de tempo. Usando stratified.");
+        splitPlan.strategy = problemType === "regression" ? "random" : "stratified";
+      }
+    }
+  }
+
+  // ========== SANITY GATE ==========
+
+  const minRows = (intent.guardrails as any)?.min_rows || 500;
+  const min_rows_ok = totalRows >= minRows;
+  if (!min_rows_ok) {
+    sanityWarnings.push(`Dataset com ${totalRows} linhas (mínimo: ${minRows}). Resultados podem ser pouco confiáveis.`);
+    if (totalRows < 50) {
+      blocked_reason_code = "BLOCKED_MIN_ROWS";
+      can_train = false;
+    }
+  }
+
+  const totalFeaturesCount = report.features_final.length + report.features_generated.length;
+  const min_features_ok = totalFeaturesCount >= 3;
+  if (!min_features_ok) {
+    blocked_reason_code = "BLOCKED_MIN_FEATURES";
+    can_train = false;
+    sanityWarnings.push(`Apenas ${totalFeaturesCount} features disponíveis (mínimo: 3).`);
+  }
+
+  // Global missing %
+  let totalNulls = 0;
+  let totalCells = 0;
+  for (const col of enrichedColumns) {
+    totalCells += totalRows;
+    totalNulls += col.null_count || 0;
+  }
+  const missing_global_pct = totalCells > 0 ? Math.round((totalNulls / totalCells) * 100) : 0;
+
+  if (missing_global_pct >= 80) {
+    blocked_reason_code = "BLOCKED_MISSING_EXTREME";
+    can_train = false;
+    sanityWarnings.push(`Missing global de ${missing_global_pct}% é excessivo (>= 80%).`);
+  } else if (missing_global_pct >= 50) {
+    sanityWarnings.push(`WARNING: Missing global de ${missing_global_pct}%. Qualidade dos dados comprometida.`);
+  }
+
+  // Overfit
+  if (report.overfit_risk_score >= 0.7) {
+    sanityWarnings.push("WARNING_OVERFIT_RISK: Risco alto de overfitting. Considere reduzir agregações ou limitar one-hot encoding.");
+  }
+
+  // ========== FINAL STATUS ==========
+  const allWarnings = [...labelWarnings, ...leakageNotes.filter(n => !n.startsWith("BLOCKED")), ...sanityWarnings];
+  const status: "READY" | "WARNING" | "BLOCKED" = !can_train
+    ? "BLOCKED"
+    : allWarnings.length > 0
+    ? "WARNING"
+    : "READY";
+
+  const dashboard_allowed_precheck = can_train && missing_global_pct < 50 && min_rows_ok;
+
+  const next_action = !can_train
+    ? `Corrija: ${blocked_reason_code}`
+    : "Proceed to training";
+
+  return {
+    can_train,
+    status,
+    blocked_reason_code,
+    label_report: {
+      target_col: targetCol,
+      problem_type: problemType,
+      n_rows: totalRows,
+      n_classes: nClasses,
+      positive_rate,
+      dominant_class_rate,
+      unique_ratio: uniqueRatio,
+      warnings: labelWarnings,
+    },
+    leakage_report: {
+      leakage_detected: report.leakage_detected || leakageNotes.length > 0,
+      leakage_columns: report.leakage_columns,
+      notes: leakageNotes,
+    },
+    split_plan: splitPlan,
+    sanity_report: {
+      min_rows_ok,
+      min_features_ok,
+      missing_global_pct,
+      overfit_risk_score: report.overfit_risk_score,
+      warnings: sanityWarnings,
+    },
+    dashboard_allowed_precheck,
+    next_action,
   };
 }
 
@@ -606,7 +865,7 @@ serve(async (req: Request) => {
       allBlockedReasons.push(...blockedReasons);
     }
 
-    // ── 6. GATING: BLOCKED if no target ──
+    // ── BLOCKED if no target ──
     if (!targetColumn) {
       if (allBlockedReasons.length === 0) {
         allBlockedReasons.push("Nenhum target/label pôde ser identificado automaticamente. Selecione manualmente.");
@@ -658,11 +917,7 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Features: ${report.features_final.length} direct, ${report.features_generated.length} generated, ${report.features_removed.length} removed, ${report.features_blocked.length} blocked`);
 
-    // ── 6. GATING: structural leakage or empty features ──
-    if (report.leakage_detected && report.leakage_columns.length > totalRows * 0.01) {
-      // Only block for massive leakage
-    }
-
+    // ── Feature-level blocked reasons ──
     if (report.features_final.length === 0 && report.features_generated.length === 0) {
       allBlockedReasons.push("Nenhuma feature válida após remoções. Dataset sem variabilidade suficiente.");
     }
@@ -678,14 +933,44 @@ serve(async (req: Request) => {
       else if (entityKey) splitStrategy = "group";
     }
 
+    // ==================== TRAINING GATE (4.3) ====================
+    const trainingGate = runTrainingGate(
+      targetColumn,
+      targetType,
+      enrichedColumns,
+      report,
+      totalRows,
+      anchorTimeCol,
+      splitStrategy,
+      intent,
+    );
+
+    console.log(`[build-modeling-dataset] TrainingGate: ${trainingGate.status}, can_train: ${trainingGate.can_train}, code: ${trainingGate.blocked_reason_code}`);
+
+    // Merge gate blocked reasons into allBlockedReasons
+    if (!trainingGate.can_train && trainingGate.blocked_reason_code) {
+      const gateReasons = [
+        ...trainingGate.label_report.warnings,
+        ...trainingGate.leakage_report.notes.filter(n => n.startsWith("BLOCKED")),
+        ...trainingGate.sanity_report.warnings.filter(w => w.includes("mínimo") || w.includes("excessivo")),
+      ];
+      for (const r of gateReasons) {
+        if (!allBlockedReasons.includes(r)) allBlockedReasons.push(r);
+      }
+    }
+
+    // Use split from gate (may be corrected)
+    splitStrategy = trainingGate.split_plan.strategy;
+
     // ==================== STATUS ====================
     const totalFeaturesFinal = report.features_final.length + report.features_generated.length;
     const coveragePct = enrichedColumns.length > 0 ? Math.round((report.features_final.length / enrichedColumns.length) * 100) : 0;
 
+    // Final status combines feature builder + training gate
     let status: string;
-    if (allBlockedReasons.length > 0) {
+    if (allBlockedReasons.length > 0 || !trainingGate.can_train) {
       status = "blocked";
-    } else if (report.overfit_warning) {
+    } else if (report.overfit_warning || trainingGate.status === "WARNING") {
       status = "warning";
     } else {
       status = "ready";
@@ -741,6 +1026,7 @@ serve(async (req: Request) => {
             overfit_risk_score: report.overfit_risk_score,
             overfit_warning: report.overfit_warning,
           },
+          training_gate: trainingGate,
           timestamp: new Date().toISOString(),
         },
       })
@@ -792,6 +1078,7 @@ serve(async (req: Request) => {
         leakage_detected: report.leakage_detected,
         leakage_columns: report.leakage_columns,
       },
+      training_gate: trainingGate,
       dataset_stats: {
         total_linhas: totalRows,
         total_features_final: totalFeaturesFinal,
