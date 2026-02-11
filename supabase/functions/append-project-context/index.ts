@@ -7,11 +7,12 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-type Stage = "eda" | "targeting" | "training" | "predictions" | "business" | "storyline";
+type Stage = "intent" | "eda" | "targeting" | "training" | "predictions" | "business" | "storyline";
 
-const VALID_STAGES: Stage[] = ["eda", "targeting", "training", "predictions", "business", "storyline"];
+const VALID_STAGES: Stage[] = ["intent", "eda", "targeting", "training", "predictions", "business", "storyline"];
 
 const STATUS_MAP: Record<Stage, string> = {
+  intent: "intent_defined",
   eda: "eda_ready",
   targeting: "target_defined",
   training: "model_trained",
