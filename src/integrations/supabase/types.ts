@@ -2177,6 +2177,179 @@ export type Database = {
           },
         ]
       }
+      project_score_reports: {
+        Row: {
+          batch_id: string
+          coverage_pct: number
+          created_at: string
+          dataset_id: string | null
+          drift_summary: Json | null
+          gates_snapshot: Json | null
+          id: string
+          invalid_rows: number
+          missing_feature_pct: number
+          model_id: string
+          predictions_count: number
+          project_id: string
+          selection_version: number
+          stats_summary: Json | null
+          warnings: string[] | null
+        }
+        Insert: {
+          batch_id: string
+          coverage_pct?: number
+          created_at?: string
+          dataset_id?: string | null
+          drift_summary?: Json | null
+          gates_snapshot?: Json | null
+          id?: string
+          invalid_rows?: number
+          missing_feature_pct?: number
+          model_id: string
+          predictions_count?: number
+          project_id: string
+          selection_version?: number
+          stats_summary?: Json | null
+          warnings?: string[] | null
+        }
+        Update: {
+          batch_id?: string
+          coverage_pct?: number
+          created_at?: string
+          dataset_id?: string | null
+          drift_summary?: Json | null
+          gates_snapshot?: Json | null
+          id?: string
+          invalid_rows?: number
+          missing_feature_pct?: number
+          model_id?: string
+          predictions_count?: number
+          project_id?: string
+          selection_version?: number
+          stats_summary?: Json | null
+          warnings?: string[] | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_score_reports_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_modeling_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_score_reports_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_score_reports_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_scoring_jobs: {
+        Row: {
+          batch_id: string
+          dataset_id: string | null
+          diagnostics: Json | null
+          error_code: string | null
+          error_friendly: string | null
+          error_stack: string | null
+          finished_at: string | null
+          id: string
+          is_latest_job: boolean
+          limit: number
+          model_id: string
+          offset: number
+          project_id: string
+          rows_fetched_total: number
+          rows_inserted_total: number
+          rows_scored_total: number
+          selection_version: number
+          source_type: string
+          started_at: string
+          status: string
+          total_rows_estimated: number
+          updated_at: string
+        }
+        Insert: {
+          batch_id: string
+          dataset_id?: string | null
+          diagnostics?: Json | null
+          error_code?: string | null
+          error_friendly?: string | null
+          error_stack?: string | null
+          finished_at?: string | null
+          id?: string
+          is_latest_job?: boolean
+          limit?: number
+          model_id: string
+          offset?: number
+          project_id: string
+          rows_fetched_total?: number
+          rows_inserted_total?: number
+          rows_scored_total?: number
+          selection_version?: number
+          source_type?: string
+          started_at?: string
+          status?: string
+          total_rows_estimated?: number
+          updated_at?: string
+        }
+        Update: {
+          batch_id?: string
+          dataset_id?: string | null
+          diagnostics?: Json | null
+          error_code?: string | null
+          error_friendly?: string | null
+          error_stack?: string | null
+          finished_at?: string | null
+          id?: string
+          is_latest_job?: boolean
+          limit?: number
+          model_id?: string
+          offset?: number
+          project_id?: string
+          rows_fetched_total?: number
+          rows_inserted_total?: number
+          rows_scored_total?: number
+          selection_version?: number
+          source_type?: string
+          started_at?: string
+          status?: string
+          total_rows_estimated?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_scoring_jobs_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_modeling_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_scoring_jobs_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_scoring_jobs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_settings: {
         Row: {
           excluded_columns: Json | null

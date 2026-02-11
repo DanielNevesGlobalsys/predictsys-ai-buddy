@@ -8,11 +8,11 @@ const corsHeaders = {
 };
 
 // ===== Multi-pass constants =====
-const MAX_ROWS_PER_PASS = 40000; // rows per invocation (safe for CPU limit)
-const CHUNK_SIZE = 3000;         // rows per processing chunk
-const DB_INSERT_BATCH = 500;     // rows per DB insert (smaller = less CPU for serialization)
+const MAX_ROWS_PER_PASS = 40000;
+const CHUNK_SIZE = 3000;
+const DB_INSERT_BATCH = 500;
 
-// ===== Running statistics =====
+// ===== Running statistics (Welford) =====
 class RunningStats {
   count = 0;
   private _mean = 0;
@@ -53,7 +53,6 @@ class RunningStats {
     return this._reservoir[Math.floor(this._reservoir.length / 2)];
   }
 
-  // Merge stats from a previous pass
   static fromJSON(json: any): RunningStats {
     const s = new RunningStats();
     if (!json) return s;
@@ -68,12 +67,8 @@ class RunningStats {
 
   toJSON() {
     return {
-      count: this.count,
-      mean: this._mean,
-      m2: this._m2,
-      min: this.min,
-      max: this.max,
-      reservoir: this._reservoir,
+      count: this.count, mean: this._mean, m2: this._m2,
+      min: this.min, max: this.max, reservoir: this._reservoir,
     };
   }
 }
@@ -81,8 +76,7 @@ class RunningStats {
 function predictTree(tree: any, x: number[]): number {
   if (!tree || tree.isLeaf) return tree?.value || 0;
   return x[tree.feature] <= tree.threshold
-    ? predictTree(tree.left, x)
-    : predictTree(tree.right, x);
+    ? predictTree(tree.left, x) : predictTree(tree.right, x);
 }
 
 function sigmoid(x: number): number {
@@ -103,21 +97,50 @@ function parseCSVLine(line: string, delim: string): string[] {
   return result;
 }
 
+// ===== Gate helpers =====
+interface ScoringGate {
+  gate: string;
+  status: "PASS" | "WARN" | "BLOCK";
+  message: string;
+}
+
+function blockResponse(
+  gates: ScoringGate[],
+  errorCode: string,
+  errorFriendly: string,
+  ctas: { label: string; go_to_step?: number; action?: string }[],
+  projectId?: string,
+  modelId?: string,
+) {
+  return new Response(JSON.stringify({
+    status: "BLOCKED",
+    project_id: projectId,
+    model_id: modelId,
+    batch_id: null,
+    error_code: errorCode,
+    error_friendly: errorFriendly,
+    gates,
+    ctas,
+  }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
 
+  const startTime = Date.now();
+
   try {
     const {
       project_id,
       horizon_days = 30,
-      // Multi-pass params
-      pass_offset = 0,        // row offset to start from
-      batch_id: existingBatchId,  // reuse batch_id across passes
-      running_stats: prevStats,   // accumulated stats from previous passes
-      total_scored_prev = 0,      // total scored in previous passes
-      total_invalid_prev = 0,     // total invalid in previous passes
+      pass_offset = 0,
+      batch_id: existingBatchId,
+      running_stats: prevStats,
+      total_scored_prev = 0,
+      total_invalid_prev = 0,
+      job_id: existingJobId,
     } = await req.json();
 
     if (!project_id) {
@@ -133,60 +156,128 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Get project info
-    const { data: project, error: projectError } = await supabase
-      .from("projects")
-      .select("*")
-      .eq("id", project_id)
-      .single();
+    // ===== LOAD SSOT + SELECTION + MODEL IN PARALLEL =====
+    const [projectRes, dsStateRes, selectionRes] = await Promise.all([
+      supabase.from("projects").select("*").eq("id", project_id).single(),
+      supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
+    ]);
 
-    if (projectError || !project) {
+    const project = projectRes.data as any;
+    const dsState = dsStateRes.data as any;
+    const selection = selectionRes.data as any;
+
+    if (!project) {
       return new Response(JSON.stringify({ error: "Projeto não encontrado" }), {
         status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Get production model
-    const { data: productionModel, error: modelError } = await supabase
-      .from("project_models")
-      .select("*")
-      .eq("project_id", project_id)
-      .eq("is_production", true)
-      .eq("status", "trained")
-      .single();
+    const gates: ScoringGate[] = [];
+    const currentSelVersion = selection?.selection_version || 0;
 
-    if (modelError || !productionModel) {
-      return new Response(JSON.stringify({
-        error: "Nenhum modelo em produção encontrado. Selecione um modelo para produção primeiro."
-      }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    // ===== GATE 1: production_model_id exists in SSOT =====
+    const productionModelId = dsState?.production_model_id;
+    if (!productionModelId) {
+      gates.push({ gate: "production_model", status: "BLOCK", message: "Nenhum modelo em produção no SSOT." });
+      return blockResponse(gates, "NO_PRODUCTION_MODEL", "Nenhum modelo em produção. Faça o deploy de um modelo primeiro.", [
+        { label: "Ir para Deploy", go_to_step: 5 }
+      ], project_id);
+    }
+    gates.push({ gate: "production_model", status: "PASS", message: `production_model_id=${productionModelId}` });
+
+    // Load model
+    const { data: productionModel } = await supabase
+      .from("project_models").select("*")
+      .eq("id", productionModelId).eq("project_id", project_id).single();
+
+    if (!productionModel) {
+      gates.push({ gate: "model_exists", status: "BLOCK", message: "Modelo de produção não encontrado na tabela." });
+      return blockResponse(gates, "MODEL_NOT_FOUND", "Modelo de produção não encontrado. Faça deploy novamente.", [
+        { label: "Ir para Deploy", go_to_step: 5 }
+      ], project_id);
     }
 
-    const hyperparams = productionModel.hyperparameters as any || {};
+    const hyperparams = (productionModel.hyperparameters || {}) as any;
+
+    // ===== GATE 2: model_quality_flag and dashboard_allowed =====
+    const mqf = hyperparams.model_quality_flag || productionModel.status;
+    const dashAllowed = hyperparams.dashboard_allowed !== false;
+    const canPromote = hyperparams.can_promote_to_production !== false;
+
+    if (mqf !== "ok" && mqf !== "trained") {
+      gates.push({ gate: "model_quality", status: "BLOCK", message: `quality=${mqf}` });
+      return blockResponse(gates, "MODEL_QUALITY_FAILED", `Modelo reprovado (quality=${mqf}). Retreine com dados melhores.`, [
+        { label: "Voltar ao Treino", go_to_step: 4 }
+      ], project_id, productionModelId);
+    }
+    if (!dashAllowed) {
+      gates.push({ gate: "model_quality", status: "BLOCK", message: "dashboard_allowed=false" });
+      return blockResponse(gates, "DASHBOARD_NOT_ALLOWED", "Modelo sem permissão para dashboard. Retreine.", [
+        { label: "Voltar ao Treino", go_to_step: 4 }
+      ], project_id, productionModelId);
+    }
+    gates.push({ gate: "model_quality", status: "PASS", message: `quality=${mqf}, dashboard=${dashAllowed}` });
+
+    // ===== GATE 3: selection_version match =====
+    const modelSelVersion = hyperparams.selection_version || 0;
+    if (currentSelVersion > 0 && modelSelVersion > 0 && modelSelVersion !== currentSelVersion) {
+      gates.push({ gate: "version_match", status: "BLOCK", message: `model=v${modelSelVersion}, selection=v${currentSelVersion}` });
+      return blockResponse(gates, "VERSION_MISMATCH", `Modelo desatualizado (v${modelSelVersion} vs v${currentSelVersion}). Re-deploy necessário.`, [
+        { label: "Retreinar e Re-deploy", go_to_step: 4 }
+      ], project_id, productionModelId);
+    }
+    gates.push({ gate: "version_match", status: "PASS", message: `v${modelSelVersion}` });
+
+    // ===== GATE 4: builder dataset current =====
+    const { data: builderDataset } = await supabase
+      .from("project_modeling_datasets").select("*")
+      .eq("project_id", project_id).eq("is_current", true)
+      .order("created_at", { ascending: false }).limit(1).maybeSingle();
+
+    if (builderDataset) {
+      const builderSelV = (builderDataset as any).selection_version_used || 0;
+      if (currentSelVersion > 0 && builderSelV < currentSelVersion) {
+        gates.push({ gate: "builder_current", status: "BLOCK", message: `builder v${builderSelV} < selection v${currentSelVersion}` });
+        return blockResponse(gates, "BUILDER_OUTDATED", "Dataset modelável desatualizado. Rode Builder + Redeploy.", [
+          { label: "Regerar Builder", go_to_step: 3 }
+        ], project_id, productionModelId);
+      }
+      gates.push({ gate: "builder_current", status: "PASS", message: `builder_id=${builderDataset.id}` });
+    } else {
+      gates.push({ gate: "builder_current", status: "WARN", message: "Sem builder dataset (legacy path)." });
+    }
+
+    // ===== GATE 5: dataset ativo no SSOT =====
+    const ssotRowCount = dsState?.row_count || 0;
+    const ssotColCount = dsState?.col_count || 0;
+    if (ssotRowCount === 0 || ssotColCount === 0) {
+      gates.push({ gate: "dataset_active", status: "BLOCK", message: `SSOT row_count=${ssotRowCount}, col_count=${ssotColCount}` });
+      return blockResponse(gates, "NO_ACTIVE_DATASET", "Nenhum dataset ativo. Faça upload ou conecte um dataset.", [
+        { label: "Ir para Upload", go_to_step: 1 }
+      ], project_id, productionModelId);
+    }
+    gates.push({ gate: "dataset_active", status: "PASS", message: `rows=${ssotRowCount}, cols=${ssotColCount}` });
+
+    console.log(`[Scoring] All gates PASS. Proceeding with scoring.`);
+
+    // ===== MODEL ARTIFACTS =====
     const modelArtifacts = hyperparams.model_artifacts;
     const savedNormalization = hyperparams.normalization;
     const savedFeatureNames = hyperparams.feature_names as string[] | undefined;
 
     if (!modelArtifacts || (!modelArtifacts.weights && !modelArtifacts.trees)) {
-      return new Response(JSON.stringify({
-        error: "Modelo sem artefatos de treinamento salvos. Re-treine o modelo.",
-        action: "retrain"
-      }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return blockResponse(gates, "NO_MODEL_ARTIFACTS", "Modelo sem artefatos de treinamento. Re-treine.", [
+        { label: "Voltar ao Treino", go_to_step: 4 }
+      ], project_id, productionModelId);
     }
-
     if (!savedNormalization?.means || !savedNormalization?.stds || !savedFeatureNames?.length) {
-      return new Response(JSON.stringify({
-        error: "Modelo sem parâmetros de normalização. Re-treine o modelo.",
-        action: "retrain"
-      }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return blockResponse(gates, "NO_NORMALIZATION", "Modelo sem normalização. Re-treine.", [
+        { label: "Voltar ao Treino", go_to_step: 4 }
+      ], project_id, productionModelId);
     }
 
-    // Get columns + features in parallel
+    // ===== LOAD COLUMNS + FEATURES =====
     const [columnsRes, featuresRes] = await Promise.all([
       supabase.from("project_columns").select("*").eq("project_id", project_id).order("column_index"),
       supabase.from("project_features").select("*").eq("project_id", project_id).eq("enabled", true),
@@ -194,21 +285,22 @@ serve(async (req) => {
 
     const columns = columnsRes.data;
     if (!columns) {
-      return new Response(JSON.stringify({ error: "Erro ao carregar colunas do projeto" }), {
+      return new Response(JSON.stringify({ error: "Erro ao carregar colunas" }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
+    const targetCol = selection?.target_column || project.target_column;
     const numericTypes = ["numerico", "numérico", "numeric"];
     const numericFeatures = columns.filter(c =>
-      numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== project.target_column
+      numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== targetCol
     );
     const baseFeatureNames = numericFeatures.map(c => c.column_name);
 
     if (baseFeatureNames.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada no projeto" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return blockResponse(gates, "NO_FEATURES", "Nenhuma feature numérica encontrada.", [
+        { label: "Revisar Features", go_to_step: 3 }
+      ], project_id, productionModelId);
     }
 
     const enabledFeatures: ProjectFeature[] = (featuresRes.data || []).map(f => ({
@@ -217,9 +309,9 @@ serve(async (req) => {
       expression: f.expression as FeatureExpression
     }));
 
-    const hasEngineeredFeatures = enabledFeatures.length > 0;
     const engineeredFeatureNames = enabledFeatures.map(f => f.name);
     const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+    const hasEngineeredFeatures = enabledFeatures.length > 0;
 
     // Pre-compute normalization lookup
     const means = allFeatureNames.map(name => {
@@ -231,7 +323,14 @@ serve(async (req) => {
       return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
     });
 
-    // Pre-extract model params
+    // Track missing features
+    let missingFeatureCount = 0;
+    for (const name of savedFeatureNames) {
+      if (!allFeatureNames.includes(name)) missingFeatureCount++;
+    }
+    const missingFeaturePct = savedFeatureNames.length > 0 ? (missingFeatureCount / savedFeatureNames.length) * 100 : 0;
+
+    // Model params
     const isGBModel = modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees;
     const gbBase = modelArtifacts.base || 0;
     const gbLR = modelArtifacts.lr || 0.1;
@@ -241,17 +340,14 @@ serve(async (req) => {
     const baseLen = baseFeatureNames.length;
     const totalFeatures = allFeatureNames.length;
 
-    // Get dataset
+    // ===== DATASET FILES =====
     const { data: activeDataset } = await supabase
-      .from("project_datasets")
-      .select("*")
-      .eq("project_id", project_id)
-      .eq("is_active", true)
-      .maybeSingle();
+      .from("project_datasets").select("*")
+      .eq("project_id", project_id).eq("is_active", true).maybeSingle();
 
     let delimiter = ",";
     let filePaths: string[] = [];
-    let totalExpectedRows = 0;
+    let totalExpectedRows = dsState?.row_count || 0;
 
     if (activeDataset) {
       const sourceMetadata = (activeDataset.source_metadata || {}) as Record<string, any>;
@@ -262,17 +358,17 @@ serve(async (req) => {
       } else {
         filePaths = [activeDataset.storage_path];
       }
-      totalExpectedRows = activeDataset.total_rows || 0;
+      if (!totalExpectedRows) totalExpectedRows = activeDataset.total_rows || 0;
     } else if (project.dataset_filename) {
       filePaths = [project.dataset_filename];
-      totalExpectedRows = project.total_rows || project.dataset_rows || 0;
+      if (!totalExpectedRows) totalExpectedRows = project.total_rows || project.dataset_rows || 0;
     } else {
-      return new Response(JSON.stringify({ error: "Nenhum dataset encontrado" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return blockResponse(gates, "NO_DATASET", "Nenhum dataset encontrado.", [
+        { label: "Ir para Upload", go_to_step: 1 }
+      ], project_id, productionModelId);
     }
 
-    // Expand folder paths and sort for deterministic ordering across passes
+    // Expand folder paths + sort for determinism
     const expandedFilePaths = (await Promise.all(
       filePaths.map(async (p) => {
         const { data: listed } = await supabase.storage.from("datasets").list(p, { limit: 1000 });
@@ -286,45 +382,54 @@ serve(async (req) => {
         return [p];
       })
     )).flat();
-    // DETERMINISTIC: sort file paths alphabetically to guarantee same order across passes
     filePaths = expandedFilePaths.sort();
 
     if (filePaths.length === 0) {
-      return new Response(JSON.stringify({ error: "Nenhum arquivo encontrado no dataset" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+      return blockResponse(gates, "NO_FILES", "Nenhum arquivo no dataset.", [
+        { label: "Ir para Upload", go_to_step: 1 }
+      ], project_id, productionModelId);
     }
 
-    // Segmentation field names
-    const segmentColNames = ['segment', 'segmento', 'segmento_cliente', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
+    // ===== SEGMENT + ENTITY MAPPING =====
+    const segmentColNames = ['segment', 'segmento', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
     const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'ID', 'Id'];
 
-    const isClassification = project.problem_type === "classification";
-    const batchId = existingBatchId || `batch_${Date.now()}`;
+    const isClassification = (selection?.problem_type || project.problem_type) === "classification";
+    const batchId = existingBatchId || `batch_${Date.now()}_${project_id.substring(0, 8)}`;
     const predictionDate = new Date().toISOString();
-    const startTime = Date.now();
 
-    // On first pass: clean up old predictions to avoid data bloat, then mark remaining as not-latest
+    // ===== CREATE / UPDATE SCORING JOB =====
+    let jobId = existingJobId;
     if (isFirstPass) {
-      // Delete old non-latest predictions (accumulated from previous runs) to prevent bloat
-      const { error: deleteError } = await supabase
-        .from("predictions")
-        .delete()
-        .eq("project_id", project_id)
-        .eq("is_latest", false);
-      
-      if (deleteError) {
-        console.warn("[Scoring] Non-fatal: failed to clean old predictions:", deleteError.message);
-      }
-      
-      // Mark current latest predictions as not-latest (they'll be replaced by new ones)
-      await supabase.from("predictions").update({ is_latest: false }).eq("project_id", project_id);
+      // Mark previous jobs as not latest
+      await supabase.from("project_scoring_jobs")
+        .update({ is_latest_job: false })
+        .eq("project_id", project_id);
+
+      const { data: newJob } = await supabase.from("project_scoring_jobs").insert({
+        project_id,
+        model_id: productionModelId,
+        selection_version: currentSelVersion,
+        dataset_id: builderDataset?.id || null,
+        source_type: dsState?.source_type || "upload",
+        status: "running",
+        batch_id: batchId,
+        is_latest_job: true,
+        total_rows_estimated: totalExpectedRows,
+        diagnostics: { gates: gates.map(g => ({ gate: g.gate, status: g.status })) },
+      }).select("id").single();
+      jobId = newJob?.id;
+
+      // Idempotency: insert new predictions with is_latest=false, promote at end
+      // Clean old non-latest predictions to prevent bloat
+      await supabase.from("predictions").delete()
+        .eq("project_id", project_id).eq("is_latest", false);
     }
 
     // ===== SCORING STATE =====
     let totalRowsScored = 0;
     let totalRowsInvalid = 0;
-    let globalRowIndex = 0; // counts ALL rows across the file (to implement offset)
+    let globalRowIndex = 0;
     let headers: string[] = [];
     let isFirstFile = true;
     let featureIndices: number[] = [];
@@ -342,17 +447,19 @@ serve(async (req) => {
         const values = parseCSVLine(rows[i], delimiter);
         const entityId = entityIdIndex !== -1 ? values[entityIdIndex] : `entity_${pass_offset + totalRowsScored + i + 1}`;
 
-        // Extract and normalize base features
+        if (!entityId || entityId.trim() === "") {
+          totalRowsInvalid++;
+          continue;
+        }
+
         const featureValues = new Array(totalFeatures);
 
         for (let j = 0; j < baseLen; j++) {
           const raw = values[featureIndices[j]];
           const val = raw ? +raw.replace(",", ".") : NaN;
-          // Impute NaN → 0 (matches training behavior) instead of skipping entire row
           featureValues[j] = isNaN(val) ? (0 - means[j]) / stdsArr[j] : (val - means[j]) / stdsArr[j];
         }
 
-        // Engineered features
         if (hasEngineeredFeatures) {
           const rawRecord: Record<string, string | number | null> = {};
           for (let h = 0; h < headers.length; h++) {
@@ -363,12 +470,11 @@ serve(async (req) => {
             const val = engineeredValues[engineeredFeatureNames[j]];
             const normIdx = baseLen + j;
             featureValues[normIdx] = (typeof val === "number" && !isNaN(val))
-              ? (val - means[normIdx]) / stdsArr[normIdx]
-              : 0;
+              ? (val - means[normIdx]) / stdsArr[normIdx] : 0;
           }
         }
 
-        // === MODEL INFERENCE ===
+        // MODEL INFERENCE
         let predictedValue: number | null = null;
         let probability: number | null = null;
         let predictedClass: string | null = null;
@@ -398,7 +504,13 @@ serve(async (req) => {
           }
         }
 
-        stats.add(isClassification ? probability! : predictedValue!);
+        const scoreVal = isClassification ? probability! : predictedValue!;
+        if (scoreVal === null || scoreVal === undefined || !isFinite(scoreVal)) {
+          totalRowsInvalid++;
+          continue;
+        }
+
+        stats.add(scoreVal);
 
         // Segmentation
         const segmentValues: Record<string, string | null> = {
@@ -410,6 +522,7 @@ serve(async (req) => {
           if (key) segmentValues[key] = values[idx] || null;
         }
 
+        // Insert with is_latest=false; promote at end for idempotency
         predictions.push({
           project_id, user_id: project.user_id, entity_id: entityId,
           entity_type: "customer", reference_date: predictionDate,
@@ -420,18 +533,18 @@ serve(async (req) => {
           predicted_class: isClassification ? predictedClass : null,
           predicted_value: isClassification ? null : predictedValue,
           potential_value: isClassification ? null : predictedValue,
-          batch_id: batchId, is_latest: true,
+          batch_id: batchId, is_latest: false,
           ...segmentValues,
-          metadata: { model_id: productionModel.id, model_name: productionModel.algorithm_name }
+          metadata: { model_id: productionModelId, model_name: productionModel.algorithm_name, selection_version: currentSelVersion }
         });
       }
 
-      // DB inserts
+      // DB inserts in batches
       for (let i = 0; i < predictions.length; i += DB_INSERT_BATCH) {
         const batch = predictions.slice(i, i + DB_INSERT_BATCH);
         const { error: insertError } = await supabase.from("predictions").insert(batch);
         if (insertError) {
-          console.error("Error inserting predictions batch:", insertError);
+          console.error("[Scoring] Insert error:", insertError);
           throw insertError;
         }
       }
@@ -441,34 +554,31 @@ serve(async (req) => {
     // ===== STREAM AND PROCESS FILES =====
     for (const filePath of filePaths) {
       if (reachedLimit) break;
-
       console.log(`[Scoring] Processing file: ${filePath}`);
 
       const { data: signedUrlData, error: signedUrlError } = await supabase.storage
         .from("datasets").createSignedUrl(filePath, 600);
 
       if (signedUrlError || !signedUrlData?.signedUrl) {
-        console.error(`Error creating signed URL for ${filePath}:`, signedUrlError);
+        console.error(`[Scoring] Signed URL error for ${filePath}:`, signedUrlError);
         continue;
       }
 
       const response = await fetch(signedUrlData.signedUrl);
       if (!response.ok || !response.body) {
-        console.error(`Error fetching ${filePath}: HTTP ${response.status}`);
+        console.error(`[Scoring] HTTP error for ${filePath}: ${response.status}`);
         continue;
       }
 
       const reader = response.body.getReader();
       const decoder = new TextDecoder("utf-8");
-      let bytesRead = 0;
       let buffer = "";
       let chunkRows: string[] = [];
       let isFirstLineOfFile = true;
 
-      while (bytesRead < 50 * 1024 * 1024) {
+      while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-        bytesRead += value?.length || 0;
         buffer += decoder.decode(value, { stream: true });
         const lineBreaks = buffer.split(/\r?\n/);
 
@@ -487,7 +597,6 @@ serve(async (req) => {
               const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
               if (idx !== -1) segmentationCandidates[name] = idx;
             });
-            // Build segment key map
             for (const [name] of Object.entries(segmentationCandidates)) {
               if (name.includes('segment')) segmentKeyMap[name] = 'segment';
               else if (name.includes('region') || name.includes('regiao')) segmentKeyMap[name] = 'region';
@@ -513,13 +622,11 @@ serve(async (req) => {
             isFirstLineOfFile = false;
           }
 
-          // Skip rows until we reach the offset
           if (globalRowIndex < pass_offset) {
             globalRowIndex++;
             continue;
           }
 
-          // Check if we've reached the limit for this pass
           if (totalRowsScored + totalRowsInvalid >= MAX_ROWS_PER_PASS) {
             reachedLimit = true;
             break;
@@ -530,7 +637,6 @@ serve(async (req) => {
 
           if (chunkRows.length >= CHUNK_SIZE) {
             await processChunk(chunkRows);
-            console.log(`[Scoring] Pass offset=${pass_offset}: scored ${totalRowsScored} rows so far...`);
             chunkRows = [];
           }
         }
@@ -548,183 +654,196 @@ serve(async (req) => {
           chunkRows = [];
         }
       }
-
-      console.log(`[Scoring] File done (pass). Scored this pass: ${totalRowsScored}`);
     }
 
-    // ===== DETERMINE IF MORE PASSES NEEDED =====
+    // ===== POST-PASS DIAGNOSTICS =====
     const cumulativeScored = total_scored_prev + totalRowsScored;
     const cumulativeInvalid = total_invalid_prev + totalRowsInvalid;
     const nextOffset = pass_offset + totalRowsScored + totalRowsInvalid;
     const hasMore = reachedLimit;
     const elapsedMs = Date.now() - startTime;
 
-    // ===== POST-PASS DB VERIFICATION =====
     const { count: countBatch } = await supabase
-      .from("predictions")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", project_id)
-      .eq("batch_id", batchId);
-
-    const { count: countLatest } = await supabase
-      .from("predictions")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", project_id)
-      .eq("is_latest", true);
+      .from("predictions").select("id", { count: "exact", head: true })
+      .eq("project_id", project_id).eq("batch_id", batchId);
 
     const passDiag = {
-      project_id,
-      model_id: productionModel.id,
-      batch_id: batchId,
-      offset: pass_offset,
-      limit: MAX_ROWS_PER_PASS,
-      continue: hasMore,
-      next_offset: hasMore ? nextOffset : null,
+      project_id, model_id: productionModelId, batch_id: batchId,
+      selection_version: currentSelVersion,
+      offset: pass_offset, limit: MAX_ROWS_PER_PASS,
+      continue: hasMore, next_offset: hasMore ? nextOffset : null,
       rows_fetched: totalRowsScored + totalRowsInvalid,
       predictions_generated: totalRowsScored,
-      predictions_inserted: totalRowsScored,
-      insert_target_table: "predictions",
-      insert_elapsed_ms: elapsedMs,
-      cumulative_scored: cumulativeScored,
-      cumulative_invalid: cumulativeInvalid,
       db_count_batch: countBatch ?? -1,
-      db_count_latest: countLatest ?? -1,
+      elapsed_ms: elapsedMs,
+      missing_feature_pct: +missingFeaturePct.toFixed(2),
     };
 
-    console.log(`[Scoring][DIAG] Pass diagnostic: ${JSON.stringify(passDiag)}`);
+    console.log(`[Scoring][DIAG] ${JSON.stringify(passDiag)}`);
+
+    // Update job
+    if (jobId) {
+      await supabase.from("project_scoring_jobs").update({
+        offset: nextOffset,
+        rows_fetched_total: cumulativeScored + cumulativeInvalid,
+        rows_scored_total: cumulativeScored,
+        rows_inserted_total: countBatch ?? cumulativeScored,
+        status: hasMore ? "running" : "finalizing",
+        diagnostics: passDiag,
+      }).eq("id", jobId);
+    }
 
     if (hasMore) {
-      // Return continuation - client should call again
       return new Response(JSON.stringify({
-        success: true,
-        continue: true,
-        next_offset: nextOffset,
-        batch_id: batchId,
+        status: "CONTINUE",
+        project_id, model_id: productionModelId, batch_id: batchId,
+        continue: true, next_offset: nextOffset,
+        offset: pass_offset, limit: MAX_ROWS_PER_PASS,
+        rows_fetched: totalRowsScored + totalRowsInvalid,
+        predictions_generated: totalRowsScored, predictions_inserted: totalRowsScored,
+        totals: { rows_scored_total: cumulativeScored, rows_inserted_total: countBatch ?? cumulativeScored },
+        diagnostics: passDiag,
+        score_report_partial: { predictions_count: cumulativeScored, invalid_rows: cumulativeInvalid, missing_feature_pct: +missingFeaturePct.toFixed(2) },
         running_stats: stats.toJSON(),
         total_scored_prev: cumulativeScored,
         total_invalid_prev: cumulativeInvalid,
+        job_id: jobId,
         pass_rows_scored: totalRowsScored,
-        pass_diagnostic: passDiag,
-        message: `Processadas ${cumulativeScored} linhas até agora... continuando`,
-      }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+        message: `Processadas ${cumulativeScored} linhas... continuando`,
+        error_code: null, error_friendly: null, ctas: [],
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ===== FINAL PASS: mark_latest verification =====
-    const markLatestStart = Date.now();
-    // All new predictions are inserted with is_latest=true, so we just verify count
-    const { count: markedLatestCount } = await supabase
-      .from("predictions")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", project_id)
-      .eq("is_latest", true)
-      .eq("batch_id", batchId);
-    const markLatestElapsed = Date.now() - markLatestStart;
+    // ===== FINAL PASS: PROMOTE BATCH =====
+    console.log(`[Scoring] Final pass complete. Promoting batch ${batchId} to is_latest=true`);
 
-    const finalDiag = {
-      ...passDiag,
-      mark_latest_elapsed_ms: markLatestElapsed,
-      marked_latest_count: markedLatestCount ?? -1,
-      total_expected_rows: totalExpectedRows,
-    };
+    // Mark old predictions as not latest
+    await supabase.from("predictions").update({ is_latest: false })
+      .eq("project_id", project_id).neq("batch_id", batchId);
 
-    console.log(`[Scoring][DIAG] Final pass diagnostic: ${JSON.stringify(finalDiag)}`);
+    // Promote new batch
+    await supabase.from("predictions").update({ is_latest: true })
+      .eq("project_id", project_id).eq("batch_id", batchId);
 
-    // Validate: marked_latest_count should == db_count_batch
-    if (markedLatestCount !== null && countBatch !== null && markedLatestCount !== countBatch) {
-      console.warn(`[Scoring][DIAG] WARNING: marked_latest_count (${markedLatestCount}) != count_batch (${countBatch}). Possible data inconsistency.`);
-    }
+    // Verify
+    const { count: finalLatestCount } = await supabase
+      .from("predictions").select("id", { count: "exact", head: true })
+      .eq("project_id", project_id).eq("is_latest", true);
 
-    // ===== Generate score report =====
+    // ===== SANITY CHECK =====
+    const isSanityFail = stats.count > 10 && stats.std < 0.0001;
+    const warnings: string[] = [];
+    if (isSanityFail) warnings.push("SANITY_FAIL: previsões degeneradas (std≈0). Revise target/features.");
+    if (missingFeaturePct > 20) warnings.push(`MISSING_FEATURES: ${missingFeaturePct.toFixed(0)}% das features do modelo estão ausentes.`);
+
+    // ===== COVERAGE =====
     const coveragePct = totalExpectedRows > 0
-      ? Math.min(100, (cumulativeScored / totalExpectedRows) * 100)
-      : (cumulativeScored > 0 ? 100 : 0);
+      ? Math.min(100, (cumulativeScored / totalExpectedRows) * 100) : (cumulativeScored > 0 ? 100 : 0);
 
+    // ===== PERSIST SCORE REPORT =====
     const quantiles = stats.quantiles();
-
-    const scoreReport = {
-      total_rows_scored: cumulativeScored,
-      total_rows_expected: totalExpectedRows,
-      coverage_pct: +coveragePct.toFixed(2),
-      invalid_rows: cumulativeInvalid,
-      latency_ms: elapsedMs,
-      prediction_stats: {
-        min: +(stats.min === Infinity ? 0 : stats.min).toFixed(4),
-        max: +(stats.max === -Infinity ? 0 : stats.max).toFixed(4),
-        mean: +stats.mean.toFixed(4),
-        median: +stats.median.toFixed(4),
-        std: +stats.std.toFixed(4),
-        quantiles,
-      },
-      model_id: productionModel.id,
-      model_name: productionModel.algorithm_name,
-      batch_id: batchId,
-      generated_at: new Date().toISOString(),
+    const statsSum = {
+      min: +(stats.min === Infinity ? 0 : stats.min).toFixed(4),
+      max: +(stats.max === -Infinity ? 0 : stats.max).toFixed(4),
+      mean: +stats.mean.toFixed(4), median: +stats.median.toFixed(4),
+      std: +stats.std.toFixed(4), quantiles,
     };
 
-    console.log(`[Scoring] === FINAL SCORE REPORT ===`);
-    console.log(`[Scoring] Rows scored: ${cumulativeScored} / ${totalExpectedRows} (${coveragePct.toFixed(1)}%)`);
-    console.log(`[Scoring] Invalid rows: ${cumulativeInvalid}`);
-    console.log(`[Scoring] DB batch count: ${countBatch}, DB latest count: ${markedLatestCount}`);
+    await supabase.from("project_score_reports").insert({
+      project_id, model_id: productionModelId, batch_id: batchId,
+      selection_version: currentSelVersion,
+      dataset_id: builderDataset?.id || null,
+      coverage_pct: +coveragePct.toFixed(2),
+      predictions_count: cumulativeScored,
+      invalid_rows: cumulativeInvalid,
+      missing_feature_pct: +missingFeaturePct.toFixed(2),
+      stats_summary: statsSum,
+      warnings,
+      gates_snapshot: gates,
+    });
 
-    // Persist score_report in AI context
+    // Update job to done
+    if (jobId) {
+      await supabase.from("project_scoring_jobs").update({
+        status: isSanityFail ? "sanity_fail" : "done",
+        finished_at: new Date().toISOString(),
+        rows_scored_total: cumulativeScored,
+        rows_inserted_total: finalLatestCount ?? cumulativeScored,
+        diagnostics: { ...passDiag, final_latest_count: finalLatestCount, sanity_fail: isSanityFail, warnings },
+      }).eq("id", jobId);
+    }
+
+    // Persist in AI context
     try {
-      const { data: existingCtx } = await supabase
-        .from("project_ai_context")
-        .select("id, context")
-        .eq("project_id", project_id)
-        .maybeSingle();
-
+      const { data: existingCtx } = await supabase.from("project_ai_context")
+        .select("id, context").eq("project_id", project_id).maybeSingle();
       const contextPayload = {
-        score_report: scoreReport,
-        last_batch_id: batchId,
-        last_batch_at: new Date().toISOString(),
+        score_report: { coverage_pct: +coveragePct.toFixed(2), predictions_count: cumulativeScored, invalid_rows: cumulativeInvalid, stats: statsSum, warnings },
+        last_batch_id: batchId, last_batch_at: new Date().toISOString(),
         model_used: productionModel.algorithm_name,
       };
-
       if (existingCtx) {
-        const currentCtx = existingCtx.context as Record<string, any> || {};
+        const cur = existingCtx.context as Record<string, any> || {};
         await supabase.from("project_ai_context").update({
-          context: { ...currentCtx, predictions: contextPayload },
-          status: "predictions_ready",
-          last_updated_at: new Date().toISOString(),
+          context: { ...cur, predictions: contextPayload },
+          status: "predictions_ready", last_updated_at: new Date().toISOString(),
         }).eq("id", existingCtx.id);
       } else {
         await supabase.from("project_ai_context").insert({
-          organization_id: project.organization_id,
-          project_id,
-          context: { predictions: contextPayload },
-          status: "predictions_ready",
+          organization_id: project.organization_id, project_id,
+          context: { predictions: contextPayload }, status: "predictions_ready",
         });
       }
-    } catch (ctxErr) {
-      console.error("[Scoring] AI context append error (non-fatal):", ctxErr);
-    }
+    } catch (_) {}
+
+    // Audit log
+    try {
+      await supabase.from("audit_logs").insert({
+        organization_id: project.organization_id, project_id,
+        action: "scoring_job_completed", resource_type: "scoring",
+        resource_name: batchId,
+        metadata: { model_id: productionModelId, selection_version: currentSelVersion, predictions_count: cumulativeScored, coverage_pct: +coveragePct.toFixed(2), warnings },
+      });
+    } catch (_) {}
+
+    console.log(`[Scoring] DONE: ${cumulativeScored} predictions, coverage=${coveragePct.toFixed(1)}%, latest_count=${finalLatestCount}`);
 
     return new Response(JSON.stringify({
-      success: true,
-      continue: false,
-      message: `${cumulativeScored} previsões geradas (cobertura: ${coveragePct.toFixed(1)}%)`,
-      batch_id: batchId,
-      predictions_count: cumulativeScored,
+      status: isSanityFail ? "ERROR" : "DONE",
+      project_id, model_id: productionModelId, batch_id: batchId,
+      continue: false, next_offset: null,
+      offset: pass_offset, limit: MAX_ROWS_PER_PASS,
+      rows_fetched: totalRowsScored + totalRowsInvalid,
+      predictions_generated: cumulativeScored, predictions_inserted: finalLatestCount ?? cumulativeScored,
+      totals: { rows_scored_total: cumulativeScored, rows_inserted_total: finalLatestCount ?? cumulativeScored },
+      diagnostics: { ...passDiag, final_latest_count: finalLatestCount, coverage_pct: +coveragePct.toFixed(2) },
+      score_report_partial: { predictions_count: cumulativeScored, invalid_rows: cumulativeInvalid, missing_feature_pct: +missingFeaturePct.toFixed(2) },
+      error_code: isSanityFail ? "SANITY_FAIL" : null,
+      error_friendly: isSanityFail ? "Previsões degeneradas (constantes). Revise target e features." : null,
+      ctas: isSanityFail ? [{ label: "Revisar Target/Features", go_to_step: 3 }] : [],
+      // Legacy compat
+      success: !isSanityFail,
       rows_scored: cumulativeScored,
-      score_report: scoreReport,
-      model_id: productionModel.id,
+      predictions_count: cumulativeScored,
+      score_report: { total_rows_scored: cumulativeScored, total_rows_expected: totalExpectedRows, coverage_pct: +coveragePct.toFixed(2), invalid_rows: cumulativeInvalid, prediction_stats: statsSum, model_id: productionModelId, model_name: productionModel.algorithm_name, batch_id: batchId },
       model_name: productionModel.algorithm_name,
-      final_diagnostic: finalDiag,
-    }), {
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+      job_id: jobId,
+      warnings,
+      message: isSanityFail
+        ? `⚠️ Sanity check falhou: ${cumulativeScored} previsões constantes.`
+        : `✅ ${cumulativeScored} previsões geradas (cobertura: ${coveragePct.toFixed(1)}%)`,
+    }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
   } catch (error) {
     const errorStack = error instanceof Error ? error.stack || error.message : "Erro desconhecido";
     console.error(`[Scoring][DIAG] error_stack: ${errorStack}`);
     return new Response(JSON.stringify({
+      status: "ERROR",
       error: error instanceof Error ? error.message : "Erro desconhecido",
+      error_code: "INTERNAL_ERROR",
+      error_friendly: "Erro interno no scoring. Tente novamente.",
       error_stack: errorStack,
-    }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+      ctas: [{ label: "Tentar Novamente", action: "retry" }],
+    }), { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } });
   }
 });
