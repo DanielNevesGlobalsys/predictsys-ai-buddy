@@ -91,6 +91,9 @@ const StepTargetFeatures = ({
   const [hasEDA, setHasEDA] = useState(false);
   const inferenceAutoLoaded = useRef(false);
 
+  // Preflight refresh key — incremented after builder completes
+  const [preflightRefreshKey, setPreflightRefreshKey] = useState(0);
+
   // Problem inference hook
   const { inference, loading: inferenceLoading, error: inferenceError, loadInference } = useProblemInference(projectData.id);
 
@@ -830,10 +833,19 @@ const StepTargetFeatures = ({
         )}
 
         {/* === Dataset Modelável Section === */}
-        <ModelingDatasetSection projectId={projectData.id} targetColumn={targetColumn} onSaveBeforeBuild={handleSaveSettings} />
+        <ModelingDatasetSection
+          projectId={projectData.id}
+          targetColumn={targetColumn}
+          onSaveBeforeBuild={handleSaveSettings}
+          onBuildComplete={() => {
+            // Re-run preflight and reload dataset state after builder completes
+            setPreflightRefreshKey(k => k + 1);
+            ds.load();
+          }}
+        />
 
         {/* === Training Preflight Panel === */}
-        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} />
+        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} refreshKey={preflightRefreshKey} />
 
         {/* Preflight Checklist */}
         {targetColumn && (

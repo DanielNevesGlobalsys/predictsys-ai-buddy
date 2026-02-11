@@ -51,9 +51,11 @@ const GATE_LABELS: Record<string, string> = {
 interface Props {
   projectId: string | undefined;
   onNavigateBack?: () => void;
+  /** Increment to force a re-run of the preflight check */
+  refreshKey?: number;
 }
 
-const TrainingPreflightPanel = ({ projectId, onNavigateBack }: Props) => {
+const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: Props) => {
   const [result, setResult] = useState<PreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -81,10 +83,10 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack }: Props) => {
     }
   }, [projectId]);
 
-  // Auto-run on mount
+  // Auto-run on mount and when refreshKey changes
   useEffect(() => {
     runPreflight();
-  }, [runPreflight]);
+  }, [runPreflight, refreshKey]);
 
   const statusColor = (s: string) =>
     s === "PASS" ? "text-accent" : s === "WARN" ? "text-amber-500" : "text-destructive";
