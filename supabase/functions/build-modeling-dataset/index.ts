@@ -924,7 +924,23 @@ serve(async (req: Request) => {
     if (targetColumn) {
       const col = enrichedColumns.find(c => c.name === targetColumn);
       if (!col) {
-        allBlockedReasons.push(`Coluna target "${targetColumn}" não encontrada no dataset.`);
+        // Check if target is a derived feature that hasn't been materialized
+        const { data: derivedFeature } = await supabase
+          .from("project_features")
+          .select("id, name")
+          .eq("project_id", project_id)
+          .eq("name", targetColumn)
+          .eq("enabled", true)
+          .maybeSingle();
+
+        if (derivedFeature) {
+          allBlockedReasons.push(
+            `BLOCKED_TARGET_NOT_MATERIALIZED: A feature derivada "${targetColumn}" ainda não foi materializada no dataset. ` +
+            `Execute a materialização de features antes de gerar o dataset modelável.`
+          );
+        } else {
+          allBlockedReasons.push(`Coluna target "${targetColumn}" não encontrada no dataset.`);
+        }
         targetColumn = null;
       } else if (isTextType(col.type) && (col.distinct_count || 0) > 50) {
         allBlockedReasons.push(`Target "${targetColumn}" é texto com alta cardinalidade (${col.distinct_count} valores). Selecione outra coluna.`);

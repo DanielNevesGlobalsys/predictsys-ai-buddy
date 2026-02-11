@@ -48,12 +48,14 @@ interface FeatureEngineeringSectionProps {
   projectId: string;
   columns: { column_name: string; inferred_type: string }[];
   onFeaturesChanged?: () => void;
+  onMaterializationComplete?: () => void;
 }
 
 export default function FeatureEngineeringSection({
   projectId,
   columns,
   onFeaturesChanged,
+  onMaterializationComplete,
 }: FeatureEngineeringSectionProps) {
   const { t } = useTranslation();
   const [features, setFeatures] = useState<ProjectFeature[]>([]);
@@ -63,6 +65,7 @@ export default function FeatureEngineeringSection({
   const [editingFeature, setEditingFeature] = useState<ProjectFeature | null>(null);
   const [deletingFeature, setDeletingFeature] = useState<ProjectFeature | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
+  const [materializing, setMaterializing] = useState(false);
 
   useEffect(() => {
     loadFeatures();
@@ -94,6 +97,39 @@ export default function FeatureEngineeringSection({
     }
   };
 
+  const triggerMaterialization = async () => {
+    setMaterializing(true);
+    try {
+      const { data: session } = await supabase.auth.getSession();
+      const token = session?.session?.access_token;
+      if (!token) {
+        toast.error("Sessão expirada. Faça login novamente.");
+        return;
+      }
+
+      const res = await supabase.functions.invoke("materialize-derived-features", {
+        body: { project_id: projectId },
+      });
+
+      if (res.error) throw res.error;
+
+      const result = res.data;
+      if (result?.success) {
+        if (result.materialized_count > 0) {
+          toast.success(result.message || `${result.materialized_count} feature(s) materializada(s)`);
+        }
+        onMaterializationComplete?.();
+      } else {
+        toast.error(result?.error || "Erro na materialização");
+      }
+    } catch (err) {
+      console.error("Materialization error:", err);
+      toast.error("Erro ao materializar features derivadas");
+    } finally {
+      setMaterializing(false);
+    }
+  };
+
   const handleToggleFeature = async (feature: ProjectFeature) => {
     setTogglingId(feature.id);
     try {
@@ -108,6 +144,7 @@ export default function FeatureEngineeringSection({
         prev.map(f => (f.id === feature.id ? { ...f, enabled: !f.enabled } : f))
       );
       onFeaturesChanged?.();
+      await triggerMaterialization();
     } catch (err) {
       console.error("Error toggling feature:", err);
       toast.error("Erro ao alterar status da feature");
@@ -130,6 +167,7 @@ export default function FeatureEngineeringSection({
       setFeatures(prev => prev.filter(f => f.id !== deletingFeature.id));
       toast.success("Feature removida com sucesso");
       onFeaturesChanged?.();
+      await triggerMaterialization();
     } catch (err) {
       console.error("Error deleting feature:", err);
       toast.error("Erro ao remover feature");
@@ -138,25 +176,28 @@ export default function FeatureEngineeringSection({
     }
   };
 
-  const handleFeatureCreated = (newFeature: ProjectFeature) => {
+  const handleFeatureCreated = async (newFeature: ProjectFeature) => {
     setFeatures(prev => [...prev, newFeature]);
     setShowCreateModal(false);
     setEditingFeature(null);
     onFeaturesChanged?.();
+    await triggerMaterialization();
   };
 
-  const handleFeatureUpdated = (updatedFeature: ProjectFeature) => {
+  const handleFeatureUpdated = async (updatedFeature: ProjectFeature) => {
     setFeatures(prev =>
       prev.map(f => (f.id === updatedFeature.id ? updatedFeature : f))
     );
     setEditingFeature(null);
     onFeaturesChanged?.();
+    await triggerMaterialization();
   };
 
-  const handlePackageApplied = (newFeatures: ProjectFeature[]) => {
+  const handlePackageApplied = async (newFeatures: ProjectFeature[]) => {
     setFeatures(prev => [...prev, ...newFeatures]);
     setShowPackageModal(false);
     onFeaturesChanged?.();
+    await triggerMaterialization();
   };
 
   const numericColumns = columns.filter(c => 
@@ -312,10 +353,18 @@ export default function FeatureEngineeringSection({
         )}
 
         {features.length > 0 && (
-          <p className="text-xs text-muted-foreground mt-4">
-            <Settings2 className="w-3 h-3 inline mr-1" />
-            Ao recalcular a EDA, as features ativas serão incluídas nas estatísticas.
-          </p>
+          <div className="mt-4 space-y-2">
+            {materializing && (
+              <div className="flex items-center gap-2 text-sm text-primary">
+                <Loader2 className="w-4 h-4 animate-spin" />
+                <span>Materializando features no dataset…</span>
+              </div>
+            )}
+            <p className="text-xs text-muted-foreground">
+              <Settings2 className="w-3 h-3 inline mr-1" />
+              Ao recalcular a EDA, as features ativas serão incluídas nas estatísticas.
+            </p>
+          </div>
         )}
       </CardContent>
 
