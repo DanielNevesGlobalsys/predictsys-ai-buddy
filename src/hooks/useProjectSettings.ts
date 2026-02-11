@@ -73,75 +73,52 @@ export function useProjectSettings(projectId: string | undefined) {
         return false;
       }
 
-      const record = {
-        project_id: projectId,
-        org_id: payload.org_id || null,
-        target_column: payload.target_column,
-        problem_type: payload.problem_type,
-        feature_columns: payload.feature_columns,
-        excluded_columns: payload.excluded_columns,
-        target_suggestion_meta: payload.suggestion
-          ? {
-              chosen_suggestion_id: payload.suggestion.id,
-              reasoning: payload.suggestion.reasoning,
-              warnings: payload.suggestion.warnings,
-            }
-          : null,
-      };
+      // Use the SSOT endpoint for atomic versioning + invalidation
+      try {
+        const response = await supabase.functions.invoke("upsert-model-selection", {
+          body: {
+            project_id: projectId,
+            target_column: payload.target_column,
+            problem_type: payload.problem_type,
+            selected_features: payload.feature_columns,
+            excluded_features: payload.excluded_columns,
+          },
+        });
 
-      const { error } = await supabase
-        .from("project_settings")
-        .upsert(record, { onConflict: "project_id" });
+        if (response.error) {
+          console.error("Error calling upsert-model-selection:", response.error);
+          return false;
+        }
 
-      if (error) {
-        console.error("Error saving project settings:", error);
+        const result = response.data as any;
+        if (!result?.success) {
+          console.error("upsert-model-selection failed:", result?.error);
+          return false;
+        }
+
+        console.log(`[useProjectSettings] Selection saved: v${result.selection_version}, hash=${result.target_hash}`);
+
+        setSettings({
+          project_id: projectId,
+          org_id: payload.org_id || null,
+          target_column: payload.target_column,
+          problem_type: payload.problem_type,
+          feature_columns: payload.feature_columns,
+          excluded_columns: payload.excluded_columns,
+          target_suggestion_meta: payload.suggestion
+            ? {
+                chosen_suggestion_id: payload.suggestion.id,
+                reasoning: payload.suggestion.reasoning,
+                warnings: payload.suggestion.warnings,
+              }
+            : null,
+          updated_at: new Date().toISOString(),
+        });
+        return true;
+      } catch (err) {
+        console.error("Error saving settings via upsert-model-selection:", err);
         return false;
       }
-
-      // Also upsert project_model_selection for versioned SSOT
-      // Increment selection_version on each save
-      const { data: existing } = await supabase
-        .from("project_model_selection" as any)
-        .select("selection_version")
-        .eq("project_id", projectId)
-        .maybeSingle();
-
-      const currentVersion = (existing as any)?.selection_version || 0;
-      const newVersion = currentVersion + 1;
-
-      // Compute target_hash
-      const hashInput = `${projectId}|${payload.target_column}|${newVersion}`;
-      let hash = 0;
-      for (let i = 0; i < hashInput.length; i++) {
-        const ch = hashInput.charCodeAt(i);
-        hash = ((hash << 5) - hash) + ch;
-        hash |= 0;
-      }
-      const targetHash = `th_${Math.abs(hash).toString(36)}`;
-
-      await supabase.from("project_model_selection" as any).upsert({
-        project_id: projectId,
-        organization_id: payload.org_id || null,
-        target_column: payload.target_column,
-        problem_type: payload.problem_type,
-        selected_features: payload.feature_columns,
-        excluded_features: payload.excluded_columns,
-        selection_version: newVersion,
-        target_hash: targetHash,
-        updated_at: new Date().toISOString(),
-      } as any, { onConflict: "project_id" } as any);
-
-      // Mark existing modeling datasets as stale if target changed
-      await supabase.from("project_modeling_datasets" as any)
-        .update({ is_current: false, stale_reason: "TARGET_CHANGED" } as any)
-        .eq("project_id", projectId)
-        .eq("is_current", true);
-
-      setSettings({
-        ...record,
-        updated_at: new Date().toISOString(),
-      });
-      return true;
     },
     [projectId]
   );

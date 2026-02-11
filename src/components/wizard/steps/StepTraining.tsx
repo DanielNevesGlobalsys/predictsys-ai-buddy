@@ -21,6 +21,7 @@ import ModelResultsTable from "@/components/training/ModelResultsTable";
 import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
+import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 
 interface StepTrainingProps {
@@ -552,6 +553,9 @@ const StepTraining = ({
             </AlertDescription>
           </Alert>
         )}
+
+        {/* Training Preflight Panel — always visible */}
+        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} />
 
         {/* Pre-train Readiness Panel */}
         {trainReadiness && !trainingComplete && !isTraining && (
