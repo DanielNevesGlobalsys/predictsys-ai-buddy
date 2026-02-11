@@ -22,6 +22,8 @@ interface ModelingDatasetResult {
     label_plan?: any;
     window_days?: number | null;
   };
+  target_hash?: string;
+  contract_version?: string;
   entity_key?: string | null;
   anchor_time_col?: string | null;
   split_strategy?: string;
@@ -88,14 +90,21 @@ interface PersistedDataset {
 interface Props {
   projectId: string | undefined;
   targetColumn: string;
+  /** Must persist the current target/settings to DB before build starts */
+  onSaveBeforeBuild?: () => Promise<boolean>;
 }
 
-const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
+const ModelingDatasetSection = ({ projectId, targetColumn, onSaveBeforeBuild }: Props) => {
   const [building, setBuilding] = useState(false);
   const [result, setResult] = useState<ModelingDatasetResult | null>(null);
   const [persisted, setPersisted] = useState<PersistedDataset | null>(null);
   const [loadingPersisted, setLoadingPersisted] = useState(true);
   const [expandRemoved, setExpandRemoved] = useState(false);
+
+  // Track if the current target differs from the last built target
+  const lastBuiltTarget = persisted?.target_column;
+  const buildTargetHash = (persisted?.build_log as any)?.target_hash || null;
+  const isStale = !!lastBuiltTarget && lastBuiltTarget !== "__none__" && lastBuiltTarget !== targetColumn;
 
   useEffect(() => {
     if (projectId) loadPersisted();
@@ -118,6 +127,17 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
 
   const handleBuild = useCallback(async () => {
     if (!projectId) return;
+
+    // CRITICAL: Save current target/settings to DB BEFORE building
+    // This prevents the race condition where the builder reads stale settings
+    if (onSaveBeforeBuild) {
+      const saved = await onSaveBeforeBuild();
+      if (!saved) {
+        toast.error("Falha ao salvar configurações. Tente novamente.");
+        return;
+      }
+    }
+
     setBuilding(true);
     setResult(null);
 
@@ -128,6 +148,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
         return;
       }
 
+      // Only pass project_id — builder reads target from DB (SSOT)
       const response = await supabase.functions.invoke("build-modeling-dataset", {
         body: { project_id: projectId },
       });
@@ -141,7 +162,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
       setResult(data);
 
       if (data.status === "READY" || data.status === "WARNING") {
-        toast.success("Dataset modelável construído com sucesso!");
+        toast.success(`Dataset construído! Target: ${data.target?.column || targetColumn}`);
         await loadPersisted();
       } else if (data.status === "BLOCKED" || data.status === "BLOCKED_FEATURE_BUILDER") {
         toast.warning("Dataset bloqueado — veja os motivos abaixo.");
@@ -153,7 +174,7 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
     } finally {
       setBuilding(false);
     }
-  }, [projectId]);
+  }, [projectId, onSaveBeforeBuild, targetColumn]);
 
   // Build display data from result or persisted
   const buildLog = persisted?.build_log as Record<string, any> | null;
@@ -236,9 +257,11 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
               {displayData.status}
             </Badge>
           )}
-          <Button size="sm" variant={displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
+          <Button size="sm" variant={isStale ? "default" : displayData ? "outline" : "default"} onClick={handleBuild} disabled={building || !targetColumn}>
             {building ? (
               <><Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />Construindo...</>
+            ) : isStale ? (
+              <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir (target mudou)</>
             ) : displayData ? (
               <><Sparkles className="w-3.5 h-3.5 mr-1.5" />Reconstruir</>
             ) : (
@@ -247,6 +270,26 @@ const ModelingDatasetSection = ({ projectId, targetColumn }: Props) => {
           </Button>
         </div>
       </div>
+
+      {/* Stale warning: target changed since last build */}
+      {isStale && displayData && (
+        <Alert className="bg-amber-500/5 border-amber-500/20">
+          <AlertTriangle className="w-4 h-4 text-amber-500" />
+          <AlertDescription className="text-xs">
+            <strong>Dataset desatualizado:</strong> Target mudou de <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{lastBuiltTarget}</code> para <code className="px-1 py-0.5 bg-muted rounded text-[10px]">{targetColumn}</code>. Clique em "Reconstruir" para atualizar.
+          </AlertDescription>
+        </Alert>
+      )}
+
+      {/* Target used in last build */}
+      {displayData?.target?.column && !isStale && (
+        <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+          <Target className="w-3 h-3" />
+          <span>Target usado no builder: <strong>{displayData.target.column}</strong></span>
+          {(displayData as any).target_hash && <span className="font-mono text-[10px]">({(displayData as any).target_hash})</span>}
+          {(displayData as any).contract_version && <span>v{(displayData as any).contract_version}</span>}
+        </div>
+      )}
 
       {!targetColumn && !displayData && (
         <p className="text-xs text-muted-foreground">Selecione um target acima antes de construir o dataset modelável.</p>

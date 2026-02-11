@@ -298,8 +298,8 @@ const StepTargetFeatures = ({
     });
   };
 
-  const handleSaveSettings = async () => {
-    if (!projectData.id || !targetColumn) return;
+  const handleSaveSettings = async (): Promise<boolean> => {
+    if (!projectData.id || !targetColumn) return false;
 
     const cleanFeatures = selectedFeatures.filter((f) => f !== targetColumn);
     if (cleanFeatures.length === 0) {
@@ -308,7 +308,7 @@ const StepTargetFeatures = ({
         description: t("lysSuggestions.needOneFeature", "Selecione ao menos 1 feature."),
         variant: "destructive",
       });
-      return;
+      return false;
     }
 
     const problemType = inferredProblemType || projectData.problem_type;
@@ -337,7 +337,9 @@ const StepTargetFeatures = ({
         title: t("lysSuggestions.settingsSaved", "Configuração salva!"),
         description: t("lysSuggestions.settingsSavedDesc", "Target, features e configurações foram persistidos."),
       });
+      return true;
     }
+    return false;
   };
 
   const handleNext = async () => {
@@ -803,7 +805,7 @@ const StepTargetFeatures = ({
         </div>
 
         {/* === Dataset Modelável Section === */}
-        <ModelingDatasetSection projectId={projectData.id} targetColumn={targetColumn} />
+        <ModelingDatasetSection projectId={projectData.id} targetColumn={targetColumn} onSaveBeforeBuild={handleSaveSettings} />
 
         {/* Preflight Checklist */}
         {targetColumn && (
