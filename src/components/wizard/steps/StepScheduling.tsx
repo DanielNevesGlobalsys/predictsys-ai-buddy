@@ -220,64 +220,41 @@ const StepScheduling = ({ projectData, onBack, loading, saveProject, onFinalComp
 
   const hasBlockingIssue = preflightChecks.some(c => c.status === "block");
 
-  const computeNextRun = (): string => {
-    const now = new Date();
-    const next = new Date();
-    next.setHours(config.hour, config.minute, 0, 0);
-    if (next <= now) next.setDate(next.getDate() + 1);
-
-    switch (config.schedule_type) {
-      case "weekly":
-        while (next.getDay() !== (config.day_of_week ?? 1)) next.setDate(next.getDate() + 1);
-        break;
-      case "monthly":
-        next.setDate(config.day_of_month ?? 1);
-        if (next <= now) next.setMonth(next.getMonth() + 1);
-        break;
-      case "interval_hours":
-        const h = config.interval_hours ?? 6;
-        const nextInterval = new Date(now.getTime() + h * 60 * 60 * 1000);
-        return nextInterval.toISOString();
-    }
-    return next.toISOString();
-  };
-
   const handleSave = async () => {
     if (!projectId) return;
     setSaving(true);
 
-    const nextRun = config.is_enabled ? computeNextRun() : null;
+    try {
+      // Delegate next_run_at computation to backend (deterministic, timezone-safe)
+      const { data, error } = await supabase.functions.invoke("upsert-schedule", {
+        body: {
+          project_id: projectId,
+          is_enabled: config.is_enabled,
+          schedule_type: config.schedule_type,
+          interval_hours: config.schedule_type === "interval_hours" ? config.interval_hours : null,
+          timezone: config.timezone,
+          hour: config.hour,
+          minute: config.minute,
+          day_of_week: config.schedule_type === "weekly" ? config.day_of_week : null,
+          day_of_month: config.schedule_type === "monthly" ? config.day_of_month : null,
+          mode: config.mode,
+          pause_on_blocked: config.pause_on_blocked,
+        },
+      });
 
-    const payload = {
-      project_id: projectId,
-      is_enabled: config.is_enabled,
-      schedule_type: config.schedule_type,
-      interval_hours: config.schedule_type === "interval_hours" ? config.interval_hours : null,
-      timezone: config.timezone,
-      hour: config.hour,
-      minute: config.minute,
-      day_of_week: config.schedule_type === "weekly" ? config.day_of_week : null,
-      day_of_month: config.schedule_type === "monthly" ? config.day_of_month : null,
-      mode: config.mode,
-      pause_on_blocked: config.pause_on_blocked,
-      next_run_at: nextRun,
-    };
+      if (error) throw error;
 
-    const { error } = await supabase
-      .from("project_schedules" as any)
-      .upsert(payload as any, { onConflict: "project_id" });
-
-    if (error) {
-      console.error("[StepScheduling] Save error:", error);
-      toast.error("Erro ao salvar agendamento: " + error.message);
-    } else {
       toast.success("Agendamento salvo com sucesso!");
       if (config.is_enabled && hasBlockingIssue) {
         toast.warning("⚠️ Agendamento ativado, mas não executará até corrigir os bloqueios identificados no preflight.");
       }
       loadSchedule();
+    } catch (err: any) {
+      console.error("[StepScheduling] Save error:", err);
+      toast.error("Erro ao salvar agendamento: " + (err?.message || "Erro desconhecido"));
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
   const handleCompleteProject = async () => {
