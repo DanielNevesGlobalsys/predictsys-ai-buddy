@@ -1925,8 +1925,10 @@ export type Database = {
           business_objective: string | null
           created_at: string
           data_source_id: string | null
+          dataset_blocked_reason: string | null
           dataset_columns: number | null
           dataset_filename: string | null
+          dataset_ready_for_modeling: boolean | null
           dataset_rows: number | null
           description: string | null
           detected_problem_type: string | null
@@ -1945,8 +1947,10 @@ export type Database = {
           business_objective?: string | null
           created_at?: string
           data_source_id?: string | null
+          dataset_blocked_reason?: string | null
           dataset_columns?: number | null
           dataset_filename?: string | null
+          dataset_ready_for_modeling?: boolean | null
           dataset_rows?: number | null
           description?: string | null
           detected_problem_type?: string | null
@@ -1965,8 +1969,10 @@ export type Database = {
           business_objective?: string | null
           created_at?: string
           data_source_id?: string | null
+          dataset_blocked_reason?: string | null
           dataset_columns?: number | null
           dataset_filename?: string | null
+          dataset_ready_for_modeling?: boolean | null
           dataset_rows?: number | null
           description?: string | null
           detected_problem_type?: string | null

@@ -1039,6 +1039,168 @@ function normalizeToSchema(
 }
 
 // ═══════════════════════════════════════════════════════════
+// Critical Column Detection via IntentContract or Heuristics
+// ═══════════════════════════════════════════════════════════
+const CRITICAL_HEURISTIC_PATTERNS: { pattern: RegExp; reason: string }[] = [
+  { pattern: /^(id|cod|codigo|code|chave|key|cpf|cnpj|matricula|contrato|uuid|pk)/i, reason: "chave/identificador" },
+  { pattern: /(data|date|dt|timestamp|created|updated|ref)/i, reason: "temporal" },
+  { pattern: /(valor|value|vlr|amount|price|preco|receita|revenue|total|saldo|balance)/i, reason: "financeiro" },
+  { pattern: /(status|estado|state|flag|situacao|ativo|active|cancelado|cancelled|churn)/i, reason: "status/target potencial" },
+  { pattern: /(score|prob|rating|nota|rank)/i, reason: "métrica/score" },
+  { pattern: /(qty|qtd|quantidade|quantity|count|num_|nr_)/i, reason: "contagem" },
+];
+
+interface CriticalColumnTag {
+  column: string;
+  reason: string;
+  source: "intent_contract" | "heuristic";
+}
+
+function detectCriticalColumns(
+  canonicalColumns: string[],
+  canonicalTypes: Record<string, string>,
+  intentContract: any | null,
+): CriticalColumnTag[] {
+  const tags: CriticalColumnTag[] = [];
+  const seen = new Set<string>();
+
+  // 1) If IntentContract exists, use it to tag critical columns
+  if (intentContract) {
+    const ic = intentContract;
+    const criticalHints: string[] = [];
+    if (ic.requires_time_column) criticalHints.push("temporal");
+    if (ic.problem_type === "classification") criticalHints.push("status/target potencial");
+    if (ic.problem_type === "regression") criticalHints.push("financeiro", "contagem");
+    if (ic.recommended_entity_key) criticalHints.push("chave/identificador");
+
+    for (const col of canonicalColumns) {
+      const norm = normalizeColumnName(col);
+      const colType = canonicalTypes[col] || "texto";
+
+      // Entity key match
+      if (ic.recommended_entity_key && norm.includes(normalizeColumnName(ic.recommended_entity_key))) {
+        tags.push({ column: col, reason: "chave de entidade (IntentContract)", source: "intent_contract" });
+        seen.add(col);
+        continue;
+      }
+
+      // Date columns if requires_time_column
+      if (ic.requires_time_column && colType === "data") {
+        tags.push({ column: col, reason: "coluna temporal (IntentContract)", source: "intent_contract" });
+        seen.add(col);
+        continue;
+      }
+
+      // Financial columns for regression/revenue objectives
+      if (["regression", "timeseries"].includes(ic.problem_type) && colType === "numérico") {
+        for (const p of CRITICAL_HEURISTIC_PATTERNS.filter(p => p.reason === "financeiro" || p.reason === "contagem")) {
+          if (p.pattern.test(norm)) {
+            tags.push({ column: col, reason: `${p.reason} (IntentContract: ${ic.declared_objective})`, source: "intent_contract" });
+            seen.add(col);
+            break;
+          }
+        }
+      }
+
+      // Status/flag columns for classification
+      if (ic.problem_type === "classification" && colType === "categórico") {
+        for (const p of CRITICAL_HEURISTIC_PATTERNS.filter(p => p.reason === "status/target potencial")) {
+          if (p.pattern.test(norm)) {
+            tags.push({ column: col, reason: `target potencial (IntentContract: ${ic.declared_objective})`, source: "intent_contract" });
+            seen.add(col);
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // 2) Fallback heuristics for columns not yet tagged
+  for (const col of canonicalColumns) {
+    if (seen.has(col)) continue;
+    const norm = normalizeColumnName(col);
+    for (const p of CRITICAL_HEURISTIC_PATTERNS) {
+      if (p.pattern.test(norm)) {
+        tags.push({ column: col, reason: p.reason, source: "heuristic" });
+        seen.add(col);
+        break;
+      }
+    }
+  }
+
+  return tags;
+}
+
+// ═══════════════════════════════════════════════════════════
+// Coverage Stats for Manifest
+// ═══════════════════════════════════════════════════════════
+interface CoverageStats {
+  critical_columns_pct: number;
+  global_null_pct: number;
+  top_10_null_columns: { column: string; null_pct: number }[];
+  file_contribution: { file: string; rows: number; data_cols: number; null_only_cols: number; contribution_type: "data" | "mostly_null" }[];
+}
+
+function computeCoverageStats(
+  canonicalColumns: string[],
+  fileSchemas: FileSchema[],
+  fileNames: string[],
+  allSampleRows: Record<string, unknown>[],
+  nullDiag: NullDiagnosticEntry[],
+): CoverageStats {
+  // % of columns with critical severity
+  const criticalCount = nullDiag.filter(d => d.severity === "critical").length;
+  const critical_columns_pct = canonicalColumns.length > 0
+    ? Math.round((criticalCount / canonicalColumns.length) * 1000) / 10
+    : 0;
+
+  // Global null %
+  let totalCells = 0;
+  let totalNulls = 0;
+  for (const row of allSampleRows) {
+    for (const col of canonicalColumns) {
+      totalCells++;
+      const v = row[col];
+      if (v === null || v === undefined || String(v).trim() === "" || v === "missing") {
+        totalNulls++;
+      }
+    }
+  }
+  const global_null_pct = totalCells > 0 ? Math.round((totalNulls / totalCells) * 1000) / 10 : 0;
+
+  // Top 10 null columns (including OK ones, sorted by null%)
+  const colNulls: { column: string; null_pct: number }[] = [];
+  for (const col of canonicalColumns) {
+    const nullCount = allSampleRows.filter(row => {
+      const v = row[col];
+      return v === null || v === undefined || String(v).trim() === "" || v === "missing";
+    }).length;
+    const pct = allSampleRows.length > 0 ? Math.round((nullCount / allSampleRows.length) * 1000) / 10 : 0;
+    colNulls.push({ column: col, null_pct: pct });
+  }
+  colNulls.sort((a, b) => b.null_pct - a.null_pct);
+  const top_10_null_columns = colNulls.slice(0, 10);
+
+  // File contribution analysis
+  const file_contribution = fileSchemas.map((schema, i) => {
+    const fileName = fileNames[i] || `file_${i + 1}`;
+    const normSchemaCols = new Set(schema.columns.map(c => normalizeColumnName(c)));
+    const dataCols = canonicalColumns.filter(c => normSchemaCols.has(normalizeColumnName(c))).length;
+    const nullOnlyCols = canonicalColumns.length - dataCols;
+    const contributionType: "data" | "mostly_null" = dataCols >= canonicalColumns.length * 0.5 ? "data" : "mostly_null";
+    return {
+      file: fileName,
+      rows: schema.totalRows,
+      data_cols: dataCols,
+      null_only_cols: nullOnlyCols,
+      contribution_type: contributionType,
+    };
+  });
+
+  return { critical_columns_pct, global_null_pct, top_10_null_columns, file_contribution };
+}
+
+// ═══════════════════════════════════════════════════════════
 // NULL Diagnostic: detect columns with high NULL from schema mismatch
 // ═══════════════════════════════════════════════════════════
 interface NullDiagnosticEntry {
@@ -1047,6 +1209,8 @@ interface NullDiagnosticEntry {
   severity: "ok" | "warning" | "critical";
   probable_cause: string;
   files_with_data: string[];
+  is_critical_column?: boolean;
+  critical_reason?: string;
 }
 
 function computeNullDiagnostic(
@@ -1054,9 +1218,15 @@ function computeNullDiagnostic(
   fileSchemas: FileSchema[],
   fileNames: string[],
   allSampleRows: Record<string, unknown>[],
+  criticalTags?: CriticalColumnTag[],
 ): NullDiagnosticEntry[] {
   const diagnostics: NullDiagnosticEntry[] = [];
   if (allSampleRows.length === 0) return diagnostics;
+
+  const criticalMap = new Map<string, CriticalColumnTag>();
+  if (criticalTags) {
+    for (const tag of criticalTags) criticalMap.set(tag.column, tag);
+  }
 
   for (const col of canonicalColumns) {
     const nullCount = allSampleRows.filter(row => {
@@ -1065,14 +1235,12 @@ function computeNullDiagnostic(
     }).length;
     const nullPct = (nullCount / allSampleRows.length) * 100;
 
-    // Classify severity: 🟢 <30%, 🟡 30-50%, 🔴 >50%
     const severity: "ok" | "warning" | "critical" =
       nullPct > 50 ? "critical" : nullPct >= 30 ? "warning" : "ok";
 
     // Only report non-OK columns
     if (severity === "ok") continue;
 
-    // Check which files had this column
     const filesWithData: string[] = [];
     const normCol = normalizeColumnName(col);
     for (let i = 0; i < fileSchemas.length; i++) {
@@ -1089,16 +1257,24 @@ function computeNullDiagnostic(
       cause = `Coluna presente apenas em ${filesWithData.length}/${fileSchemas.length} arquivos.`;
     }
 
+    const critTag = criticalMap.get(col);
     diagnostics.push({
       column: col,
       null_pct: Math.round(nullPct * 10) / 10,
       severity,
       probable_cause: cause,
       files_with_data: filesWithData,
+      is_critical_column: !!critTag,
+      critical_reason: critTag?.reason,
     });
   }
 
-  return diagnostics.sort((a, b) => b.null_pct - a.null_pct);
+  return diagnostics.sort((a, b) => {
+    // Critical columns first, then by null_pct desc
+    if (a.is_critical_column && !b.is_critical_column) return -1;
+    if (!a.is_critical_column && b.is_critical_column) return 1;
+    return b.null_pct - a.null_pct;
+  });
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1119,7 +1295,34 @@ async function createImportManifest(
 ): Promise<void> {
   try {
     const rowsSum = fileSchemas.reduce((s, sc) => s + sc.totalRows, 0);
-    const nullDiag = computeNullDiagnostic(canonical.columns, fileSchemas, fileNames, allSampleRows);
+
+    // Fetch IntentContract if available
+    let intentContract: any = null;
+    try {
+      const { data: aiCtx } = await supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectId)
+        .single();
+      if (aiCtx?.context?.intent) {
+        const intentData = aiCtx.context.intent;
+        // Get the latest version
+        if (Array.isArray(intentData)) {
+          intentContract = intentData[intentData.length - 1];
+        } else {
+          intentContract = intentData;
+        }
+      }
+    } catch { /* no intent contract yet */ }
+
+    // Detect critical columns
+    const criticalTags = detectCriticalColumns(canonical.columns, canonical.columnTypes, intentContract);
+    console.log(`[process-import] Critical columns detected: ${criticalTags.length} (${criticalTags.filter(t => t.source === "intent_contract").length} from IntentContract)`);
+
+    const nullDiag = computeNullDiagnostic(canonical.columns, fileSchemas, fileNames, allSampleRows, criticalTags);
+
+    // Compute coverage stats
+    const coverageStats = computeCoverageStats(canonical.columns, fileSchemas, fileNames, allSampleRows, nullDiag);
 
     // Build per-file entries
     const files = fileResults.map((result, i) => {
@@ -1128,7 +1331,6 @@ async function createImportManifest(
       const missingCols: string[] = [];
 
       if (schema && allSampleRows.length > 0) {
-        // Compute null% per column for this file's contribution
         for (const col of schema.columns) {
           const nullCount = schema.sampleRows.filter(row => {
             const v = row[col];
@@ -1139,7 +1341,6 @@ async function createImportManifest(
         }
         nullPctByCol.sort((a, b) => b.pct - a.pct);
 
-        // Check which canonical columns are missing from this file
         for (const canonCol of canonical.columns) {
           const normCanon = normalizeColumnName(canonCol);
           const hasCol = schema.columns.some(c => normalizeColumnName(c) === normCanon);
@@ -1162,7 +1363,7 @@ async function createImportManifest(
         file_id: result.jobId,
         file_name: result.fileName,
         format: result.format,
-        size_mb: schema ? Math.round((schema.sampleRows.length * 100) / 100) : 0, // approximate
+        size_mb: schema ? Math.round((schema.sampleRows.length * 100) / 100) : 0,
         rows_detected: result.rowsRead,
         rows_loaded: result.rowsRead,
         cols_detected: schema?.columns.length || 0,
@@ -1181,7 +1382,6 @@ async function createImportManifest(
     let overallStatus: "ok" | "warn" | "fail" | "blocked" = "ok";
     let statusReason: string | null = null;
 
-    // BLOCKED gating: critical structural failures
     const criticalCols = nullDiag.filter(d => d.severity === "critical").length;
     const criticalRatio = canonical.columns.length > 0 ? criticalCols / canonical.columns.length : 0;
 
@@ -1208,6 +1408,8 @@ async function createImportManifest(
       statusReason = `${filesWarn} arquivo(s) com schemas divergentes.`;
     }
 
+    const datasetReady = overallStatus !== "blocked" && overallStatus !== "fail";
+
     const { data: manifestData, error: manifestError } = await supabase.from("import_manifests").insert({
       project_id: projectId,
       user_id: userId,
@@ -1221,7 +1423,11 @@ async function createImportManifest(
       rows_consolidated: totalRowsConsolidated,
       rows_difference: Math.max(0, rowsSum - totalRowsConsolidated),
       columns_final: canonical.columns.length,
-      canonical_schema: canonical.columnTypes,
+      canonical_schema: {
+        ...canonical.columnTypes,
+        _coverage_stats: coverageStats,
+        _critical_columns: criticalTags,
+      },
       column_mapping_report: canonical.columnMapping || [],
       null_diagnostic: nullDiag,
       files,
@@ -1229,8 +1435,14 @@ async function createImportManifest(
       status_reason: statusReason,
     }).select("id").single();
 
+    // Persist dataset_ready_for_modeling on project
+    await supabase.from("projects").update({
+      dataset_ready_for_modeling: datasetReady,
+      dataset_blocked_reason: datasetReady ? null : statusReason,
+    }).eq("id", projectId);
+
     const manifestId = manifestData?.id || null;
-    console.log(`[process-import] Manifest created: ${overallStatus}, ${files.length} files, ${totalRowsConsolidated} rows, manifest_id=${manifestId}`);
+    console.log(`[process-import] Manifest created: ${overallStatus}, dataset_ready=${datasetReady}, ${files.length} files, ${totalRowsConsolidated} rows, coverage=${coverageStats.global_null_pct}% null, manifest_id=${manifestId}`);
     return manifestId;
   } catch (e) {
     console.error("[process-import] Failed to create manifest:", e);

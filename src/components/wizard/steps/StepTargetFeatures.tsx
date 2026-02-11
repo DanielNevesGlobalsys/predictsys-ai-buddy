@@ -68,6 +68,10 @@ const StepTargetFeatures = ({
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
 
+  // Dataset readiness gate
+  const [datasetBlocked, setDatasetBlocked] = useState(false);
+  const [datasetBlockedReason, setDatasetBlockedReason] = useState<string | null>(null);
+
   // Column inference matrix data
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
   const columnInferenceMap = useRef(new Map<string, ColumnInferenceRow>());
@@ -92,6 +96,7 @@ const StepTargetFeatures = ({
     if (projectData.id) {
       loadColumns();
       checkEDA();
+      checkDatasetReady();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -99,6 +104,20 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  // Check dataset_ready_for_modeling flag
+  const checkDatasetReady = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("projects")
+      .select("dataset_ready_for_modeling, dataset_blocked_reason")
+      .eq("id", projectData.id)
+      .single();
+    if (data && data.dataset_ready_for_modeling === false) {
+      setDatasetBlocked(true);
+      setDatasetBlockedReason(data.dataset_blocked_reason);
+    }
+  };
 
   // Auto-load inference when EDA is available
   useEffect(() => {
@@ -375,6 +394,28 @@ const StepTargetFeatures = ({
           <Button variant="outline" onClick={onBack}>
             {t("stepVariables.backToData")}
           </Button>
+        </div>
+      </Card>
+    );
+  }
+
+  if (datasetBlocked) {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="text-center py-12 space-y-4">
+          <Ban className="w-12 h-12 text-destructive/50 mx-auto" />
+          <h2 className="text-xl font-display font-bold text-destructive">Dataset não está pronto para modelagem</h2>
+          <p className="text-sm text-muted-foreground max-w-md mx-auto">
+            {datasetBlockedReason || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis."}
+          </p>
+          <p className="text-xs text-muted-foreground">
+            Volte à Etapa 2 (Importação) e corrija os problemas indicados no Resumo de Importação.
+          </p>
+          <div className="pt-4">
+            <Button variant="outline" onClick={onBack}>
+              {t("common.back")}
+            </Button>
+          </div>
         </div>
       </Card>
     );
