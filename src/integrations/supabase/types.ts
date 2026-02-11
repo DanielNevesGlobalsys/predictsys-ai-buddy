@@ -1716,7 +1716,9 @@ export type Database = {
           enabled: boolean
           expression: Json
           id: string
+          is_materialized: boolean
           label: string
+          materialized_column_id: string | null
           name: string
           project_id: string
           updated_at: string
@@ -1727,7 +1729,9 @@ export type Database = {
           enabled?: boolean
           expression?: Json
           id?: string
+          is_materialized?: boolean
           label: string
+          materialized_column_id?: string | null
           name: string
           project_id: string
           updated_at?: string
@@ -1738,12 +1742,21 @@ export type Database = {
           enabled?: boolean
           expression?: Json
           id?: string
+          is_materialized?: boolean
           label?: string
+          materialized_column_id?: string | null
           name?: string
           project_id?: string
           updated_at?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "project_features_materialized_column_id_fkey"
+            columns: ["materialized_column_id"]
+            isOneToOne: false
+            referencedRelation: "project_columns"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "project_features_project_id_fkey"
             columns: ["project_id"]

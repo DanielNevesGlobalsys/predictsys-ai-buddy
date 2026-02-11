@@ -922,22 +922,41 @@ serve(async (req: Request) => {
     }
 
     if (targetColumn) {
-      const col = enrichedColumns.find(c => c.name === targetColumn);
+      // ── CANONICAL TARGET RESOLVER: case-insensitive match ──
+      let col = enrichedColumns.find(c => c.name === targetColumn);
+      if (!col) {
+        // Try case-insensitive match
+        const lowerTarget = targetColumn.toLowerCase();
+        col = enrichedColumns.find(c => c.name.toLowerCase() === lowerTarget);
+        if (col) {
+          console.log(`[build-modeling-dataset] Target resolved case-insensitively: "${targetColumn}" → "${col.name}"`);
+          targetColumn = col.name; // Use canonical name
+        }
+      }
+
       if (!col) {
         // Check if target is a derived feature that hasn't been materialized
         const { data: derivedFeature } = await supabase
           .from("project_features")
-          .select("id, name")
+          .select("id, name, is_materialized, materialized_column_id")
           .eq("project_id", project_id)
-          .eq("name", targetColumn)
+          .ilike("name", targetColumn)
           .eq("enabled", true)
           .maybeSingle();
 
         if (derivedFeature) {
-          allBlockedReasons.push(
-            `BLOCKED_TARGET_NOT_MATERIALIZED: A feature derivada "${targetColumn}" ainda não foi materializada no dataset. ` +
-            `Execute a materialização de features antes de gerar o dataset modelável.`
-          );
+          if (derivedFeature.is_materialized && derivedFeature.materialized_column_id) {
+            // Feature is materialized but column might not be in enrichedColumns (stats not run yet)
+            allBlockedReasons.push(
+              `BLOCKED_TARGET_NOT_IN_STATS: A feature derivada "${targetColumn}" foi materializada mas não possui estatísticas (EDA). ` +
+              `Execute o EDA novamente para incluir a coluna materializada.`
+            );
+          } else {
+            allBlockedReasons.push(
+              `BLOCKED_TARGET_NOT_MATERIALIZED: A feature derivada "${targetColumn}" ainda não foi materializada no dataset. ` +
+              `Execute a materialização de features antes de gerar o dataset modelável.`
+            );
+          }
         } else {
           allBlockedReasons.push(`Coluna target "${targetColumn}" não encontrada no dataset.`);
         }
