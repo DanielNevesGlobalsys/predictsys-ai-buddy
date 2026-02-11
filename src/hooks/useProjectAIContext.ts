@@ -1,7 +1,27 @@
 import { useState, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type AIContextStage = "eda" | "targeting" | "training" | "predictions" | "business" | "storyline";
+export type AIContextStage = "intent" | "eda" | "targeting" | "training" | "predictions" | "business" | "storyline";
+
+export interface AIContextIntent {
+  declared_objective: string;
+  industry_hint: string;
+  problem_type: string;
+  target_expected: string;
+  requires_time_column: boolean;
+  default_window_days: number;
+  label_builder_required: boolean;
+  recommended_entity_key: string | null;
+  recommended_metrics: string[];
+  disallowed_metrics: string[];
+  guardrails: {
+    block_id_targets: boolean;
+    block_leakage: boolean;
+    block_constant_target: boolean;
+  };
+  version: number;
+  created_at: string;
+}
 
 export interface AIContextEDA {
   summary: string;
@@ -44,6 +64,7 @@ export interface AIContextStoryline {
 }
 
 export interface ProjectAIContext {
+  intent: AIContextIntent;
   eda: AIContextEDA;
   targeting: AIContextTargeting;
   training: AIContextTraining;
@@ -63,6 +84,21 @@ export interface ProjectAIContextRecord {
 }
 
 const DEFAULT_CONTEXT: ProjectAIContext = {
+  intent: {
+    declared_objective: "",
+    industry_hint: "generic",
+    problem_type: "classification",
+    target_expected: "event",
+    requires_time_column: true,
+    default_window_days: 30,
+    label_builder_required: false,
+    recommended_entity_key: null,
+    recommended_metrics: [],
+    disallowed_metrics: [],
+    guardrails: { block_id_targets: true, block_leakage: true, block_constant_target: true },
+    version: 0,
+    created_at: "",
+  },
   eda: { summary: "", column_profile: {}, warnings: [], hypotheses: [] },
   targeting: {
     suggested_problems: [],

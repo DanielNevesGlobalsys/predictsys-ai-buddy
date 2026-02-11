@@ -142,6 +142,16 @@ const WizardContainer = () => {
 
         if (error) throw error;
         setProjectData((prev) => ({ ...prev, ...data }));
+
+        // Generate intent contract on step 1 save (update)
+        if (currentStep === 1) {
+          generateIntentContractForProject(
+            projectData.id,
+            data.name ?? projectData.name,
+            data.description ?? projectData.description,
+            data.business_objective ?? projectData.business_objective
+          );
+        }
       } else {
         // Create new project with organization_id
         const { data: newProject, error } = await supabase
@@ -177,6 +187,14 @@ const WizardContainer = () => {
           data.name || projectData.name
         );
         
+        // Generate intent contract for new project (fire-and-forget)
+        generateIntentContractForProject(
+          newProject.id,
+          data.name || projectData.name,
+          data.description || projectData.description,
+          data.business_objective || projectData.business_objective
+        );
+        
         // Update URL to include project ID
         navigate(`/projeto/${newProject.id}/wizard`, { replace: true });
       }
@@ -195,6 +213,25 @@ const WizardContainer = () => {
       });
     }
     setLoading(false);
+  };
+
+  const generateIntentContractForProject = async (
+    projectId: string, name: string, description: string, objective: string
+  ) => {
+    if (!objective?.trim()) return;
+    try {
+      await supabase.functions.invoke("generate-intent-contract", {
+        body: {
+          project_id: projectId,
+          project_name: name,
+          project_description: description,
+          declared_objective: objective,
+        },
+      });
+      console.log("[WizardContainer] Intent contract generated");
+    } catch (err) {
+      console.warn("[WizardContainer] Intent contract generation failed:", err);
+    }
   };
 
   const handleNext = (data?: Partial<ProjectData>) => {
