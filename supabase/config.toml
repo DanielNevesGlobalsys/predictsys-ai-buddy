@@ -110,3 +110,12 @@ verify_jwt = false
 
 [functions.materialize-derived-features]
 verify_jwt = false
+
+[functions.run-training-preflight]
+verify_jwt = false
+
+[functions.build-modeling-dataset]
+verify_jwt = false
+
+[functions.upsert-model-selection]
+verify_jwt = false

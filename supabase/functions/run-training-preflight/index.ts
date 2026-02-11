@@ -47,19 +47,35 @@ serve(async (req: Request) => {
     console.log(`[run-training-preflight] Starting for project ${project_id}`);
 
     // Parallel fetch all needed data
-    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, contractRes] = await Promise.all([
+    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes] = await Promise.all([
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_modeling_datasets").select("*").eq("project_id", project_id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      // Also fetch the best matching dataset for current selection version (belt-and-suspenders)
+      supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle().then(async (selRes) => {
+        const sv = (selRes.data as any)?.selection_version || 0;
+        if (sv > 0) {
+          return supabase.from("project_modeling_datasets").select("*")
+            .eq("project_id", project_id)
+            .eq("selection_version_used", sv)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+        }
+        return { data: null, error: null };
+      }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
     const selection = selectionRes.data;
     const aiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
-    const modelingDataset = modelingDatasetRes.data;
+    const modelingDatasetIsCurrent = modelingDatasetRes.data;
+    const versionMatchedDataset = versionMatchedDatasetRes.data;
     const contract = contractRes.data;
+    // Prefer version-matched dataset, then is_current, to avoid stale reads
+    const modelingDataset = versionMatchedDataset || modelingDatasetIsCurrent;
 
     const gates: GateResult[] = [];
     let canBuild = true;
