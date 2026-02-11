@@ -153,25 +153,59 @@ serve(async (req: Request) => {
       }
     }
 
-    // ===== 4.4 BUILDER GATE =====
+    // ===== 4.4 BUILDER GATE (SSOT cross-validation) =====
     const selectionVersion = (selection as any)?.selection_version || 0;
-    const builderSelVersion = modelingDataset ? ((modelingDataset as any).selection_version_used || 0) : null;
-    const builderIsCurrent = modelingDataset
-      ? ((modelingDataset as any).is_current !== false && builderSelVersion !== null && builderSelVersion >= selectionVersion)
+    const diagnostics = (datasetState as any)?.diagnostics as Record<string, any> | null;
+    const ssotBuilderDatasetId = diagnostics?.builder_dataset_id || null;
+    const ssotSelVersionUsed = diagnostics?.selection_version_used || null;
+
+    // Determine the canonical builder dataset:
+    // 1. If SSOT has builder_dataset_id, cross-check it exists in project_modeling_datasets
+    // 2. If project_modeling_datasets has is_current=true, use that
+    // 3. Never use "latest by created_at" alone
+    let canonicalDataset = modelingDataset;
+    let builderSource = "modeling_datasets_is_current";
+
+    if (ssotBuilderDatasetId && (!modelingDataset || (modelingDataset as any).id !== ssotBuilderDatasetId)) {
+      // Cross-check: SSOT points to a different dataset than is_current query
+      const { data: ssotDataset } = await supabase
+        .from("project_modeling_datasets")
+        .select("*")
+        .eq("id", ssotBuilderDatasetId)
+        .maybeSingle();
+      if (ssotDataset) {
+        canonicalDataset = ssotDataset;
+        builderSource = "ssot_diagnostics";
+      }
+    }
+
+    const builderSelVersion = canonicalDataset ? ((canonicalDataset as any).selection_version_used || 0) : null;
+    const builderIsCurrent = canonicalDataset
+      ? ((canonicalDataset as any).is_current !== false && builderSelVersion !== null && builderSelVersion >= selectionVersion)
       : false;
 
-    if (modelingDataset) {
-      const md = modelingDataset as any;
+    // Also check SSOT version consistency
+    const ssotVersionMatch = ssotSelVersionUsed !== null ? ssotSelVersionUsed >= selectionVersion : true;
+
+    if (canonicalDataset) {
+      const md = canonicalDataset as any;
       const isCurrent = md.is_current !== false;
       const isReady = md.status === "ready" || md.status === "warning";
+      const versionMismatch = selectionVersion > 0 && (builderSelVersion || 0) < selectionVersion;
 
-      if (!isCurrent || (selectionVersion > 0 && (builderSelVersion || 0) < selectionVersion)) {
-        // Builder outdated — BLOCK
+      if (!isCurrent || versionMismatch || !ssotVersionMatch) {
+        // Builder outdated — BLOCK (never "não executado" since builder ran)
         gates.push({
           gate: "builder",
           status: "BLOCK",
           message: `Builder desatualizado (built v${builderSelVersion || 0}, current v${selectionVersion}). Regere o dataset modelável.`,
-          details: { selection_version_used: builderSelVersion, current_version: selectionVersion, stale_reason: md.stale_reason },
+          details: {
+            selection_version_used: builderSelVersion,
+            current_version: selectionVersion,
+            ssot_version_used: ssotSelVersionUsed,
+            stale_reason: md.stale_reason || (versionMismatch ? "VERSION_MISMATCH" : "NOT_CURRENT"),
+            builder_source: builderSource,
+          },
         });
         canTrain = false;
       } else if (isCurrent && isReady) {
@@ -179,7 +213,7 @@ serve(async (req: Request) => {
           gate: "builder",
           status: md.status === "warning" ? "WARN" : "PASS",
           message: `Builder atual (v${builderSelVersion}). ${md.row_count} linhas, ${md.column_count} colunas.`,
-          details: { selection_version_used: builderSelVersion, status: md.status },
+          details: { selection_version_used: builderSelVersion, status: md.status, builder_source: builderSource },
         });
       } else if (isCurrent && !isReady) {
         gates.push({
@@ -190,6 +224,15 @@ serve(async (req: Request) => {
         });
         canTrain = false;
       }
+    } else if (ssotBuilderDatasetId) {
+      // SSOT has a builder_dataset_id but dataset not found — data integrity issue
+      gates.push({
+        gate: "builder",
+        status: "BLOCK",
+        message: "Builder desatualizado: dataset referenciado não encontrado. Regere o dataset modelável.",
+        details: { ssot_builder_dataset_id: ssotBuilderDatasetId, error: "DATASET_NOT_FOUND" },
+      });
+      canTrain = false;
     } else {
       gates.push({
         gate: "builder",
