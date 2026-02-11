@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -23,6 +23,7 @@ import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import { trackEventWithTiming } from "@/lib/platformTracking";
+import { useDatasetState } from "@/hooks/useDatasetState";
 
 interface StepTrainingProps {
   projectData: ProjectData;
@@ -124,12 +125,34 @@ const StepTraining = ({
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
 
+  // SSOT dataset state — force reload on mount
+  const ds = useDatasetState(projectData.id);
+
+  // Selection version for display + preflight refresh
+  const [selectionVersion, setSelectionVersion] = useState<number | null>(null);
+  const [preflightRefreshKey, setPreflightRefreshKey] = useState(0);
+
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
+
+  const loadSelectionVersion = useCallback(async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_model_selection" as any)
+      .select("selection_version")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data) setSelectionVersion((data as any).selection_version);
+  }, [projectData.id]);
 
   useEffect(() => {
     loadExistingModels();
     detectProblemType();
     checkTrainReadiness();
+    // Force SSOT reload + selection version on mount
+    ds.load();
+    loadSelectionVersion();
+    // Bump preflight key to force fresh check
+    setPreflightRefreshKey(k => k + 1);
   }, [projectData.id]);
 
   const checkTrainReadiness = async () => {
@@ -556,8 +579,16 @@ const StepTraining = ({
           </Alert>
         )}
 
-        {/* Training Preflight Panel — always visible */}
-        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} />
+        {/* Training Preflight Panel — always visible, force-refreshed on mount */}
+        <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} refreshKey={preflightRefreshKey} />
+
+        {/* Selection version display */}
+        {selectionVersion !== null && (
+          <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg text-xs text-muted-foreground">
+            <Info className="w-3.5 h-3.5" />
+            <span>Seleção atual: <strong>v{selectionVersion}</strong></span>
+          </div>
+        )}
 
         {/* Pre-train Readiness Panel */}
         {trainReadiness && !trainingComplete && !isTraining && (
