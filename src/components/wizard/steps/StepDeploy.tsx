@@ -13,7 +13,6 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
-import PredictionScheduler from "@/components/project/PredictionScheduler";
 import DeployAiInsight from "@/components/deploy/DeployAiInsight";
 
 interface ScheduleSummary {
@@ -545,26 +544,6 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
               productionModelName={productionModel.algorithm_name}
               problemType={projectData.problem_type} allModels={models}
             />
-
-            {/* Scheduler - gated behind valid scoring */}
-            <div className="pt-4">
-              {hasScoringDone ? (
-                <PredictionScheduler 
-                  projectId={projectData.id!} productionModelName={productionModel.algorithm_name}
-                  onScheduleChange={loadScheduleSummary}
-                />
-              ) : (
-                <div className="p-4 bg-muted/30 border border-border rounded-lg flex items-center gap-3">
-                  <CalendarClock className="w-5 h-5 text-muted-foreground" />
-                  <div>
-                    <p className="text-sm font-medium text-muted-foreground">Agendamento automático</p>
-                    <p className="text-xs text-muted-foreground">
-                      Disponível após a primeira execução de scoring válida. Gere as previsões acima para habilitar.
-                    </p>
-                  </div>
-                </div>
-              )}
-            </div>
           </>
         )}
 

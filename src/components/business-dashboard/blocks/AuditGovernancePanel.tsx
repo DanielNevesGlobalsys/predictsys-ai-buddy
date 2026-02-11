@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,7 @@ import {
   AlertTriangle, FileText, Cpu, Layers, Target, Rocket,
   RefreshCw, ClipboardCopy, Clock, GitBranch, Activity
 } from 'lucide-react';
+import { supabase } from '@/integrations/supabase/client';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import type { ProjectStage } from './BlockATrustVision';
@@ -19,6 +20,34 @@ interface AuditGovernancePanelProps {
   projectStage: ProjectStage;
   modelQualityFlag: string | null;
   ssot: SSOTData;
+}
+
+function ScheduleAuditInfo({ projectId }: { projectId: string }) {
+  const [schedule, setSchedule] = useState<any>(null);
+  useEffect(() => {
+    supabase.from('project_schedules' as any).select('*').eq('project_id', projectId).maybeSingle()
+      .then(({ data }) => setSchedule(data));
+  }, [projectId]);
+
+  if (!schedule) return <p className="text-sm text-muted-foreground mt-2">Agendamento não configurado.</p>;
+  return (
+    <div className="mt-3 pt-3 border-t border-border/50 grid grid-cols-2 md:grid-cols-3 gap-4 text-sm">
+      <div>
+        <p className="text-xs text-muted-foreground">Agendamento</p>
+        <Badge variant={schedule.is_enabled ? 'default' : 'secondary'} className="text-xs">
+          {schedule.is_enabled ? 'Ativo' : 'Inativo'}
+        </Badge>
+      </div>
+      <div>
+        <p className="text-xs text-muted-foreground">Próxima execução</p>
+        <p className="font-semibold">{schedule.next_run_at ? new Date(schedule.next_run_at).toLocaleString() : '—'}</p>
+      </div>
+      <div>
+        <p className="text-xs text-muted-foreground">Última execução</p>
+        <p className="font-semibold">{schedule.last_run_at ? new Date(schedule.last_run_at).toLocaleString() : '—'}</p>
+      </div>
+    </div>
+  );
 }
 
 export function AuditGovernancePanel({
@@ -456,7 +485,7 @@ export function AuditGovernancePanel({
             <AccordionTrigger className="text-sm font-semibold">
               <div className="flex items-center gap-2">
                 <Activity className="w-4 h-4" />
-                Scoring Report
+                Scoring Report & Agendamento
               </div>
             </AccordionTrigger>
             <AccordionContent className="pt-2 space-y-3">
@@ -516,6 +545,9 @@ export function AuditGovernancePanel({
               ) : (
                 <p className="text-sm text-muted-foreground">Nenhum scoring executado.</p>
               )}
+
+              {/* Schedule info */}
+              <ScheduleAuditInfo projectId={projectId} />
             </AccordionContent>
           </AccordionItem>
 

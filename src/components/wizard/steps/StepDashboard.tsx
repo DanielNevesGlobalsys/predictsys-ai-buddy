@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play } from "lucide-react";
+import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play, CalendarClock } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 import { BusinessDashboard } from "@/components/business-dashboard";
 import { supabase } from "@/integrations/supabase/client";
@@ -14,9 +14,10 @@ interface StepDashboardProps {
   loading: boolean;
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
   onFinalComplete: () => Promise<void>;
+  onNext?: () => void;
 }
 
-const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalComplete }: StepDashboardProps) => {
+const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalComplete, onNext }: StepDashboardProps) => {
   const { t } = useTranslation();
   const [hasProductionModel, setHasProductionModel] = useState(false);
   const [hasPredictions, setHasPredictions] = useState<boolean | null>(null); // null = loading
@@ -144,23 +145,35 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
             <ArrowLeft className="w-4 h-4 mr-2" />
             {t("common.back")}
           </Button>
-          <Button
-            onClick={handleCompleteProject}
-            disabled={loading || completing || !hasProductionModel}
-            className="bg-gradient-primary hover:shadow-hover transition-all"
-          >
-            {completing ? (
-              <>
-                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                {t("common.loading")}
-              </>
-            ) : (
-              <>
-                <CheckCircle className="w-4 h-4 mr-2" />
-                {t("stepDashboard.completeProject")}
-              </>
+          <div className="flex gap-2">
+            {onNext && (
+              <Button
+                variant="outline"
+                onClick={onNext}
+                disabled={loading || completing}
+              >
+                Agendamento
+                <CalendarClock className="w-4 h-4 ml-2" />
+              </Button>
             )}
-          </Button>
+            <Button
+              onClick={handleCompleteProject}
+              disabled={loading || completing || !hasProductionModel}
+              className="bg-gradient-primary hover:shadow-hover transition-all"
+            >
+              {completing ? (
+                <>
+                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  {t("common.loading")}
+                </>
+              ) : (
+                <>
+                  <CheckCircle className="w-4 h-4 mr-2" />
+                  {t("stepDashboard.completeProject")}
+                </>
+              )}
+            </Button>
+          </div>
         </div>
       </div>
     </Card>
