@@ -1917,10 +1917,11 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
   }
 
   // ─── Phase 4: EDA Gate ─────────────────────────────────────
+  // EDA blocks ONLY on structural failures: 0 rows, 0 columns, or ALL files failed
   const coveragePct = batchJobs.length > 0
     ? Math.round((successResults.length / batchJobs.length) * 100)
     : 0;
-  const passesEDAGate = totalRowsConsolidated > 0 && canonical.columns.length > 0 && coveragePct >= 50;
+  const passesEDAGate = totalRowsConsolidated > 0 && canonical.columns.length > 0 && successResults.length > 0;
 
   if (!passesEDAGate) {
     // Build specific, actionable error message
@@ -1931,8 +1932,8 @@ async function processBatchImport(supabase: any, primaryJob: ImportJob): Promise
     if (canonical.columns.length === 0) {
       reasons.push("Nenhuma coluna detectada no schema canônico.");
     }
-    if (coveragePct < 50) {
-      reasons.push(`Apenas ${coveragePct}% dos arquivos foram processados com sucesso (mínimo: 50%).`);
+    if (successResults.length === 0) {
+      reasons.push("Todos os arquivos falharam no processamento.");
     }
     if (failedResults.length > 0) {
       reasons.push(`Arquivos com falha: ${failedResults.map(r => `"${r.fileName}" (${r.error})`).join("; ")}`);

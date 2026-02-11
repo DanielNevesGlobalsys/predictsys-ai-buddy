@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Database, AlertTriangle, Info } from "lucide-react";
+import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { supabase } from "@/integrations/supabase/client";
@@ -26,10 +26,27 @@ interface DatasetBannerInfo {
   blockedReasonEda: string | null;
   blockedReasonModel: string | null;
   manifestStatus: string;
+  filesWarn: number;
+  filesFail: number;
 }
 
-const EDA_STRATEGY_MESSAGES: Record<string, string> = {
-  UNION_BY_NAME: "EDA disponível (união por colunas). Atenção: schemas divergentes podem gerar NULLs.",
+type SchemaStatus = "OK" | "WARN" | "INTERSECTION" | "ANCHOR";
+
+function deriveSchemaStatus(info: DatasetBannerInfo): SchemaStatus {
+  if (info.edaStrategy === "INTERSECTION_ONLY") return "INTERSECTION";
+  if (info.edaStrategy === "ANCHOR_FILE_EDA") return "ANCHOR";
+  if (info.filesWarn > 0 || info.manifestStatus === "warn") return "WARN";
+  return "OK";
+}
+
+const STRATEGY_MESSAGES: Record<string, string> = {
+  UNION_BY_NAME: "Schema divergente detectado. A EDA foi executada em modo compatível (união por colunas — NULLs podem aparecer).",
+  INTERSECTION_ONLY: "EDA executada em modo interseção devido a divergência de schemas (somente colunas comuns).",
+  ANCHOR_FILE_EDA: "EDA executada no dataset âncora devido à presença exclusiva do target.",
+};
+
+const STRATEGY_MESSAGES_OK: Record<string, string> = {
+  UNION_BY_NAME: "Dataset consolidado com sucesso. Todas as colunas disponíveis para análise.",
   INTERSECTION_ONLY: "EDA disponível (somente colunas comuns entre todos os arquivos).",
   ANCHOR_FILE_EDA: "EDA parcial (arquivo âncora).",
 };
@@ -42,34 +59,30 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     if (!projectData.id) return;
 
     const loadBannerInfo = async () => {
-      // Get latest manifest with new fields
       const { data: manifest } = await supabase
         .from("import_manifests")
-        .select("rows_consolidated, columns_final, total_files, status, status_reason, eda_ready, model_ready, eda_strategy, eda_scope, blocked_reason_eda, blocked_reason_model")
+        .select("rows_consolidated, columns_final, total_files, status, status_reason, eda_ready, model_ready, eda_strategy, eda_scope, blocked_reason_eda, blocked_reason_model, files_warn, files_fail")
         .eq("project_id", projectData.id!)
         .order("created_at", { ascending: false })
         .limit(1)
         .single();
 
       if (manifest) {
-        // Use new eda_ready field; fallback to old logic for backward compat
-        const edaReady = manifest.eda_ready !== false;
-        const modelReady = manifest.model_ready !== false;
-
         setBannerInfo({
           totalRows: manifest.rows_consolidated,
           columnsCount: manifest.columns_final,
           totalFiles: manifest.total_files,
-          edaReady,
-          modelReady,
+          edaReady: manifest.eda_ready !== false,
+          modelReady: manifest.model_ready !== false,
           edaStrategy: (manifest.eda_strategy as string) || "UNION_BY_NAME",
           edaScope: manifest.eda_scope as string | null,
           blockedReasonEda: manifest.blocked_reason_eda as string | null,
           blockedReasonModel: manifest.blocked_reason_model as string | null,
           manifestStatus: manifest.status,
+          filesWarn: manifest.files_warn || 0,
+          filesFail: manifest.files_fail || 0,
         });
       } else {
-        // No manifest — use project data fallback
         setBannerInfo({
           totalRows: projectData.total_rows || projectData.dataset_rows || 0,
           columnsCount: projectData.dataset_columns || 0,
@@ -81,6 +94,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           blockedReasonEda: null,
           blockedReasonModel: null,
           manifestStatus: "ok",
+          filesWarn: 0,
+          filesFail: 0,
         });
       }
     };
@@ -91,7 +106,13 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const handleEDAComplete = () => {};
 
   const edaBlocked = bannerInfo ? !bannerInfo.edaReady : false;
-  const strategyMsg = bannerInfo ? EDA_STRATEGY_MESSAGES[bannerInfo.edaStrategy] || "" : "";
+  const schemaStatus = bannerInfo ? deriveSchemaStatus(bannerInfo) : "OK";
+  const hasSchemaIssue = schemaStatus !== "OK";
+  const strategyMsg = bannerInfo
+    ? (hasSchemaIssue
+        ? STRATEGY_MESSAGES[bannerInfo.edaStrategy] || ""
+        : STRATEGY_MESSAGES_OK[bannerInfo.edaStrategy] || "")
+    : "";
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -110,17 +131,21 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
 
         {/* Consolidated Dataset Banner */}
         {bannerInfo && (
-          <div className={`p-4 rounded-lg border space-y-2 ${
+          <div className={`p-4 rounded-lg border space-y-3 ${
             edaBlocked
               ? "bg-destructive/10 border-destructive/30"
-              : "bg-primary/5 border-primary/20"
+              : hasSchemaIssue
+                ? "bg-amber-500/5 border-amber-500/20"
+                : "bg-primary/5 border-primary/20"
           }`}>
-            <div className="flex items-center justify-between">
+            <div className="flex items-center justify-between flex-wrap gap-2">
               <div className="flex items-center gap-3">
                 <Database className={`w-5 h-5 ${edaBlocked ? "text-destructive" : "text-primary"}`} />
                 <div>
                   {edaBlocked ? (
-                    <p className="text-sm font-semibold text-destructive">Dataset não disponível para análise</p>
+                    <p className="text-sm font-semibold text-destructive">
+                      Não há dados suficientes para análise exploratória
+                    </p>
                   ) : (
                     <>
                       <p className="text-sm font-semibold">Dataset consolidado</p>
@@ -135,35 +160,67 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                 </div>
               </div>
 
-              {/* Separate EDA / MODEL badges */}
-              <div className="flex items-center gap-2">
+              {/* 3 Badges: EDA_READY, MODEL_READY, SCHEMA_STATUS */}
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {/* EDA Badge */}
                 {edaBlocked ? (
-                  <Badge variant="destructive">EDA: BLOCKED</Badge>
-                ) : bannerInfo.manifestStatus === "warn" ? (
-                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    EDA: APPROVED
+                  <Badge variant="destructive" className="text-[10px]">
+                    <XCircle className="w-3 h-3 mr-1" />
+                    EDA: BLOCKED
                   </Badge>
                 ) : (
-                  <Badge className="bg-accent/20 text-accent border-accent/30">EDA: APPROVED</Badge>
+                  <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    EDA: OK
+                  </Badge>
                 )}
 
+                {/* MODEL Badge */}
                 {bannerInfo.modelReady ? (
-                  <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: APPROVED</Badge>
+                  <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
+                    <CheckCircle className="w-3 h-3 mr-1" />
+                    MODEL: OK
+                  </Badge>
                 ) : !edaBlocked ? (
-                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]">
                     <AlertTriangle className="w-3 h-3 mr-1" />
-                    MODEL: BLOCKED
+                    MODEL: WARN
                   </Badge>
                 ) : null}
+
+                {/* SCHEMA_STATUS Badge */}
+                {schemaStatus === "OK" ? (
+                  <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
+                    SCHEMA: OK
+                  </Badge>
+                ) : schemaStatus === "WARN" ? (
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]">
+                    SCHEMA: WARN
+                  </Badge>
+                ) : schemaStatus === "INTERSECTION" ? (
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]">
+                    SCHEMA: INTERSECTION
+                  </Badge>
+                ) : (
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]">
+                    SCHEMA: ANCHOR
+                  </Badge>
+                )}
               </div>
             </div>
 
             {/* Strategy message */}
             {!edaBlocked && strategyMsg && (
-              <div className="flex items-start gap-2 text-xs text-muted-foreground bg-muted/30 p-2 rounded">
+              <div className={`flex items-start gap-2 text-xs p-2 rounded ${
+                hasSchemaIssue
+                  ? "text-amber-700 bg-amber-500/10 border border-amber-500/20"
+                  : "text-muted-foreground bg-muted/30"
+              }`}>
                 <Info className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                <span>{strategyMsg}{bannerInfo.edaStrategy === "ANCHOR_FILE_EDA" && bannerInfo.edaScope ? ` (${bannerInfo.edaScope})` : ""}</span>
+                <span>
+                  {strategyMsg}
+                  {bannerInfo.edaStrategy === "ANCHOR_FILE_EDA" && bannerInfo.edaScope ? ` (${bannerInfo.edaScope})` : ""}
+                </span>
               </div>
             )}
 
@@ -187,12 +244,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
         {/* EDA Display */}
         {edaBlocked ? (
           <div className="text-center py-12 space-y-3">
-            <AlertTriangle className="w-12 h-12 text-destructive/50 mx-auto" />
+            <XCircle className="w-12 h-12 text-destructive/50 mx-auto" />
             <p className="text-muted-foreground font-medium">
               Não é possível executar a análise exploratória.
             </p>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              {bannerInfo?.blockedReasonEda || "O dataset importado possui problemas estruturais que impedem a análise. Volte à etapa anterior e corrija a importação."}
+              {bannerInfo?.blockedReasonEda || "O dataset não contém dados válidos (0 linhas ou 0 colunas). Volte à etapa anterior e corrija a importação."}
             </p>
           </div>
         ) : projectData.id ? (
