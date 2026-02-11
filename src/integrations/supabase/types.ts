@@ -1665,6 +1665,118 @@ export type Database = {
           },
         ]
       }
+      project_modeling_datasets: {
+        Row: {
+          anchor_time_col: string | null
+          blocked_reasons: Json | null
+          build_log: Json | null
+          column_count: number | null
+          coverage_pct: number | null
+          created_at: string
+          dataset_id: string | null
+          entity_key: string | null
+          error_message: string | null
+          features_blocked: Json | null
+          features_final: Json
+          features_generated: Json | null
+          id: string
+          intent_version: string | null
+          label_plan: Json | null
+          leakage_report: Json | null
+          manifest_version: string | null
+          organization_id: string
+          project_id: string
+          row_count: number | null
+          split_strategy: string | null
+          status: string
+          target_column: string
+          target_source: string
+          target_type: string
+          updated_at: string
+          window_days: number | null
+        }
+        Insert: {
+          anchor_time_col?: string | null
+          blocked_reasons?: Json | null
+          build_log?: Json | null
+          column_count?: number | null
+          coverage_pct?: number | null
+          created_at?: string
+          dataset_id?: string | null
+          entity_key?: string | null
+          error_message?: string | null
+          features_blocked?: Json | null
+          features_final?: Json
+          features_generated?: Json | null
+          id?: string
+          intent_version?: string | null
+          label_plan?: Json | null
+          leakage_report?: Json | null
+          manifest_version?: string | null
+          organization_id: string
+          project_id: string
+          row_count?: number | null
+          split_strategy?: string | null
+          status?: string
+          target_column: string
+          target_source?: string
+          target_type?: string
+          updated_at?: string
+          window_days?: number | null
+        }
+        Update: {
+          anchor_time_col?: string | null
+          blocked_reasons?: Json | null
+          build_log?: Json | null
+          column_count?: number | null
+          coverage_pct?: number | null
+          created_at?: string
+          dataset_id?: string | null
+          entity_key?: string | null
+          error_message?: string | null
+          features_blocked?: Json | null
+          features_final?: Json
+          features_generated?: Json | null
+          id?: string
+          intent_version?: string | null
+          label_plan?: Json | null
+          leakage_report?: Json | null
+          manifest_version?: string | null
+          organization_id?: string
+          project_id?: string
+          row_count?: number | null
+          split_strategy?: string | null
+          status?: string
+          target_column?: string
+          target_source?: string
+          target_type?: string
+          updated_at?: string
+          window_days?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_modeling_datasets_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_modeling_datasets_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_modeling_datasets_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_models: {
         Row: {
           algorithm_name: string
