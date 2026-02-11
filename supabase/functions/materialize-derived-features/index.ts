@@ -198,6 +198,85 @@ serve(async (req: Request) => {
 
     console.log(`[materialize] Created: ${newlyCreated}, existing: ${alreadyExisted}, skipped: ${skipped}`);
 
+    // ── Target Distribution Check ──
+    // Check if any materialized feature is the current target
+    const { data: selData } = await supabase
+      .from("project_model_selection")
+      .select("target_column, selection_version")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    const targetChecks: Record<string, any> = {};
+    const matLowerSet = new Set(materializedNames.map(n => n.toLowerCase()));
+
+    for (const featName of materializedNames) {
+      const isCurrentTarget = selData?.target_column && selData.target_column.toLowerCase() === featName.toLowerCase();
+      // Only run distribution check for binary_flag features (target candidates)
+      const feat = features.find(f => f.name === featName);
+      if (!feat || (feat.expression.type !== "binary_flag" && !isCurrentTarget)) continue;
+
+      // Get column stats from project_numeric_stats (if available) or project_categorical_stats
+      const { data: numStats } = await supabase
+        .from("project_numeric_stats")
+        .select("min_value, max_value, mean_value, null_count")
+        .eq("project_id", project_id)
+        .ilike("column_name", featName)
+        .maybeSingle();
+
+      const { data: catStats } = await supabase
+        .from("project_categorical_stats")
+        .select("distinct_count, top_categories")
+        .eq("project_id", project_id)
+        .ilike("column_name", featName)
+        .maybeSingle();
+
+      // Get row count from SSOT
+      const { data: dsForRows } = await supabase
+        .from("project_dataset_state")
+        .select("row_count")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      const totalRows = dsForRows?.row_count || 0;
+      const nullRows = numStats?.null_count || 0;
+      const pctNull = totalRows > 0 ? (nullRows / totalRows) * 100 : 0;
+      const distinctCount = catStats?.distinct_count || (numStats ? (numStats.min_value === numStats.max_value ? 1 : 2) : null);
+      const pctPositive = numStats?.mean_value != null ? numStats.mean_value * 100 : null;
+
+      let targetQuality = "OK";
+      const warnings: string[] = [];
+
+      if (distinctCount != null && distinctCount < 2) {
+        targetQuality = "BLOCKED_NO_VARIATION";
+        warnings.push(`Materialização gerou ${distinctCount} valor(es) distinto(s) — sem variação para classificação. Verificar parse/cobertura da coluna fonte.`);
+      }
+      if (pctPositive != null && pctPositive < 0.1) {
+        targetQuality = targetQuality === "OK" ? "WARN_HIGH_IMBALANCE" : targetQuality;
+        warnings.push(`Taxa positiva = ${pctPositive.toFixed(2)}% — desbalanceamento severo.`);
+      }
+      if (pctPositive != null && pctPositive > 99.9) {
+        targetQuality = targetQuality === "OK" ? "WARN_HIGH_IMBALANCE" : targetQuality;
+        warnings.push(`Taxa positiva = ${pctPositive.toFixed(2)}% — quase todos positivos.`);
+      }
+      if (pctNull > 50) {
+        targetQuality = targetQuality === "OK" ? "WARN_TOO_MANY_NULLS" : targetQuality;
+        warnings.push(`${pctNull.toFixed(1)}% de valores nulos no target.`);
+      }
+
+      targetChecks[featName.toLowerCase()] = {
+        total_rows: totalRows,
+        null_rows: nullRows,
+        pct_null: Math.round(pctNull * 10) / 10,
+        distinct_count: distinctCount,
+        pct_positive: pctPositive != null ? Math.round(pctPositive * 100) / 100 : null,
+        target_quality: targetQuality,
+        warnings,
+        checked_at: new Date().toISOString(),
+      };
+
+      console.log(`[materialize] Target check "${featName}": quality=${targetQuality}, distinct=${distinctCount}, pct_pos=${pctPositive?.toFixed(2)}%`);
+    }
+
     // ── Update SSOT ──
     const newColCount = (existingCols?.length || 0) + newlyCreated;
     const { data: dsState } = await supabase
@@ -209,6 +288,7 @@ serve(async (req: Request) => {
     if (dsState) {
       const currentDiag = (dsState.diagnostics as Record<string, any>) || {};
       const schemaVersion = (currentDiag.schema_version || 0) + (newlyCreated > 0 ? 1 : 0);
+      const existingTargetChecks = (currentDiag.target_checks as Record<string, any>) || {};
 
       await supabase.from("project_dataset_state").update({
         col_count: newColCount,
@@ -219,28 +299,22 @@ serve(async (req: Request) => {
           last_materialization_at: new Date().toISOString(),
           materialized_features_count: materializedNames.length,
           materialized_feature_names: materializedNames,
+          target_checks: { ...existingTargetChecks, ...targetChecks },
         },
         updated_at: new Date().toISOString(),
       }).eq("project_id", project_id);
     }
 
     // ── Check if target is a derived feature → increment selection_version ──
-    const { data: selectionData } = await supabase
-      .from("project_model_selection")
-      .select("target_column, selection_version")
-      .eq("project_id", project_id)
-      .maybeSingle();
-
     let selectionVersionIncremented = false;
-    const matSet = new Set(materializedNames.map(n => n.toLowerCase()));
 
-    if (selectionData?.target_column && matSet.has(selectionData.target_column.toLowerCase())) {
-      const newVersion = ((selectionData as any).selection_version || 0) + 1;
+    if (selData?.target_column && matLowerSet.has(selData.target_column.toLowerCase())) {
+      const newVersion = ((selData as any).selection_version || 0) + 1;
       await supabase.from("project_model_selection").update({
         selection_version: newVersion,
       }).eq("project_id", project_id);
       selectionVersionIncremented = true;
-      console.log(`[materialize] Target "${selectionData.target_column}" is derived — selection_version → ${newVersion}`);
+      console.log(`[materialize] Target "${selData.target_column}" is derived — selection_version → ${newVersion}`);
     }
 
     // ── Mark modeling datasets as outdated ──
@@ -266,6 +340,7 @@ serve(async (req: Request) => {
       new_col_count: newColCount,
       selection_version_incremented: selectionVersionIncremented,
       modeling_datasets_invalidated: newlyCreated > 0,
+      target_checks: targetChecks,
       message: newlyCreated > 0
         ? `${newlyCreated} feature(s) materializada(s). Dataset atualizado.`
         : `Todas as ${alreadyExisted} features já estavam materializadas.`,

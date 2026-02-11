@@ -6,6 +6,17 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+export interface TargetDistributionCheck {
+  total_rows?: number;
+  null_rows?: number;
+  pct_null?: number;
+  distinct_count?: number | null;
+  pct_positive?: number | null;
+  target_quality?: string;
+  warnings?: string[];
+  checked_at?: string;
+}
+
 export interface TrainingGateData {
   can_train: boolean;
   status: "READY" | "WARNING" | "BLOCKED";
@@ -19,6 +30,7 @@ export interface TrainingGateData {
     dominant_class_rate: number | null;
     unique_ratio: number | null;
     warnings: string[];
+    target_distribution_check?: TargetDistributionCheck;
   };
   leakage_report: {
     leakage_detected: boolean;
@@ -114,10 +126,41 @@ export default function TrainingGateReport({ gate }: Props) {
             {lr.dominant_class_rate !== null && <span>Classe dominante: <strong>{(lr.dominant_class_rate * 100).toFixed(1)}%</strong></span>}
             {lr.unique_ratio !== null && <span>Unique ratio: <strong>{(lr.unique_ratio * 100).toFixed(1)}%</strong></span>}
           </div>
+
+          {/* Target Distribution Check from materialization */}
+          {lr.target_distribution_check && (
+            <div className="mt-1.5 p-1.5 rounded border border-border/40 bg-background/50 space-y-0.5">
+              <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">📊 Distribuição do Target (materialização)</p>
+              <div className="grid grid-cols-3 gap-x-3 gap-y-0.5">
+                {lr.target_distribution_check.distinct_count != null && (
+                  <span>Distintos: <strong>{lr.target_distribution_check.distinct_count}</strong></span>
+                )}
+                {lr.target_distribution_check.pct_positive != null && (
+                  <span>% Positivos: <strong>{lr.target_distribution_check.pct_positive.toFixed(1)}%</strong></span>
+                )}
+                {lr.target_distribution_check.pct_null != null && (
+                  <span>% Nulos: <strong>{lr.target_distribution_check.pct_null.toFixed(1)}%</strong></span>
+                )}
+              </div>
+              {lr.target_distribution_check.target_quality && lr.target_distribution_check.target_quality !== "OK" && (
+                <Badge variant="destructive" className="text-[10px] mt-0.5">
+                  {lr.target_distribution_check.target_quality}
+                </Badge>
+              )}
+              {lr.target_distribution_check.warnings?.map((w, i) => (
+                <p key={i} className="text-destructive text-[11px]">⚠ {w}</p>
+              ))}
+              {lr.target_distribution_check.target_quality === "OK" && (
+                <p className="text-accent text-[11px]">✓ Distribuição saudável.</p>
+              )}
+            </div>
+          )}
+
           {lr.warnings.map((w, i) => (
             <p key={i} className="text-destructive text-[11px]">⚠ {w}</p>
           ))}
-          {labelOk && <p className="text-accent">✓ Target válido para treino.</p>}
+          {labelOk && !lr.target_distribution_check && <p className="text-accent">✓ Target válido para treino.</p>}
+          {labelOk && lr.target_distribution_check?.target_quality === "OK" && <p className="text-accent">✓ Target válido para treino.</p>}
         </GateSection>
 
         {/* Leakage Gate */}
