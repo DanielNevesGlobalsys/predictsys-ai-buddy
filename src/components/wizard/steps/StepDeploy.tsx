@@ -131,7 +131,10 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
   const bestModel = getBestModel();
   const productionModel = models.find(m => m.is_production);
 
-  // ===== SCORING MULTI-PASS =====
+  const MAX_PASSES = 100;
+  const TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+  // ===== SCORING MULTI-PASS WITH AUTO-CONTINUE =====
   const runScoring = useCallback(async () => {
     if (!projectData.id || !productionModel) return;
 
@@ -149,10 +152,33 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
     let totalInvalidPrev = 0;
     let passNumber = 0;
     let jobId: string | undefined;
+    const startedAt = Date.now();
 
     try {
       while (!scoringAborted.current) {
         passNumber++;
+
+        // Safety: max passes
+        if (passNumber > MAX_PASSES) {
+          setScoring(prev => ({
+            ...prev, status: "error",
+            errorCode: "SAFE_STOP_MAX_PASSES",
+            errorFriendly: `Scoring interrompido após ${MAX_PASSES} passes por segurança. Contate o suporte se o dataset for muito grande.`,
+            ctas: [{ label: "Tentar Novamente", action: "retry" }],
+          }));
+          return;
+        }
+
+        // Safety: timeout
+        if (Date.now() - startedAt > TIMEOUT_MS) {
+          setScoring(prev => ({
+            ...prev, status: "error",
+            errorCode: "SAFE_STOP_TIMEOUT",
+            errorFriendly: "Scoring interrompido após 5 minutos por segurança. Tente novamente ou contate o suporte.",
+            ctas: [{ label: "Tentar Novamente", action: "retry" }],
+          }));
+          return;
+        }
 
         const { data, error: invokeError } = await supabase.functions.invoke('run-batch-predictions', {
           body: {
@@ -209,6 +235,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           missingFeaturePct: data?.score_report_partial?.missing_feature_pct || 0,
         }));
 
+        // AUTO-CONTINUE: if backend says CONTINUE, loop automatically
         if (data?.status === "CONTINUE" || data?.continue) {
           passOffset = data.next_offset;
           batchIdToUse = data.batch_id;
@@ -216,7 +243,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           totalScoredPrev = data.total_scored_prev;
           totalInvalidPrev = data.total_invalid_prev;
           jobId = data.job_id;
-          continue;
+          continue; // next iteration — no user click needed
         }
 
         // DONE
@@ -372,10 +399,19 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
             {scoring.status === "running" && (
               <div className="space-y-2">
                 <div className="flex items-center justify-between text-sm text-muted-foreground">
-                  <span>Pass #{scoring.currentPass} — {scoring.totalScored.toLocaleString()} previsões geradas</span>
+                  <span>
+                    Processando lote {scoring.currentPass}
+                    {scoring.totalExpected > 0 ? ` de ~${Math.ceil(scoring.totalExpected / 40000)}` : ""}
+                    {" — "}{scoring.totalScored.toLocaleString()} previsões geradas
+                  </span>
                   <span>{progressPct.toFixed(0)}%</span>
                 </div>
                 <Progress value={progressPct} className="h-2" />
+                {scoring.totalExpected > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Cobertura parcial: {scoring.coveragePct.toFixed(1)}% • {scoring.totalScored.toLocaleString()} / {scoring.totalExpected.toLocaleString()} linhas
+                  </p>
+                )}
                 {scoring.missingFeaturePct > 0 && (
                   <p className="text-xs text-yellow-600 flex items-center gap-1">
                     <AlertTriangle className="w-3 h-3" />
