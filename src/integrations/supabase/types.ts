@@ -2177,6 +2177,115 @@ export type Database = {
           },
         ]
       }
+      project_schedule_runs: {
+        Row: {
+          blocked_reason_code: string | null
+          created_at: string
+          diagnostics: Json | null
+          finished_at: string | null
+          id: string
+          project_id: string
+          scheduled_at: string
+          scoring_job_id: string | null
+          started_at: string | null
+          status: Database["public"]["Enums"]["schedule_run_status"]
+        }
+        Insert: {
+          blocked_reason_code?: string | null
+          created_at?: string
+          diagnostics?: Json | null
+          finished_at?: string | null
+          id?: string
+          project_id: string
+          scheduled_at: string
+          scoring_job_id?: string | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["schedule_run_status"]
+        }
+        Update: {
+          blocked_reason_code?: string | null
+          created_at?: string
+          diagnostics?: Json | null
+          finished_at?: string | null
+          id?: string
+          project_id?: string
+          scheduled_at?: string
+          scoring_job_id?: string | null
+          started_at?: string | null
+          status?: Database["public"]["Enums"]["schedule_run_status"]
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_schedule_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_schedules: {
+        Row: {
+          created_at: string
+          day_of_month: number | null
+          day_of_week: number | null
+          hour: number
+          interval_hours: number | null
+          is_enabled: boolean
+          last_run_at: string | null
+          minute: number
+          mode: Database["public"]["Enums"]["schedule_mode"]
+          next_run_at: string | null
+          pause_on_blocked: boolean
+          project_id: string
+          schedule_type: Database["public"]["Enums"]["schedule_type"]
+          timezone: string
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          day_of_month?: number | null
+          day_of_week?: number | null
+          hour?: number
+          interval_hours?: number | null
+          is_enabled?: boolean
+          last_run_at?: string | null
+          minute?: number
+          mode?: Database["public"]["Enums"]["schedule_mode"]
+          next_run_at?: string | null
+          pause_on_blocked?: boolean
+          project_id: string
+          schedule_type?: Database["public"]["Enums"]["schedule_type"]
+          timezone?: string
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          day_of_month?: number | null
+          day_of_week?: number | null
+          hour?: number
+          interval_hours?: number | null
+          is_enabled?: boolean
+          last_run_at?: string | null
+          minute?: number
+          mode?: Database["public"]["Enums"]["schedule_mode"]
+          next_run_at?: string | null
+          pause_on_blocked?: boolean
+          project_id?: string
+          schedule_type?: Database["public"]["Enums"]["schedule_type"]
+          timezone?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_schedules_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_score_reports: {
         Row: {
           batch_id: string
@@ -2544,6 +2653,9 @@ export type Database = {
         | "semiannual"
         | "yearly"
         | "specific_date"
+      schedule_mode: "full" | "incremental"
+      schedule_run_status: "RUNNING" | "DONE" | "BLOCKED" | "ERROR"
+      schedule_type: "daily" | "weekly" | "monthly" | "interval_hours"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -2683,6 +2795,9 @@ export const Constants = {
         "yearly",
         "specific_date",
       ],
+      schedule_mode: ["full", "incremental"],
+      schedule_run_status: ["RUNNING", "DONE", "BLOCKED", "ERROR"],
+      schedule_type: ["daily", "weekly", "monthly", "interval_hours"],
     },
   },
 } as const

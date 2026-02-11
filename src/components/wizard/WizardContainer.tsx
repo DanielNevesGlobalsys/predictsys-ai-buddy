@@ -13,6 +13,7 @@ import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
 import StepDashboard from "./steps/StepDashboard";
+import StepScheduling from "./steps/StepScheduling";
 import { trackEvent } from "@/lib/platformTracking";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useOrganization } from "@/contexts/OrganizationContext";
@@ -60,6 +61,7 @@ const WizardContainer = () => {
     { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
     { id: 6, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
     { id: 7, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
+    { id: 8, title: "Agendamento", description: "Configurar execuções recorrentes" },
   ];
 
   useEffect(() => {
@@ -105,7 +107,7 @@ const WizardContainer = () => {
       else if (data.status === "eda_complete") setCurrentStep(4);
       else if (data.status === "training") setCurrentStep(5);
       else if (data.status === "evaluated") setCurrentStep(6);
-      else if (data.status === "deployed") setCurrentStep(7);
+      else if (data.status === "deployed") setCurrentStep(8);
     }
     setLoading(false);
   };
@@ -253,8 +255,12 @@ const WizardContainer = () => {
   };
 
   const handleComplete = async () => {
-    // Move to Dashboard step (step 7) instead of navigating away
+    // Move to Dashboard step (step 7)
     await saveProject({ status: "deployed" }, 7);
+  };
+
+  const handleDashboardNext = () => {
+    setCurrentStep(8);
   };
   
   const handleFinalComplete = async () => {
@@ -343,7 +349,9 @@ const WizardContainer = () => {
       case 6:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 7:
-        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
+      case 8:
+        return <StepScheduling projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
       default:
         return null;
     }

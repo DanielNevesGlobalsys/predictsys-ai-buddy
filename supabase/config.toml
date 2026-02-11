@@ -104,3 +104,6 @@ verify_jwt = false
 
 [functions.deploy-model]
 verify_jwt = false
+
+[functions.upsert-schedule]
+verify_jwt = false
