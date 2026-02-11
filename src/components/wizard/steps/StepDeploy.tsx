@@ -61,6 +61,8 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
   const [columns, setColumns] = useState<{ column_name: string }[]>([]);
   const [scheduleSummary, setScheduleSummary] = useState<ScheduleSummary | null>(null);
   const scoringAborted = useRef(false);
+  const [hasScoringDone, setHasScoringDone] = useState(false);
+  const [checkingScoringStatus, setCheckingScoringStatus] = useState(true);
 
   const [scoring, setScoring] = useState<ScoringState>({
     status: "idle", batchId: null, totalScored: 0, totalExpected: 0,
@@ -72,11 +74,25 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
   const apiEndpoint = `${supabaseUrl}/functions/v1/predict`;
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
 
+  // Check if project already has valid predictions
+  const checkExistingScoring = useCallback(async () => {
+    if (!projectData.id) { setCheckingScoringStatus(false); return; }
+    setCheckingScoringStatus(true);
+    const { count } = await supabase
+      .from("predictions")
+      .select("id", { count: "exact", head: true })
+      .eq("project_id", projectData.id)
+      .eq("is_latest", true);
+    setHasScoringDone((count ?? 0) > 0);
+    setCheckingScoringStatus(false);
+  }, [projectData.id]);
+
   useEffect(() => {
     if (projectData.id) {
       loadModels();
       loadColumns();
       loadScheduleSummary();
+      checkExistingScoring();
     }
   }, [projectData.id]);
 
@@ -256,6 +272,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           ctas: data?.ctas || [],
         }));
 
+        setHasScoringDone(true);
         toast.success(`✅ ${data?.predictions_count || scored} previsões geradas`);
         return;
       }
@@ -529,13 +546,36 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
               problemType={projectData.problem_type} allModels={models}
             />
 
+            {/* Scheduler - gated behind valid scoring */}
             <div className="pt-4">
-              <PredictionScheduler 
-                projectId={projectData.id!} productionModelName={productionModel.algorithm_name}
-                onScheduleChange={loadScheduleSummary}
-              />
+              {hasScoringDone ? (
+                <PredictionScheduler 
+                  projectId={projectData.id!} productionModelName={productionModel.algorithm_name}
+                  onScheduleChange={loadScheduleSummary}
+                />
+              ) : (
+                <div className="p-4 bg-muted/30 border border-border rounded-lg flex items-center gap-3">
+                  <CalendarClock className="w-5 h-5 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium text-muted-foreground">Agendamento automático</p>
+                    <p className="text-xs text-muted-foreground">
+                      Disponível após a primeira execução de scoring válida. Gere as previsões acima para habilitar.
+                    </p>
+                  </div>
+                </div>
+              )}
             </div>
           </>
+        )}
+
+        {/* Post-scoring gate message */}
+        {productionModel && !hasScoringDone && scoring.status === "idle" && !checkingScoringStatus && (
+          <div className="p-4 bg-muted/20 border border-border rounded-lg flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-muted-foreground shrink-0" />
+            <p className="text-sm text-muted-foreground">
+              ⚠️ Modelo deployado, mas ainda não existem previsões válidas. Execute o scoring acima para habilitar o Dashboard e o Agendamento.
+            </p>
+          </div>
         )}
 
         {/* Actions */}
@@ -543,7 +583,12 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           <Button variant="outline" onClick={onBack} disabled={loading}>
             <ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}
           </Button>
-          <Button onClick={onComplete} disabled={loading || !productionModel} className="bg-gradient-primary hover:shadow-hover transition-all">
+          <Button
+            onClick={onComplete}
+            disabled={loading || !productionModel || !hasScoringDone || scoring.status === "running"}
+            className="bg-gradient-primary hover:shadow-hover transition-all"
+            title={!hasScoringDone ? "Execute o scoring antes de avançar para o Dashboard" : ""}
+          >
             {t("common.next")}<ArrowRight className="w-4 h-4 ml-2" />
           </Button>
         </div>
