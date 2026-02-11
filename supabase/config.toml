@@ -107,3 +107,6 @@ verify_jwt = false
 
 [functions.upsert-schedule]
 verify_jwt = false
+
+[functions.materialize-derived-features]
+verify_jwt = false

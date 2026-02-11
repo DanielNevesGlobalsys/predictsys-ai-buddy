@@ -381,7 +381,9 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
           projectId={projectId}
           columns={projectColumns}
           onFeaturesChanged={() => {
-            // Features changed, user should recalculate EDA to include new features
+            loadEnabledFeatures();
+          }}
+          onMaterializationComplete={() => {
             loadEnabledFeatures();
           }}
         />
