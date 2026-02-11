@@ -136,18 +136,38 @@ const StepTraining = ({
 
     const blockReasons: string[] = [];
 
-    // Check manifest
-    const { data: manifest } = await supabase
-      .from("import_manifests")
-      .select("eda_ready, model_ready, blocked_reason_model, rows_consolidated")
+    // Check SSOT dataset state first, then fallback to manifest
+    const { data: dsState } = await supabase
+      .from("project_dataset_state")
+      .select("row_count, col_count, eda_ready, model_ready, virtual_manifest, diagnostics")
       .eq("project_id", projectData.id)
-      .order("created_at", { ascending: false })
-      .limit(1)
       .maybeSingle();
 
-    const edaReady = manifest?.eda_ready !== false;
-    const modelReady = manifest?.model_ready !== false;
-    const totalRows = manifest?.rows_consolidated || projectData.total_rows || 0;
+    let edaReady = true;
+    let modelReady = true;
+    let totalRows = 0;
+    let blockedReasonModel: string | null = null;
+
+    if (dsState && (dsState as any).row_count > 0) {
+      edaReady = (dsState as any).eda_ready !== false;
+      modelReady = (dsState as any).model_ready !== false;
+      totalRows = (dsState as any).row_count;
+      blockedReasonModel = (dsState as any).diagnostics?.blocked_reason_model || null;
+    } else {
+      // Fallback to manifest
+      const { data: manifest } = await supabase
+        .from("import_manifests")
+        .select("eda_ready, model_ready, blocked_reason_model, rows_consolidated")
+        .eq("project_id", projectData.id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      edaReady = manifest?.eda_ready !== false;
+      modelReady = manifest?.model_ready !== false;
+      totalRows = manifest?.rows_consolidated || projectData.total_rows || 0;
+      blockedReasonModel = manifest?.blocked_reason_model as string | null;
+    }
 
     if (!edaReady) blockReasons.push("Dataset não está pronto para análise (EDA bloqueado).");
 
@@ -187,7 +207,7 @@ const StepTraining = ({
       hasFeatures,
       hasContract,
       contractStatus,
-      blockedReasonModel: manifest?.blocked_reason_model as string | null,
+      blockedReasonModel,
       totalRows,
       canTrain,
       blockReasons,

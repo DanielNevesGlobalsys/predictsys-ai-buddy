@@ -1650,6 +1650,60 @@ export type Database = {
           },
         ]
       }
+      project_model_selection: {
+        Row: {
+          excluded_features: Json | null
+          organization_id: string
+          problem_type: string | null
+          project_id: string
+          selected_features: Json | null
+          selection_version: number
+          target_column: string | null
+          target_hash: string | null
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          excluded_features?: Json | null
+          organization_id: string
+          problem_type?: string | null
+          project_id: string
+          selected_features?: Json | null
+          selection_version?: number
+          target_column?: string | null
+          target_hash?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          excluded_features?: Json | null
+          organization_id?: string
+          problem_type?: string | null
+          project_id?: string
+          selected_features?: Json | null
+          selection_version?: number
+          target_column?: string | null
+          target_hash?: string | null
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_model_selection_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_model_selection_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_modeling_contracts: {
         Row: {
           anchor_time_col: string | null
@@ -1757,13 +1811,16 @@ export type Database = {
           features_generated: Json | null
           id: string
           intent_version: string | null
+          is_current: boolean | null
           label_plan: Json | null
           leakage_report: Json | null
           manifest_version: string | null
           organization_id: string
           project_id: string
           row_count: number | null
+          selection_version_used: number | null
           split_strategy: string | null
+          stale_reason: string | null
           status: string
           target_column: string
           target_source: string
@@ -1786,13 +1843,16 @@ export type Database = {
           features_generated?: Json | null
           id?: string
           intent_version?: string | null
+          is_current?: boolean | null
           label_plan?: Json | null
           leakage_report?: Json | null
           manifest_version?: string | null
           organization_id: string
           project_id: string
           row_count?: number | null
+          selection_version_used?: number | null
           split_strategy?: string | null
+          stale_reason?: string | null
           status?: string
           target_column: string
           target_source?: string
@@ -1815,13 +1875,16 @@ export type Database = {
           features_generated?: Json | null
           id?: string
           intent_version?: string | null
+          is_current?: boolean | null
           label_plan?: Json | null
           leakage_report?: Json | null
           manifest_version?: string | null
           organization_id?: string
           project_id?: string
           row_count?: number | null
+          selection_version_used?: number | null
           split_strategy?: string | null
+          stale_reason?: string | null
           status?: string
           target_column?: string
           target_source?: string
