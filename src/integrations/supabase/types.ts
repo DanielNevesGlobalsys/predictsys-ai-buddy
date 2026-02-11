@@ -1298,6 +1298,7 @@ export type Database = {
           manifest_id: string | null
           model_ready: boolean
           organization_id: string
+          production_model_id: string | null
           project_id: string
           row_count: number
           source_type: string
@@ -1315,6 +1316,7 @@ export type Database = {
           manifest_id?: string | null
           model_ready?: boolean
           organization_id: string
+          production_model_id?: string | null
           project_id: string
           row_count?: number
           source_type?: string
@@ -1332,6 +1334,7 @@ export type Database = {
           manifest_id?: string | null
           model_ready?: boolean
           organization_id?: string
+          production_model_id?: string | null
           project_id?: string
           row_count?: number
           source_type?: string
@@ -1339,6 +1342,13 @@ export type Database = {
           virtual_manifest?: boolean
         }
         Relationships: [
+          {
+            foreignKeyName: "fk_production_model"
+            columns: ["production_model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "project_dataset_state_manifest_id_fkey"
             columns: ["manifest_id"]
@@ -1920,6 +1930,8 @@ export type Database = {
         Row: {
           algorithm_name: string
           created_at: string
+          deployed_at: string | null
+          deployed_selection_version: number | null
           hyperparameters: Json | null
           id: string
           is_production: boolean
@@ -1932,6 +1944,8 @@ export type Database = {
         Insert: {
           algorithm_name: string
           created_at?: string
+          deployed_at?: string | null
+          deployed_selection_version?: number | null
           hyperparameters?: Json | null
           id?: string
           is_production?: boolean
@@ -1944,6 +1958,8 @@ export type Database = {
         Update: {
           algorithm_name?: string
           created_at?: string
+          deployed_at?: string | null
+          deployed_selection_version?: number | null
           hyperparameters?: Json | null
           id?: string
           is_production?: boolean

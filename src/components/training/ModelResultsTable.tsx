@@ -85,33 +85,34 @@ const ModelResultsTable = ({
     
     setSettingProduction(modelId);
     try {
-      // First, set all models of this project to is_production = false
-      const { error: resetError } = await supabase
-        .from("project_models")
-        .update({ is_production: false })
-        .eq("project_id", projectId);
+      // Use the Deploy Engine endpoint with full gate validation
+      const { data, error: fnError } = await supabase.functions.invoke("deploy-model", {
+        body: { project_id: projectId, model_id: modelId },
+      });
 
-      if (resetError) throw resetError;
+      if (fnError) {
+        console.error("Deploy engine error:", fnError);
+        throw new Error(fnError.message || "Erro no deploy");
+      }
 
-      // Then set the selected model to is_production = true
-      const { error: setError } = await supabase
-        .from("project_models")
-        .update({ is_production: true })
-        .eq("id", modelId);
+      if (data?.status === "BLOCKED") {
+        const reason = data.blocked_reason_code || "UNKNOWN";
+        const cta = data.ctas?.[0];
+        const msg = `Deploy bloqueado: ${reason}. ${cta?.label || "Revise o modelo."}`;
+        toast.error(msg);
+        console.warn("[Deploy] Blocked:", data);
+        return;
+      }
 
-      if (setError) throw setError;
-
-      // Update project status to deployed
-      await supabase
-        .from("projects")
-        .update({ status: "deployed" })
-        .eq("id", projectId);
-
-      toast.success(t("models.productionSet"));
-      onProductionChange?.();
-    } catch (error) {
-      console.error("Error setting production model:", error);
-      toast.error(t("models.productionError"));
+      if (data?.status === "DEPLOYED") {
+        toast.success(t("models.productionSet"));
+        onProductionChange?.();
+      } else {
+        toast.error("Resposta inesperada do deploy engine");
+      }
+    } catch (error: any) {
+      console.error("Error deploying model:", error);
+      toast.error(error?.message || t("models.productionError"));
     } finally {
       setSettingProduction(null);
     }
