@@ -545,7 +545,14 @@ function predictGradientBoosting(
 
 // ==================== METRICS ====================
 
-function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<string, number> {
+interface MetricsResult {
+  raw: Record<string, number>;
+  clamped: Record<string, number>;
+  valid: boolean;
+  invalid_reasons: string[];
+}
+
+function calcClassificationMetricsDetailed(yTrue: number[], yProb: number[]): MetricsResult {
   const yPred = yProb.map(p => p >= 0.5 ? 1 : 0);
   let tp = 0, tn = 0, fp = 0, fn = 0;
   
@@ -556,34 +563,47 @@ function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<str
     else fn++;
   }
   
-  const accuracy = Math.min(1, Math.max(0, (tp + tn) / (tp + tn + fp + fn) || 0));
-  const precision = Math.min(1, Math.max(0, tp / (tp + fp) || 0));
-  const recall = Math.min(1, Math.max(0, tp / (tp + fn) || 0));
-  const f1 = Math.min(1, Math.max(0, 2 * precision * recall / (precision + recall) || 0));
+  const accuracy_raw = (tp + tn) / (tp + tn + fp + fn) || 0;
+  const precision_raw = tp / (tp + fp) || 0;
+  const recall_raw = tp / (tp + fn) || 0;
+  const f1_raw = 2 * precision_raw * recall_raw / (precision_raw + recall_raw) || 0;
   
   // AUC calculation
   const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
     .sort((a, b) => b.p - a.p);
-  let auc = 0;
+  let auc_raw = 0;
   let posSum = 0;
   const totalPos = yTrue.filter(y => y === 1).length;
   const totalNeg = yTrue.filter(y => y === 0).length;
   
   for (const pair of sortedPairs) {
     if (pair.t === 0) {
-      auc += posSum;
+      auc_raw += posSum;
     } else {
       posSum++;
     }
   }
-  auc = totalPos * totalNeg > 0 ? auc / (totalPos * totalNeg) : 0.5;
-  // Clamp AUC to [0, 1]
-  auc = Math.min(1, Math.max(0, auc));
-  
-  return { AUC: auc, F1: f1, Recall: recall, Precisão: precision, Acurácia: accuracy };
+  auc_raw = totalPos * totalNeg > 0 ? auc_raw / (totalPos * totalNeg) : 0.5;
+
+  const raw: Record<string, number> = { AUC: auc_raw, F1: f1_raw, Recall: recall_raw, Precisão: precision_raw, Acurácia: accuracy_raw };
+
+  // Validate raw metrics
+  const invalid_reasons: string[] = [];
+  for (const [k, v] of Object.entries(raw)) {
+    if (!isFinite(v)) invalid_reasons.push(`${k} = ${v} (not finite)`);
+    else if (v < 0) invalid_reasons.push(`${k} = ${v.toFixed(4)} (negative)`);
+    else if (v > 1.001) invalid_reasons.push(`${k} = ${v.toFixed(4)} (> 1.0)`);
+  }
+
+  const clamped: Record<string, number> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    clamped[k] = Math.min(1, Math.max(0, isFinite(v) ? v : 0));
+  }
+
+  return { raw, clamped, valid: invalid_reasons.length === 0, invalid_reasons };
 }
 
-function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string, number> {
+function calcRegressionMetricsDetailed(yTrue: number[], yPred: number[]): MetricsResult {
   const n = yTrue.length;
   let sumSquaredError = 0, sumAbsError = 0;
   const yMean = mean(yTrue);
@@ -601,8 +621,26 @@ function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string,
   const mse = sumSquaredError / n;
   const rmse = Math.sqrt(mse);
   const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
-  
-  return { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
+
+  const raw: Record<string, number> = { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
+
+  const invalid_reasons: string[] = [];
+  for (const [k, v] of Object.entries(raw)) {
+    if (!isFinite(v)) invalid_reasons.push(`${k} = ${v} (not finite)`);
+  }
+
+  const clamped = { ...raw };
+
+  return { raw, clamped, valid: invalid_reasons.length === 0, invalid_reasons };
+}
+
+// Legacy wrappers used by trainSingleModel
+function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<string, number> {
+  return calcClassificationMetricsDetailed(yTrue, yProb).clamped;
+}
+
+function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string, number> {
+  return calcRegressionMetricsDetailed(yTrue, yPred).clamped;
 }
 
 function calcFeatureImportance(weights: number[], featureNames: string[]): { feature_name: string; importance_value: number }[] {
@@ -2454,29 +2492,67 @@ serve(async (req) => {
     console.log(`\n=== Baseline Metrics ===`);
     console.log(JSON.stringify(baselineMetrics));
 
-    // ==================== MODEL QUALITY CHECK (metrics + sanity) ====================
-    let modelQualityFlag = "ok";
-    const modelR2 = trainResult.metrics["R²"];
-    const modelAUC = trainResult.metrics["AUC"];
-    
-    if (!isClassification && modelR2 !== undefined && modelR2 < 0) {
-      modelQualityFlag = "fail";
-      console.warn(`[AutoML] ⚠️ R² negativo (${modelR2.toFixed(4)}) — modelo PIOR que baseline!`);
-    } else if (isClassification && modelAUC !== undefined && modelAUC < 0.55) {
-      modelQualityFlag = "fail";
-      console.warn(`[AutoML] ⚠️ AUC abaixo de 0.55 (${modelAUC.toFixed(4)}) — insuficiente!`);
+    // ==================== DETAILED METRICS (RAW + CLAMPED + VALIDATION) ====================
+    const detailedMetrics: MetricsResult = isClassification
+      ? calcClassificationMetricsDetailed(ytestForModel, trainResult.predictions)
+      : calcRegressionMetricsDetailed(ytestForModel, trainResult.predictions);
+
+    console.log(`\n=== Detailed Metrics ===`);
+    console.log(`Raw:`, JSON.stringify(detailedMetrics.raw));
+    console.log(`Clamped:`, JSON.stringify(detailedMetrics.clamped));
+    console.log(`Valid: ${detailedMetrics.valid}`);
+    if (detailedMetrics.invalid_reasons.length > 0) {
+      console.warn(`Invalid reasons: ${detailedMetrics.invalid_reasons.join("; ")}`);
     }
+
+    // ==================== IMPROVEMENT VS BASELINE ====================
+    const primaryMetricKey = isClassification ? "AUC" : "R²";
+    const modelPrimaryMetric = detailedMetrics.clamped[primaryMetricKey] ?? 0;
+    const baselinePrimaryMetric = baselineMetrics[primaryMetricKey] ?? 0;
+    const improvementVsBaseline = modelPrimaryMetric - baselinePrimaryMetric;
+
+    console.log(`\n=== Improvement vs Baseline ===`);
+    console.log(`Model ${primaryMetricKey}: ${modelPrimaryMetric.toFixed(4)}`);
+    console.log(`Baseline ${primaryMetricKey}: ${baselinePrimaryMetric.toFixed(4)}`);
+    console.log(`Improvement: ${improvementVsBaseline.toFixed(4)}`);
+
+    // ==================== MODEL QUALITY CHECK (metrics + sanity + baseline) ====================
+    let modelQualityFlag = "ok";
+    const modelR2 = detailedMetrics.clamped["R²"];
+    const modelAUC = detailedMetrics.clamped["AUC"];
     
-    // Sanity check override
-    if (!trainResult.sanity.passed) {
-      modelQualityFlag = "fail";
+    // 1. Invalid metrics (NaN, Infinity, out-of-range)
+    if (!detailedMetrics.valid) {
+      modelQualityFlag = "fail_metrics";
+      console.warn(`[AutoML] ⚠️ Metrics INVALID: ${detailedMetrics.invalid_reasons.join("; ")}`);
+    }
+    // 2. Sanity check failure (constant/degenerate predictions)
+    else if (!trainResult.sanity.passed) {
+      modelQualityFlag = "fail_sanity";
       console.warn(`[AutoML] ⚠️ Prediction sanity FAILED: ${trainResult.sanity.fail_reasons.join("; ")}`);
     }
-    
-    const shouldPromoteToProduction = modelQualityFlag === "ok";
-    
+    // 3. Worse than or equal to baseline
+    else if (improvementVsBaseline <= 0) {
+      modelQualityFlag = "weak_model";
+      console.warn(`[AutoML] ⚠️ Model does NOT beat baseline (improvement=${improvementVsBaseline.toFixed(4)})`);
+    }
+    // 4. Below minimum quality thresholds
+    else if (!isClassification && modelR2 !== undefined && modelR2 < 0) {
+      modelQualityFlag = "weak_model";
+      console.warn(`[AutoML] ⚠️ R² negativo (${modelR2.toFixed(4)}) — modelo PIOR que baseline!`);
+    } else if (isClassification && modelAUC !== undefined && modelAUC < 0.55) {
+      modelQualityFlag = "weak_model";
+      console.warn(`[AutoML] ⚠️ AUC abaixo de 0.55 (${modelAUC.toFixed(4)}) — insuficiente!`);
+    }
+
+    // Determine production eligibility + dashboard access
+    const metricsValid = detailedMetrics.valid;
+    const canPromoteToProduction = metricsValid && modelQualityFlag === "ok" && trainResult.sanity.passed;
+    const dashboardAllowed = canPromoteToProduction;
+    const shouldPromoteToProduction = canPromoteToProduction;
+
     if (!shouldPromoteToProduction) {
-      console.warn(`[AutoML] ⚠️ Modelo NÃO será promovido para produção automaticamente.`);
+      console.warn(`[AutoML] ⚠️ Modelo NÃO será promovido para produção. Flag: ${modelQualityFlag}`);
     }
 
     // Save model to database
@@ -2511,6 +2587,14 @@ serve(async (req) => {
           feature_names: finalFeatureNames,
           baseline_metrics: baselineMetrics,
           model_quality_flag: modelQualityFlag,
+          // Metrics audit trail
+          metrics_raw: detailedMetrics.raw,
+          metrics_clamped: detailedMetrics.clamped,
+          metrics_valid: detailedMetrics.valid,
+          metrics_invalid_reasons: detailedMetrics.invalid_reasons,
+          improvement_vs_baseline: improvementVsBaseline,
+          can_promote_to_production: canPromoteToProduction,
+          dashboard_allowed: dashboardAllowed,
           // Preflight validation report
           preflight_report: preflightReport,
           // Split info
@@ -2666,12 +2750,35 @@ serve(async (req) => {
     console.log(`========================================\n`);
 
     return new Response(JSON.stringify({ 
-      success: true, 
+      // ===== STRUCTURED RESPONSE (Etapa 4 Standard) =====
+      success: true,
+      status: "SUCCESS",
       message: modelQualityFlag === "ok" 
-        ? "Treinamento concluído" 
-        : "Treinamento concluído — modelo abaixo do baseline",
+        ? "Treinamento concluído com sucesso" 
+        : `Treinamento concluído — modelo ${modelQualityFlag}`,
+      // 2) metrics_summary
+      metrics_summary: detailedMetrics.clamped,
+      metrics_raw: detailedMetrics.raw,
+      metrics_valid: detailedMetrics.valid,
+      metrics_invalid_reasons: detailedMetrics.invalid_reasons,
+      // 3) baseline_summary
+      baseline_summary: baselineMetrics,
+      improvement_vs_baseline: improvementVsBaseline,
+      // 4) model_quality_flag
       model_quality_flag: modelQualityFlag,
-      baseline_metrics: baselineMetrics,
+      // 5) can_promote_to_production
+      can_promote_to_production: canPromoteToProduction,
+      // 6) dashboard_allowed
+      dashboard_allowed: dashboardAllowed,
+      // 7) training_warnings
+      training_warnings: [
+        ...(classMinSamplesWarning ? ["Classe com menos de 50 amostras"] : []),
+        ...featureValidation.blocked.map(f => `Feature bloqueada: ${f}`),
+        ...targetValidation.issues,
+        ...trainResult.sanity.fail_reasons,
+        ...detailedMetrics.invalid_reasons,
+        ...(improvementVsBaseline <= 0 ? [`Modelo não supera baseline (diff: ${improvementVsBaseline.toFixed(4)})`] : []),
+      ],
       preflight_report: preflightReport,
       prediction_sanity: {
         passed: trainResult.sanity.passed,
@@ -2690,7 +2797,7 @@ serve(async (req) => {
         name: strategy.name,
         algorithm: strategy.algorithm,
         reason: strategy.reason,
-        metrics: trainResult.metrics,
+        metrics: detailedMetrics.clamped,
         is_production: shouldPromoteToProduction,
         sample_info: {
           total_dataset_rows: totalDatasetRows,

@@ -58,6 +58,18 @@ interface TrainingErrorDetails {
   blocked_reason_code?: string;
 }
 
+interface TrainingQualityResult {
+  model_quality_flag: string;
+  can_promote_to_production: boolean;
+  dashboard_allowed: boolean;
+  improvement_vs_baseline: number;
+  metrics_valid: boolean;
+  metrics_invalid_reasons: string[];
+  training_warnings: string[];
+  baseline_summary: Record<string, number>;
+  metrics_summary: Record<string, number>;
+}
+
 interface TrainReadiness {
   edaReady: boolean;
   modelReady: boolean;
@@ -89,6 +101,7 @@ const StepTraining = ({
   const [errorAction, setErrorAction] = useState<string | null>(null);
   const [detectedProblemType, setDetectedProblemType] = useState<string | null>(null);
   const [showTypeWarning, setShowTypeWarning] = useState(false);
+  const [qualityResult, setQualityResult] = useState<TrainingQualityResult | null>(null);
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
 
@@ -303,6 +316,22 @@ const StepTraining = ({
           setErrorAction((data as any).action || null);
         }
         throw new Error(String((data as any).error));
+      }
+
+      // Capture quality result from backend
+      if (data) {
+        const d = data as any;
+        setQualityResult({
+          model_quality_flag: d.model_quality_flag || "ok",
+          can_promote_to_production: d.can_promote_to_production ?? true,
+          dashboard_allowed: d.dashboard_allowed ?? true,
+          improvement_vs_baseline: d.improvement_vs_baseline ?? 0,
+          metrics_valid: d.metrics_valid ?? true,
+          metrics_invalid_reasons: d.metrics_invalid_reasons || [],
+          training_warnings: d.training_warnings || [],
+          baseline_summary: d.baseline_summary || {},
+          metrics_summary: d.metrics_summary || {},
+        });
       }
 
       toast.success(t("stepTraining.trainingSuccess"));
@@ -689,6 +718,83 @@ const StepTraining = ({
             </div>
           )}
         </div>
+
+        {/* Quality Gate Panel — shows after training */}
+        {trainingComplete && qualityResult && (
+          <div className={`p-4 rounded-lg border space-y-3 ${
+            qualityResult.model_quality_flag === "ok"
+              ? "bg-accent/5 border-accent/20"
+              : qualityResult.model_quality_flag === "weak_model"
+              ? "bg-amber-500/5 border-amber-500/20"
+              : "bg-destructive/5 border-destructive/20"
+          }`}>
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <p className="text-sm font-semibold">Avaliação de Qualidade do Modelo</p>
+              <div className="flex items-center gap-1.5 flex-wrap">
+                <Badge className={qualityResult.metrics_valid
+                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                  : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                  {qualityResult.metrics_valid ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                  MÉTRICAS
+                </Badge>
+                <Badge className={qualityResult.can_promote_to_production
+                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                  : "bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]"}>
+                  {qualityResult.can_promote_to_production ? <CheckCircle className="w-3 h-3 mr-1" /> : <AlertTriangle className="w-3 h-3 mr-1" />}
+                  PRODUÇÃO
+                </Badge>
+                <Badge className={qualityResult.dashboard_allowed
+                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                  : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                  {qualityResult.dashboard_allowed ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                  DASHBOARD
+                </Badge>
+              </div>
+            </div>
+
+            {/* Baseline comparison */}
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2 bg-muted/50 rounded">
+                <p className="font-medium text-muted-foreground mb-1">Baseline</p>
+                {Object.entries(qualityResult.baseline_summary).slice(0, 3).map(([k, v]) => (
+                  <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
+                ))}
+              </div>
+              <div className="p-2 bg-muted/50 rounded">
+                <p className="font-medium text-muted-foreground mb-1">Modelo</p>
+                {Object.entries(qualityResult.metrics_summary).slice(0, 3).map(([k, v]) => (
+                  <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
+                ))}
+              </div>
+            </div>
+
+            <p className={`text-xs font-medium ${qualityResult.improvement_vs_baseline > 0 ? "text-accent" : "text-destructive"}`}>
+              Melhoria vs baseline: {qualityResult.improvement_vs_baseline > 0 ? "+" : ""}{qualityResult.improvement_vs_baseline.toFixed(4)}
+            </p>
+
+            {/* Zombie model warning */}
+            {!qualityResult.dashboard_allowed && (
+              <Alert className="bg-destructive/10 border-destructive/30">
+                <AlertTriangle className="w-4 h-4 text-destructive" />
+                <AlertDescription className="text-xs">
+                  ⚠️ Modelo treinado, porém não atingiu qualidade mínima para produção. 
+                  O dashboard executivo está bloqueado. Revise o target e as features e retreine o modelo.
+                </AlertDescription>
+              </Alert>
+            )}
+
+            {qualityResult.training_warnings.length > 0 && qualityResult.dashboard_allowed && (
+              <div className="space-y-1">
+                {qualityResult.training_warnings.slice(0, 5).map((w, i) => (
+                  <p key={i} className="text-[11px] text-amber-600 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+                    {w}
+                  </p>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Results section */}
         {trainingComplete && models.length > 0 && (
