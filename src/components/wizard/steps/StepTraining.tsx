@@ -58,16 +58,34 @@ interface TrainingErrorDetails {
   blocked_reason_code?: string;
 }
 
+interface TrainDiagnostics {
+  primary_metric: string;
+  primary_metric_value_raw: number;
+  primary_metric_value_clamped: number;
+  baseline_primary_metric: number;
+  improvement_vs_baseline: number;
+  raw_metrics_invalid_reasons: string[];
+  sanity_checks_passed: boolean;
+  sanity_fail_reasons: string[];
+  model_quality_flag: string;
+  dashboard_allowed: boolean;
+  dashboard_allowed_reason: string;
+  metrics_valid: boolean;
+  can_promote_to_production: boolean;
+}
+
 interface TrainingQualityResult {
   model_quality_flag: string;
   can_promote_to_production: boolean;
   dashboard_allowed: boolean;
+  dashboard_allowed_reason?: string;
   improvement_vs_baseline: number;
   metrics_valid: boolean;
   metrics_invalid_reasons: string[];
   training_warnings: string[];
   baseline_summary: Record<string, number>;
   metrics_summary: Record<string, number>;
+  train_diagnostics?: TrainDiagnostics;
 }
 
 interface TrainReadiness {
@@ -768,9 +786,21 @@ const StepTraining = ({
               </div>
             </div>
 
-            <p className={`text-xs font-medium ${qualityResult.improvement_vs_baseline > 0 ? "text-accent" : "text-destructive"}`}>
-              Melhoria vs baseline: {qualityResult.improvement_vs_baseline > 0 ? "+" : ""}{qualityResult.improvement_vs_baseline.toFixed(4)}
-            </p>
+            {qualityResult.train_diagnostics && (
+              <div className="p-2 bg-muted/30 rounded text-[11px] space-y-0.5">
+                <p className="font-medium text-muted-foreground mb-1">Diagnóstico do Treino</p>
+                <p>Métrica primária: <span className="font-semibold">{qualityResult.train_diagnostics.primary_metric}</span> = {qualityResult.train_diagnostics.primary_metric_value_raw.toFixed(4)} (raw) / {qualityResult.train_diagnostics.primary_metric_value_clamped.toFixed(4)} (clamped)</p>
+                <p>Baseline: {qualityResult.train_diagnostics.baseline_primary_metric.toFixed(4)}</p>
+                <p className={qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "text-accent font-medium" : "text-destructive font-medium"}>
+                  Melhoria: {qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "+" : ""}{qualityResult.train_diagnostics.improvement_vs_baseline.toFixed(4)}
+                </p>
+                <p>Sanity: {qualityResult.train_diagnostics.sanity_checks_passed ? "✅ OK" : `❌ ${qualityResult.train_diagnostics.sanity_fail_reasons.join("; ")}`}</p>
+                <p>Dashboard: {qualityResult.train_diagnostics.dashboard_allowed ? "✅ Liberado" : `❌ ${qualityResult.train_diagnostics.dashboard_allowed_reason}`}</p>
+                {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.length > 0 && (
+                  <p className="text-destructive">Métricas inválidas: {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.join("; ")}</p>
+                )}
+              </div>
+            )}
 
             {/* Zombie model warning */}
             {!qualityResult.dashboard_allowed && (
@@ -778,7 +808,11 @@ const StepTraining = ({
                 <AlertTriangle className="w-4 h-4 text-destructive" />
                 <AlertDescription className="text-xs">
                   ⚠️ Modelo treinado, porém não atingiu qualidade mínima para produção. 
-                  O dashboard executivo está bloqueado. Revise o target e as features e retreine o modelo.
+                  O dashboard executivo está bloqueado. 
+                  {qualityResult.dashboard_allowed_reason && (
+                    <span className="font-medium"> Motivo: {qualityResult.dashboard_allowed_reason}.</span>
+                  )}
+                  {" "}Revise o target e as features e retreine o modelo.
                 </AlertDescription>
               </Alert>
             )}

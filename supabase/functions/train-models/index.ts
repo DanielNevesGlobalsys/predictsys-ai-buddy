@@ -915,7 +915,7 @@ interface PredictionSanity {
   fail_reasons: string[];
 }
 
-function checkPredictionSanity(predictions: number[], yTrue?: number[]): PredictionSanity {
+function checkPredictionSanity(predictions: number[], yTrue?: number[], isClassification?: boolean): PredictionSanity {
   const n = predictions.length;
   const predMean = mean(predictions);
   const predStd = std(predictions);
@@ -961,6 +961,32 @@ function checkPredictionSanity(predictions: number[], yTrue?: number[]): Predict
   
   if (uniqueRatio < 0.005 && n > 100) {
     failReasons.push(`Apenas ${uniquePreds.size} valores únicos em ${n} previsões.`);
+  }
+
+  // Classification-specific: probability collapse (p95 - p05 < 0.02)
+  if (isClassification && n > 20) {
+    const sorted = [...predictions].sort((a, b) => a - b);
+    const p05 = sorted[Math.floor(n * 0.05)];
+    const p95 = sorted[Math.floor(n * 0.95)];
+    const probSpread = p95 - p05;
+    if (probSpread < 0.02) {
+      failReasons.push(`Colapso de probabilidade: p95−p05 = ${probSpread.toFixed(4)} (<0.02) — modelo não discrimina classes.`);
+    }
+
+    // Only 1 predicted class
+    const predictedClasses = new Set(predictions.map(p => p >= 0.5 ? 1 : 0));
+    if (predictedClasses.size === 1) {
+      const onlyClass = [...predictedClasses][0];
+      failReasons.push(`Apenas classe ${onlyClass} prevista — modelo ignora a outra classe.`);
+    }
+  }
+
+  // Regression-specific: very low variance + no improvement (checked externally but flag here)
+  if (!isClassification && yTrue && yTrue.length > 0) {
+    const yStd = std(yTrue);
+    if (yStd > 0 && predStd / yStd < 0.01) {
+      failReasons.push(`Variância das previsões é <1% da variância real — modelo colapsou.`);
+    }
   }
   
   return {
@@ -1051,7 +1077,7 @@ function trainSingleModel(
     ? calcClassificationMetrics(ytest, predictions)
     : calcRegressionMetrics(ytest, predictions);
   
-  const sanity = checkPredictionSanity(predictions, isClassification ? undefined : ytest);
+  const sanity = checkPredictionSanity(predictions, isClassification ? undefined : ytest, isClassification);
   
   console.log(`[AutoML] Métricas:`, metrics);
   console.log(`[AutoML] Sanity: passed=${sanity.passed}, pred_std=${sanity.pred_std.toFixed(6)}, pct_mode=${(sanity.pct_equal_mode_pred * 100).toFixed(1)}%`);
@@ -2505,14 +2531,14 @@ serve(async (req) => {
       console.warn(`Invalid reasons: ${detailedMetrics.invalid_reasons.join("; ")}`);
     }
 
-    // ==================== IMPROVEMENT VS BASELINE ====================
+    // ==================== IMPROVEMENT VS BASELINE (use RAW metrics) ====================
     const primaryMetricKey = isClassification ? "AUC" : "R²";
-    const modelPrimaryMetric = detailedMetrics.clamped[primaryMetricKey] ?? 0;
+    const modelPrimaryMetricRaw = detailedMetrics.raw[primaryMetricKey] ?? 0;
     const baselinePrimaryMetric = baselineMetrics[primaryMetricKey] ?? 0;
-    const improvementVsBaseline = modelPrimaryMetric - baselinePrimaryMetric;
+    const improvementVsBaseline = modelPrimaryMetricRaw - baselinePrimaryMetric;
 
     console.log(`\n=== Improvement vs Baseline ===`);
-    console.log(`Model ${primaryMetricKey}: ${modelPrimaryMetric.toFixed(4)}`);
+    console.log(`Model ${primaryMetricKey} (raw): ${modelPrimaryMetricRaw.toFixed(4)}`);
     console.log(`Baseline ${primaryMetricKey}: ${baselinePrimaryMetric.toFixed(4)}`);
     console.log(`Improvement: ${improvementVsBaseline.toFixed(4)}`);
 
@@ -2551,8 +2577,35 @@ serve(async (req) => {
     const dashboardAllowed = canPromoteToProduction;
     const shouldPromoteToProduction = canPromoteToProduction;
 
+    // Build dashboard_allowed_reason
+    let dashboardAllowedReason = "ok";
+    if (!metricsValid) dashboardAllowedReason = "metrics_invalid";
+    else if (!trainResult.sanity.passed) dashboardAllowedReason = "sanity_failed";
+    else if (modelQualityFlag === "weak_model") dashboardAllowedReason = "weak_model_no_improvement";
+    else if (modelQualityFlag !== "ok") dashboardAllowedReason = modelQualityFlag;
+
+    // Build train_diagnostics (always returned)
+    const trainDiagnostics = {
+      primary_metric: primaryMetricKey,
+      primary_metric_value_raw: modelPrimaryMetricRaw,
+      primary_metric_value_clamped: detailedMetrics.clamped[primaryMetricKey] ?? 0,
+      baseline_primary_metric: baselinePrimaryMetric,
+      improvement_vs_baseline: improvementVsBaseline,
+      raw_metrics_invalid_reasons: detailedMetrics.invalid_reasons,
+      sanity_checks_passed: trainResult.sanity.passed,
+      sanity_fail_reasons: trainResult.sanity.fail_reasons,
+      model_quality_flag: modelQualityFlag,
+      dashboard_allowed: dashboardAllowed,
+      dashboard_allowed_reason: dashboardAllowedReason,
+      metrics_valid: metricsValid,
+      can_promote_to_production: canPromoteToProduction,
+    };
+
+    console.log(`\n=== Train Diagnostics ===`);
+    console.log(JSON.stringify(trainDiagnostics));
+
     if (!shouldPromoteToProduction) {
-      console.warn(`[AutoML] ⚠️ Modelo NÃO será promovido para produção. Flag: ${modelQualityFlag}`);
+      console.warn(`[AutoML] ⚠️ Modelo NÃO será promovido para produção. Flag: ${modelQualityFlag}, reason: ${dashboardAllowedReason}`);
     }
 
     // Save model to database
@@ -2595,6 +2648,8 @@ serve(async (req) => {
           improvement_vs_baseline: improvementVsBaseline,
           can_promote_to_production: canPromoteToProduction,
           dashboard_allowed: dashboardAllowed,
+          dashboard_allowed_reason: dashboardAllowedReason,
+          train_diagnostics: trainDiagnostics,
           // Preflight validation report
           preflight_report: preflightReport,
           // Split info
@@ -2770,6 +2825,9 @@ serve(async (req) => {
       can_promote_to_production: canPromoteToProduction,
       // 6) dashboard_allowed
       dashboard_allowed: dashboardAllowed,
+      dashboard_allowed_reason: dashboardAllowedReason,
+      // 8) train_diagnostics (always present)
+      train_diagnostics: trainDiagnostics,
       // 7) training_warnings
       training_warnings: [
         ...(classMinSamplesWarning ? ["Classe com menos de 50 amostras"] : []),
