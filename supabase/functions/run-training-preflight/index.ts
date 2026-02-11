@@ -155,13 +155,26 @@ serve(async (req: Request) => {
 
     // ===== 4.4 BUILDER GATE =====
     const selectionVersion = (selection as any)?.selection_version || 0;
+    const builderSelVersion = modelingDataset ? ((modelingDataset as any).selection_version_used || 0) : null;
+    const builderIsCurrent = modelingDataset
+      ? ((modelingDataset as any).is_current !== false && builderSelVersion !== null && builderSelVersion >= selectionVersion)
+      : false;
+
     if (modelingDataset) {
       const md = modelingDataset as any;
-      const builderSelVersion = md.selection_version_used || 0;
       const isCurrent = md.is_current !== false;
       const isReady = md.status === "ready" || md.status === "warning";
 
-      if (isCurrent && isReady && builderSelVersion >= selectionVersion) {
+      if (!isCurrent || (selectionVersion > 0 && (builderSelVersion || 0) < selectionVersion)) {
+        // Builder outdated — BLOCK
+        gates.push({
+          gate: "builder",
+          status: "BLOCK",
+          message: `Builder desatualizado (built v${builderSelVersion || 0}, current v${selectionVersion}). Regere o dataset modelável.`,
+          details: { selection_version_used: builderSelVersion, current_version: selectionVersion, stale_reason: md.stale_reason },
+        });
+        canTrain = false;
+      } else if (isCurrent && isReady) {
         gates.push({
           gate: "builder",
           status: md.status === "warning" ? "WARN" : "PASS",
@@ -176,14 +189,6 @@ serve(async (req: Request) => {
           details: { status: md.status, blocked_reasons: md.blocked_reasons },
         });
         canTrain = false;
-      } else {
-        gates.push({
-          gate: "builder",
-          status: "WARN",
-          message: `Builder desatualizado (built v${builderSelVersion}, current v${selectionVersion}). Regere o dataset.`,
-          details: { selection_version_used: builderSelVersion, current_version: selectionVersion, stale_reason: md.stale_reason },
-        });
-        canTrain = false;
       }
     } else {
       gates.push({
@@ -191,7 +196,7 @@ serve(async (req: Request) => {
         status: "BLOCK",
         message: "Feature Builder ainda não foi executado. Gere o dataset modelável.",
       });
-      canBuild = true; // can build, just hasn't been done
+      canBuild = true;
       canTrain = false;
     }
 
@@ -241,6 +246,9 @@ serve(async (req: Request) => {
       human_message: firstBlock?.message || "Tudo pronto para treinar.",
       action_cta: firstBlock ? ctaMap[firstBlock.gate] || "Corrigir problema" : null,
       selection_version: selectionVersion,
+      selection_version_current: selectionVersion,
+      selection_version_used_by_builder: builderSelVersion,
+      builder_is_current: builderIsCurrent,
       builder_version: (modelingDataset as any)?.selection_version_used || 0,
     };
 

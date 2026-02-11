@@ -26,6 +26,9 @@ interface PreflightResult {
   human_message: string;
   action_cta: string | null;
   selection_version: number;
+  selection_version_current: number;
+  selection_version_used_by_builder: number | null;
+  builder_is_current: boolean;
   builder_version: number;
 }
 
@@ -134,10 +137,10 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack }: Props) => {
 
           {/* Version info */}
           <div className="flex items-center gap-3 text-[11px] text-muted-foreground border-t border-border/50 pt-2">
-            <span>Seleção: v{result.selection_version}</span>
-            <span>Builder: v{result.builder_version}</span>
-            {result.selection_version > result.builder_version && (
-              <Badge variant="outline" className="text-[10px] text-amber-500 border-amber-500/30">OUTDATED</Badge>
+            <span>Seleção: v{result.selection_version_current}</span>
+            <span>Builder: v{result.selection_version_used_by_builder ?? "—"}</span>
+            {!result.builder_is_current && (
+              <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">OUTDATED</Badge>
             )}
           </div>
 

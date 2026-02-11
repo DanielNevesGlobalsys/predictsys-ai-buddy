@@ -738,11 +738,17 @@ serve(async (req: Request) => {
       });
     }
 
-    const { project_id } = await req.json();
+    const body = await req.json();
+    const { project_id } = body;
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id obrigatório" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // SSOT RULE: Builder NEVER accepts target/features from payload
+    if (body.target_column || body.selected_features) {
+      console.warn(`[build-modeling-dataset] REJECTED: client sent target_column/selected_features in payload. Ignoring.`);
     }
 
     const { data: project, error: projErr } = await supabase
@@ -894,6 +900,17 @@ serve(async (req: Request) => {
     let labelPlan: LabelPlan | null = null;
     let windowDays: number | null = null;
     const allBlockedReasons: string[] = [];
+
+    // SSOT: If project_model_selection exists but has no target, BLOCK immediately
+    if (modelSelection && !modelSelection.target_column) {
+      return new Response(JSON.stringify({
+        status: "BLOCKED_NO_TARGET",
+        action: "select_target",
+        blocked_reasons: ["Nenhum target selecionado na configuração do modelo. Volte à Etapa 3 e selecione um target."],
+        modeling_dataset_ready: false,
+        selection_version: selectionVersion,
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
 
     console.log(`[build-modeling-dataset] Target source: selection="${modelSelection?.target_column}" (v${selectionVersion}), settings="${settings?.target_column}", resolved="${targetColumn}"`);
 
@@ -1132,6 +1149,29 @@ serve(async (req: Request) => {
       return new Response(JSON.stringify({ error: "Erro ao salvar dataset modelável", details: saveErr.message }), {
         status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ── POST-BUILD: Re-check selection_version for race condition ──
+    if (selectionVersion > 0) {
+      const { data: postCheck } = await supabase
+        .from("project_model_selection")
+        .select("selection_version")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      const postVersion = (postCheck as any)?.selection_version || 0;
+      if (postVersion > selectionVersion) {
+        console.warn(`[build-modeling-dataset] RACE CONDITION: selection changed during build (${selectionVersion} -> ${postVersion}). Marking as stale.`);
+        await supabase.from("project_modeling_datasets")
+          .update({ is_current: false, stale_reason: "SELECTION_CHANGED_DURING_BUILD" })
+          .eq("id", saved.id);
+        return new Response(JSON.stringify({
+          status: "SELECTION_CHANGED_RETRY",
+          error: "Seleção mudou durante a construção do dataset. Atualize a página e gere o builder novamente.",
+          action: "REFRESH_SELECTION",
+          selection_version_started: selectionVersion,
+          selection_version_current: postVersion,
+        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
     }
 
     console.log(`[build-modeling-dataset] Complete. Status: ${status}, modeling_dataset_ready: ${modelingDatasetReady}`);
