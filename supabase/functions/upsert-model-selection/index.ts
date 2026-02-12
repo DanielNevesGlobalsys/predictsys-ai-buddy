@@ -6,6 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+type RpcResult = {
+  success: boolean;
+  selection_version: number;
+  target_hash: string;
+  did_change: boolean;
+};
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -19,109 +26,117 @@ serve(async (req: Request) => {
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       return new Response(JSON.stringify({ error: "Não autorizado" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    const { data: { user }, error: authError } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+    const { data: { user }, error: authError } = await supabase.auth.getUser(
+      authHeader.replace("Bearer ", ""),
+    );
+
     if (authError || !user) {
       return new Response(JSON.stringify({ error: "Token inválido" }), {
-        status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const body = await req.json();
-    const { project_id, target_column, problem_type, selected_features, excluded_features } = body;
+    const {
+      project_id,
+      target_column,
+      problem_type,
+      selected_features,
+      excluded_features,
+    } = body;
 
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id obrigatório" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     if (!target_column) {
       return new Response(JSON.stringify({ error: "target_column obrigatório" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    // Verify project access
     const { data: project, error: projErr } = await supabase
-      .from("projects").select("id, organization_id, user_id").eq("id", project_id).single();
+      .from("projects")
+      .select("id, organization_id, user_id")
+      .eq("id", project_id)
+      .single();
+
     if (projErr || !project) {
       return new Response(JSON.stringify({ error: "Projeto não encontrado" }), {
-        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        status: 404,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
-    console.log(`[upsert-model-selection] project=${project_id}, target=${target_column}, user=${user.id}`);
+    console.log(
+      `[upsert-model-selection] project=${project_id}, target=${target_column}, user=${user.id}`,
+    );
 
-    // ── 1. Atomically increment selection_version ──
-    const { data: existing } = await supabase
-      .from("project_model_selection")
-      .select("selection_version")
-      .eq("project_id", project_id)
-      .maybeSingle();
+    const { data: rpcData, error: rpcErr } = await supabase.rpc(
+      "rpc_upsert_model_selection",
+      {
+        p_project_id: project_id,
+        p_organization_id: project.organization_id,
+        p_user_id: user.id,
+        p_target_column: target_column,
+        p_problem_type: problem_type || "",
+        p_selected_features: selected_features || [],
+        p_excluded_features: excluded_features || [],
+      },
+    );
 
-    const currentVersion = (existing as any)?.selection_version || 0;
-    const newVersion = currentVersion + 1;
-
-    // Compute target_hash
-    const hashInput = `${project_id}|${target_column}|${newVersion}`;
-    let hash = 0;
-    for (let i = 0; i < hashInput.length; i++) {
-      const ch = hashInput.charCodeAt(i);
-      hash = ((hash << 5) - hash) + ch;
-      hash |= 0;
-    }
-    const targetHash = `th_${Math.abs(hash).toString(36)}`;
-
-    const selectionRecord = {
-      project_id,
-      organization_id: project.organization_id,
-      target_column,
-      problem_type: problem_type || null,
-      selected_features: selected_features || [],
-      excluded_features: excluded_features || [],
-      selection_version: newVersion,
-      target_hash: targetHash,
-      updated_at: new Date().toISOString(),
-      updated_by: user.id,
-    };
-
-    const { error: upsertErr } = await supabase
-      .from("project_model_selection")
-      .upsert(selectionRecord, { onConflict: "project_id" });
-
-    if (upsertErr) {
-      console.error("[upsert-model-selection] Upsert error:", upsertErr);
-      return new Response(JSON.stringify({ error: "Erro ao salvar seleção", details: upsertErr.message }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
+    if (rpcErr || !rpcData || (Array.isArray(rpcData) && rpcData.length === 0)) {
+      console.error("[upsert-model-selection] RPC error:", rpcErr);
+      return new Response(
+        JSON.stringify({ error: "Erro ao salvar seleção (RPC)", details: rpcErr?.message }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+      );
     }
 
-    console.log(`[upsert-model-selection] Saved v${newVersion}, hash=${targetHash}`);
+    const result: RpcResult = Array.isArray(rpcData) ? rpcData[0] : rpcData;
 
-    // ── 2. Mark ALL existing modeling datasets as stale ──
-    const { data: staleUpdated } = await supabase
-      .from("project_modeling_datasets")
-      .update({ is_current: false, stale_reason: "SELECTION_CHANGED" })
-      .eq("project_id", project_id)
-      .eq("is_current", true)
-      .select("id");
+    const newVersion = result.selection_version;
+    const targetHash = result.target_hash;
+    const didChange = result.did_change;
 
-    const staleCount = staleUpdated?.length || 0;
-    console.log(`[upsert-model-selection] Marked ${staleCount} datasets as stale`);
+    console.log(
+      `[upsert-model-selection] Saved v${newVersion}, hash=${targetHash}, did_change=${didChange}`,
+    );
 
-    // ── 3. Update project_dataset_state.model_ready=false + diagnostics ──
-    const { data: dsState } = await supabase
-      .from("project_dataset_state")
-      .select("diagnostics")
-      .eq("project_id", project_id)
-      .maybeSingle();
+    let staleCount = 0;
 
-    if (dsState) {
-      const oldDiag = (dsState as any).diagnostics || {};
+    if (didChange) {
+      const { data: staleUpdated } = await supabase
+        .from("project_modeling_datasets")
+        .update({ is_current: false, stale_reason: "SELECTION_CHANGED" })
+        .eq("project_id", project_id)
+        .eq("is_current", true)
+        .select("id");
+
+      staleCount = staleUpdated?.length || 0;
+      console.log(`[upsert-model-selection] Marked ${staleCount} datasets as stale`);
+    } else {
+      console.log("[upsert-model-selection] No-op change: not staling datasets.");
+    }
+
+    if (didChange) {
+      const { data: dsState } = await supabase
+        .from("project_dataset_state")
+        .select("diagnostics")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      const oldDiag = (dsState as any)?.diagnostics || {};
       await supabase
         .from("project_dataset_state")
         .update({
@@ -136,34 +151,36 @@ serve(async (req: Request) => {
         .eq("project_id", project_id);
     }
 
-    // ── 4. Also sync project_settings for backward compat ──
     await supabase
       .from("project_settings")
-      .upsert({
-        project_id,
-        org_id: project.organization_id,
+      .upsert(
+        {
+          project_id,
+          org_id: project.organization_id,
+          target_column,
+          problem_type: problem_type || null,
+          feature_columns: selected_features || [],
+          excluded_columns: excluded_features || [],
+        },
+        { onConflict: "project_id" },
+      );
+
+    return new Response(
+      JSON.stringify({
+        success: true,
+        selection_version: newVersion,
+        target_hash: targetHash,
+        did_change: didChange,
         target_column,
-        problem_type: problem_type || null,
-        feature_columns: selected_features || [],
-        excluded_columns: excluded_features || [],
-      }, { onConflict: "project_id" });
-
-    return new Response(JSON.stringify({
-      success: true,
-      selection_version: newVersion,
-      target_hash: targetHash,
-      target_column,
-      stale_datasets_count: staleCount,
-    }), {
-      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
-
+        stale_datasets_count: staleCount,
+      }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   } catch (error) {
     console.error("[upsert-model-selection] Error:", error);
-    return new Response(JSON.stringify({
-      error: error instanceof Error ? error.message : "Erro desconhecido",
-    }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    return new Response(
+      JSON.stringify({ error: error instanceof Error ? error.message : "Erro desconhecido" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
   }
 });
