@@ -963,7 +963,7 @@ const StepTraining = ({
             />
 
             {/* Pipeline Audit Panel (admin only) */}
-            <PipelineAuditPanel projectId={projectData.id || ""} />
+            <PipelineAuditPanel projectId={projectData.id || ""} pipelineStage="training" />
           </div>
         )}
 

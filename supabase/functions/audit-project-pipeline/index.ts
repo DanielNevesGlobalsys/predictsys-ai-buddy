@@ -181,12 +181,14 @@ serve(async (req) => {
       });
     }
 
-    const { project_id, language = "pt" } = await req.json();
+    const { project_id, language = "pt", pipeline_stage = "production" } = await req.json();
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id é obrigatório" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    const isTrainingStage = pipeline_stage === "training";
 
     console.log(`[audit-pipeline] Starting audit for project ${project_id}`);
 
@@ -375,9 +377,10 @@ RULES:
 - NEVER say everything is fine if guardrails found issues
 - Include the deterministic guardrail warnings in the appropriate stage
 - For model stage: assess if the model type matches the inferred problem
-- For dashboard stage: assess if predictions exist and if dashboard context is coherent
-- executive_conclusion MUST be in business language, explaining if the model can be used and if the dashboard is trustworthy
-- Be honest and specific — never mask issues with generic phrases`;
+- For dashboard stage: ${isTrainingStage ? 'This project is still in the TRAINING phase. Predictions and dashboard are generated in the NEXT step. Mark the dashboard stage as "warning" with observation that it is PENDING (not an error). Do NOT list missing predictions/dashboard as incoherences.' : 'assess if predictions exist and if dashboard context is coherent'}
+- executive_conclusion MUST be in business language, explaining if the model can be used${isTrainingStage ? '. Note that predictions and dashboard will be available after scoring execution.' : ' and if the dashboard is trustworthy'}
+- Be honest and specific — never mask issues with generic phrases
+- PIPELINE_STAGE: ${isTrainingStage ? 'TRAINING (do NOT penalize missing predictions or dashboard)' : 'PRODUCTION (full audit)'}`;
 
     let aiAudit: any = null;
 
@@ -418,13 +421,22 @@ RULES:
 
     // ── Build final report ──────────────────────────────────────────────────
 
+    const dashboardFallback = isTrainingStage
+      ? { status: "pending" as const, observations: ["PENDENTE: previsões e dashboard são gerados na próxima etapa."] }
+      : { status: (contextFlags.has_predictions ? "ok" : "warning") as "ok" | "warning" | "error", observations: contextFlags.has_predictions ? [] : ["Nenhuma previsão gerada ainda."] };
+
     const stages = aiAudit?.stages || {
       eda: { status: contextFlags.has_eda ? "ok" : "error", observations: contextFlags.has_eda ? [] : ["EDA não foi executada."] },
       inference: { status: contextFlags.has_inference ? "ok" : "error", observations: contextFlags.has_inference ? [] : ["Inferência de problema não foi executada."] },
       target: { status: targetGuardrails.valid ? "ok" : "error", observations: targetGuardrails.warnings },
       model: { status: modelGuardrails.adequate ? "ok" : "error", observations: modelGuardrails.warnings },
-      dashboard: { status: contextFlags.has_predictions ? "ok" : "warning", observations: contextFlags.has_predictions ? [] : ["Nenhuma previsão gerada ainda."] },
+      dashboard: dashboardFallback,
     };
+
+    // Override AI dashboard stage during training
+    if (isTrainingStage && stages.dashboard) {
+      stages.dashboard = { status: "pending", observations: ["PENDENTE: previsões e dashboard são gerados na próxima etapa."] };
+    }
 
     // Merge guardrail warnings into AI stages
     if (aiAudit?.stages?.target) {
@@ -438,15 +450,26 @@ RULES:
       if (!modelGuardrails.adequate) aiAudit.stages.model.status = "error";
     }
 
-    const hasErrors = Object.values(stages).some((s: any) => s.status === "error");
-    const hasWarnings = Object.values(stages).some((s: any) => s.status === "warning");
+    // For training stage, exclude dashboard from overall coherence calculation
+    const stagesToEvaluate = isTrainingStage
+      ? Object.entries(stages).filter(([k]) => k !== "dashboard").map(([, v]) => v)
+      : Object.values(stages);
+    const hasErrors = stagesToEvaluate.some((s: any) => s.status === "error");
+    const hasWarnings = stagesToEvaluate.some((s: any) => s.status === "warning");
+
+    // Filter out prediction/dashboard incoherences during training
+    const filterTrainingIncoherences = (incs: string[]) => {
+      if (!isTrainingStage) return incs;
+      const blockedTerms = ["previsão", "previsões", "prediction", "dashboard", "scoring"];
+      return incs.filter(inc => !blockedTerms.some(t => inc.toLowerCase().includes(t)));
+    };
 
     const report: AuditReport = {
       overall_coherent: !hasErrors,
       confidence_level: hasErrors ? "low" : hasWarnings ? "medium" : "high",
       stages: aiAudit?.stages || stages,
-      incoherences: aiAudit?.incoherences || [...targetGuardrails.warnings, ...modelGuardrails.warnings].filter(w => w.includes("INVÁLIDO") || w.includes("NÃO deve")),
-      corrections: aiAudit?.corrections || [],
+      incoherences: filterTrainingIncoherences(aiAudit?.incoherences || [...targetGuardrails.warnings, ...modelGuardrails.warnings].filter(w => w.includes("INVÁLIDO") || w.includes("NÃO deve"))),
+      corrections: filterTrainingIncoherences(aiAudit?.corrections || []),
       executive_conclusion: aiAudit?.executive_conclusion || "Auditoria parcial — a análise de IA não estava disponível. Verifique os guardrails determinísticos.",
       context_flags: contextFlags,
       disclaimer: "Estas conclusões são baseadas em evidência estatística e estrutural do projeto, não em suposições.",
