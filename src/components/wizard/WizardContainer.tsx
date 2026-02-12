@@ -12,6 +12,7 @@ import StepEDA from "./steps/StepEDA";
 import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
+import StepScoring from "./steps/StepScoring";
 import StepDashboard from "./steps/StepDashboard";
 import StepScheduling from "./steps/StepScheduling";
 import { trackEvent } from "@/lib/platformTracking";
@@ -59,9 +60,10 @@ const WizardContainer = () => {
     { id: 3, title: t("wizard.steps.analysis"), description: t("wizard.steps.analysisDesc") },
     { id: 4, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
     { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
-    { id: 6, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
-    { id: 7, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
-    { id: 8, title: "Agendamento", description: "Configurar execuções recorrentes" },
+    { id: 6, title: "Previsões", description: "Gerar previsões com o modelo" },
+    { id: 7, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
+    { id: 8, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
+    { id: 9, title: "Agendamento", description: "Configurar execuções recorrentes" },
   ];
 
   useEffect(() => {
@@ -107,7 +109,7 @@ const WizardContainer = () => {
       else if (data.status === "eda_complete") setCurrentStep(4);
       else if (data.status === "training") setCurrentStep(5);
       else if (data.status === "evaluated") setCurrentStep(6);
-      else if (data.status === "deployed") setCurrentStep(8);
+      else if (data.status === "deployed") setCurrentStep(9);
     }
     setLoading(false);
   };
@@ -255,12 +257,12 @@ const WizardContainer = () => {
   };
 
   const handleComplete = async () => {
-    // Move to Dashboard step (step 7)
-    await saveProject({ status: "deployed" }, 7);
+    // Move to Dashboard step (step 8)
+    await saveProject({ status: "deployed" }, 8);
   };
 
   const handleDashboardNext = () => {
-    setCurrentStep(8);
+    setCurrentStep(9);
   };
   
   const handleFinalComplete = async () => {
@@ -347,10 +349,12 @@ const WizardContainer = () => {
       case 5:
         return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} />;
       case 6:
-        return <StepDeploy {...stepProps} onComplete={handleComplete} />;
+        return <StepScoring projectData={projectData} onNext={() => setCurrentStep(7)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
       case 7:
-        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
+        return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 8:
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
+      case 9:
         return <StepScheduling projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
       default:
         return null;
