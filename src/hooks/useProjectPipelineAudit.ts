@@ -2,7 +2,7 @@ import { useState, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 export interface AuditCheckResult {
-  status: "ok" | "warning" | "error";
+  status: "ok" | "warning" | "error" | "pending";
   observations: string[];
 }
 
@@ -40,14 +40,14 @@ export function useProjectPipelineAudit(projectId: string | undefined) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const runAudit = useCallback(async (language: string = "pt") => {
+  const runAudit = useCallback(async (language: string = "pt", pipelineStage: string = "production") => {
     if (!projectId) return null;
     setLoading(true);
     setError(null);
 
     try {
       const { data, error: fnError } = await supabase.functions.invoke("audit-project-pipeline", {
-        body: { project_id: projectId, language },
+        body: { project_id: projectId, language, pipeline_stage: pipelineStage },
       });
 
       if (fnError) {

@@ -21,6 +21,7 @@ import { useProjectPipelineAudit, type AuditReport, type AuditCheckResult, type 
 
 interface PipelineAuditPanelProps {
   projectId: string;
+  pipelineStage?: "training" | "production";
 }
 
 const STAGE_LABELS: Record<string, { label: string; icon: string }> = {
@@ -39,6 +40,8 @@ const StatusIcon = ({ status }: { status: string }) => {
       return <AlertTriangle className="w-4 h-4 text-yellow-500" />;
     case "error":
       return <XCircle className="w-4 h-4 text-destructive" />;
+    case "pending":
+      return <Info className="w-4 h-4 text-blue-400" />;
     default:
       return <Info className="w-4 h-4 text-muted-foreground" />;
   }
@@ -49,11 +52,13 @@ const StatusBadge = ({ status }: { status: string }) => {
     ok: "bg-accent/10 text-accent border-accent/30",
     warning: "bg-yellow-500/10 text-yellow-600 border-yellow-500/30",
     error: "bg-destructive/10 text-destructive border-destructive/30",
+    pending: "bg-blue-500/10 text-blue-500 border-blue-500/30",
   };
   const labels: Record<string, string> = {
     ok: "Coerente",
     warning: "Atenção",
     error: "Incoerente",
+    pending: "Pendente",
   };
   return (
     <span className={`text-xs px-2 py-0.5 rounded-full border ${variants[status] || ""}`}>
@@ -68,6 +73,7 @@ const StageCard = ({ stageKey, check }: { stageKey: string; check: AuditCheckRes
     <div className={`p-3 rounded-lg border ${
       check.status === "ok" ? "border-accent/20 bg-accent/5" :
       check.status === "warning" ? "border-yellow-500/20 bg-yellow-500/5" :
+      check.status === "pending" ? "border-blue-500/20 bg-blue-500/5" :
       "border-destructive/20 bg-destructive/5"
     }`}>
       <div className="flex items-center justify-between mb-1">
@@ -121,7 +127,7 @@ const ContextFlagsGrid = ({ flags }: { flags: AuditContextFlags }) => {
   );
 };
 
-const PipelineAuditPanel = ({ projectId }: PipelineAuditPanelProps) => {
+const PipelineAuditPanel = ({ projectId, pipelineStage = "production" }: PipelineAuditPanelProps) => {
   const { t, i18n } = useTranslation();
   const [isAdmin, setIsAdmin] = useState(false);
   const [expanded, setExpanded] = useState(false);
@@ -200,7 +206,7 @@ const PipelineAuditPanel = ({ projectId }: PipelineAuditPanelProps) => {
                 Execute a auditoria para validar a coerência do pipeline EDA → Modelo → Dashboard.
               </p>
               <Button
-                onClick={() => runAudit(i18n.language)}
+                onClick={() => runAudit(i18n.language, pipelineStage)}
                 disabled={loading}
                 className="bg-gradient-primary hover:shadow-hover"
               >
@@ -222,7 +228,7 @@ const PipelineAuditPanel = ({ projectId }: PipelineAuditPanelProps) => {
           {error && (
             <div className="p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
               <p className="text-sm text-destructive">{error}</p>
-              <Button variant="outline" size="sm" className="mt-2" onClick={() => runAudit(i18n.language)}>
+              <Button variant="outline" size="sm" className="mt-2" onClick={() => runAudit(i18n.language, pipelineStage)}>
                 Tentar novamente
               </Button>
             </div>
@@ -295,7 +301,7 @@ const PipelineAuditPanel = ({ projectId }: PipelineAuditPanelProps) => {
                 <Button
                   variant="ghost"
                   size="sm"
-                  onClick={() => runAudit(i18n.language)}
+                  onClick={() => runAudit(i18n.language, pipelineStage)}
                   disabled={loading}
                   className="text-xs"
                 >
