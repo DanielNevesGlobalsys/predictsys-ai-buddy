@@ -189,6 +189,7 @@ serve(async (req) => {
     }
 
     const isTrainingStage = pipeline_stage === "training";
+    const isPredictionsStage = pipeline_stage === "predictions";
 
     console.log(`[audit-pipeline] Starting audit for project ${project_id}`);
 
@@ -377,10 +378,10 @@ RULES:
 - NEVER say everything is fine if guardrails found issues
 - Include the deterministic guardrail warnings in the appropriate stage
 - For model stage: assess if the model type matches the inferred problem
-- For dashboard stage: ${isTrainingStage ? 'This project is still in the TRAINING phase. Predictions and dashboard are generated in the NEXT step. Mark the dashboard stage as "warning" with observation that it is PENDING (not an error). Do NOT list missing predictions/dashboard as incoherences.' : 'assess if predictions exist and if dashboard context is coherent'}
-- executive_conclusion MUST be in business language, explaining if the model can be used${isTrainingStage ? '. Note that predictions and dashboard will be available after scoring execution.' : ' and if the dashboard is trustworthy'}
+- For dashboard stage: ${isTrainingStage ? 'This project is still in the TRAINING phase. Predictions and dashboard are generated in LATER steps. Mark the dashboard stage as "warning" with observation that it is PENDING (not an error). Do NOT list missing predictions/dashboard as incoherences.' : isPredictionsStage ? 'This project is in the PREDICTIONS phase. Dashboard context will be available after scoring. If predictions exist, mark dashboard as "warning" (pending). Do NOT list missing dashboard as incoherence.' : 'assess if predictions exist and if dashboard context is coherent'}
+- executive_conclusion MUST be in business language, explaining if the model can be used${isTrainingStage ? '. Note that predictions and dashboard will be available after scoring execution.' : isPredictionsStage ? '. Note that dashboard will be populated after predictions are generated.' : ' and if the dashboard is trustworthy'}
 - Be honest and specific — never mask issues with generic phrases
-- PIPELINE_STAGE: ${isTrainingStage ? 'TRAINING (do NOT penalize missing predictions or dashboard)' : 'PRODUCTION (full audit)'}`;
+- PIPELINE_STAGE: ${isTrainingStage ? 'TRAINING (do NOT penalize missing predictions or dashboard)' : isPredictionsStage ? 'PREDICTIONS (do NOT penalize missing dashboard)' : 'PRODUCTION (full audit)'}`;
 
     let aiAudit: any = null;
 
@@ -422,7 +423,9 @@ RULES:
     // ── Build final report ──────────────────────────────────────────────────
 
     const dashboardFallback = isTrainingStage
-      ? { status: "pending" as const, observations: ["PENDENTE: previsões e dashboard são gerados na próxima etapa."] }
+      ? { status: "pending" as const, observations: ["PENDENTE: previsões e dashboard são gerados nas próximas etapas."] }
+      : isPredictionsStage
+      ? { status: "pending" as const, observations: ["PENDENTE: dashboard será populado após geração das previsões."] }
       : { status: (contextFlags.has_predictions ? "ok" : "warning") as "ok" | "warning" | "error", observations: contextFlags.has_predictions ? [] : ["Nenhuma previsão gerada ainda."] };
 
     const stages = aiAudit?.stages || {
@@ -433,9 +436,11 @@ RULES:
       dashboard: dashboardFallback,
     };
 
-    // Override AI dashboard stage during training
+    // Override AI dashboard stage during training or predictions
     if (isTrainingStage && stages.dashboard) {
-      stages.dashboard = { status: "pending", observations: ["PENDENTE: previsões e dashboard são gerados na próxima etapa."] };
+      stages.dashboard = { status: "pending", observations: ["PENDENTE: previsões e dashboard são gerados nas próximas etapas."] };
+    } else if (isPredictionsStage && stages.dashboard) {
+      stages.dashboard = { status: "pending", observations: ["PENDENTE: dashboard será populado após geração das previsões."] };
     }
 
     // Merge guardrail warnings into AI stages
@@ -451,7 +456,10 @@ RULES:
     }
 
     // For training stage, exclude dashboard from overall coherence calculation
+    // For predictions stage, also exclude dashboard (it's populated after scoring)
     const stagesToEvaluate = isTrainingStage
+      ? Object.entries(stages).filter(([k]) => k !== "dashboard").map(([, v]) => v)
+      : isPredictionsStage
       ? Object.entries(stages).filter(([k]) => k !== "dashboard").map(([, v]) => v)
       : Object.values(stages);
     const hasErrors = stagesToEvaluate.some((s: any) => s.status === "error");
@@ -459,9 +467,14 @@ RULES:
 
     // Filter out prediction/dashboard incoherences during training
     const filterTrainingIncoherences = (incs: string[]) => {
-      if (!isTrainingStage) return incs;
+      if (!isTrainingStage && !isPredictionsStage) return incs;
       const blockedTerms = ["previsão", "previsões", "prediction", "dashboard", "scoring"];
-      return incs.filter(inc => !blockedTerms.some(t => inc.toLowerCase().includes(t)));
+      if (isTrainingStage) {
+        return incs.filter(inc => !blockedTerms.some(t => inc.toLowerCase().includes(t)));
+      }
+      // predictions stage: only filter dashboard terms
+      const dashTerms = ["dashboard"];
+      return incs.filter(inc => !dashTerms.some(t => inc.toLowerCase().includes(t)));
     };
 
     const report: AuditReport = {
