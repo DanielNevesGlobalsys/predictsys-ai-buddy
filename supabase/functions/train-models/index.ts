@@ -2863,6 +2863,19 @@ serve(async (req) => {
       .update({ status: "evaluated" })
       .eq("id", project_id);
 
+    // Sync SSOT: set production_model_id in project_dataset_state
+    if (shouldPromoteToProduction && modelData?.id) {
+      const { error: ssotErr } = await supabase
+        .from("project_dataset_state")
+        .update({ production_model_id: modelData.id, updated_at: new Date().toISOString() })
+        .eq("project_id", project_id);
+      if (ssotErr) {
+        console.warn(`[AutoML] Failed to sync SSOT production_model_id:`, ssotErr);
+      } else {
+        console.log(`[AutoML] ✅ SSOT synced: production_model_id = ${modelData.id}`);
+      }
+    }
+
     // ---- Append AI Context (training stage) ----
     try {
       const isClassification = problem_type === "classification";
