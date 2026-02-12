@@ -165,6 +165,36 @@ serve(async (req: Request) => {
         { onConflict: "project_id" },
       );
 
+    // ── Sync modeling contract problem_type when selection changes ──
+    if (didChange && problem_type) {
+      const { data: contract } = await supabase
+        .from("project_modeling_contracts")
+        .select("id, target_definition")
+        .eq("project_id", project_id)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (contract) {
+        const targetDef = (contract.target_definition as any) || {};
+        const contractPT = (targetDef.problem_type || "").toLowerCase();
+        const normalize = (t: string) => {
+          const l = t.toLowerCase();
+          if (["binary", "classification", "binary_classification"].includes(l)) return "classification";
+          if (["regression", "continuous"].includes(l)) return "regression";
+          return l;
+        };
+        if (normalize(contractPT) !== normalize(problem_type)) {
+          const updatedDef = { ...targetDef, problem_type };
+          await supabase
+            .from("project_modeling_contracts")
+            .update({ target_definition: updatedDef, updated_at: new Date().toISOString() })
+            .eq("id", contract.id);
+          console.log(`[upsert-model-selection] Synced contract problem_type: ${contractPT} → ${problem_type}`);
+        }
+      }
+    }
+
     return new Response(
       JSON.stringify({
         success: true,
