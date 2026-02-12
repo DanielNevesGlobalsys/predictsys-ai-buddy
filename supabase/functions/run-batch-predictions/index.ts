@@ -392,7 +392,7 @@ serve(async (req) => {
 
     // ===== SEGMENT + ENTITY MAPPING =====
     const segmentColNames = ['segment', 'segmento', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
-    const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'ID', 'Id'];
+    const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'id_cliente', 'customer', 'cliente', 'cnpj', 'cpf'];
 
     const isClassification = (selection?.problem_type || project.problem_type) === "classification";
     const batchId = existingBatchId || `batch_${Date.now()}_${project_id.substring(0, 8)}`;
@@ -588,13 +588,59 @@ serve(async (req) => {
 
           if (isFirstFile && isFirstLineOfFile) {
             headers = parseCSVLine(line, delimiter);
-            featureIndices = baseFeatureNames.map(name => headers.indexOf(name));
+            const headersLower = headers.map(h => h.toLowerCase().trim());
+
+            // Case-insensitive feature matching
+            featureIndices = baseFeatureNames.map(name => {
+              const exact = headers.indexOf(name);
+              if (exact !== -1) return exact;
+              return headersLower.indexOf(name.toLowerCase());
+            });
+
+            // Case-insensitive entity_id detection
+            let detectedEntityIdCol: string | null = null;
             for (const candidate of entityIdCandidates) {
-              const idx = headers.indexOf(candidate);
-              if (idx !== -1) { entityIdIndex = idx; break; }
+              const idx = headersLower.indexOf(candidate.toLowerCase());
+              if (idx !== -1) {
+                entityIdIndex = idx;
+                detectedEntityIdCol = headers[idx];
+                break;
+              }
             }
+
+            // === GATE: Validate feature coverage ===
+            const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
+            const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
+            const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+
+            if (modelMissingPct > 20 || baseMissing.length > 0) {
+              const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
+              gates.push({
+                gate: "feature_validation",
+                status: "BLOCK",
+                message: `Features ausentes: ${missingList.join(", ")}${missingList.length < baseMissing.length + modelMissing.length ? "..." : ""} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
+              });
+              return blockResponse(
+                gates,
+                "MISSING_FEATURES",
+                "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.",
+                [
+                  { label: "Regerar Builder", go_to_step: 3 },
+                  { label: "Retreinar", go_to_step: 4 },
+                ],
+                project_id,
+                productionModelId,
+              );
+            }
+            gates.push({
+              gate: "feature_validation",
+              status: modelMissing.length > 0 ? "WARN" : "PASS",
+              message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+            });
+
+            // Segmentation: already case-insensitive
             segmentColNames.forEach(name => {
-              const idx = headers.findIndex(h => h.toLowerCase() === name.toLowerCase());
+              const idx = headersLower.indexOf(name.toLowerCase());
               if (idx !== -1) segmentationCandidates[name] = idx;
             });
             for (const [name] of Object.entries(segmentationCandidates)) {
@@ -608,6 +654,8 @@ serve(async (req) => {
               else if (name.includes('age') || name.includes('etaria')) segmentKeyMap[name] = 'age_group';
               else if (name.includes('category') || name.includes('categoria')) segmentKeyMap[name] = 'product_category';
             }
+
+            console.log(`[Scoring] Headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}, base_missing=${baseMissing.length}, model_missing=${modelMissing.length}`);
             isFirstLineOfFile = false;
             isFirstFile = false;
             continue;
