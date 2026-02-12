@@ -2820,6 +2820,23 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      rpc_upsert_model_selection: {
+        Args: {
+          p_excluded_features: string[]
+          p_organization_id: string
+          p_problem_type: string
+          p_project_id: string
+          p_selected_features: string[]
+          p_target_column: string
+          p_user_id: string
+        }
+        Returns: {
+          did_change: boolean
+          selection_version: number
+          success: boolean
+          target_hash: string
+        }[]
+      }
       user_belongs_to_org: {
         Args: { _org_id: string; _user_id: string }
         Returns: boolean
