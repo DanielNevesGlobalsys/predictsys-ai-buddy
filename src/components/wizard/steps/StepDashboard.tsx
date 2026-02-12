@@ -1,12 +1,15 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play, CalendarClock } from "lucide-react";
+import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play, CalendarClock, Bug, RefreshCw, ShieldAlert } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 import { BusinessDashboard } from "@/components/business-dashboard";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+import { useDashboardDataStatus } from "./useDashboardDataStatus";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { Badge } from "@/components/ui/badge";
 
 interface StepDashboardProps {
   projectData: ProjectData;
@@ -20,15 +23,14 @@ interface StepDashboardProps {
 const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalComplete, onNext }: StepDashboardProps) => {
   const { t } = useTranslation();
   const [hasProductionModel, setHasProductionModel] = useState(false);
-  const [hasPredictions, setHasPredictions] = useState<boolean | null>(null); // null = loading
-  const [predictionsCount, setPredictionsCount] = useState(0);
   const [completing, setCompleting] = useState(false);
+  const [promoting, setPromoting] = useState(false);
+  const [debugOpen, setDebugOpen] = useState(false);
+
+  const dataStatus = useDashboardDataStatus(projectData.id);
 
   useEffect(() => {
-    if (projectData.id) {
-      checkProductionModel();
-      checkPredictions();
-    }
+    if (projectData.id) checkProductionModel();
   }, [projectData.id]);
 
   const checkProductionModel = async () => {
@@ -42,17 +44,63 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
     setHasProductionModel(!!data);
   };
 
-  const checkPredictions = async () => {
+  const handlePromoteBatch = useCallback(async () => {
     if (!projectData.id) return;
-    const { count } = await supabase
-      .from("predictions")
-      .select("id", { count: "exact", head: true })
-      .eq("project_id", projectData.id)
-      .eq("is_latest", true);
-    const c = count ?? 0;
-    setPredictionsCount(c);
-    setHasPredictions(c > 0);
-  };
+    setPromoting(true);
+    try {
+      let passOffset = 0;
+      let batchId: string | undefined;
+      let runningStats: any = null;
+      let totalScoredPrev = 0;
+      let totalInvalidPrev = 0;
+      let jobId: string | undefined;
+      let passes = 0;
+      const MAX_PASSES = 100;
+
+      while (passes < MAX_PASSES) {
+        passes++;
+        const { data, error } = await supabase.functions.invoke("run-batch-predictions", {
+          body: {
+            project_id: projectData.id,
+            horizon_days: dataStatus.bestHorizon ?? 30,
+            pass_offset: passOffset,
+            batch_id: batchId,
+            running_stats: runningStats,
+            total_scored_prev: totalScoredPrev,
+            total_invalid_prev: totalInvalidPrev,
+            job_id: jobId,
+          },
+        });
+
+        if (error) {
+          toast.error(`Erro no scoring: ${error.message}`);
+          break;
+        }
+        if (data?.status === "BLOCKED" || data?.status === "ERROR") {
+          toast.error(data.error_friendly || data.error || "Erro no scoring");
+          break;
+        }
+        if (data?.status === "CONTINUE" || data?.continue) {
+          passOffset = data.next_offset;
+          batchId = data.batch_id;
+          runningStats = data.running_stats;
+          totalScoredPrev = data.total_scored_prev;
+          totalInvalidPrev = data.total_invalid_prev;
+          jobId = data.job_id;
+          continue;
+        }
+        // DONE
+        toast.success("Scoring finalizado! Recarregando...");
+        dataStatus.refetch();
+        break;
+      }
+    } catch (err) {
+      toast.error("Erro inesperado ao promover batch");
+      console.error(err);
+    } finally {
+      setPromoting(false);
+    }
+  }, [projectData.id, dataStatus.bestHorizon, dataStatus.refetch]);
 
   const handleCompleteProject = async () => {
     if (!hasProductionModel) {
@@ -80,8 +128,8 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
     );
   }
 
-  // Loading predictions check
-  if (hasPredictions === null) {
+  // Loading
+  if (dataStatus.status === "LOADING") {
     return (
       <Card className="bg-gradient-card shadow-card p-8">
         <div className="flex items-center justify-center py-12">
@@ -91,8 +139,59 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
     );
   }
 
-  // No predictions — explicit block
-  if (!hasPredictions) {
+  // Debug panel component
+  const DebugPanel = () => (
+    <Collapsible open={debugOpen} onOpenChange={setDebugOpen}>
+      <CollapsibleTrigger asChild>
+        <Button variant="ghost" size="sm" className="text-xs text-muted-foreground gap-1">
+          <Bug className="w-3 h-3" />
+          {debugOpen ? "Ocultar diagnóstico" : "Diagnóstico"}
+        </Button>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-2 p-4 bg-muted/50 rounded-lg text-xs font-mono space-y-1 border border-border">
+          <p><strong>Status:</strong> {dataStatus.status}</p>
+          <p><strong>score_report.predictions_count:</strong> {dataStatus.scoreReport?.predictions_count ?? "N/A"}</p>
+          <p><strong>score_report.coverage_pct:</strong> {dataStatus.scoreReport?.coverage_pct ?? "N/A"}%</p>
+          <p><strong>score_report.batch_id:</strong> {dataStatus.scoreReport?.batch_id ?? "N/A"}</p>
+          <p><strong>predictions.total:</strong> {dataStatus.counts.total}</p>
+          <p><strong>predictions.latest:</strong> {dataStatus.counts.latest}</p>
+          <p><strong>horizons:</strong> {dataStatus.horizons.length > 0 ? dataStatus.horizons.map(h => `${h.horizon_days}d (${h.count})`).join(", ") : "nenhum"}</p>
+          <p><strong>bestHorizon:</strong> {dataStatus.bestHorizon ?? "N/A"}</p>
+          {dataStatus.rlsError && <p className="text-destructive"><strong>RLS Error:</strong> {dataStatus.rlsError}</p>}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+
+  // RLS error
+  if (dataStatus.status === "RLS_ERROR") {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="space-y-6">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <ShieldAlert className="w-8 h-8 text-destructive" />
+            </div>
+            <h2 className="text-2xl font-display font-bold mb-2">Sem permissão</h2>
+          </div>
+          <div className="p-6 bg-destructive/5 border border-destructive/20 rounded-xl text-center space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Não foi possível ler as previsões. Verifique suas permissões de acesso (RLS).
+            </p>
+            <pre className="text-xs text-left bg-muted p-3 rounded overflow-auto max-h-32">{dataStatus.rlsError}</pre>
+          </div>
+          <DebugPanel />
+          <div className="flex justify-between pt-6 border-t border-border">
+            <Button variant="outline" onClick={onBack}><ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}</Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // Pending promote: predictions exist but none is_latest
+  if (dataStatus.status === "PENDING_PROMOTE") {
     return (
       <Card className="bg-gradient-card shadow-card p-8">
         <div className="space-y-6">
@@ -102,23 +201,25 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
             </div>
             <h2 className="text-2xl font-display font-bold mb-2">{t("modelDashboard.title")}</h2>
           </div>
-
-          <div className="p-6 bg-destructive/5 border border-destructive/20 rounded-xl text-center space-y-4">
-            <AlertTriangle className="w-10 h-10 text-destructive mx-auto" />
-            <h3 className="font-semibold text-lg">Dashboard não disponível</h3>
+          <div className="p-6 bg-accent/50 border border-accent rounded-xl text-center space-y-4">
+            <AlertTriangle className="w-10 h-10 text-accent-foreground mx-auto" />
+            <h3 className="font-semibold text-lg">Previsões não promovidas</h3>
             <p className="text-sm text-muted-foreground max-w-md mx-auto">
-              ⚠️ Não foram encontradas previsões válidas para este projeto. Execute o Scoring na etapa de Deploy para gerar previsões e habilitar o Dashboard.
+              Existem <strong>{dataStatus.counts.total}</strong> previsões geradas, mas nenhuma está marcada como <Badge variant="outline" className="text-xs">is_latest</Badge>. 
+              Finalize o scoring para promover o batch.
             </p>
-            <Button variant="outline" onClick={onBack} className="mt-2">
-              <Play className="w-4 h-4 mr-2" />
-              Voltar ao Deploy e gerar previsões
+            <Button onClick={handlePromoteBatch} disabled={promoting} className="bg-gradient-primary">
+              {promoting ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Processando scoring...</>
+              ) : (
+                <><RefreshCw className="w-4 h-4 mr-2" />Finalizar scoring (promover batch)</>
+              )}
             </Button>
           </div>
-
+          <DebugPanel />
           <div className="flex justify-between pt-6 border-t border-border">
-            <Button variant="outline" onClick={onBack} disabled={loading || completing}>
-              <ArrowLeft className="w-4 h-4 mr-2" />
-              {t("common.back")}
+            <Button variant="outline" onClick={onBack} disabled={loading || promoting}>
+              <ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}
             </Button>
           </div>
         </div>
@@ -126,6 +227,39 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
     );
   }
 
+  // No predictions at all
+  if (dataStatus.status === "NO_PREDICTIONS") {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="space-y-6">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-muted rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <LayoutDashboard className="w-8 h-8 text-muted-foreground" />
+            </div>
+            <h2 className="text-2xl font-display font-bold mb-2">{t("modelDashboard.title")}</h2>
+          </div>
+          <div className="p-6 bg-destructive/5 border border-destructive/20 rounded-xl text-center space-y-4">
+            <AlertTriangle className="w-10 h-10 text-destructive mx-auto" />
+            <h3 className="font-semibold text-lg">Dashboard não disponível</h3>
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Nenhuma previsão foi encontrada. Execute o Scoring na etapa anterior para gerar previsões.
+            </p>
+            <Button variant="outline" onClick={onBack} className="mt-2">
+              <Play className="w-4 h-4 mr-2" />Voltar ao Scoring
+            </Button>
+          </div>
+          <DebugPanel />
+          <div className="flex justify-between pt-6 border-t border-border">
+            <Button variant="outline" onClick={onBack} disabled={loading}>
+              <ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}
+            </Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // OK — show dashboard
   return (
     <Card className="bg-gradient-card shadow-card p-8">
       <div className="space-y-6">
@@ -139,19 +273,16 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
 
         <BusinessDashboard projectId={projectData.id} />
 
+        <DebugPanel />
+
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
           <Button variant="outline" onClick={onBack} disabled={loading || completing}>
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            {t("common.back")}
+            <ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}
           </Button>
           <div className="flex gap-2">
             {onNext && (
-              <Button
-                variant="outline"
-                onClick={onNext}
-                disabled={loading || completing}
-              >
+              <Button variant="outline" onClick={onNext} disabled={loading || completing}>
                 Agendamento
                 <CalendarClock className="w-4 h-4 ml-2" />
               </Button>
@@ -162,15 +293,9 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
               className="bg-gradient-primary hover:shadow-hover transition-all"
             >
               {completing ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  {t("common.loading")}
-                </>
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />{t("common.loading")}</>
               ) : (
-                <>
-                  <CheckCircle className="w-4 h-4 mr-2" />
-                  {t("stepDashboard.completeProject")}
-                </>
+                <><CheckCircle className="w-4 h-4 mr-2" />{t("stepDashboard.completeProject")}</>
               )}
             </Button>
           </div>
