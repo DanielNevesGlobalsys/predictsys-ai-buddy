@@ -43,6 +43,8 @@ export function useBusinessDashboard(projectId: string) {
     loading: metricsLoading, error: metricsError,
     refetch: refetchMetrics,
     confidenceScore, confidenceInputs,
+    recommendedThreshold, staleResults,
+    selectionVersionScored, selectionVersionCurrent,
   } = useDashboardMetrics(projectId, filters);
 
   // Fetch production model
@@ -248,6 +250,8 @@ export function useBusinessDashboard(projectId: string) {
   const data: BusinessDashboardData = {
     predictions, kpis, segmentationBands, groupSegmentation, timeProjections, availableSegmentFields,
     confidenceScore, confidenceInputs,
+    recommendedThreshold, staleResults,
+    selectionVersionScored, selectionVersionCurrent,
   };
 
   return {

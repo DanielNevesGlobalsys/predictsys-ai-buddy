@@ -15,6 +15,10 @@ interface DashboardMetricsResponse {
   mode: 'risk' | 'opportunity';
   segment: string;
   problem_type: string;
+  recommended_threshold?: number;
+  stale_results?: boolean;
+  selection_version_scored?: number | null;
+  selection_version_current?: number | null;
   confidence_score?: number | null;
   confidence_inputs?: {
     predictability_score: number | null;
@@ -43,6 +47,8 @@ interface DashboardMetricsResponse {
   segments: Array<{
     field: string;
     values: string[];
+    null_count?: number;
+    null_pct?: number;
   }>;
   diagnostics?: Record<string, unknown>;
 }
@@ -52,6 +58,7 @@ interface UseDashboardMetricsResult {
   segmentationBands: SegmentationBand[];
   availableSegmentFields: string[];
   availableSegmentValues: Record<string, string[]>;
+  segmentNullCoverage: Record<string, { null_count: number; null_pct: number }>;
   problemType: string;
   loading: boolean;
   error: string | null;
@@ -66,6 +73,10 @@ interface UseDashboardMetricsResult {
     missing_feature_pct: number | null;
     sanity_fail: boolean;
   } | null;
+  recommendedThreshold: number | null;
+  staleResults: boolean;
+  selectionVersionScored: number | null;
+  selectionVersionCurrent: number | null;
 }
 
 const DEFAULT_KPIS: KPIData = {
@@ -198,8 +209,12 @@ export function useDashboardMetrics(
   const availableSegmentFields = data?.segments?.map(s => s.field) ?? [];
   
   const availableSegmentValues: Record<string, string[]> = {};
+  const segmentNullCoverage: Record<string, { null_count: number; null_pct: number }> = {};
   data?.segments?.forEach(s => {
     availableSegmentValues[s.field] = s.values;
+    if (s.null_count != null && s.null_pct != null) {
+      segmentNullCoverage[s.field] = { null_count: s.null_count, null_pct: s.null_pct };
+    }
   });
 
   return {
@@ -207,6 +222,7 @@ export function useDashboardMetrics(
     segmentationBands,
     availableSegmentFields,
     availableSegmentValues,
+    segmentNullCoverage,
     problemType: data?.problem_type ?? 'classification',
     loading,
     error,
@@ -216,5 +232,9 @@ export function useDashboardMetrics(
     dashboardCtas: data?.ctas ?? [],
     confidenceScore: data?.confidence_score ?? null,
     confidenceInputs: data?.confidence_inputs ?? null,
+    recommendedThreshold: data?.recommended_threshold ?? null,
+    staleResults: data?.stale_results ?? false,
+    selectionVersionScored: data?.selection_version_scored ?? null,
+    selectionVersionCurrent: data?.selection_version_current ?? null,
   };
 }

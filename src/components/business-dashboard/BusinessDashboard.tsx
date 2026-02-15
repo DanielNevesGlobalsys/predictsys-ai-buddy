@@ -186,8 +186,9 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
       coveragePct: data.kpis.coveragePercent,
       confidenceScore: data.confidenceScore,
       targetColumn: projectInfo?.target_column || undefined,
+      recommendedThreshold: data.recommendedThreshold ?? undefined,
     });
-  }, [data.kpis, data.confidenceScore, problemType, aiContext, projectInfo?.target_column]);
+  }, [data.kpis, data.confidenceScore, data.recommendedThreshold, problemType, aiContext, projectInfo?.target_column]);
 
   const hasPredictionVariance = useMemo(() => {
     if (data.predictions.length < 2) return false;
@@ -451,7 +452,11 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
               inputs={data.confidenceInputs ?? undefined}
             />
             <div className="md:col-span-2">
-              <BusinessSummaryCard translation={businessTranslation} />
+              <BusinessSummaryCard
+                translation={businessTranslation}
+                staleResults={data.staleResults}
+                onRunScoring={handleRunPredictions}
+              />
             </div>
           </div>
 
