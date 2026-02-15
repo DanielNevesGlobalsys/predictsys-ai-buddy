@@ -62,7 +62,17 @@ serve(async (req: Request) => {
       supabase.from("project_numeric_stats").select("column_name, min_value, max_value").eq("project_id", project_id),
     ]);
 
-    const totalRows = dsStateRes.data?.row_count || 0;
+    // Fallback: if dataset_state missing, estimate from numeric stats (id column range)
+    let totalRows = dsStateRes.data?.row_count || 0;
+    if (totalRows === 0 && numStatsRes.data && numStatsRes.data.length > 0) {
+      // Use max_value of first numeric column as rough row estimate
+      const idStat = numStatsRes.data.find((n: any) => /^id/i.test(n.column_name));
+      const anyStat = idStat || numStatsRes.data[0];
+      if (anyStat?.max_value && Number(anyStat.max_value) > 0) {
+        totalRows = Math.round(Number(anyStat.max_value));
+        console.log(`[preview-split-policy] Fallback row estimate from ${anyStat.column_name}: ${totalRows}`);
+      }
+    }
     const currentSelVersion = selection_version || (selectionRes.data as any)?.selection_version || 1;
     const aiContext = (aiCtxRes.data?.context as Record<string, any>) || {};
     const contractHints = aiContext.contract_hints || {};
