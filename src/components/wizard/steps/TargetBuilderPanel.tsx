@@ -114,7 +114,7 @@ export default function TargetBuilderPanel({
   const [topAlternative, setTopAlternative] = useState<RecommendedAlternative | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
 
-  // Available templates for this industry
+  // Available templates for this industry (with fallback)
   const availableTemplates: LabelTemplate[] = [];
   if (recommendedTemplates) {
     for (const rt of recommendedTemplates) {
@@ -122,10 +122,24 @@ export default function TargetBuilderPanel({
       if (t) availableTemplates.push(t);
     }
   }
-  // Also add any templates from the industry
+  // Add templates matching industry
   if (industry) {
     for (const t of Object.values(LABEL_TEMPLATES)) {
       if (t.industry === industry && !availableTemplates.find(a => a.template_id === t.template_id)) {
+        availableTemplates.push(t);
+      }
+    }
+  }
+  // Fallback: always include "generic" templates
+  for (const t of Object.values(LABEL_TEMPLATES)) {
+    if (t.industry === "generic" && !availableTemplates.find(a => a.template_id === t.template_id)) {
+      availableTemplates.push(t);
+    }
+  }
+  // Last resort: if still empty, show ALL templates
+  if (availableTemplates.length === 0) {
+    for (const t of Object.values(LABEL_TEMPLATES)) {
+      if (!availableTemplates.find(a => a.template_id === t.template_id)) {
         availableTemplates.push(t);
       }
     }
