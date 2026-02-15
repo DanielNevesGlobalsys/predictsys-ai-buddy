@@ -9,29 +9,35 @@ interface TemplateFeedbackWidgetProps {
   projectId: string;
   templateId: string;
   context?: 'target_builder' | 'dashboard';
+  /** Whether this template came from a recommendation engine */
+  source?: 'manual' | 'recommended';
+  /** ID from get-template-recommendations for conversion tracking */
+  recommendationId?: string;
+  /** Industry for health compliance (blocks free comments) */
+  industry?: string;
 }
 
 const QUICK_TAGS_TARGET = ['confuso', 'bom', 'métricas fracas', 'dados ruins', 'parâmetros errados'];
 const QUICK_TAGS_DASHBOARD = ['ações úteis', 'confuso', 'não confio', 'irrelevante', 'preciso'];
 
-export function TemplateFeedbackWidget({ projectId, templateId, context = 'target_builder' }: TemplateFeedbackWidgetProps) {
+export function TemplateFeedbackWidget({
+  projectId,
+  templateId,
+  context = 'target_builder',
+  source = 'manual',
+  recommendationId,
+  industry,
+}: TemplateFeedbackWidgetProps) {
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedRating, setSelectedRating] = useState<number | null>(null);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [showTags, setShowTags] = useState(false);
 
+  const isHealth = industry === 'health' || industry === 'saude';
   const quickTags = context === 'dashboard' ? QUICK_TAGS_DASHBOARD : QUICK_TAGS_TARGET;
 
-  const submitFeedback = useCallback(async (rating: number) => {
-    setSelectedRating(rating);
-
-    // If negative, show tags first
-    if (rating <= 2 && !showTags) {
-      setShowTags(true);
-      return;
-    }
-
+  const doSubmit = useCallback(async (rating: number, tags: string[]) => {
     setSubmitting(true);
     try {
       const { error } = await supabase.functions.invoke('submit-template-feedback', {
@@ -39,7 +45,11 @@ export function TemplateFeedbackWidget({ projectId, templateId, context = 'targe
           project_id: projectId,
           template_id: templateId,
           rating,
-          tags: selectedTags,
+          tags,
+          source,
+          recommendation_id: recommendationId || null,
+          // Health compliance: never send free comment from UI
+          comment: null,
         },
       });
       if (error) throw error;
@@ -51,28 +61,20 @@ export function TemplateFeedbackWidget({ projectId, templateId, context = 'targe
     } finally {
       setSubmitting(false);
     }
-  }, [projectId, templateId, selectedTags, showTags]);
+  }, [projectId, templateId, source, recommendationId]);
+
+  const submitFeedback = useCallback(async (rating: number) => {
+    setSelectedRating(rating);
+    if (rating <= 2 && !showTags) {
+      setShowTags(true);
+      return;
+    }
+    await doSubmit(rating, selectedTags);
+  }, [showTags, selectedTags, doSubmit]);
 
   const confirmWithTags = useCallback(async () => {
-    setSubmitting(true);
-    try {
-      const { error } = await supabase.functions.invoke('submit-template-feedback', {
-        body: {
-          project_id: projectId,
-          template_id: templateId,
-          rating: selectedRating,
-          tags: selectedTags,
-        },
-      });
-      if (error) throw error;
-      setSubmitted(true);
-      toast.success('Feedback registrado!');
-    } catch (err) {
-      toast.error('Erro ao enviar feedback');
-    } finally {
-      setSubmitting(false);
-    }
-  }, [projectId, templateId, selectedRating, selectedTags]);
+    await doSubmit(selectedRating!, selectedTags);
+  }, [selectedRating, selectedTags, doSubmit]);
 
   const toggleTag = (tag: string) => {
     setSelectedTags(prev =>
@@ -141,6 +143,12 @@ export function TemplateFeedbackWidget({ projectId, templateId, context = 'targe
               </Badge>
             ))}
           </div>
+          {/* Health compliance: no free text input */}
+          {isHealth && (
+            <p className="text-[10px] text-muted-foreground italic">
+              Comentários livres desabilitados por compliance (setor Saúde).
+            </p>
+          )}
           <Button
             size="sm"
             variant="outline"

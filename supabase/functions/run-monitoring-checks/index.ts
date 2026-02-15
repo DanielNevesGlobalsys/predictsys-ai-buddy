@@ -287,23 +287,32 @@ serve(async (req) => {
           if (checks.some(c => c.check === "DATA_DRIFT_CHECK" && c.status === "ALERT")) implicitTags.push("drift_alto");
           if (checks.some(c => c.check === "VERSION_DRIFT_CHECK" && c.status !== "PASS")) implicitTags.push("versao_defasada");
 
-          await supabase.from("project_template_feedback").insert({
+          // ── Improvement #6: Dedup implicit feedback per batch ──
+          // Uses unique partial index (project_id, batch_id, template_id, feedback_type)
+          // ON CONFLICT will silently skip if already exists for this batch
+          const { error: fbInsertErr } = await supabase.from("project_template_feedback").upsert({
             project_id,
             organization_id: project.organization_id,
-            user_id: "00000000-0000-0000-0000-000000000000", // system user
+            user_id: "00000000-0000-0000-0000-000000000000",
             template_id: templateId,
             industry: project.industry || null,
             feedback_type: "implicit",
             tags: implicitTags,
             batch_id: latestBatchId || null,
+            source: "manual",
             signals: {
               coverage_pct: coveragePct,
               monitoring_score: score,
               monitoring_status: overallStatus,
               sanity_fail: predStatus === "sanity_fail",
             },
-          });
-          console.log(`[Monitoring] Implicit feedback recorded: ${implicitTags.join(", ")}`);
+          }, { onConflict: "project_id,batch_id,template_id,feedback_type", ignoreDuplicates: true });
+
+          if (fbInsertErr) {
+            console.warn("[Monitoring] Implicit feedback upsert skipped (likely dedup):", fbInsertErr.message);
+          } else {
+            console.log(`[Monitoring] Implicit feedback recorded: ${implicitTags.join(", ")}`);
+          }
         }
       } catch (fbErr) {
         console.warn("[Monitoring] Implicit feedback failed (best-effort):", fbErr);

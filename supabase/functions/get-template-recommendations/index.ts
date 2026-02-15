@@ -6,6 +6,30 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ─── Reason codes (stable for i18n/analytics) ──────────────────
+type ReasonCode =
+  | "HIGH_SUCCESS_RATE"
+  | "HIGH_MONITORING_SCORE"
+  | "LOW_SANITY_FAIL"
+  | "HIGH_USER_RATING"
+  | "INTENT_MATCH"
+  | "INDUSTRY_MATCH"
+  | "HIGH_COVERAGE"
+  | "PENALTY_SANITY_FAIL"
+  | "PENALTY_LOW_RATING"
+  | "COLD_START"
+  | "HARD_STOP_SANITY";
+
+interface ReasonEntry {
+  code: ReasonCode;
+  weight: number;
+}
+
+// ─── Bayesian smoothing for cold start (improvement #1) ────────
+function smoothedRate(wins: number, total: number, priorWins = 5, priorTotal = 10): number {
+  return (wins + priorWins) / (total + priorTotal);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -25,7 +49,7 @@ serve(async (req) => {
       });
     }
 
-    // Load template stats for this industry
+    // ── Improvement #3: strict industry filtering (no cross-contamination) ──
     const { data: stats, error: statsErr } = await supabase
       .from("template_quality_stats")
       .select("*")
@@ -36,53 +60,80 @@ serve(async (req) => {
       console.error("[Recommendations] Stats error:", statsErr);
     }
 
-    // If intent_id filter provided, prioritize matching
     const allStats = (stats || []) as any[];
 
     // Score each template
     const scored = allStats.map((s: any) => {
+      const reasons: ReasonEntry[] = [];
       let confidence = 0.5;
-      let reasons: string[] = [];
+      const totalUses = s.total_uses ?? 0;
 
-      // Base: success rate
-      confidence += (s.success_rate ?? 0) * 0.3;
-      if (s.success_rate >= 0.8) reasons.push("Alta taxa de sucesso");
+      // ── Improvement #1: Bayesian smoothing for cold start ──
+      const isColdStart = totalUses < 20;
+      const rawSuccessRate = s.success_rate ?? 0;
+      const successes = Math.round(rawSuccessRate * totalUses);
+      const adjustedSuccessRate = isColdStart
+        ? smoothedRate(successes, totalUses)
+        : rawSuccessRate;
 
-      // Monitoring score contribution
-      if (s.avg_monitoring_score >= 80) {
-        confidence += 0.1;
-        reasons.push("Score de monitoramento consistente");
+      if (isColdStart) {
+        reasons.push({ code: "COLD_START", weight: 0 });
       }
 
-      // Sanity fail penalty
-      if (s.sanity_fail_rate > 0.2) {
+      // ── Improvement #2: Weighted composite score ──
+      // score = 0.5*success + 0.3*(avg_monitoring/100) + 0.2*(avg_rating/5)
+      const monNorm = (s.avg_monitoring_score ?? 0) / 100;
+      const ratingNorm = (s.avg_rating ?? 0) / 5;
+      confidence = 0.5 * adjustedSuccessRate + 0.3 * monNorm + 0.2 * ratingNorm;
+
+      // Dataset quality penalty: reduce confidence when avg predictability is low
+      const avgConfidence = s.avg_confidence ?? 100;
+      if (avgConfidence < 50) {
+        confidence *= 0.8; // 20% penalty for bad datasets
+      }
+
+      if (adjustedSuccessRate >= 0.7) reasons.push({ code: "HIGH_SUCCESS_RATE", weight: 0.3 });
+      if (monNorm >= 0.8) reasons.push({ code: "HIGH_MONITORING_SCORE", weight: 0.1 });
+
+      // ── Improvement #4: Hard stop for high sanity_fail_rate ──
+      const sanityFailRate = s.sanity_fail_rate ?? 0;
+      const isHardStop = sanityFailRate > 0.15;
+
+      if (sanityFailRate > 0.1) {
         confidence -= 0.2;
-        reasons.push("⚠️ Taxa de sanity fail elevada");
+        reasons.push({ code: "PENALTY_SANITY_FAIL", weight: -0.2 });
+      }
+      if (isHardStop) {
+        reasons.push({ code: "HARD_STOP_SANITY", weight: -0.5 });
       }
 
-      // Rating bonus
-      if (s.avg_rating >= 4) {
-        confidence += 0.1;
-        reasons.push("Bem avaliado por usuários");
-      } else if (s.avg_rating > 0 && s.avg_rating < 2.5) {
+      // Rating
+      if ((s.avg_rating ?? 0) >= 4) {
+        reasons.push({ code: "HIGH_USER_RATING", weight: 0.1 });
+      } else if ((s.avg_rating ?? 0) > 0 && (s.avg_rating ?? 0) < 2.5) {
         confidence -= 0.1;
-        reasons.push("⚠️ Avaliação baixa de usuários");
+        reasons.push({ code: "PENALTY_LOW_RATING", weight: -0.1 });
       }
 
-      // Intent match bonus
+      // Intent match
       if (intent_id && s.intent_id === intent_id) {
         confidence += 0.1;
-        reasons.push("Match de intenção exato");
+        reasons.push({ code: "INTENT_MATCH", weight: 0.1 });
       }
 
-      // Industry exact match
+      // ── Improvement #3: Industry exact match bonus ──
       if (s.industry === industry) {
         confidence += 0.05;
+        reasons.push({ code: "INDUSTRY_MATCH", weight: 0.05 });
       }
 
       // Coverage
-      if (s.avg_coverage >= 80) {
-        reasons.push("Boa cobertura média");
+      if ((s.avg_coverage ?? 0) >= 80) {
+        reasons.push({ code: "HIGH_COVERAGE", weight: 0 });
+      }
+
+      if (sanityFailRate <= 0.1) {
+        reasons.push({ code: "LOW_SANITY_FAIL", weight: 0.05 });
       }
 
       confidence = Math.max(0, Math.min(1, confidence));
@@ -91,24 +142,36 @@ serve(async (req) => {
         template_id: s.template_id,
         industry: s.industry,
         intent_id: s.intent_id,
-        reason: reasons.join(". ") || "Template disponível",
+        // ── Improvement #8: Stable reason_codes for i18n ──
+        reason_codes: reasons.map(r => r.code),
+        reasons,
         confidence: Math.round(confidence * 100) / 100,
-        expected_fit: confidence >= 0.7 ? "high" : confidence >= 0.4 ? "medium" : "low",
+        expected_fit: isHardStop ? "blocked" : confidence >= 0.7 ? "high" : confidence >= 0.4 ? "medium" : "low",
+        is_hard_stop: isHardStop,
+        is_cold_start: isColdStart,
         stats: {
-          total_uses: s.total_uses,
-          success_rate: s.success_rate,
+          total_uses: totalUses,
+          success_rate: rawSuccessRate,
+          adjusted_success_rate: Math.round(adjustedSuccessRate * 1000) / 1000,
           avg_monitoring_score: s.avg_monitoring_score,
-          sanity_fail_rate: s.sanity_fail_rate,
+          sanity_fail_rate: sanityFailRate,
           avg_rating: s.avg_rating,
+          avg_confidence: avgConfidence,
         },
       };
     });
 
-    // Sort by confidence descending
-    scored.sort((a: any, b: any) => b.confidence - a.confidence);
+    // Sort: non-hard-stop first, then by confidence descending
+    scored.sort((a: any, b: any) => {
+      if (a.is_hard_stop !== b.is_hard_stop) return a.is_hard_stop ? 1 : -1;
+      return b.confidence - a.confidence;
+    });
 
-    // Take top 5
-    const recommendations = scored.slice(0, 5);
+    // Take top 5, mark hard stops as alternatives
+    const recommendations = scored.slice(0, 5).map((r: any) => ({
+      ...r,
+      recommendation_id: `rec_${r.template_id}_${Date.now()}`,
+    }));
 
     return new Response(JSON.stringify({
       success: true,
