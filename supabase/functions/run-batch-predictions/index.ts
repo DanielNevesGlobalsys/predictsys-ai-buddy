@@ -400,9 +400,36 @@ serve(async (req) => {
     const batchId = existingBatchId || `batch_${Date.now()}_${project_id.substring(0, 8)}`;
     const predictionDate = new Date().toISOString();
 
-    // ===== CREATE / UPDATE SCORING JOB =====
+    // ===== JOB LOCK: prevent concurrent scoring =====
     let jobId = existingJobId;
     if (isFirstPass) {
+      // Check for already-running job (concurrency guard)
+      const { data: runningJob } = await supabase
+        .from("project_scoring_jobs")
+        .select("id, status, created_at")
+        .eq("project_id", project_id)
+        .in("status", ["running", "finalizing"])
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (runningJob) {
+        // Allow if stuck > 30 min (auto-expire stale locks)
+        const staleMs = Date.now() - new Date(runningJob.created_at).getTime();
+        if (staleMs < 30 * 60 * 1000) {
+          gates.push({ gate: "job_lock", status: "BLOCK", message: `Job ${runningJob.id} já em execução (status=${runningJob.status}).` });
+          return blockResponse(gates, "JOB_ALREADY_RUNNING", "Já existe um scoring em andamento para este projeto. Aguarde.", [
+            { label: "Aguardar", action: "wait" }
+          ], project_id, productionModelId);
+        }
+        // Stale job — mark as failed
+        console.log(`[Scoring] Stale job ${runningJob.id} detected (${staleMs}ms). Marking as failed.`);
+        await supabase.from("project_scoring_jobs").update({
+          status: "failed", finished_at: new Date().toISOString(),
+          diagnostics: { error: "Stale job auto-expired" },
+        }).eq("id", runningJob.id);
+      }
+
       // Mark previous jobs as not latest
       await supabase.from("project_scoring_jobs")
         .update({ is_latest_job: false })
@@ -421,6 +448,21 @@ serve(async (req) => {
         diagnostics: { gates: gates.map(g => ({ gate: g.gate, status: g.status })) },
       }).select("id").single();
       jobId = newJob?.id;
+
+      // Set prediction state to running
+      await supabase.from("project_prediction_state").upsert({
+        project_id,
+        latest_batch_id: batchId,
+        latest_job_id: jobId,
+        latest_model_id: productionModelId,
+        latest_selection_version: currentSelVersion,
+        status: "running",
+        predictions_count: 0,
+        coverage_pct: 0,
+        last_error_code: null,
+        last_error_message: null,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
 
       // Idempotency: insert new predictions with is_latest=false, promote at end
       // Clean old non-latest predictions to prevent bloat
@@ -772,23 +814,11 @@ serve(async (req) => {
       }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ===== FINAL PASS: PROMOTE BATCH =====
-    console.log(`[Scoring] Final pass complete. Promoting batch ${batchId} to is_latest=true`);
+    // ===== COVERAGE (must be before warnings) =====
+    const coveragePct = totalExpectedRows > 0
+      ? Math.min(100, (cumulativeScored / totalExpectedRows) * 100) : (cumulativeScored > 0 ? 100 : 0);
 
-    // Mark old predictions as not latest
-    await supabase.from("predictions").update({ is_latest: false })
-      .eq("project_id", project_id).neq("batch_id", batchId);
-
-    // Promote new batch
-    await supabase.from("predictions").update({ is_latest: true })
-      .eq("project_id", project_id).eq("batch_id", batchId);
-
-    // Verify
-    const { count: finalLatestCount } = await supabase
-      .from("predictions").select("id", { count: "exact", head: true })
-      .eq("project_id", project_id).eq("is_latest", true);
-
-    // ===== SANITY CHECK + SCORING_OUTPUT_SANITY =====
+    // ===== SANITY CHECK =====
     const isSanityFail = stats.count > 10 && stats.std < 0.0001;
     const warnings: string[] = [];
     if (cumulativeScored === 0) warnings.push("SCORING_OUTPUT_BLOCK: nenhuma previsão gerada.");
@@ -796,9 +826,49 @@ serve(async (req) => {
     if (missingFeaturePct > 20) warnings.push(`MISSING_FEATURES: ${missingFeaturePct.toFixed(0)}% das features do modelo estão ausentes.`);
     if (coveragePct < 30 && cumulativeScored > 0) warnings.push(`LOW_COVERAGE: cobertura de apenas ${coveragePct.toFixed(1)}%.`);
 
-    // ===== COVERAGE =====
-    const coveragePct = totalExpectedRows > 0
-      ? Math.min(100, (cumulativeScored / totalExpectedRows) * 100) : (cumulativeScored > 0 ? 100 : 0);
+    // ===== Update prediction state to finalizing =====
+    if (jobId) {
+      await supabase.from("project_prediction_state").upsert({
+        project_id,
+        status: "finalizing",
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+
+      await supabase.from("project_scoring_jobs").update({
+        status: "finalizing",
+      }).eq("id", jobId);
+    }
+
+    // ===== FINAL PASS: ATOMIC BATCH PROMOTION via RPC =====
+    console.log(`[Scoring] Final pass complete. Promoting batch ${batchId} atomically via RPC.`);
+
+    const { data: promoteResult, error: promoteError } = await supabase.rpc("rpc_promote_prediction_batch", {
+      p_project_id: project_id,
+      p_batch_id: batchId,
+      p_model_id: productionModelId,
+      p_selection_version: currentSelVersion,
+      p_job_id: jobId,
+      p_predictions_count: cumulativeScored,
+      p_coverage_pct: +coveragePct.toFixed(2),
+      p_is_sanity_fail: isSanityFail,
+    });
+
+    if (promoteError) {
+      console.error("[Scoring] RPC promote error:", promoteError);
+      // Fallback: update state to failed
+      await supabase.from("project_prediction_state").upsert({
+        project_id,
+        status: "failed",
+        last_error_code: "PROMOTE_RPC_FAILED",
+        last_error_message: promoteError.message,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+    }
+
+    const promoteData = promoteResult as any;
+    const finalLatestCount = promoteData?.predictions_promoted ?? cumulativeScored;
+
+    console.log(`[Scoring] Promotion result: demoted=${promoteData?.predictions_demoted}, promoted=${finalLatestCount}`);
 
     // ===== PERSIST SCORE REPORT =====
     const quantiles = stats.quantiles();
@@ -897,6 +967,24 @@ serve(async (req) => {
   } catch (error) {
     const errorStack = error instanceof Error ? error.stack || error.message : "Erro desconhecido";
     console.error(`[Scoring][DIAG] error_stack: ${errorStack}`);
+
+    // Best-effort: set prediction state to failed
+    try {
+      const body = await req.clone().json().catch(() => ({}));
+      if (body.project_id) {
+        const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+        const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+        const sb = createClient(supabaseUrl, supabaseServiceKey);
+        await sb.from("project_prediction_state").upsert({
+          project_id: body.project_id,
+          status: "failed",
+          last_error_code: "INTERNAL_ERROR",
+          last_error_message: error instanceof Error ? error.message : "Erro desconhecido",
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "project_id" });
+      }
+    } catch (_) {}
+
     return new Response(JSON.stringify({
       status: "ERROR",
       error: error instanceof Error ? error.message : "Erro desconhecido",

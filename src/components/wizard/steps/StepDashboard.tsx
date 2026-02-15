@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play, CalendarClock, Bug, RefreshCw, ShieldAlert } from "lucide-react";
+import { LayoutDashboard, ArrowLeft, CheckCircle, Loader2, AlertTriangle, Play, CalendarClock, Bug, RefreshCw, ShieldAlert, Clock, XCircle } from "lucide-react";
 import type { ProjectData } from "../WizardContainer";
 import { BusinessDashboard } from "@/components/business-dashboard";
 import { supabase } from "@/integrations/supabase/client";
@@ -151,6 +151,10 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
       <CollapsibleContent>
         <div className="mt-2 p-4 bg-muted/50 rounded-lg text-xs font-mono space-y-1 border border-border">
           <p><strong>Status:</strong> {dataStatus.status}</p>
+          <p><strong>prediction_state:</strong> {dataStatus.predictionState?.status ?? "N/A"}</p>
+          <p><strong>prediction_state.batch_id:</strong> {dataStatus.predictionState?.latest_batch_id ?? "N/A"}</p>
+          <p><strong>prediction_state.count:</strong> {dataStatus.predictionState?.predictions_count ?? "N/A"}</p>
+          <p><strong>prediction_state.coverage:</strong> {dataStatus.predictionState?.coverage_pct ?? "N/A"}%</p>
           <p><strong>score_report.predictions_count:</strong> {dataStatus.scoreReport?.predictions_count ?? "N/A"}</p>
           <p><strong>score_report.coverage_pct:</strong> {dataStatus.scoreReport?.coverage_pct ?? "N/A"}%</p>
           <p><strong>score_report.batch_id:</strong> {dataStatus.scoreReport?.batch_id ?? "N/A"}</p>
@@ -158,6 +162,7 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
           <p><strong>predictions.latest:</strong> {dataStatus.counts.latest}</p>
           <p><strong>horizons:</strong> {dataStatus.horizons.length > 0 ? dataStatus.horizons.map(h => `${h.horizon_days}d (${h.count})`).join(", ") : "nenhum"}</p>
           <p><strong>bestHorizon:</strong> {dataStatus.bestHorizon ?? "N/A"}</p>
+          {dataStatus.predictionState?.last_error_message && <p className="text-destructive"><strong>Error:</strong> {dataStatus.predictionState.last_error_message}</p>}
           {dataStatus.rlsError && <p className="text-destructive"><strong>RLS Error:</strong> {dataStatus.rlsError}</p>}
         </div>
       </CollapsibleContent>
@@ -180,6 +185,99 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
               Não foi possível ler as previsões. Verifique suas permissões de acesso (RLS).
             </p>
             <pre className="text-xs text-left bg-muted p-3 rounded overflow-auto max-h-32">{dataStatus.rlsError}</pre>
+          </div>
+          <DebugPanel />
+          <div className="flex justify-between pt-6 border-t border-border">
+            <Button variant="outline" onClick={onBack}><ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}</Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // Scoring running
+  if (dataStatus.status === "SCORING_RUNNING") {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="space-y-6">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Loader2 className="w-8 h-8 text-primary animate-spin" />
+            </div>
+            <h2 className="text-2xl font-display font-bold mb-2">Gerando previsões…</h2>
+          </div>
+          <div className="p-6 bg-primary/5 border border-primary/20 rounded-xl text-center space-y-3">
+            <p className="text-sm text-muted-foreground">
+              O scoring está processando o dataset em múltiplos passes. Isso pode levar alguns minutos.
+            </p>
+            <Button variant="outline" size="sm" onClick={dataStatus.refetch}>
+              <RefreshCw className="w-4 h-4 mr-2" />Atualizar status
+            </Button>
+          </div>
+          <DebugPanel />
+          <div className="flex justify-between pt-6 border-t border-border">
+            <Button variant="outline" onClick={onBack}><ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}</Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // Scoring finalizing
+  if (dataStatus.status === "SCORING_FINALIZING") {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="space-y-6">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-accent/50 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Clock className="w-8 h-8 text-accent-foreground" />
+            </div>
+            <h2 className="text-2xl font-display font-bold mb-2">Finalizando previsões…</h2>
+          </div>
+          <div className="p-6 bg-accent/50 border border-accent rounded-xl text-center space-y-4">
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              As previsões foram geradas e estão sendo promovidas. Se isso demorar, clique para finalizar manualmente.
+            </p>
+            <Button onClick={handlePromoteBatch} disabled={promoting} className="bg-gradient-primary">
+              {promoting ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Finalizando…</>
+              ) : (
+                <><RefreshCw className="w-4 h-4 mr-2" />Finalizar scoring</>
+              )}
+            </Button>
+          </div>
+          <DebugPanel />
+          <div className="flex justify-between pt-6 border-t border-border">
+            <Button variant="outline" onClick={onBack}><ArrowLeft className="w-4 h-4 mr-2" />{t("common.back")}</Button>
+          </div>
+        </div>
+      </Card>
+    );
+  }
+
+  // Scoring failed
+  if (dataStatus.status === "SCORING_FAILED") {
+    return (
+      <Card className="bg-gradient-card shadow-card p-8">
+        <div className="space-y-6">
+          <div className="text-center mb-8">
+            <div className="w-16 h-16 bg-destructive/10 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <XCircle className="w-8 h-8 text-destructive" />
+            </div>
+            <h2 className="text-2xl font-display font-bold mb-2">Scoring falhou</h2>
+          </div>
+          <div className="p-6 bg-destructive/5 border border-destructive/20 rounded-xl text-center space-y-4">
+            <p className="text-sm text-muted-foreground max-w-md mx-auto">
+              Ocorreu um erro durante o scoring. {dataStatus.predictionState?.last_error_message || "Tente novamente."}
+            </p>
+            {dataStatus.predictionState?.last_error_code && (
+              <Badge variant="outline" className="text-xs">{dataStatus.predictionState.last_error_code}</Badge>
+            )}
+            <div>
+              <Button onClick={handlePromoteBatch} disabled={promoting} variant="outline">
+                <RefreshCw className="w-4 h-4 mr-2" />Tentar novamente
+              </Button>
+            </div>
           </div>
           <DebugPanel />
           <div className="flex justify-between pt-6 border-t border-border">
