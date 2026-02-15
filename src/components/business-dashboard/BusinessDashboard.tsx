@@ -12,6 +12,7 @@ import { BusinessAIInsights } from './BusinessAIInsights';
 import { ExecutiveNarrative } from './ExecutiveNarrative';
 import { FullReportPDFExport } from './pdf/FullReportPDFExport';
 import { MonitoringPanel } from './MonitoringPanel';
+import { DashboardFeedbackWidget } from './DashboardFeedbackWidget';
 import { ConfidenceCard } from './ConfidenceCard';
 import { BusinessSummaryCard } from './BusinessSummaryCard';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
@@ -574,6 +575,8 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             kpis={displayKpis} segmentationBands={data.segmentationBands}
             groupSegmentation={data.groupSegmentation} viewMode={filters.viewMode}
           />
+
+          <DashboardFeedbackWidget projectId={projectId} />
         </TabsContent>
 
         <TabsContent value="monitoring" className="space-y-6 mt-4">

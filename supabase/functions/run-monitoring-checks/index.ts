@@ -261,6 +261,55 @@ serve(async (req) => {
       checks,
     });
 
+    // ========== IMPLICIT FEEDBACK (best-effort) ==========
+    // Auto-register feedback when problems detected
+    const shouldAutoFeedback = overallStatus === "alert" || overallStatus === "failed"
+      || checks.some(c => c.check === "SANITY_CHECK" && c.status !== "PASS")
+      || (coveragePct !== null && coveragePct < 30);
+
+    if (shouldAutoFeedback) {
+      try {
+        // Resolve template_id from AI context
+        const { data: aiCtxData } = await supabase
+          .from("project_ai_context")
+          .select("context")
+          .eq("project_id", project_id)
+          .maybeSingle();
+
+        const ctx = aiCtxData?.context as any;
+        const templateId = ctx?.intent_contract?.domain_adapter?.recommended_templates?.[0]?.template_id
+          || ctx?.intent_contract?.template_id;
+
+        if (templateId && project?.organization_id) {
+          const implicitTags: string[] = [];
+          if (checks.some(c => c.check === "SANITY_CHECK" && c.status !== "PASS")) implicitTags.push("sanity_fail");
+          if (coveragePct !== null && coveragePct < 30) implicitTags.push("cobertura_critica");
+          if (checks.some(c => c.check === "DATA_DRIFT_CHECK" && c.status === "ALERT")) implicitTags.push("drift_alto");
+          if (checks.some(c => c.check === "VERSION_DRIFT_CHECK" && c.status !== "PASS")) implicitTags.push("versao_defasada");
+
+          await supabase.from("project_template_feedback").insert({
+            project_id,
+            organization_id: project.organization_id,
+            user_id: "00000000-0000-0000-0000-000000000000", // system user
+            template_id: templateId,
+            industry: project.industry || null,
+            feedback_type: "implicit",
+            tags: implicitTags,
+            batch_id: latestBatchId || null,
+            signals: {
+              coverage_pct: coveragePct,
+              monitoring_score: score,
+              monitoring_status: overallStatus,
+              sanity_fail: predStatus === "sanity_fail",
+            },
+          });
+          console.log(`[Monitoring] Implicit feedback recorded: ${implicitTags.join(", ")}`);
+        }
+      } catch (fbErr) {
+        console.warn("[Monitoring] Implicit feedback failed (best-effort):", fbErr);
+      }
+    }
+
     console.log(`[Monitoring] project=${project_id} status=${overallStatus} score=${score} checks=${checks.length}`);
 
     return new Response(JSON.stringify({
