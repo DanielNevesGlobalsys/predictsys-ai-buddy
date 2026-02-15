@@ -116,6 +116,8 @@ export default function TargetBuilderPanel({
 
   // Available templates for this industry (with fallback)
   const availableTemplates: LabelTemplate[] = [];
+  let usingFallback = false;
+
   if (recommendedTemplates) {
     for (const rt of recommendedTemplates) {
       const t = LABEL_TEMPLATES[rt.template_id];
@@ -130,6 +132,12 @@ export default function TargetBuilderPanel({
       }
     }
   }
+
+  // If no industry-specific templates found, mark fallback
+  if (availableTemplates.length === 0) {
+    usingFallback = true;
+  }
+
   // Fallback: always include "generic" templates
   for (const t of Object.values(LABEL_TEMPLATES)) {
     if (t.industry === "generic" && !availableTemplates.find(a => a.template_id === t.template_id)) {
@@ -138,6 +146,7 @@ export default function TargetBuilderPanel({
   }
   // Last resort: if still empty, show ALL templates
   if (availableTemplates.length === 0) {
+    usingFallback = true;
     for (const t of Object.values(LABEL_TEMPLATES)) {
       if (!availableTemplates.find(a => a.template_id === t.template_id)) {
         availableTemplates.push(t);
@@ -290,6 +299,17 @@ export default function TargetBuilderPanel({
               <p className="text-xs text-muted-foreground">
                 O objetivo deste projeto requer que o target seja <strong>derivado</strong> dos dados
                 (ex: churn = sem compra em N dias). Use um dos templates abaixo para gerar automaticamente.
+              </p>
+            </div>
+          )}
+
+          {/* Fallback alert */}
+          {usingFallback && (
+            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-amber-600 dark:text-amber-400">
+                Usando template genérico por ausência de template específico da indústria.
+                Os templates universais funcionam com qualquer dataset.
               </p>
             </div>
           )}
