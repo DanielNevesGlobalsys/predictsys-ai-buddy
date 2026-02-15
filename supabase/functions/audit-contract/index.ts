@@ -191,8 +191,9 @@ serve(async (req: Request) => {
     }
 
     // ===== GATE 5: CLASS_BALANCE =====
+    const rowCount = dsState?.row_count || 0;
     const classBalance = aiCtx?.class_balance || {};
-    const entityCount = rowCount; // reuse rowCount as proxy for entity count
+    const entityCount = rowCount;
     if (labelBuilder?.preview_summary?.positive_rate != null) {
       const pr = labelBuilder.preview_summary.positive_rate;
       const topClass = Math.max(pr, 1 - pr);
@@ -218,7 +219,6 @@ serve(async (req: Request) => {
     }
 
     // ===== GATE 6: DATA_QUALITY_MIN =====
-    const rowCount = dsState?.row_count || 0;
     if (rowCount < 200) {
       gates.push({ gate: "DATA_QUALITY_MIN", status: "WARN", message: `Dataset com apenas ${rowCount} linhas. Mínimo recomendado: 200.`, details: { row_count: rowCount } });
       score -= 10;
