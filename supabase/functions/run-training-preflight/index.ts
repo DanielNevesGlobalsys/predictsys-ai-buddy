@@ -417,6 +417,27 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9 AUDIT CONTRACT GATE =====
+    const { data: latestAudit } = await supabase
+      .from("project_contract_audits")
+      .select("status, predictability_score, gates, summary")
+      .eq("project_id", project_id)
+      .eq("selection_version", selectionVersion)
+      .order("audit_version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestAudit) {
+      const auditStatus = latestAudit.status === "block" ? "BLOCK" : latestAudit.status === "warn" ? "WARN" : "PASS";
+      gates.push({
+        gate: "audit_contract",
+        status: auditStatus,
+        message: `Auditoria: score=${latestAudit.predictability_score}/100, status=${latestAudit.status}`,
+        details: { predictability_score: latestAudit.predictability_score },
+      });
+      if (latestAudit.status === "block") canTrain = false;
+    }
+
     // Derive final flags
     canDeploy = canTrain;
     canSchedule = canTrain;
@@ -442,6 +463,7 @@ serve(async (req: Request) => {
       split_policy: "Configurar Split Policy na Etapa 4",
       leakage_guard: "Revisar colunas removidas por leakage",
       class_balance: "Configurar balanceamento de classes",
+      audit_contract: "Rodar Auditoria do Contrato",
     };
 
     const result = {

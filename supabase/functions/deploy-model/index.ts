@@ -148,6 +148,24 @@ serve(async (req: Request) => {
       gates.push({ gate: "contract", status: "WARN", message: "Sem contrato de modelagem — continuando sem contrato." });
     }
 
+    // ===== GATE 5: Audit Contract (predictability score) =====
+    const { data: latestAudit } = await supabase
+      .from("project_contract_audits")
+      .select("status, predictability_score")
+      .eq("project_id", project_id)
+      .eq("selection_version", currentSelVersion)
+      .order("audit_version", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (latestAudit) {
+      if (latestAudit.status === "block" || latestAudit.predictability_score < 60) {
+        gates.push({ gate: "audit_score", status: "BLOCK", message: `Predictability score=${latestAudit.predictability_score}/100 (mínimo: 60).`, details: { score: latestAudit.predictability_score } });
+        return blockResult("LOW_PREDICTABILITY", `Score de previsibilidade muito baixo (${latestAudit.predictability_score}/100). Corrija os gates da auditoria.`, { label: "Ver Auditoria do Contrato", go_to_step: 3 });
+      }
+      gates.push({ gate: "audit_score", status: latestAudit.status === "warn" ? "WARN" : "PASS", message: `Predictability score=${latestAudit.predictability_score}/100` });
+    }
+
     // ===== ALL GATES PASSED — PROMOTE =====
     console.log(`[deploy-model] All gates PASS. Promoting model ${model_id}`);
 

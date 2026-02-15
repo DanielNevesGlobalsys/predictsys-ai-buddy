@@ -1341,6 +1341,50 @@ export type Database = {
           },
         ]
       }
+      project_contract_audits: {
+        Row: {
+          audit_version: number
+          created_at: string
+          gates: Json
+          id: string
+          predictability_score: number
+          project_id: string
+          selection_version: number
+          status: string
+          summary: Json
+        }
+        Insert: {
+          audit_version?: number
+          created_at?: string
+          gates?: Json
+          id?: string
+          predictability_score?: number
+          project_id: string
+          selection_version: number
+          status: string
+          summary?: Json
+        }
+        Update: {
+          audit_version?: number
+          created_at?: string
+          gates?: Json
+          id?: string
+          predictability_score?: number
+          project_id?: string
+          selection_version?: number
+          status?: string
+          summary?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_contract_audits_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_data_contract: {
         Row: {
           created_at: string

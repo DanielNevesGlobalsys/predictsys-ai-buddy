@@ -778,11 +778,13 @@ serve(async (req) => {
       .from("predictions").select("id", { count: "exact", head: true })
       .eq("project_id", project_id).eq("is_latest", true);
 
-    // ===== SANITY CHECK =====
+    // ===== SANITY CHECK + SCORING_OUTPUT_SANITY =====
     const isSanityFail = stats.count > 10 && stats.std < 0.0001;
     const warnings: string[] = [];
+    if (cumulativeScored === 0) warnings.push("SCORING_OUTPUT_BLOCK: nenhuma previsão gerada.");
     if (isSanityFail) warnings.push("SANITY_FAIL: previsões degeneradas (std≈0). Revise target/features.");
     if (missingFeaturePct > 20) warnings.push(`MISSING_FEATURES: ${missingFeaturePct.toFixed(0)}% das features do modelo estão ausentes.`);
+    if (coveragePct < 30 && cumulativeScored > 0) warnings.push(`LOW_COVERAGE: cobertura de apenas ${coveragePct.toFixed(1)}%.`);
 
     // ===== COVERAGE =====
     const coveragePct = totalExpectedRows > 0

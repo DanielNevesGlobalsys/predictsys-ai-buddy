@@ -32,6 +32,7 @@ import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
 import TargetBuilderPanel from "./TargetBuilderPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
+import AuditContractPanel from "./AuditContractPanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -1033,6 +1034,14 @@ const StepTargetFeatures = ({
               ))}
             </div>
           </div>
+        )}
+
+        {/* Audit Contract Panel */}
+        {targetColumn && selectionVersion && (
+          <AuditContractPanel
+            projectId={projectData.id}
+            selectionVersion={selectionVersion}
+          />
         )}
 
         {/* Actions */}
