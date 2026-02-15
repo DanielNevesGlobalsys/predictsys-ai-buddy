@@ -63,6 +63,12 @@ const TEMPLATE_CONFIGS: Record<string, TemplateConfig> = {
     requires_event_column: false,
     problem_type: "classification",
   },
+  churn_generic: {
+    requires_entity_key: true,
+    requires_time_anchor: true,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
   no_show_health: {
     requires_entity_key: true,
     requires_time_anchor: false,
@@ -450,7 +456,8 @@ serve(async (req) => {
     let extraNotes: string[] = [];
 
     switch (template_id) {
-      case "churn_retail": {
+      case "churn_retail":
+      case "churn_generic": {
         const result = simulateChurnRetail(catStats, numStats, totalRows, entityKey, timeAnchor, effectiveParams);
         preview = result.preview;
         extraNotes = result.notes;
