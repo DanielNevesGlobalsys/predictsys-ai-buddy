@@ -84,13 +84,13 @@ serve(async (req: Request) => {
     const requiresTime = intentBase.requires_time_column ?? false;
 
     if (!entityKey) {
-      gates.push({ gate: "CONTRACT_MIN_FIELDS", status: "WARN", message: "Nenhuma chave de entidade detectada. Recomendado: configure na Etapa 2.", details: { missing: "entity_key" } });
+      gates.push({ gate: "CONTRACT_MIN_FIELDS", status: "WARN", message: "Nenhuma chave de entidade detectada. Configure na etapa de EDA.", details: { missing: "entity_key" } });
       score -= 10;
-      actions.push({ label: "Configurar chave de entidade", go_to_step: 2 });
+      actions.push({ label: "Configurar chave de entidade", go_to_step: 3 });
     } else if (requiresTime && !timeAnchor) {
-      gates.push({ gate: "CONTRACT_MIN_FIELDS", status: "BLOCK", message: "Coluna de tempo obrigatória não detectada. Configure na Etapa 2.", details: { missing: "time_anchor", requires_time: true } });
+      gates.push({ gate: "CONTRACT_MIN_FIELDS", status: "BLOCK", message: "Coluna de tempo obrigatória não detectada.", details: { missing: "time_anchor", requires_time: true } });
       score -= 30;
-      actions.push({ label: "Configurar coluna temporal", go_to_step: 2 });
+      actions.push({ label: "Configurar coluna temporal", go_to_step: 4 });
     } else {
       gates.push({ gate: "CONTRACT_MIN_FIELDS", status: "PASS", message: `Contrato OK: entity=${entityKey}${timeAnchor ? `, time=${timeAnchor}` : ""}` });
     }
@@ -147,11 +147,11 @@ serve(async (req: Request) => {
       if (policySelVersion < selectionVersion) {
         gates.push({ gate: "SPLIT_SANITY", status: "BLOCK", message: `Split policy desatualizada (v${policySelVersion} vs v${selectionVersion}).`, details: { drift: true } });
         score -= 40;
-        actions.push({ label: "Regerar Split Policy", go_to_step: 3, code: "SPLIT_OUTDATED" });
+        actions.push({ label: "Regerar Split Policy", go_to_step: 4, code: "SPLIT_OUTDATED" });
       } else if (splitPolicy.status === "blocked") {
         gates.push({ gate: "SPLIT_SANITY", status: "BLOCK", message: "Split policy bloqueada.", details: { status: splitPolicy.status } });
         score -= 40;
-        actions.push({ label: "Revisar Split Policy", go_to_step: 3 });
+        actions.push({ label: "Revisar Split Policy", go_to_step: 4 });
       } else if (splitPolicy.status === "ready") {
         gates.push({ gate: "SPLIT_SANITY", status: "PASS", message: `Split ${splitPolicy.strategy} v${policySelVersion} pronto.` });
       } else {
@@ -161,7 +161,7 @@ serve(async (req: Request) => {
     } else if (requiresTime) {
       gates.push({ gate: "SPLIT_SANITY", status: "BLOCK", message: "Split temporal obrigatório mas nenhuma policy criada.", details: {} });
       score -= 40;
-      actions.push({ label: "Criar Split Policy", go_to_step: 3 });
+      actions.push({ label: "Criar Split Policy", go_to_step: 4 });
     } else {
       gates.push({ gate: "SPLIT_SANITY", status: "WARN", message: "Nenhuma split policy — treino usará split aleatório padrão." });
       score -= 15;
@@ -183,7 +183,7 @@ serve(async (req: Request) => {
     if (suspectInSelection.length > 0) {
       gates.push({ gate: "LEAKAGE_GUARD", status: "BLOCK", message: `${suspectInSelection.length} feature(s) suspeita(s) de leakage ainda selecionada(s).`, details: { suspect_features: suspectInSelection } });
       score -= 40;
-      actions.push({ label: "Remover features com leakage", go_to_step: 3 });
+      actions.push({ label: "Remover features com leakage", go_to_step: 4 });
     } else if (leakageGuard && leakageGuard.removals_count > 0) {
       gates.push({ gate: "LEAKAGE_GUARD", status: "PASS", message: `Leakage Guard: ${leakageGuard.removals_count} coluna(s) removida(s) automaticamente.`, details: { removals_count: leakageGuard.removals_count } });
     } else {
@@ -192,14 +192,24 @@ serve(async (req: Request) => {
 
     // ===== GATE 5: CLASS_BALANCE =====
     const classBalance = aiCtx?.class_balance || {};
+    const entityCount = rowCount; // reuse rowCount as proxy for entity count
     if (labelBuilder?.preview_summary?.positive_rate != null) {
       const pr = labelBuilder.preview_summary.positive_rate;
       const topClass = Math.max(pr, 1 - pr);
-      if (topClass > 0.90 && (!classBalance.method || classBalance.method === "none")) {
-        gates.push({ gate: "CLASS_BALANCE", status: "WARN", message: `Desbalanceamento (${(topClass * 100).toFixed(1)}%) sem policy de balanceamento.`, details: { top_class_pct: topClass, method: "none" } });
+      const hasBalanceMethod = classBalance.method && classBalance.method !== "none";
+      const isSmallDataset = entityCount < 1000;
+
+      if (topClass >= 0.85 && !hasBalanceMethod) {
+        // No balancing at all — always WARN
+        gates.push({ gate: "CLASS_BALANCE", status: "WARN", message: `Desbalanceamento (${(topClass * 100).toFixed(1)}%) sem policy de balanceamento.`, details: { top_class_pct: topClass, method: "none", entity_count: entityCount } });
         score -= 10;
-      } else if (topClass > 0.90 && classBalance.method && classBalance.method !== "none") {
-        gates.push({ gate: "CLASS_BALANCE", status: "PASS", message: `Balanceamento: ${classBalance.method} aplicado (${(topClass * 100).toFixed(1)}% dominante).` });
+      } else if (topClass >= 0.85 && hasBalanceMethod && isSmallDataset) {
+        // Balancing applied but dataset too small — method alone may be insufficient
+        gates.push({ gate: "CLASS_BALANCE", status: "WARN", message: `Balanceamento ${classBalance.method} aplicado, mas dataset pequeno (${entityCount} linhas) — eficácia pode ser limitada.`, details: { top_class_pct: topClass, method: classBalance.method, entity_count: entityCount } });
+        score -= 10;
+        actions.push({ label: "Considerar mais dados ou ajustar threshold", go_to_step: 2 });
+      } else if (topClass >= 0.85 && hasBalanceMethod) {
+        gates.push({ gate: "CLASS_BALANCE", status: "PASS", message: `Balanceamento: ${classBalance.method} aplicado (${(topClass * 100).toFixed(1)}% dominante, ${entityCount} linhas).` });
       } else {
         gates.push({ gate: "CLASS_BALANCE", status: "PASS", message: `Classes balanceadas (${(topClass * 100).toFixed(1)}% dominante).` });
       }
@@ -242,6 +252,8 @@ serve(async (req: Request) => {
       }
     } else {
       gates.push({ gate: "SCORING_READY", status: "WARN", message: "Nenhum modelo em produção (pré-deploy)." });
+      actions.push({ label: "Treinar modelos", go_to_step: 5 });
+      actions.push({ label: "Ver modelos candidatos", go_to_step: 5 });
     }
 
     // ===== COMPUTE FINAL =====
