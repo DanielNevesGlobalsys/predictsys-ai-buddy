@@ -155,10 +155,16 @@ const ADAPTERS: Record<IndustryKey, DomainAdapter> = {
     leakage_watchlist: ["write_off_date", "collection_status", "final_status", "recovery_amount"],
     recommended_templates: [
       {
-        template_id: "inadimplencia",
-        display_name: "Inadimplência / Default",
+        template_id: "inadimplencia_por_atraso",
+        display_name: "Inadimplência por Atraso",
         problem_type: "classification",
-        description: "Prevê a probabilidade de um cliente se tornar inadimplente.",
+        description: "Prevê inadimplência com base no atraso de pagamento em dias.",
+      },
+      {
+        template_id: "inadimplencia_por_status",
+        display_name: "Inadimplência por Status",
+        problem_type: "classification",
+        description: "Prevê inadimplência com base na coluna de status do pagamento.",
       },
       {
         template_id: "fraude",

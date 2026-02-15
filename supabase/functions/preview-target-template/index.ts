@@ -69,6 +69,36 @@ const TEMPLATE_CONFIGS: Record<string, TemplateConfig> = {
     requires_event_column: false,
     problem_type: "classification",
   },
+  generic_event_no_activity: {
+    requires_entity_key: true,
+    requires_time_anchor: true,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
+  generic_threshold_binary: {
+    requires_entity_key: false,
+    requires_time_anchor: false,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
+  generic_future_sum_regression: {
+    requires_entity_key: true,
+    requires_time_anchor: true,
+    requires_event_column: false,
+    problem_type: "regression",
+  },
+  inadimplencia_por_atraso: {
+    requires_entity_key: true,
+    requires_time_anchor: false,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
+  inadimplencia_por_status: {
+    requires_entity_key: true,
+    requires_time_anchor: false,
+    requires_event_column: true,
+    problem_type: "classification",
+  },
   no_show_health: {
     requires_entity_key: true,
     requires_time_anchor: false,
@@ -327,6 +357,233 @@ function simulateAdesaoHealth(
   };
 }
 
+// ═══ Simulate threshold binary ═════════════════════════════════
+
+function simulateThresholdBinary(
+  catStats: CategoricalStat[],
+  numStats: NumericStat[],
+  totalRows: number,
+  entityKey: string | null,
+  valueCandidates: string[],
+  params: Record<string, any>,
+): { preview: PreviewStats; notes: string[] } {
+  const notes: string[] = [];
+  const thresholdValue = params.threshold_value ?? 30;
+  let valueColumn = params.value_column || null;
+
+  // Auto-detect value column
+  if (!valueColumn) {
+    const candidates = ["dias_atraso", "days_overdue", "atraso_dias", "delay_days", ...valueCandidates];
+    for (const c of candidates) {
+      const stat = numStats.find(n => n.column_name === c);
+      if (stat) {
+        valueColumn = c;
+        notes.push(`Coluna detectada automaticamente: "${c}"`);
+        break;
+      }
+    }
+  }
+
+  const entityStat = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+  const entityCount = entityStat?.distinct_count || totalRows;
+
+  let positiveRate = 0.20;
+  if (valueColumn) {
+    const stat = numStats.find(n => n.column_name === valueColumn);
+    if (stat && stat.mean_value != null && stat.max_value != null) {
+      // Estimate: what fraction is above threshold
+      const range = (stat.max_value - (stat.min_value || 0)) || 1;
+      positiveRate = Math.max(0.02, Math.min(0.95, 1 - ((thresholdValue - (stat.min_value || 0)) / range)));
+      notes.push(`Estimativa baseada em "${valueColumn}": média=${stat.mean_value?.toFixed(1)}, max=${stat.max_value?.toFixed(1)}`);
+    }
+  } else {
+    notes.push("⚠️ Nenhuma coluna numérica detectada. Especifique value_column manualmente.");
+  }
+
+  notes.push(`Limiar: >= ${thresholdValue}`);
+
+  return {
+    preview: {
+      total_rows_sampled: Math.min(totalRows, 50000),
+      entity_count: entityCount,
+      positive_rate: positiveRate,
+      distinct_target_values: 2,
+      top_class_pct: Math.max(positiveRate, 1 - positiveRate),
+      per_period_distribution: [],
+      notes,
+    },
+    notes,
+  };
+}
+
+// ═══ Simulate future sum regression ════════════════════════════
+
+function simulateFutureSumRegression(
+  catStats: CategoricalStat[],
+  numStats: NumericStat[],
+  totalRows: number,
+  entityKey: string | null,
+  timeAnchor: string | null,
+  valueCandidates: string[],
+  params: Record<string, any>,
+): { preview: PreviewStats; notes: string[] } {
+  const notes: string[] = [];
+  const windowDays = params.window_days || 90;
+  let valueColumn = params.value_column || null;
+
+  if (!valueColumn) {
+    for (const c of valueCandidates) {
+      const stat = numStats.find(n => n.column_name === c);
+      if (stat) {
+        valueColumn = c;
+        notes.push(`Coluna de valor detectada: "${c}"`);
+        break;
+      }
+    }
+  }
+
+  const entityStat = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+  const entityCount = entityStat?.distinct_count || totalRows;
+
+  let avgValue = 100;
+  if (valueColumn) {
+    const stat = numStats.find(n => n.column_name === valueColumn);
+    if (stat?.mean_value != null) avgValue = stat.mean_value;
+  } else {
+    notes.push("⚠️ Nenhuma coluna de valor detectada. Especifique value_column manualmente.");
+  }
+
+  notes.push(`Soma de "${valueColumn || '?'}" nos próximos ${windowDays} dias por entidade.`);
+  notes.push(`Valor médio por registro: ${avgValue.toFixed(2)}`);
+
+  return {
+    preview: {
+      total_rows_sampled: Math.min(totalRows, 50000),
+      entity_count: entityCount,
+      positive_rate: avgValue, // For regression, store avg predicted value
+      distinct_target_values: entityCount, // continuous
+      top_class_pct: 0,
+      per_period_distribution: generatePeriodicDistribution(timeAnchor, numStats, totalRows, entityCount, 0.5, windowDays),
+      notes,
+    },
+    notes,
+  };
+}
+
+// ═══ Simulate inadimplência por atraso ═════════════════════════
+
+function simulateInadimplenciaAtraso(
+  catStats: CategoricalStat[],
+  numStats: NumericStat[],
+  totalRows: number,
+  entityKey: string | null,
+  timeAnchor: string | null,
+  params: Record<string, any>,
+): { preview: PreviewStats; notes: string[] } {
+  const notes: string[] = [];
+  const atrasoDias = params.atraso_dias || 30;
+
+  const entityStat = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+  const entityCount = entityStat?.distinct_count || totalRows;
+
+  // Try to find delay-related numeric columns
+  const delayCandidates = ["dias_atraso", "days_overdue", "atraso", "delay_days", "days_late"];
+  let delayStat: NumericStat | null = null;
+  for (const c of delayCandidates) {
+    const s = numStats.find(n => n.column_name === c);
+    if (s) { delayStat = s; break; }
+  }
+
+  let positiveRate = 0.15;
+  if (delayStat && delayStat.mean_value != null && delayStat.max_value != null) {
+    const range = (delayStat.max_value - (delayStat.min_value || 0)) || 1;
+    positiveRate = Math.max(0.02, Math.min(0.8, 1 - ((atrasoDias - (delayStat.min_value || 0)) / range)));
+    notes.push(`Estimativa via "${delayStat.column_name}": média=${delayStat.mean_value?.toFixed(1)} dias`);
+  } else {
+    notes.push(`Heurística: ~${(positiveRate * 100).toFixed(0)}% de inadimplência estimada para atraso > ${atrasoDias} dias.`);
+  }
+
+  notes.push(`Critério: paid_date nulo OU atraso > ${atrasoDias} dias.`);
+  notes.push(`Entidades: ${entityCount}`);
+
+  const distribution = generatePeriodicDistribution(timeAnchor, numStats, totalRows, entityCount, positiveRate, 90);
+
+  return {
+    preview: {
+      total_rows_sampled: Math.min(totalRows, 50000),
+      entity_count: entityCount,
+      positive_rate: positiveRate,
+      distinct_target_values: 2,
+      top_class_pct: Math.max(positiveRate, 1 - positiveRate),
+      per_period_distribution: distribution,
+      notes,
+    },
+    notes,
+  };
+}
+
+// ═══ Simulate inadimplência por status ═════════════════════════
+
+function simulateInadimplenciaStatus(
+  catStats: CategoricalStat[],
+  numStats: NumericStat[],
+  totalRows: number,
+  entityKey: string | null,
+  timeAnchor: string | null,
+  eventCandidates: string[],
+  params: Record<string, any>,
+): { preview: PreviewStats; notes: string[]; statusColumn: string | null } {
+  const notes: string[] = [];
+  const negativeStatuses: string[] = params.negative_statuses || ["em_aberto", "atrasado", "inadimplente", "defaulted", "atraso", "vencido"];
+  let statusColumn = params.status_column || null;
+
+  if (!statusColumn) {
+    const candidates = ["status", "status_pagamento", "payment_status", ...eventCandidates];
+    for (const ec of candidates) {
+      const stat = catStats.find(c => c.column_name === ec);
+      if (stat && stat.distinct_count && stat.distinct_count >= 2 && stat.distinct_count <= 30) {
+        statusColumn = ec;
+        notes.push(`Coluna de status detectada: "${ec}"`);
+        break;
+      }
+    }
+  }
+
+  const entityStat = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+  const entityCount = entityStat?.distinct_count || totalRows;
+
+  let positiveRate = 0.15;
+  if (statusColumn) {
+    const stat = catStats.find(c => c.column_name === statusColumn);
+    if (stat?.top_categories) {
+      const total = stat.top_categories.reduce((s, c) => s + c.count, 0);
+      const negatives = stat.top_categories
+        .filter(c => negativeStatuses.some(ns => c.category.toLowerCase().includes(ns.toLowerCase())))
+        .reduce((s, c) => s + c.count, 0);
+      if (total > 0) positiveRate = negatives / total;
+      notes.push(`Taxa de inadimplência estimada de "${statusColumn}": ${(positiveRate * 100).toFixed(1)}%`);
+    }
+  } else {
+    notes.push("⚠️ Nenhuma coluna de status encontrada. Especifique manualmente.");
+  }
+
+  const distribution = generatePeriodicDistribution(timeAnchor, numStats, totalRows, entityCount, positiveRate, 90);
+
+  return {
+    preview: {
+      total_rows_sampled: Math.min(totalRows, 50000),
+      entity_count: entityCount,
+      positive_rate: positiveRate,
+      distinct_target_values: 2,
+      top_class_pct: Math.max(positiveRate, 1 - positiveRate),
+      per_period_distribution: distribution,
+      notes,
+    },
+    notes,
+    statusColumn,
+  };
+}
+
 // ═══ Main ══════════════════════════════════════════════════════
 
 serve(async (req) => {
@@ -457,10 +714,38 @@ serve(async (req) => {
 
     switch (template_id) {
       case "churn_retail":
-      case "churn_generic": {
+      case "churn_generic":
+      case "generic_event_no_activity": {
         const result = simulateChurnRetail(catStats, numStats, totalRows, entityKey, timeAnchor, effectiveParams);
         preview = result.preview;
         extraNotes = result.notes;
+        break;
+      }
+      case "generic_threshold_binary": {
+        const result = simulateThresholdBinary(catStats, numStats, totalRows, entityKey, valueCandidates, effectiveParams);
+        preview = result.preview;
+        extraNotes = result.notes;
+        break;
+      }
+      case "generic_future_sum_regression": {
+        const result = simulateFutureSumRegression(catStats, numStats, totalRows, entityKey, timeAnchor, valueCandidates, effectiveParams);
+        preview = result.preview;
+        extraNotes = result.notes;
+        break;
+      }
+      case "inadimplencia_por_atraso": {
+        const result = simulateInadimplenciaAtraso(catStats, numStats, totalRows, entityKey, timeAnchor, effectiveParams);
+        preview = result.preview;
+        extraNotes = result.notes;
+        break;
+      }
+      case "inadimplencia_por_status": {
+        const result = simulateInadimplenciaStatus(catStats, numStats, totalRows, entityKey, timeAnchor, eventCandidates, effectiveParams);
+        preview = result.preview;
+        extraNotes = result.notes;
+        if (result.statusColumn && !params.status_column) {
+          effectiveParams.status_column = result.statusColumn;
+        }
         break;
       }
       case "no_show_health": {
