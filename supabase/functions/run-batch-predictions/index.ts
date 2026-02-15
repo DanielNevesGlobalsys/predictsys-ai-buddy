@@ -414,8 +414,14 @@ serve(async (req) => {
         .maybeSingle();
 
       if (runningJob) {
-        // Allow if stuck > 30 min (auto-expire stale locks)
-        const staleMs = Date.now() - new Date(runningJob.created_at).getTime();
+        // Allow if stuck > 30 min since last heartbeat (updated_at on prediction_state)
+        const { data: predState } = await supabase
+          .from("project_prediction_state")
+          .select("updated_at")
+          .eq("project_id", project_id)
+          .maybeSingle();
+        const heartbeatRef = predState?.updated_at || runningJob.created_at;
+        const staleMs = Date.now() - new Date(heartbeatRef).getTime();
         if (staleMs < 30 * 60 * 1000) {
           gates.push({ gate: "job_lock", status: "BLOCK", message: `Job ${runningJob.id} já em execução (status=${runningJob.status}).` });
           return blockResponse(gates, "JOB_ALREADY_RUNNING", "Já existe um scoring em andamento para este projeto. Aguarde.", [
@@ -794,6 +800,14 @@ serve(async (req) => {
     }
 
     if (hasMore) {
+      // Heartbeat: update prediction_state.updated_at so stale lock detection works
+      await supabase.from("project_prediction_state").upsert({
+        project_id,
+        status: "running",
+        predictions_count: countBatch ?? cumulativeScored,
+        updated_at: new Date().toISOString(),
+      }, { onConflict: "project_id" });
+
       return new Response(JSON.stringify({
         status: "CONTINUE",
         project_id, model_id: productionModelId, batch_id: batchId,
@@ -826,11 +840,14 @@ serve(async (req) => {
     if (missingFeaturePct > 20) warnings.push(`MISSING_FEATURES: ${missingFeaturePct.toFixed(0)}% das features do modelo estão ausentes.`);
     if (coveragePct < 30 && cumulativeScored > 0) warnings.push(`LOW_COVERAGE: cobertura de apenas ${coveragePct.toFixed(1)}%.`);
 
-    // ===== Update prediction state to finalizing =====
+    // ===== Update prediction state to finalizing with current count =====
+    const batchCountForFinalizing = countBatch ?? cumulativeScored;
     if (jobId) {
       await supabase.from("project_prediction_state").upsert({
         project_id,
         status: "finalizing",
+        predictions_count: batchCountForFinalizing,
+        coverage_pct: +coveragePct.toFixed(2),
         updated_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
 
