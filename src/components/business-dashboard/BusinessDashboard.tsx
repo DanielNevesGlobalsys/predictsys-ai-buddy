@@ -11,12 +11,16 @@ import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessAIInsights } from './BusinessAIInsights';
 import { ExecutiveNarrative } from './ExecutiveNarrative';
 import { FullReportPDFExport } from './pdf/FullReportPDFExport';
+import { ConfidenceCard } from './ConfidenceCard';
+import { BusinessSummaryCard } from './BusinessSummaryCard';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
+import { translateToBusinessNarrative } from '@/lib/businessTranslator';
+import type { IndustryKey } from '@/types/intentContract';
 
 import {
   BlockATrustVision,
@@ -162,6 +166,28 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const displayKpis = isSimulationActive ? simulatedKpis : data.kpis;
   const showBlockC = projectStage !== 'nao_confiavel' && data.predictions.length > 0;
   const showBlockD = projectStage === 'decisorio' && data.predictions.length > 0;
+
+  // Business translation memo
+  const businessTranslation = useMemo(() => {
+    if (data.kpis.totalEntities === 0) return null;
+    const aiCtxData = aiContext as any;
+    const intentContract = aiCtxData?.intent_contract;
+    const industry: IndustryKey = intentContract?.domain_adapter?.industry || intentContract?.industry_hint || 'generic';
+    const objective = intentContract?.intent_base?.declared_objective || intentContract?.declared_objective || '';
+    return translateToBusinessNarrative({
+      industry,
+      declaredObjective: objective,
+      problemType,
+      totalEntities: data.kpis.totalEntities,
+      highRiskCount: data.kpis.highProbabilityCount,
+      expectedEvents: data.kpis.expectedEvents,
+      financialImpact: data.kpis.financialImpact,
+      predictedTotalValue: data.kpis.predictedTotalValue,
+      coveragePct: data.kpis.coveragePercent,
+      confidenceScore: data.confidenceScore,
+      targetColumn: projectInfo?.target_column || undefined,
+    });
+  }, [data.kpis, data.confidenceScore, problemType, aiContext, projectInfo?.target_column]);
 
   const hasPredictionVariance = useMemo(() => {
     if (data.predictions.length < 2) return false;
@@ -418,6 +444,17 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         </div>
 
         <TabsContent value="dashboard" className="space-y-6 mt-4">
+          {/* Confidence Card + Business Summary */}
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <ConfidenceCard
+              score={data.confidenceScore}
+              inputs={data.confidenceInputs ?? undefined}
+            />
+            <div className="md:col-span-2">
+              <BusinessSummaryCard translation={businessTranslation} />
+            </div>
+          </div>
+
           <BlockATrustVision
             problemType={problemType}
             inferredProblemType={problemContext || undefined}

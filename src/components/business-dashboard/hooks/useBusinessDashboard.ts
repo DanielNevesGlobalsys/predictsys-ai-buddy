@@ -41,7 +41,8 @@ export function useBusinessDashboard(projectId: string) {
     availableSegmentFields: metricsSegmentFields,
     problemType: metricsProblemType,
     loading: metricsLoading, error: metricsError,
-    refetch: refetchMetrics
+    refetch: refetchMetrics,
+    confidenceScore, confidenceInputs,
   } = useDashboardMetrics(projectId, filters);
 
   // Fetch production model
@@ -245,7 +246,8 @@ export function useBusinessDashboard(projectId: string) {
   const combinedLoading = loading || metricsLoading;
 
   const data: BusinessDashboardData = {
-    predictions, kpis, segmentationBands, groupSegmentation, timeProjections, availableSegmentFields
+    predictions, kpis, segmentationBands, groupSegmentation, timeProjections, availableSegmentFields,
+    confidenceScore, confidenceInputs,
   };
 
   return {

@@ -10,5 +10,7 @@ export { CohortComparison } from './CohortComparison';
 export { SimulationPanel } from './SimulationPanel';
 export { FullReportPDFExport } from './pdf/FullReportPDFExport';
 export { BusinessAIInsights } from './BusinessAIInsights';
+export { ConfidenceCard } from './ConfidenceCard';
+export { BusinessSummaryCard } from './BusinessSummaryCard';
 export { useSimulation } from './hooks/useSimulation';
 export * from './types';
