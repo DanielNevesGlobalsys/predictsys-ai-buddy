@@ -1,4 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { PDFDocument, StandardFonts, rgb } from "https://esm.sh/pdf-lib@1.17.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -32,11 +33,214 @@ function blocked(errorCode: string, friendlyMsg: string, gates: Gate[], ctas: CT
   );
 }
 
-// ─── Health disclaimer ────────────────────────────
 const HEALTH_DISCLAIMER =
   "⚕️ Uso operacional: Este resultado é suporte à operação (agendamento, confirmação, triagem), não diagnóstico clínico. Não substitui avaliação médica.";
 
-// ─── HTML template ────────────────────────────────
+// ─── PDF generation via pdf-lib ───────────────────
+async function generatePDF(p: {
+  projectName: string;
+  industry: string;
+  objective: string;
+  generatedAt: string;
+  headline: string;
+  whatItMeans: string;
+  recommendedActions: string[];
+  buckets: { bucket: string; count: number; percent: number }[];
+  confidenceScore: number | null;
+  confidenceLabel: string;
+  primaryMetricName: string | null;
+  primaryMetricValue: number | null;
+  threshold: number | null;
+  thresholdExplanation: string | null;
+  totalEntities: number;
+  staleResults: boolean;
+  sanityFail: boolean;
+  isHealth: boolean;
+}): Promise<Uint8Array> {
+  const doc = await PDFDocument.create();
+  const page = doc.addPage([595.28, 841.89]); // A4
+  const { width, height } = page.getSize();
+
+  const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
+  const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
+
+  const blue = rgb(0.231, 0.51, 0.965);
+  const dark = rgb(0.118, 0.137, 0.169);
+  const gray = rgb(0.396, 0.443, 0.525);
+  const lightGray = rgb(0.584, 0.639, 0.714);
+  const red = rgb(0.863, 0.145, 0.145);
+  const amber = rgb(0.961, 0.62, 0.043);
+  const green = rgb(0.086, 0.639, 0.267);
+  const white = rgb(1, 1, 1);
+  const bgLight = rgb(0.973, 0.98, 0.988);
+
+  let y = height - 40;
+  const marginLeft = 40;
+  const contentWidth = width - 80;
+
+  // Helper: draw text, return new y
+  const drawText = (text: string, x: number, yPos: number, size: number, font = fontRegular, color = dark) => {
+    page.drawText(text, { x, y: yPos, size, font, color });
+    return yPos - size - 4;
+  };
+
+  // Helper: wrap text
+  const wrapText = (text: string, maxWidth: number, size: number, font = fontRegular): string[] => {
+    const words = text.split(' ');
+    const lines: string[] = [];
+    let current = '';
+    for (const word of words) {
+      const test = current ? `${current} ${word}` : word;
+      if (font.widthOfTextAtSize(test, size) > maxWidth) {
+        if (current) lines.push(current);
+        current = word;
+      } else {
+        current = test;
+      }
+    }
+    if (current) lines.push(current);
+    return lines;
+  };
+
+  // ─── Header ───
+  page.drawRectangle({ x: 0, y: height - 70, width, height: 70, color: blue });
+  drawText("Relatório Executivo", marginLeft, height - 30, 18, fontBold, white);
+  drawText(p.projectName, marginLeft, height - 50, 11, fontRegular, rgb(0.85, 0.9, 1));
+
+  // Right side: date
+  const dateStr = `Gerado em ${p.generatedAt}`;
+  const dateW = fontRegular.widthOfTextAtSize(dateStr, 9);
+  drawText(dateStr, width - marginLeft - dateW, height - 30, 9, fontRegular, rgb(0.85, 0.9, 1));
+  const psText = "PredictSys AI";
+  const psW = fontRegular.widthOfTextAtSize(psText, 8);
+  drawText(psText, width - marginLeft - psW, height - 44, 8, fontRegular, rgb(0.85, 0.9, 1));
+
+  y = height - 85;
+
+  // Industry + objective line
+  const subline = `${p.industry} · ${p.objective}`.substring(0, 90);
+  y = drawText(subline, marginLeft, y, 9, fontRegular, lightGray);
+  y -= 6;
+
+  // ─── Banners ───
+  if (p.staleResults) {
+    page.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.953, 0.78) });
+    y = drawText("⚠ Resultados desatualizados: Configuração alterada após o último scoring. Rode o scoring novamente.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.6, 0.4, 0));
+    y -= 10;
+  }
+
+  if (p.sanityFail) {
+    page.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.886, 0.886) });
+    y = drawText("🚨 Alerta de qualidade: Previsões com variância insuficiente. Revise target e features.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.7, 0.1, 0.1));
+    y -= 10;
+  }
+
+  // ─── Main KPI box ───
+  page.drawRectangle({ x: marginLeft, y: y - 65, width: contentWidth, height: 65, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+
+  const headlineLines = wrapText(p.headline, contentWidth - 20, 14, fontBold);
+  let hy = y - 16;
+  for (const line of headlineLines) {
+    hy = drawText(line, marginLeft + 10, hy, 14, fontBold, dark);
+  }
+
+  const whatLines = wrapText(p.whatItMeans, contentWidth - 20, 9, fontRegular);
+  for (const line of whatLines.slice(0, 3)) {
+    hy = drawText(line, marginLeft + 10, hy, 9, fontRegular, gray);
+  }
+  y -= 75;
+
+  // ─── Metric + threshold ───
+  if (p.primaryMetricName && p.primaryMetricValue !== null) {
+    y = drawText(`Métrica principal: ${p.primaryMetricName} = ${p.primaryMetricValue.toFixed(4)}`, marginLeft, y, 9, fontRegular, gray);
+  }
+  if (p.thresholdExplanation) {
+    y = drawText(`📊 ${p.thresholdExplanation}`, marginLeft, y, 8, fontRegular, lightGray);
+  }
+  y -= 8;
+
+  // ─── Confidence + Entities row ───
+  const boxW = (contentWidth - 16) / 2;
+  const boxH = 55;
+
+  // Confidence box
+  page.drawRectangle({ x: marginLeft, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+  drawText("Confiança", marginLeft + boxW / 2 - fontRegular.widthOfTextAtSize("Confiança", 9) / 2, y - 14, 9, fontRegular, lightGray);
+  const confStr = p.confidenceScore !== null ? String(p.confidenceScore) : "—";
+  const confColor = (p.confidenceScore ?? 0) >= 70 ? green : (p.confidenceScore ?? 0) >= 40 ? amber : red;
+  drawText(confStr, marginLeft + boxW / 2 - fontBold.widthOfTextAtSize(confStr, 22) / 2, y - 36, 22, fontBold, confColor);
+  drawText(p.confidenceLabel, marginLeft + boxW / 2 - fontRegular.widthOfTextAtSize(p.confidenceLabel, 8) / 2, y - 48, 8, fontRegular, confColor);
+
+  // Entities box
+  const ex = marginLeft + boxW + 16;
+  page.drawRectangle({ x: ex, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+  drawText("Entidades analisadas", ex + boxW / 2 - fontRegular.widthOfTextAtSize("Entidades analisadas", 9) / 2, y - 14, 9, fontRegular, lightGray);
+  const entStr = p.totalEntities.toLocaleString("pt-BR");
+  drawText(entStr, ex + boxW / 2 - fontBold.widthOfTextAtSize(entStr, 22) / 2, y - 36, 22, fontBold, dark);
+
+  y -= boxH + 12;
+
+  // ─── Buckets table ───
+  if (p.buckets.length > 0) {
+    y = drawText("Distribuição de Probabilidade", marginLeft, y, 11, fontBold, dark);
+    y -= 4;
+
+    // Table header
+    const colFaixa = marginLeft;
+    const colQtd = marginLeft + contentWidth * 0.55;
+    const colPct = marginLeft + contentWidth * 0.8;
+
+    page.drawRectangle({ x: marginLeft, y: y - 14, width: contentWidth, height: 16, color: rgb(0.945, 0.961, 0.976) });
+    drawText("Faixa", colFaixa + 4, y - 10, 8, fontBold, dark);
+    drawText("Quantidade", colQtd, y - 10, 8, fontBold, dark);
+    drawText("%", colPct, y - 10, 8, fontBold, dark);
+    y -= 18;
+
+    for (const b of p.buckets) {
+      drawText(b.bucket, colFaixa + 4, y - 10, 8, fontRegular, dark);
+      drawText(b.count.toLocaleString("pt-BR"), colQtd, y - 10, 8, fontRegular, dark);
+      drawText(`${b.percent.toFixed(1)}%`, colPct, y - 10, 8, fontRegular, dark);
+      page.drawLine({ start: { x: marginLeft, y: y - 14 }, end: { x: marginLeft + contentWidth, y: y - 14 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
+      y -= 16;
+    }
+    y -= 6;
+  }
+
+  // ─── Recommended actions ───
+  if (p.recommendedActions.length > 0) {
+    y = drawText("Ações Recomendadas", marginLeft, y, 11, fontBold, dark);
+    y -= 2;
+    for (let i = 0; i < p.recommendedActions.length; i++) {
+      const lines = wrapText(`${i + 1}. ${p.recommendedActions[i]}`, contentWidth - 10, 9, fontRegular);
+      for (const line of lines) {
+        y = drawText(line, marginLeft + 6, y, 9, fontRegular, gray);
+      }
+    }
+    y -= 6;
+  }
+
+  // ─── Health disclaimer ───
+  if (p.isHealth) {
+    y -= 4;
+    page.drawRectangle({ x: marginLeft, y: y - 28, width: contentWidth, height: 30, color: rgb(0.937, 0.965, 1), borderColor: rgb(0.231, 0.51, 0.965), borderWidth: 0.5 });
+    const disclaimerLines = wrapText(HEALTH_DISCLAIMER, contentWidth - 16, 7, fontRegular);
+    let dy = y - 8;
+    for (const line of disclaimerLines) {
+      dy = drawText(line, marginLeft + 8, dy, 7, fontRegular, rgb(0.2, 0.35, 0.6));
+    }
+    y -= 36;
+  }
+
+  // ─── Footer ───
+  page.drawLine({ start: { x: marginLeft, y: 40 }, end: { x: width - marginLeft, y: 40 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
+  const footerText = "PredictSys AI · Relatório gerado automaticamente · Dados sujeitos a atualização";
+  const footerW = fontRegular.widthOfTextAtSize(footerText, 7);
+  drawText(footerText, width / 2 - footerW / 2, 28, 7, fontRegular, lightGray);
+
+  return await doc.save();
+}
+
+// ─── HTML fallback (kept for resilience) ──────────
 function renderExecutiveHTML(p: {
   projectName: string;
   industry: string;
@@ -104,7 +308,6 @@ function renderExecutiveHTML(p: {
 <html lang="pt-BR">
 <head><meta charset="UTF-8"><title>Relatório Executivo - ${p.projectName}</title></head>
 <body style="font-family:'Segoe UI',Arial,sans-serif;max-width:800px;margin:0 auto;padding:32px;color:#1e293b;font-size:14px">
-  <!-- Header -->
   <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:24px;border-bottom:3px solid #3b82f6;padding-bottom:16px">
     <div>
       <h1 style="margin:0;font-size:22px;color:#1e293b">Relatório Executivo</h1>
@@ -117,17 +320,12 @@ function renderExecutiveHTML(p: {
       <p style="margin:4px 0 0">PredictSys AI</p>
     </div>
   </div>
-
   ${staleBanner}${sanityBanner}
-
-  <!-- KPI Principal -->
   <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:20px;margin-bottom:20px">
     <h2 style="margin:0 0 8px;font-size:18px;color:#1e293b">${p.headline}</h2>
     <p style="margin:0;color:#475569;font-size:14px">${p.whatItMeans}</p>
     ${metricLine}${thresholdLine}
   </div>
-
-  <!-- Confiança + Entidades -->
   <div style="display:flex;gap:16px;margin-bottom:20px">
     <div style="flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:16px;text-align:center">
       <p style="margin:0;font-size:12px;color:#94a3b8">Confiança</p>
@@ -139,11 +337,7 @@ function renderExecutiveHTML(p: {
       <p style="margin:4px 0;font-size:28px;font-weight:700;color:#1e293b">${p.totalEntities.toLocaleString("pt-BR")}</p>
     </div>
   </div>
-
-  <!-- Distribuição -->
-  ${
-    p.buckets.length > 0
-      ? `<div style="margin-bottom:20px">
+  ${p.buckets.length > 0 ? `<div style="margin-bottom:20px">
     <h3 style="margin:0 0 8px;font-size:15px">Distribuição de Probabilidade</h3>
     <table style="width:100%;border-collapse:collapse;font-size:13px">
       <thead><tr style="background:#f1f5f9">
@@ -153,19 +347,12 @@ function renderExecutiveHTML(p: {
       </tr></thead>
       <tbody>${bucketsHTML}</tbody>
     </table>
-  </div>`
-      : ""
-  }
-
-  <!-- Ações -->
+  </div>` : ""}
   <div style="margin-bottom:16px">
     <h3 style="margin:0 0 8px;font-size:15px">Ações Recomendadas</h3>
     <ol style="margin:0;padding-left:20px;color:#475569;font-size:13px">${actionsHTML}</ol>
   </div>
-
   ${healthDisclaimer}
-
-  <!-- Footer -->
   <div style="margin-top:24px;border-top:1px solid #e2e8f0;padding-top:12px;font-size:11px;color:#94a3b8;text-align:center">
     PredictSys AI · Relatório gerado automaticamente · Dados sujeitos a atualização
   </div>
@@ -385,13 +572,12 @@ Deno.serve(async (req) => {
       primaryMetricValue = picked.metric_value;
     }
 
-    // Business translation (inline, matching businessTranslator.ts logic)
+    // Business translation
     const totalEntities = metrics.summary_cards?.entities_with_prediction || 0;
     const highRisk = metrics.summary_cards?.high_risk_or_opportunity || 0;
     const expectedEvents = metrics.summary_cards?.expected_events || 0;
     const financialImpact = metrics.summary_cards?.financial_impact || 0;
 
-    // Simple headline/what generation
     const isHealth = industry === "health";
     const isChurn =
       objective.toLowerCase().includes("churn") || objective.toLowerCase().includes("cancelamento");
@@ -441,7 +627,7 @@ Deno.serve(async (req) => {
     }
 
     const thresholdPct = (recommendedThreshold * 100).toFixed(0);
-    const thresholdExplanation = `Risco alto = probabilidade ≥ ${thresholdPct}%`;
+    const thresholdExplanation = `Risco alto = probabilidade >= ${thresholdPct}%`;
 
     const buckets = (metrics.probability_buckets || []).map((b: any) => ({
       bucket: b.bucket,
@@ -457,39 +643,92 @@ Deno.serve(async (req) => {
       minute: "2-digit",
     });
 
-    // ═══ Step 5: Render HTML ═══
-    const html = renderExecutiveHTML({
-      projectName: project.name,
-      industry,
-      objective,
-      generatedAt,
-      headline,
-      whatItMeans,
-      recommendedActions,
-      buckets,
-      confidenceScore,
-      confidenceLabel,
-      primaryMetricName,
-      primaryMetricValue,
-      threshold: recommendedThreshold,
-      thresholdExplanation,
-      totalEntities,
-      staleResults,
-      sanityFail: false, // already gated above
-      isHealth,
-      selVersionScored: selVersionScored,
-      selVersionCurrent: selVersionCurrent,
-    });
+    // ═══ Step 5: Try PDF, fallback to HTML ═══
+    let fileBytes: Uint8Array;
+    let contentType: string;
+    let fileExtension: string;
+    let format: "pdf" | "html";
+    let engine: string;
+    const warnGates: Gate[] = [];
+
+    try {
+      fileBytes = await generatePDF({
+        projectName: project.name,
+        industry,
+        objective,
+        generatedAt,
+        headline,
+        whatItMeans,
+        recommendedActions,
+        buckets,
+        confidenceScore,
+        confidenceLabel,
+        primaryMetricName,
+        primaryMetricValue,
+        threshold: recommendedThreshold,
+        thresholdExplanation,
+        totalEntities,
+        staleResults,
+        sanityFail: false,
+        isHealth,
+      });
+      contentType = "application/pdf";
+      fileExtension = "pdf";
+      format = "pdf";
+      engine = "pdf-lib";
+      console.log(`[Executive Report] PDF generated successfully (${fileBytes.length} bytes)`);
+    } catch (pdfErr) {
+      console.error("[Executive Report] PDF generation failed, falling back to HTML:", pdfErr);
+      warnGates.push({
+        gate: "PDF_ENGINE_AVAILABLE",
+        status: "WARN",
+        message: `PDF engine failed: ${pdfErr instanceof Error ? pdfErr.message : "unknown"}. Fallback to HTML.`,
+      });
+
+      const html = renderExecutiveHTML({
+        projectName: project.name,
+        industry,
+        objective,
+        generatedAt,
+        headline,
+        whatItMeans,
+        recommendedActions,
+        buckets,
+        confidenceScore,
+        confidenceLabel,
+        primaryMetricName,
+        primaryMetricValue,
+        threshold: recommendedThreshold,
+        thresholdExplanation,
+        totalEntities,
+        staleResults,
+        sanityFail: false,
+        isHealth,
+        selVersionScored,
+        selVersionCurrent,
+      });
+      fileBytes = new TextEncoder().encode(html);
+      contentType = "text/html";
+      fileExtension = "html";
+      format = "html";
+      engine = "html-fallback";
+    }
+
+    // Add format gate
+    if (format === "pdf") {
+      warnGates.push({ gate: "EXPORT_FORMAT", status: "WARN", message: "format=pdf (success)" });
+    } else {
+      warnGates.push({ gate: "EXPORT_FORMAT", status: "WARN", message: "format=html (fallback)" });
+    }
 
     // ═══ Step 6: Save to storage ═══
     const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-    const filePath = `${project_id}/executive_report_${timestamp}.html`;
-    const fileBytes = new TextEncoder().encode(html);
+    const filePath = `${project_id}/executive_report_${timestamp}.${fileExtension}`;
 
     const { error: uploadErr } = await supabase.storage
       .from("exports")
       .upload(filePath, fileBytes, {
-        contentType: "text/html",
+        contentType,
         upsert: false,
       });
 
@@ -501,9 +740,10 @@ Deno.serve(async (req) => {
     }
 
     // ═══ Step 7: Generate signed URL ═══
+    const downloadName = `executive_report_${project.name.replace(/\s+/g, "_")}.${fileExtension}`;
     const { data: signedData, error: signedErr } = await supabase.storage
       .from("exports")
-      .createSignedUrl(filePath, 10 * 60, { download: `executive_report_${project.name.replace(/\s+/g, "_")}.html` });
+      .createSignedUrl(filePath, 10 * 60, { download: downloadName });
 
     if (signedErr || !signedData?.signedUrl) {
       console.error("[Executive Report] Signed URL error:", signedErr);
@@ -528,6 +768,9 @@ Deno.serve(async (req) => {
         status: "done",
         file_path: filePath,
         meta: {
+          format,
+          engine,
+          page_count: 1,
           industry,
           objective,
           total_entities: totalEntities,
@@ -541,10 +784,9 @@ Deno.serve(async (req) => {
 
     if (insertErr) {
       console.error("[Executive Report] Insert export log error:", insertErr);
-      // Non-blocking — report was already generated
     }
 
-    console.log(`[Executive Report] Done: report_id=${exportRecord?.id}, entities=${totalEntities}, confidence=${confidenceScore}`);
+    console.log(`[Executive Report] Done: report_id=${exportRecord?.id}, format=${format}, entities=${totalEntities}, confidence=${confidenceScore}`);
 
     // ═══ Step 9: Return response ═══
     return new Response(
@@ -553,12 +795,15 @@ Deno.serve(async (req) => {
         report_id: exportRecord?.id || null,
         signed_url: signedData.signedUrl,
         file_path: filePath,
+        format,
+        engine,
         generated_at: new Date().toISOString(),
         selection_version_scored: selVersionScored,
         selection_version_current: selVersionCurrent,
         confidence_score: confidenceScore,
         stale_results: staleResults,
         total_entities: totalEntities,
+        gates: warnGates,
       }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } },
     );
