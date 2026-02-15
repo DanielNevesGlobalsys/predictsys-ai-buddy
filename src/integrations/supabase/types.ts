@@ -2475,8 +2475,10 @@ export type Database = {
         Row: {
           checks: Json
           created_at: string
+          error_message: string | null
           id: string
           last_run_at: string | null
+          last_run_status: string
           latest_batch_id: string | null
           model_id: string | null
           monitoring_score: number
@@ -2487,8 +2489,10 @@ export type Database = {
         Insert: {
           checks?: Json
           created_at?: string
+          error_message?: string | null
           id?: string
           last_run_at?: string | null
+          last_run_status?: string
           latest_batch_id?: string | null
           model_id?: string | null
           monitoring_score?: number
@@ -2499,8 +2503,10 @@ export type Database = {
         Update: {
           checks?: Json
           created_at?: string
+          error_message?: string | null
           id?: string
           last_run_at?: string | null
+          last_run_status?: string
           latest_batch_id?: string | null
           model_id?: string | null
           monitoring_score?: number
