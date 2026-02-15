@@ -122,3 +122,6 @@ verify_jwt = false
 
 [functions.infer-entity-and-time]
 verify_jwt = false
+
+[functions.preview-target-template]
+verify_jwt = false

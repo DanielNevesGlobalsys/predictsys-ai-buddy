@@ -30,6 +30,7 @@ import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
+import TargetBuilderPanel from "./TargetBuilderPanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -117,6 +118,17 @@ const StepTargetFeatures = ({
     value_candidates?: string[];
   } | null>(null);
 
+  // Intent contract info for target builder
+  const [intentInfo, setIntentInfo] = useState<{
+    labelBuilderRequired: boolean;
+    recommendedTemplates: { template_id: string; display_name: string; problem_type: string }[];
+    industry: string;
+  }>({ labelBuilderRequired: false, recommendedTemplates: [], industry: "generic" });
+
+  // Label builder state
+  const [labelBuilderId, setLabelBuilderId] = useState<string | null>(null);
+  const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
+
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
@@ -125,6 +137,7 @@ const StepTargetFeatures = ({
       loadSelectionVersion();
       loadBuilderVersion();
       loadContractHints();
+      loadIntentInfo();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -132,6 +145,26 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  const loadIntentInfo = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_ai_context")
+      .select("context")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data?.context) {
+      const ctx = data.context as Record<string, any>;
+      const ic = ctx.intent_contract || ctx.intent || {};
+      const ib = ic.intent_base || ic;
+      const da = ic.domain_adapter || {};
+      setIntentInfo({
+        labelBuilderRequired: ib.label_builder_required || false,
+        recommendedTemplates: da.recommended_templates || [],
+        industry: da.industry || ib.industry_hint || "generic",
+      });
+    }
+  };
 
   const loadContractHints = async () => {
     if (!projectData.id) return;
@@ -625,6 +658,23 @@ const StepTargetFeatures = ({
             )}
           </div>
         )}
+        {/* Target Builder Panel (Etapa 3) */}
+        {projectData.id && (
+          <TargetBuilderPanel
+            projectId={projectData.id}
+            labelBuilderRequired={intentInfo.labelBuilderRequired}
+            recommendedTemplates={intentInfo.recommendedTemplates}
+            industry={intentInfo.industry}
+            onBuilderReady={(builderId, templateId) => {
+              setLabelBuilderId(builderId);
+              setLabelTemplateId(templateId);
+              // Set virtual target column for label builder
+              setTargetColumn("_label_");
+              setInferredProblemType("classification");
+            }}
+          />
+        )}
+
         {/* Problem Inference Panel (replaces old Lys suggestions) */}
         <ProblemInferencePanel
           inference={inference}
