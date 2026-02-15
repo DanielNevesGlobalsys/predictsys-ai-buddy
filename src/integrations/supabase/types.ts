@@ -2485,6 +2485,63 @@ export type Database = {
           },
         ]
       }
+      project_prediction_state: {
+        Row: {
+          coverage_pct: number
+          last_error_code: string | null
+          last_error_message: string | null
+          latest_batch_id: string | null
+          latest_job_id: string | null
+          latest_model_id: string | null
+          latest_selection_version: number | null
+          predictions_count: number
+          project_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          coverage_pct?: number
+          last_error_code?: string | null
+          last_error_message?: string | null
+          latest_batch_id?: string | null
+          latest_job_id?: string | null
+          latest_model_id?: string | null
+          latest_selection_version?: number | null
+          predictions_count?: number
+          project_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          coverage_pct?: number
+          last_error_code?: string | null
+          last_error_message?: string | null
+          latest_batch_id?: string | null
+          latest_job_id?: string | null
+          latest_model_id?: string | null
+          latest_selection_version?: number | null
+          predictions_count?: number
+          project_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_prediction_state_latest_model_id_fkey"
+            columns: ["latest_model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_prediction_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_problem_inference: {
         Row: {
           confidence: number
@@ -3065,6 +3122,19 @@ export type Database = {
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
       rpc_promote_model_to_production: {
         Args: { p_model_id: string; p_project_id: string; p_reason?: string }
+        Returns: Json
+      }
+      rpc_promote_prediction_batch: {
+        Args: {
+          p_batch_id: string
+          p_coverage_pct?: number
+          p_is_sanity_fail?: boolean
+          p_job_id?: string
+          p_model_id?: string
+          p_predictions_count?: number
+          p_project_id: string
+          p_selection_version?: number
+        }
         Returns: Json
       }
       rpc_upsert_model_selection: {

@@ -1,7 +1,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
-export type DashboardStatus = "LOADING" | "OK" | "PENDING_PROMOTE" | "NO_PREDICTIONS" | "RLS_ERROR" | "SCORING_SANITY_FAIL";
+export type DashboardStatus =
+  | "LOADING"
+  | "OK"
+  | "PENDING_PROMOTE"
+  | "NO_PREDICTIONS"
+  | "RLS_ERROR"
+  | "SCORING_SANITY_FAIL"
+  | "SCORING_RUNNING"
+  | "SCORING_FINALIZING"
+  | "SCORING_FAILED";
 
 export interface ScoreReportInfo {
   created_at: string;
@@ -20,6 +29,15 @@ export interface HorizonInfo {
   count: number;
 }
 
+export interface PredictionStateInfo {
+  status: string;
+  latest_batch_id: string | null;
+  predictions_count: number;
+  coverage_pct: number;
+  last_error_code: string | null;
+  last_error_message: string | null;
+}
+
 export interface DashboardDataStatus {
   status: DashboardStatus;
   scoreReport: ScoreReportInfo | null;
@@ -27,6 +45,7 @@ export interface DashboardDataStatus {
   horizons: HorizonInfo[];
   bestHorizon: number | null;
   rlsError: string | null;
+  predictionState: PredictionStateInfo | null;
   refetch: () => void;
 }
 
@@ -36,6 +55,7 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
   const [counts, setCounts] = useState<PredictionCounts>({ total: 0, latest: 0 });
   const [horizons, setHorizons] = useState<HorizonInfo[]>([]);
   const [rlsError, setRlsError] = useState<string | null>(null);
+  const [predictionState, setPredictionState] = useState<PredictionStateInfo | null>(null);
 
   const fetchAll = useCallback(async () => {
     if (!projectId) {
@@ -46,9 +66,15 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
     setRlsError(null);
 
     try {
-      // 4 parallel queries
-      const [reportRes, totalRes, latestRes, horizonRes, jobRes] = await Promise.all([
-        // A) Latest score report
+      // 5 parallel queries — prediction_state is the new SSOT
+      const [predStateRes, reportRes, totalRes, latestRes, horizonRes] = await Promise.all([
+        // A) Prediction state (SSOT)
+        supabase
+          .from("project_prediction_state")
+          .select("status, latest_batch_id, predictions_count, coverage_pct, last_error_code, last_error_message")
+          .eq("project_id", projectId)
+          .maybeSingle(),
+        // B) Latest score report
         supabase
           .from("project_score_reports")
           .select("created_at, predictions_count, coverage_pct, batch_id, warnings")
@@ -56,37 +82,28 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
-        // B) Total predictions count
+        // C) Total predictions count
         supabase
           .from("predictions")
           .select("id", { count: "exact", head: true })
           .eq("project_id", projectId),
-        // B2) Latest predictions count
+        // D) Latest predictions count
         supabase
           .from("predictions")
           .select("id", { count: "exact", head: true })
           .eq("project_id", projectId)
           .eq("is_latest", true),
-        // C) Horizons
+        // E) Horizons
         supabase
           .from("predictions")
           .select("horizon_days")
           .eq("project_id", projectId)
           .eq("is_latest", true)
           .limit(1000),
-        // D) Latest scoring job status
-        supabase
-          .from("project_scoring_jobs")
-          .select("status, diagnostics")
-          .eq("project_id", projectId)
-          .eq("is_latest_job", true)
-          .order("created_at", { ascending: false })
-          .limit(1)
-          .maybeSingle(),
       ]);
 
       // Check for RLS errors
-      const errors = [reportRes.error, totalRes.error, latestRes.error, horizonRes.error, jobRes.error].filter(Boolean);
+      const errors = [predStateRes.error, reportRes.error, totalRes.error, latestRes.error, horizonRes.error].filter(Boolean);
       if (errors.length > 0) {
         const msg = errors.map(e => e!.message).join("; ");
         console.error("[DashboardDataStatus] RLS/query error:", msg);
@@ -94,6 +111,10 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
         setStatus("RLS_ERROR");
         return;
       }
+
+      // Prediction state (new SSOT)
+      const pState = predStateRes.data as PredictionStateInfo | null;
+      setPredictionState(pState);
 
       // Score report
       const report = reportRes.data as ScoreReportInfo | null;
@@ -117,15 +138,33 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
         .sort((a, b) => b.count - a.count);
       setHorizons(horizonArr);
 
-      // Check scoring job sanity
-      const jobStatus = (jobRes.data as any)?.status;
-      const jobDiag = (jobRes.data as any)?.diagnostics as any;
-      const isSanityFail = jobStatus === "sanity_fail" || (jobDiag?.sanity_fail === true);
+      // ===== Decision logic: prediction_state is primary SSOT =====
+      if (pState) {
+        switch (pState.status) {
+          case "running":
+            setStatus("SCORING_RUNNING");
+            return;
+          case "finalizing":
+            setStatus("SCORING_FINALIZING");
+            return;
+          case "failed":
+            setStatus("SCORING_FAILED");
+            return;
+          case "sanity_fail":
+            setStatus("SCORING_SANITY_FAIL");
+            return;
+          case "done":
+            if (pState.predictions_count > 0) {
+              setStatus("OK");
+              return;
+            }
+            break;
+          // idle — fall through to legacy check
+        }
+      }
 
-      // Decision logic
-      if (isSanityFail) {
-        setStatus("SCORING_SANITY_FAIL");
-      } else if (report && report.predictions_count > 0) {
+      // Legacy fallback (for projects without prediction_state yet)
+      if (report && report.predictions_count > 0) {
         setStatus("OK");
       } else if (latest > 0) {
         setStatus("OK");
@@ -147,5 +186,5 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
 
   const bestHorizon = horizons.length > 0 ? horizons[0].horizon_days : null;
 
-  return { status, scoreReport, counts, horizons, bestHorizon, rlsError, refetch: fetchAll };
+  return { status, scoreReport, counts, horizons, bestHorizon, rlsError, predictionState, refetch: fetchAll };
 }
