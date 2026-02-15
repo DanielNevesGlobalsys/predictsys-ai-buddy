@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet, ArrowLeft, ShieldAlert, Clock } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet, ArrowLeft, ShieldAlert, Clock, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { useDashboardState } from './hooks/useDashboardState';
@@ -21,6 +21,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { toast } from 'sonner';
 import { translateToBusinessNarrative } from '@/lib/businessTranslator';
 import type { IndustryKey } from '@/types/intentContract';
+import type { ExecutiveReportResponse } from './types';
 
 import {
   BlockATrustVision,
@@ -55,6 +56,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('dashboard');
+  const [exportingExecutive, setExportingExecutive] = useState(false);
 
   // SSOT State Machine
   const { state: dashboardState, ssot, loading: ssotLoading, refetch: refetchSsot } = useDashboardState(projectId);
@@ -162,6 +164,39 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     () => determineProjectStage(modelQualityFlag, scoreCoveragePct, mainMetric, baselineMetric, data.predictions.length, problemType),
     [modelQualityFlag, scoreCoveragePct, mainMetric, baselineMetric, data.predictions.length, problemType],
   );
+
+  // Executive PDF export handler
+  const handleExportExecutive = useCallback(async () => {
+    if (data.staleResults) {
+      const confirmed = window.confirm('Os resultados estão desatualizados (configuração alterada após o último scoring). Deseja exportar mesmo assim?');
+      if (!confirmed) return;
+    }
+    setExportingExecutive(true);
+    try {
+      const { data: result, error: invokeErr } = await supabase.functions.invoke('generate-executive-report', {
+        body: { project_id: projectId, horizon_days: filters.horizon },
+      });
+      if (invokeErr) {
+        toast.error(invokeErr.message || 'Erro ao gerar relatório');
+        return;
+      }
+      const response = result as ExecutiveReportResponse;
+      if (response.success && response.signed_url) {
+        window.open(response.signed_url, '_blank');
+        toast.success('Relatório executivo gerado com sucesso!');
+      } else {
+        const msg = response.error_friendly || response.error || 'Erro ao gerar relatório';
+        toast.error(msg, {
+          description: response.ctas?.map(c => c.label).join(' · ') || undefined,
+        });
+      }
+    } catch (err) {
+      toast.error('Erro inesperado ao exportar relatório');
+      console.error('Executive export error:', err);
+    } finally {
+      setExportingExecutive(false);
+    }
+  }, [projectId, filters.horizon, data.staleResults]);
 
   const displayKpis = isSimulationActive ? simulatedKpis : data.kpis;
   const showBlockC = projectStage !== 'nao_confiavel' && data.predictions.length > 0;
@@ -427,6 +462,21 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
                 businessConfig={businessConfig}
                 isSimulationActive={isSimulationActive}
               />
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleExportExecutive}
+                disabled={exportingExecutive || dashboardState !== 'READY'}
+                className="gap-2"
+                title={dashboardState !== 'READY' ? 'Scoring precisa estar concluído para exportar' : 'Gerar relatório executivo 1 página'}
+              >
+                {exportingExecutive ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <FileText className="w-4 h-4" />
+                )}
+                PDF Executivo
+              </Button>
               <Button variant="outline" size="sm" onClick={() => setExportJobsModalOpen(true)} className="gap-2">
                 <FileSpreadsheet className="w-4 h-4" />{t('export.jobsTitle')}
               </Button>

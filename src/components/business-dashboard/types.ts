@@ -132,6 +132,40 @@ export interface BusinessDashboardData {
   selectionVersionCurrent: number | null;
 }
 
+// Executive Report types
+export interface ExportGate {
+  gate: string;
+  status: 'BLOCK' | 'WARN';
+  message: string;
+}
+
+export interface ExportCTA {
+  label: string;
+  action: string;
+  step?: number;
+}
+
+export interface ExecutiveReportResponse {
+  success: boolean;
+  report_id?: string;
+  signed_url?: string;
+  file_path?: string;
+  generated_at?: string;
+  selection_version_scored?: number | null;
+  selection_version_current?: number | null;
+  confidence_score?: number | null;
+  stale_results?: boolean;
+  total_entities?: number;
+  // Error fields
+  status?: string;
+  error_code?: string;
+  error_friendly?: string;
+  error?: string;
+  gates?: ExportGate[];
+  ctas?: ExportCTA[];
+  selectionVersionCurrent: number | null;
+}
+
 export const PROBLEM_CONTEXT_LABELS: Record<string, { title: string; subtitle: string }> = {
   churn: {
     title: 'businessDashboard.contextLabels.churn.title',
