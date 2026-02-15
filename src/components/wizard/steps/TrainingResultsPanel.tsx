@@ -146,7 +146,13 @@ export default function TrainingResultsPanel({
           {recommendedThreshold != null && isClassification ? (
             <>
               <p className="text-xs font-semibold">{(recommendedThreshold * 100).toFixed(0)}%</p>
-              <p className="text-[10px] text-muted-foreground">recomendado</p>
+              <p className="text-[10px] text-muted-foreground">
+                {effectiveProfile.threshold_strategy === "max_recall_min_precision" ? "prioriza recall"
+                  : effectiveProfile.threshold_strategy === "max_precision_at_k" ? "prioriza precisão"
+                  : effectiveProfile.threshold_strategy === "max_recall" ? "máx. sensibilidade"
+                  : effectiveProfile.threshold_strategy === "max_f1" ? "equilíbrio (F1)"
+                  : "recomendado"}
+              </p>
             </>
           ) : (
             <p className="text-xs text-muted-foreground">{isClassification ? "50%" : "N/A"}</p>
@@ -154,12 +160,14 @@ export default function TrainingResultsPanel({
         </div>
 
         {/* Profile card */}
-        <div className="bg-background/60 rounded-lg p-2.5 text-center space-y-1">
+        <div className={`bg-background/60 rounded-lg p-2.5 text-center space-y-1 ${profileSource?.includes("fallback") ? "ring-1 ring-amber-500/40" : ""}`}>
           <BarChart3 className="w-4 h-4 mx-auto text-primary" />
           <p className="text-[10px] text-muted-foreground">Perfil</p>
           <p className="text-xs font-semibold">{effectiveProfile.label}</p>
           {profileSource && profileSource.includes("fallback") && (
-            <Badge variant="outline" className="text-[9px]">fallback</Badge>
+            <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-600">
+              <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />genérico
+            </Badge>
           )}
         </div>
       </div>
