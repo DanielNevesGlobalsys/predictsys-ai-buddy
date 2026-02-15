@@ -13,6 +13,8 @@ export interface BusinessTranslation {
   recommendedActions: string[];
   confidenceLabel: string;
   confidenceColor: "green" | "yellow" | "red";
+  operationalDisclaimer?: string;
+  thresholdExplanation?: string;
 }
 
 interface TranslatorInput {
@@ -27,6 +29,7 @@ interface TranslatorInput {
   coveragePct: number;
   confidenceScore: number | null;
   targetColumn?: string;
+  recommendedThreshold?: number;
 }
 
 // ─── Industry + Objective Templates ───────────────────────────
@@ -148,6 +151,26 @@ function getConfidenceInfo(score: number | null): { label: string; color: "green
   return { label: "Baixa confiança", color: "red" };
 }
 
+// ─── Health Compliance Disclaimer ──────────────────────────────
+
+const HEALTH_DISCLAIMER = "⚕️ Uso operacional: Este resultado é suporte à operação (agendamento, confirmação, triagem), não diagnóstico clínico. Não substitui avaliação médica.";
+
+function isHealthIndustry(industry: IndustryKey): boolean {
+  return industry === "health";
+}
+
+// ─── Threshold Explanation ────────────────────────────────────
+
+function buildThresholdExplanation(threshold: number, objective: string): string {
+  const pct = (threshold * 100).toFixed(0);
+  const context = objective.toLowerCase().includes("churn") || objective.toLowerCase().includes("cancelamento")
+    ? "priorizando recall para capturar mais casos"
+    : objective.toLowerCase().includes("conversão") || objective.toLowerCase().includes("lead")
+    ? "balanceando precisão e recall"
+    : "definido pelo modelo";
+  return `Risco alto = probabilidade ≥ ${pct}% (${context})`;
+}
+
 // ─── Main Translator ──────────────────────────────────────────
 
 export function translateToBusinessNarrative(input: TranslatorInput): BusinessTranslation {
@@ -156,6 +179,10 @@ export function translateToBusinessNarrative(input: TranslatorInput): BusinessTr
   const template = templateKey ? TEMPLATES[templateKey] : null;
 
   const confidenceInfo = getConfidenceInfo(input.confidenceScore);
+  const operationalDisclaimer = isHealthIndustry(input.industry) ? HEALTH_DISCLAIMER : undefined;
+  const thresholdExplanation = input.recommendedThreshold != null
+    ? buildThresholdExplanation(input.recommendedThreshold, input.declaredObjective)
+    : undefined;
 
   if (template) {
     return {
@@ -164,6 +191,8 @@ export function translateToBusinessNarrative(input: TranslatorInput): BusinessTr
       recommendedActions: template.actions,
       confidenceLabel: confidenceInfo.label,
       confidenceColor: confidenceInfo.color,
+      operationalDisclaimer,
+      thresholdExplanation,
     };
   }
 
@@ -184,6 +213,8 @@ export function translateToBusinessNarrative(input: TranslatorInput): BusinessTr
       ],
       confidenceLabel: confidenceInfo.label,
       confidenceColor: confidenceInfo.color,
+      operationalDisclaimer,
+      thresholdExplanation,
     };
   }
 
@@ -200,5 +231,7 @@ export function translateToBusinessNarrative(input: TranslatorInput): BusinessTr
     ],
     confidenceLabel: confidenceInfo.label,
     confidenceColor: confidenceInfo.color,
+    operationalDisclaimer,
+    thresholdExplanation,
   };
 }

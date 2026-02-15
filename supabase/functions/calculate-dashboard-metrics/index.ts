@@ -161,12 +161,52 @@ serve(async (req) => {
       }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
     }
 
-    // ═══ Step 5: Build response ═══
+    // ═══ Step 5: Version drift detection ═══
+    let selectionVersionScored: number | null = null;
+    let selectionVersionCurrent: number | null = null;
+    let staleResults = false;
+
+    const [deployedModelRes, currentSelectionRes] = await Promise.all([
+      // Get the selection_version that was used when scoring
+      supabase
+        .from('project_models')
+        .select('deployed_selection_version')
+        .eq('project_id', project_id)
+        .eq('is_production', true)
+        .maybeSingle(),
+      // Get the current selection_version from SSOT
+      supabase
+        .from('project_model_selection')
+        .select('selection_version')
+        .eq('project_id', project_id)
+        .maybeSingle(),
+    ]);
+
+    selectionVersionScored = (deployedModelRes.data as any)?.deployed_selection_version ?? null;
+    selectionVersionCurrent = (currentSelectionRes.data as any)?.selection_version ?? null;
+    
+    if (selectionVersionScored !== null && selectionVersionCurrent !== null && selectionVersionScored < selectionVersionCurrent) {
+      staleResults = true;
+      console.log(`[Dashboard Metrics v2] Version drift detected: scored=${selectionVersionScored}, current=${selectionVersionCurrent}`);
+    }
+
+    // ═══ Step 6: Build response ═══
     const problemType = agg.problem_type || 'classification';
     const isClassification = problemType === 'classification';
     const totalRows = agg.total_rows || 0;
     const totalLatest = agg.total_latest || totalRows;
     const coveragePct = totalLatest > 0 ? (totalRows / totalLatest) * 100 : 100;
+
+    // Get recommended_threshold from production model
+    const { data: prodModelData } = await supabase
+      .from('project_models')
+      .select('hyperparameters')
+      .eq('project_id', project_id)
+      .eq('is_production', true)
+      .maybeSingle();
+    
+    const hp = prodModelData?.hyperparameters as any;
+    const recommendedThreshold = hp?.recommended_threshold ?? hp?.best_threshold ?? 0.5;
 
     // Probability buckets
     let probabilityBuckets: any[];
@@ -214,9 +254,9 @@ serve(async (req) => {
       }
     }
 
-    // Segments — use batch_id if available
+    // Segments — use batch_id if available, also track null coverage
     const segmentFields = ['segment', 'age_group', 'region', 'state', 'city', 'product_category', 'channel', 'campaign', 'cohort'];
-    const availableSegments: { field: string; values: string[] }[] = [];
+    const availableSegments: { field: string; values: string[]; null_count?: number; null_pct?: number }[] = [];
 
     const segmentPromises = segmentFields.map(async (field) => {
       let query = supabase
@@ -227,7 +267,6 @@ serve(async (req) => {
         .not(field, 'is', null)
         .limit(100);
 
-      // If we have a batch_id from SSOT, also filter by it for consistency
       if (latestBatchId) {
         query = query.eq('batch_id', latestBatchId);
       }
@@ -237,7 +276,10 @@ serve(async (req) => {
       if (segData && segData.length > 0) {
         const uniqueValues = [...new Set(segData.map((s: any) => s[field]).filter(Boolean))] as string[];
         if (uniqueValues.length > 0) {
-          return { field, values: uniqueValues.slice(0, 50) };
+          // Count nulls for this segment field
+          const nullCount = totalRows - segData.length; // approximate from sample
+          const nullPct = totalRows > 0 ? (nullCount / totalRows) * 100 : 0;
+          return { field, values: uniqueValues.slice(0, 50), null_count: nullCount, null_pct: +nullPct.toFixed(1) };
         }
       }
       return null;
@@ -298,6 +340,10 @@ serve(async (req) => {
       horizon, mode,
       segment: segment_value || 'all',
       problem_type: problemType,
+      recommended_threshold: recommendedThreshold,
+      stale_results: staleResults,
+      selection_version_scored: selectionVersionScored,
+      selection_version_current: selectionVersionCurrent,
       confidence_score: confidenceScore,
       confidence_inputs: {
         predictability_score: predictabilityScore,

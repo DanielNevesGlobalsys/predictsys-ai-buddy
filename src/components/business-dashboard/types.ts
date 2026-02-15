@@ -126,6 +126,10 @@ export interface BusinessDashboardData {
     missing_feature_pct: number | null;
     sanity_fail: boolean;
   } | null;
+  recommendedThreshold: number | null;
+  staleResults: boolean;
+  selectionVersionScored: number | null;
+  selectionVersionCurrent: number | null;
 }
 
 export const PROBLEM_CONTEXT_LABELS: Record<string, { title: string; subtitle: string }> = {
