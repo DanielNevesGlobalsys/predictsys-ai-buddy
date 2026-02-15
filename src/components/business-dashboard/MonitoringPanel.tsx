@@ -1,5 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
-import { useTranslation } from 'react-i18next';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { Card, CardHeader, CardTitle, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -7,7 +6,7 @@ import { Progress } from '@/components/ui/progress';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   ShieldCheck, ShieldAlert, AlertTriangle, CheckCircle, XCircle,
-  RefreshCw, Loader2, ChevronDown, Activity, Info,
+  RefreshCw, Loader2, ChevronDown, Activity, Info, Clock,
 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
@@ -32,6 +31,8 @@ interface MonitoringState {
   checks: MonitoringCheck[];
   last_run_at: string | null;
   latest_batch_id: string | null;
+  last_run_status: string | null;
+  error_message: string | null;
 }
 
 interface MonitoringPanelProps {
@@ -60,13 +61,15 @@ const CHECK_STATUS_ICON = {
   FAIL: { icon: XCircle, color: 'text-destructive' },
 };
 
+const COOLDOWN_MS = 2 * 60 * 1000; // 2 min client-side guard
+
 export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
-  const { t } = useTranslation();
   const [state, setState] = useState<MonitoringState | null>(null);
   const [ctas, setCtas] = useState<MonitoringCTA[]>([]);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [checksOpen, setChecksOpen] = useState(false);
+  const lastRunRef = useRef<number>(0);
 
   const fetchState = useCallback(async () => {
     setLoading(true);
@@ -87,7 +90,12 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
           checks: (data.checks as unknown as MonitoringCheck[]) || [],
           last_run_at: data.last_run_at,
           latest_batch_id: data.latest_batch_id,
+          last_run_status: (data as any).last_run_status ?? null,
+          error_message: (data as any).error_message ?? null,
         });
+        if (data.last_run_at) {
+          lastRunRef.current = new Date(data.last_run_at).getTime();
+        }
       } else {
         setState(null);
       }
@@ -101,6 +109,14 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
   useEffect(() => { fetchState(); }, [fetchState]);
 
   const runChecks = useCallback(async () => {
+    // Client-side cooldown
+    const elapsed = Date.now() - lastRunRef.current;
+    if (elapsed < COOLDOWN_MS) {
+      const remainSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+      toast.warning(`Monitoramento recente. Aguarde ${remainSec}s.`);
+      return;
+    }
+
     setRunning(true);
     try {
       const { data, error } = await supabase.functions.invoke('run-monitoring-checks', {
@@ -110,13 +126,20 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
         toast.error('Erro ao executar monitoramento');
         return;
       }
+      if (data?.error === 'COOLDOWN') {
+        toast.warning(data.message);
+        return;
+      }
       if (data?.success) {
+        lastRunRef.current = Date.now();
         setState({
           status: data.status,
           monitoring_score: data.monitoring_score,
           checks: data.checks || [],
           last_run_at: data.last_run_at,
           latest_batch_id: null,
+          last_run_status: 'success',
+          error_message: null,
         });
         setCtas(data.ctas || []);
         toast.success(`Monitoramento concluído: ${data.status.toUpperCase()} (score: ${data.monitoring_score})`);
@@ -180,12 +203,16 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
             </div>
             <div>
               <CardTitle className="text-base">Saúde do Modelo</CardTitle>
-              <div className="flex items-center gap-2 mt-0.5">
+              <div className="flex items-center gap-2 mt-0.5 flex-wrap">
                 <Badge variant="outline" className={`text-xs ${config.color}`}>{config.label}</Badge>
                 {state.last_run_at && (
-                  <span className="text-xs text-muted-foreground">
-                    Última verificação: {new Date(state.last_run_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                  <span className="text-xs text-muted-foreground flex items-center gap-1">
+                    <Clock className="w-3 h-3" />
+                    {new Date(state.last_run_at).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
                   </span>
+                )}
+                {state.last_run_status === 'error' && (
+                  <Badge variant="destructive" className="text-xs">Erro na última execução</Badge>
                 )}
               </div>
             </div>
@@ -204,6 +231,14 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
       </CardHeader>
 
       <CardContent className="pt-0 space-y-3">
+        {/* Error message from last run */}
+        {state.last_run_status === 'error' && state.error_message && (
+          <div className="p-2 rounded bg-destructive/10 border border-destructive/20 text-xs text-destructive flex items-start gap-2">
+            <XCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
+            <span>{state.error_message}</span>
+          </div>
+        )}
+
         {/* Non-pass checks first */}
         {nonPassChecks.length > 0 && (
           <div className="space-y-2">
@@ -231,6 +266,7 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
               <Button key={i} variant="outline" size="sm" className="text-xs gap-1">
                 <Info className="w-3 h-3" />
                 {cta.label}
+                {cta.step && <span className="text-muted-foreground">(Etapa {cta.step})</span>}
               </Button>
             ))}
           </div>
@@ -258,7 +294,7 @@ export function MonitoringPanel({ projectId }: MonitoringPanelProps) {
         {state.checks.some(c => c.check === 'HEALTH_COMPLIANCE_CHECK') && (
           <div className="p-2 rounded bg-muted/30 border border-border text-xs text-muted-foreground flex items-start gap-2">
             <Info className="w-3 h-3 mt-0.5 flex-shrink-0" />
-            <span>Este modelo é uma ferramenta de apoio operacional. Não substitui diagnóstico ou decisão médica profissional.</span>
+            <span>Este modelo é uma ferramenta de apoio operacional para risco operacional, adesão e no-show. Não substitui avaliação médica profissional.</span>
           </div>
         )}
       </CardContent>

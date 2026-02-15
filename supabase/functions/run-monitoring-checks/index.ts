@@ -6,6 +6,11 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+const COOLDOWN_MS = 2 * 60 * 1000; // 2 minutes
+
+// Forbidden terms for health industry (compliance)
+const FORBIDDEN_HEALTH_TERMS = /diagnóstico|doença|morte\s*provável|óbito|mortalidade|patologia|prognóstico\s*clínico/gi;
+
 interface MonitoringCheck {
   check: string;
   status: "PASS" | "WARN" | "ALERT" | "FAIL";
@@ -39,10 +44,19 @@ function computePSI(baseline: number[], current: number[], buckets = 10): number
   return Math.abs(psi);
 }
 
+// Sanitize health compliance text: strip forbidden diagnostic terms
+function sanitizeHealthText(text: string): string {
+  return text.replace(FORBIDDEN_HEALTH_TERMS, "[termo removido]");
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
+
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseKey);
 
   try {
     const { project_id, batch_id } = await req.json();
@@ -52,16 +66,31 @@ serve(async (req) => {
       });
     }
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseKey);
+    // ========== RATE LIMIT / COOLDOWN ==========
+    const { data: existingState } = await supabase
+      .from("project_monitoring_state")
+      .select("last_run_at")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    if (existingState?.last_run_at) {
+      const elapsed = Date.now() - new Date(existingState.last_run_at).getTime();
+      if (elapsed < COOLDOWN_MS) {
+        const remainSec = Math.ceil((COOLDOWN_MS - elapsed) / 1000);
+        return new Response(JSON.stringify({
+          success: false,
+          error: "COOLDOWN",
+          message: `Monitoramento executado recentemente. Aguarde ${remainSec}s.`,
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+    }
 
     // Load all needed data in parallel
     const [
       predStateRes, scoreReportsRes, selectionRes, dsStateRes, projectRes,
     ] = await Promise.all([
       supabase.from("project_prediction_state").select("*").eq("project_id", project_id).maybeSingle(),
-      supabase.from("project_score_reports").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(2),
+      supabase.from("project_score_reports").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(5),
       supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("production_model_id").eq("project_id", project_id).maybeSingle(),
       supabase.from("projects").select("industry, organization_id").eq("id", project_id).single(),
@@ -76,7 +105,18 @@ serve(async (req) => {
     const productionModelId = dsState?.production_model_id || predState?.model_id;
     const latestBatchId = batch_id || predState?.latest_batch_id;
     const currentReport = scoreReports[0];
-    const previousReport = scoreReports.length > 1 ? scoreReports[1] : null;
+
+    // ===== PSI baseline: find previous DONE batch for the SAME production_model_id =====
+    let previousReport: any = null;
+    if (currentReport && productionModelId) {
+      previousReport = scoreReports.find((r: any, i: number) =>
+        i > 0 && r.model_id === productionModelId && r.batch_id !== currentReport.batch_id
+      ) || null;
+    }
+    // Fallback: just use index 1 if no model-matched baseline
+    if (!previousReport && scoreReports.length > 1) {
+      previousReport = scoreReports[1];
+    }
 
     const checks: MonitoringCheck[] = [];
     const ctas: MonitoringCTA[] = [];
@@ -92,7 +132,7 @@ serve(async (req) => {
       } else if (coveragePct < 60) {
         checks.push({ check: "COVERAGE_CHECK", status: "WARN", message: `Cobertura baixa: ${coveragePct.toFixed(1)}%`, value: coveragePct, threshold: "< 60% = WARN" });
         score -= 10;
-        ctas.push({ label: "Rever dataset / filtros", action: "goto_step", step: 2 });
+        ctas.push({ label: "Rever dataset / filtros", action: "goto_step", step: 3 });
       } else {
         checks.push({ check: "COVERAGE_CHECK", status: "PASS", message: `Cobertura: ${coveragePct.toFixed(1)}%`, value: coveragePct });
       }
@@ -119,7 +159,6 @@ serve(async (req) => {
 
     // ========== C) DATA_DRIFT_CHECK (PSI) ==========
     if (currentReport && previousReport) {
-      // Sample probabilities from current and previous batches
       const currentBatchId = currentReport.batch_id;
       const prevBatchId = previousReport.batch_id;
 
@@ -137,6 +176,7 @@ serve(async (req) => {
           checks.push({ check: "DATA_DRIFT_CHECK", status: "ALERT", message: `PSI alto: ${psi.toFixed(3)}. Distribuição mudou significativamente.`, value: psi, threshold: ">= 0.3 = ALERT" });
           score -= 25;
           ctas.push({ label: "Re-treinar modelo", action: "goto_step", step: 6 });
+          ctas.push({ label: "Rever dataset de entrada", action: "goto_step", step: 2 });
         } else if (psi >= 0.2) {
           checks.push({ check: "DATA_DRIFT_CHECK", status: "WARN", message: `PSI moderado: ${psi.toFixed(3)}. Possível drift nos dados.`, value: psi, threshold: ">= 0.2 = WARN" });
           score -= 10;
@@ -159,11 +199,11 @@ serve(async (req) => {
       if (vDiff >= 2) {
         checks.push({ check: "VERSION_DRIFT_CHECK", status: "ALERT", message: `Versão defasada: scored=v${selVersionScored}, current=v${selVersionCurrent}`, value: vDiff, threshold: "diff >= 2 = ALERT" });
         score -= 25;
-        ctas.push({ label: "Rodar scoring novamente", action: "run_scoring" });
+        ctas.push({ label: "Rodar scoring novamente", action: "goto_step", step: 8 });
       } else if (vDiff >= 1) {
         checks.push({ check: "VERSION_DRIFT_CHECK", status: "WARN", message: `Versão desatualizada: scored=v${selVersionScored}, current=v${selVersionCurrent}`, value: vDiff, threshold: "diff >= 1 = WARN" });
         score -= 10;
-        ctas.push({ label: "Rodar scoring novamente", action: "run_scoring" });
+        ctas.push({ label: "Rodar scoring novamente", action: "goto_step", step: 8 });
       } else {
         checks.push({ check: "VERSION_DRIFT_CHECK", status: "PASS", message: `Versão atualizada: v${selVersionScored}`, value: 0 });
       }
@@ -174,10 +214,14 @@ serve(async (req) => {
     // ========== E) HEALTH_COMPLIANCE_CHECK ==========
     const industry = project?.industry;
     if (industry === "health" || industry === "saude") {
+      // Sanitize all existing check messages for forbidden health terms
+      for (const c of checks) {
+        c.message = sanitizeHealthText(c.message);
+      }
       checks.push({
         check: "HEALTH_COMPLIANCE_CHECK",
         status: "PASS",
-        message: "Compliance: Este modelo é ferramenta de apoio operacional. Não substitui diagnóstico médico.",
+        message: "Compliance: Este modelo é ferramenta de apoio operacional para risco operacional, adesão e no-show. Não substitui avaliação médica profissional.",
         value: "compliance_ok",
       });
     }
@@ -193,7 +237,7 @@ serve(async (req) => {
 
     const now = new Date().toISOString();
 
-    // Upsert monitoring state
+    // Upsert monitoring state (includes last_run_status + error_message for SSOT)
     await supabase.from("project_monitoring_state").upsert({
       project_id,
       model_id: productionModelId || null,
@@ -202,6 +246,8 @@ serve(async (req) => {
       monitoring_score: score,
       checks,
       last_run_at: now,
+      last_run_status: "success",
+      error_message: null,
       updated_at: now,
     }, { onConflict: "project_id" });
 
@@ -228,6 +274,21 @@ serve(async (req) => {
 
   } catch (error) {
     console.error("[Monitoring] Error:", error);
+
+    // Try to persist error in SSOT
+    try {
+      const { project_id } = await req.clone().json().catch(() => ({}));
+      if (project_id) {
+        await supabase.from("project_monitoring_state").upsert({
+          project_id,
+          last_run_status: "error",
+          error_message: error instanceof Error ? error.message : "Erro desconhecido",
+          last_run_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "project_id" });
+      }
+    } catch (_) { /* best-effort */ }
+
     return new Response(JSON.stringify({
       success: false,
       error: error instanceof Error ? error.message : "Erro desconhecido",
