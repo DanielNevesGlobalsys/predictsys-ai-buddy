@@ -63,6 +63,8 @@ export interface IntentContractV2 {
   intent_base: IntentBase;
   domain_adapter: DomainAdapter;
   contract_version: number;
+  migration_from_legacy?: boolean;
+  legacy_version?: number | null;
   created_at: string;
 }
 
