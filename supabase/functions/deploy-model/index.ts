@@ -90,7 +90,15 @@ serve(async (req: Request) => {
       gates.push({ gate: "audit_contract", status: "WARN", message: "Sem auditoria de contrato — continuando." });
     }
 
-    // ===== GATE 2: Model Artifacts OK =====
+    // ===== GATE 2: Model Status (must be trained/completed) =====
+    if (!["trained", "completed"].includes(model.status)) {
+      gates.push({ gate: "model_status", status: "BLOCK", message: `Status do modelo="${model.status}". Esperado: trained ou completed.` });
+      ctas.push({ label: "Retreinar Modelo", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
+    }
+    gates.push({ gate: "model_status", status: "PASS", message: `status=${model.status}` });
+
+    // ===== GATE 3: Model Artifacts OK =====
     const artifacts = hyper.model_artifacts;
     const featureNames = hyper.feature_names as string[] | undefined;
     const normalization = hyper.normalization;
@@ -186,6 +194,20 @@ serve(async (req: Request) => {
     }
 
     gates.push({ gate: "atomic_promotion", status: "PASS", message: `Promoted. deployment_id=${result.deployment_id}` });
+
+    // ===== POST-RPC CONSISTENCY CHECK: production_model_id ↔ is_production =====
+    const [consistencyDs, consistencyModel] = await Promise.all([
+      supabase.from("project_dataset_state").select("production_model_id").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_models").select("id, is_production").eq("project_id", project_id).eq("is_production", true),
+    ]);
+    const ssotModelId = consistencyDs.data?.production_model_id;
+    const prodModels = consistencyModel.data || [];
+    if (prodModels.length !== 1 || prodModels[0].id !== ssotModelId || ssotModelId !== model_id) {
+      console.error(`[deploy-model] CONSISTENCY VIOLATION: ssot=${ssotModelId}, is_production models=${JSON.stringify(prodModels.map((m: any) => m.id))}, expected=${model_id}`);
+      gates.push({ gate: "post_deploy_consistency", status: "WARN", message: `Inconsistência detectada pós-deploy. Verifique manualmente.` });
+    } else {
+      gates.push({ gate: "post_deploy_consistency", status: "PASS", message: "SSOT ↔ is_production consistente" });
+    }
 
     // Update project status
     await supabase.from("projects").update({ status: "deployed" }).eq("id", project_id);
