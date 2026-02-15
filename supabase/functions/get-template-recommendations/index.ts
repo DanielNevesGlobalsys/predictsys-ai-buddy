@@ -170,11 +170,15 @@ serve(async (req) => {
         Math.pow(1 - clamp(driftAlertRate, 0, 1), 1.5) *
         Math.pow(coverageOkRate, 1.2);
 
+      // Soft floor: avoids crushing good templates with moderate risk
+      // risk=0.775 → soft=0.91, risk=0.394 → soft=0.758
+      const riskPenaltySoft = 0.6 + 0.4 * riskPenalty;
+
       let finalScore =
         Math.pow(clamp(successAdj, 0.01, 1), 1.2) *
         Math.pow(monNorm, 0.8) *
         Math.pow(ratingNorm, 0.6) *
-        riskPenalty;
+        riskPenaltySoft;
 
       // Dataset quality penalty (from v1)
       const avgConfidence = s.avg_confidence ?? 100;
@@ -264,6 +268,8 @@ serve(async (req) => {
           monitoring_norm: Math.round(monNorm * 1000) / 1000,
           rating_norm: Math.round(ratingNorm * 1000) / 1000,
           risk_penalty: Math.round(riskPenalty * 1000) / 1000,
+          risk_penalty_soft: Math.round(riskPenaltySoft * 1000) / 1000,
+          coverage_ok_rate: Math.round(coverageOkRate * 1000) / 1000,
           fit_multiplier: Math.round(fitMultiplier * 1000) / 1000,
           recency_boost: Math.round(recencyBoost * 1000) / 1000,
         },
@@ -298,6 +304,8 @@ serve(async (req) => {
       !r.is_hard_stop &&
       r.stats.total_uses < 30 &&
       r.final_score >= threshold &&
+      r.score_breakdown.risk_penalty >= 0.75 &&
+      r.score_breakdown.coverage_ok_rate >= 0.7 &&
       !top4.find((t: any) => t.template_id === r.template_id && t.industry === r.industry)
     );
 
