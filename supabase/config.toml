@@ -119,3 +119,6 @@ verify_jwt = false
 
 [functions.upsert-model-selection]
 verify_jwt = false
+
+[functions.infer-entity-and-time]
+verify_jwt = false

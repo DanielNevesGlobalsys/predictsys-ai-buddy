@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -7,6 +7,7 @@ import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle } from "
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { useDatasetState } from "@/hooks/useDatasetState";
+import ContractHintsSuggestions from "./ContractHintsSuggestions";
 
 interface StepEDAProps {
   projectData: ProjectData;
@@ -178,6 +179,11 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             )}
           </div>
         )}
+        {/* Contract Hints - Auto-detection */}
+        {projectData.id && !edaBlocked && (
+          <ContractHintsSuggestions projectId={projectData.id} />
+        )}
+
         {/* Info message */}
         <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
           <p className="text-sm text-muted-foreground">

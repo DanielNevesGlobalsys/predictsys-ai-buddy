@@ -106,8 +106,16 @@ const StepTargetFeatures = ({
 
   // Project settings persistence
   const { settings, loadSettings, saveSettings } = useProjectSettings(projectData.id);
-  const { appendContext } = useProjectAIContext(projectData.id);
+  const { appendContext, loadContext } = useProjectAIContext(projectData.id);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
+
+  // Contract hints from Etapa 2 auto-detection
+  const [contractHints, setContractHints] = useState<{
+    entity_key?: string | null;
+    time_anchor_column?: string | null;
+    event_candidates?: string[];
+    value_candidates?: string[];
+  } | null>(null);
 
   useEffect(() => {
     if (projectData.id) {
@@ -116,6 +124,7 @@ const StepTargetFeatures = ({
       ds.load();
       loadSelectionVersion();
       loadBuilderVersion();
+      loadContractHints();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -123,6 +132,21 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  const loadContractHints = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_ai_context")
+      .select("context")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data?.context) {
+      const ctx = data.context as Record<string, any>;
+      if (ctx.contract_hints) {
+        setContractHints(ctx.contract_hints);
+      }
+    }
+  };
 
   const loadBuilderVersion = async () => {
     if (!projectData.id) return;
@@ -177,6 +201,19 @@ const StepTargetFeatures = ({
       }
     }
   }, [settings, settingsLoaded, columns]);
+
+  // Pre-fill from contract hints (only when no settings exist)
+  useEffect(() => {
+    if (!contractHints || !columns.length || settingsLoaded) return;
+    if (targetColumn) return; // Already has a target
+
+    // If event_candidates has a match in columns, suggest it as target
+    const eventCols = contractHints.event_candidates || [];
+    const matchedEvent = eventCols.find(ec => columns.some(c => c.name === ec));
+    if (matchedEvent && !targetColumn) {
+      setTargetColumn(matchedEvent);
+    }
+  }, [contractHints, columns, settingsLoaded, targetColumn]);
 
   // Store initial target on mount
   useEffect(() => {
