@@ -135,15 +135,35 @@ const StepTargetFeatures = ({
 
   const loadContractHints = async () => {
     if (!projectData.id) return;
-    const { data } = await supabase
-      .from("project_ai_context")
-      .select("context")
-      .eq("project_id", projectData.id)
-      .maybeSingle();
-    if (data?.context) {
-      const ctx = data.context as Record<string, any>;
+    const [{ data: aiCtxData }, { data: dsStateData }] = await Promise.all([
+      supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+      supabase
+        .from("project_dataset_state")
+        .select("active_dataset_ref, manifest_id")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+    ]);
+    if (aiCtxData?.context) {
+      const ctx = aiCtxData.context as Record<string, any>;
       if (ctx.contract_hints) {
-        setContractHints(ctx.contract_hints);
+        const hints = ctx.contract_hints;
+        // Only use hints if they match the current dataset/manifest
+        const currentRef = dsStateData?.active_dataset_ref || null;
+        const currentManifest = dsStateData?.manifest_id || null;
+        const hintsRef = hints.dataset_ref || null;
+        const hintsManifest = hints.manifest_id || null;
+        // If hints have a dataset_ref, it must match current; otherwise accept (legacy hints)
+        const refMatch = !hintsRef || hintsRef === currentRef;
+        const manifestMatch = !hintsManifest || hintsManifest === currentManifest;
+        if (refMatch && manifestMatch) {
+          setContractHints(hints);
+        } else {
+          console.log("[StepTargetFeatures] Stale contract_hints ignored (dataset/manifest mismatch)");
+        }
       }
     }
   };
@@ -202,18 +222,9 @@ const StepTargetFeatures = ({
     }
   }, [settings, settingsLoaded, columns]);
 
-  // Pre-fill from contract hints (only when no settings exist)
-  useEffect(() => {
-    if (!contractHints || !columns.length || settingsLoaded) return;
-    if (targetColumn) return; // Already has a target
-
-    // If event_candidates has a match in columns, suggest it as target
-    const eventCols = contractHints.event_candidates || [];
-    const matchedEvent = eventCols.find(ec => columns.some(c => c.name === ec));
-    if (matchedEvent && !targetColumn) {
-      setTargetColumn(matchedEvent);
-    }
-  }, [contractHints, columns, settingsLoaded, targetColumn]);
+  // NOTE: We intentionally do NOT pre-fill target from event_candidates.
+  // event_candidate ≠ target. Target is often derived (e.g. "no purchase in 90 days").
+  // We only pre-fill entity_key + time_anchor (structural keys), not the target.
 
   // Store initial target on mount
   useEffect(() => {
