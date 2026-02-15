@@ -119,6 +119,13 @@ export interface BusinessDashboardData {
   groupSegmentation: GroupSegmentation[];
   timeProjections: TimeProjection[];
   availableSegmentFields: string[];
+  confidenceScore: number | null;
+  confidenceInputs: {
+    predictability_score: number | null;
+    coverage_pct: number | null;
+    missing_feature_pct: number | null;
+    sanity_fail: boolean;
+  } | null;
 }
 
 export const PROBLEM_CONTEXT_LABELS: Record<string, { title: string; subtitle: string }> = {

@@ -8,10 +8,20 @@ import type { DashboardFilters, KPIData, SegmentationBand } from '../types';
  */
 
 interface DashboardMetricsResponse {
+  dashboard_status?: string;
+  message?: string;
+  ctas?: Array<{ label: string; action: string; step?: number }>;
   horizon: number;
   mode: 'risk' | 'opportunity';
   segment: string;
   problem_type: string;
+  confidence_score?: number | null;
+  confidence_inputs?: {
+    predictability_score: number | null;
+    coverage_pct: number | null;
+    missing_feature_pct: number | null;
+    sanity_fail: boolean;
+  };
   summary_cards: {
     entities_with_prediction: number;
     high_risk_or_opportunity: number;
@@ -34,6 +44,7 @@ interface DashboardMetricsResponse {
     field: string;
     values: string[];
   }>;
+  diagnostics?: Record<string, unknown>;
 }
 
 interface UseDashboardMetricsResult {
@@ -45,6 +56,16 @@ interface UseDashboardMetricsResult {
   loading: boolean;
   error: string | null;
   refetch: () => Promise<void>;
+  dashboardStatus: string | null;
+  dashboardMessage: string | null;
+  dashboardCtas: Array<{ label: string; action: string; step?: number }>;
+  confidenceScore: number | null;
+  confidenceInputs: {
+    predictability_score: number | null;
+    coverage_pct: number | null;
+    missing_feature_pct: number | null;
+    sanity_fail: boolean;
+  } | null;
 }
 
 const DEFAULT_KPIS: KPIData = {
@@ -189,6 +210,11 @@ export function useDashboardMetrics(
     problemType: data?.problem_type ?? 'classification',
     loading,
     error,
-    refetch: fetchMetrics
+    refetch: fetchMetrics,
+    dashboardStatus: data?.dashboard_status ?? null,
+    dashboardMessage: data?.message ?? null,
+    dashboardCtas: data?.ctas ?? [],
+    confidenceScore: data?.confidence_score ?? null,
+    confidenceInputs: data?.confidence_inputs ?? null,
   };
 }
