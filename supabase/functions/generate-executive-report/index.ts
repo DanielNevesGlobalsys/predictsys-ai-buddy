@@ -58,8 +58,11 @@ async function generatePDF(p: {
   isHealth: boolean;
 }): Promise<Uint8Array> {
   const doc = await PDFDocument.create();
-  const page = doc.addPage([595.28, 841.89]); // A4
-  const { width, height } = page.getSize();
+  const PAGE_W = 595.28;
+  const PAGE_H = 841.89;
+  const marginLeft = 40;
+  const contentWidth = PAGE_W - 80;
+  const FOOTER_ZONE = 55; // reserved for footer
 
   const fontBold = await doc.embedFont(StandardFonts.HelveticaBold);
   const fontRegular = await doc.embedFont(StandardFonts.Helvetica);
@@ -74,13 +77,39 @@ async function generatePDF(p: {
   const white = rgb(1, 1, 1);
   const bgLight = rgb(0.973, 0.98, 0.988);
 
-  let y = height - 40;
-  const marginLeft = 40;
-  const contentWidth = width - 80;
+  let pageNum = 0;
+  let currentPage = doc.addPage([PAGE_W, PAGE_H]);
+  let y = PAGE_H - 40;
+  pageNum++;
 
-  // Helper: draw text, return new y
+  // Helper: ensure we have space, otherwise add a new page
+  const ensureSpace = (needed: number) => {
+    if (y - needed < FOOTER_ZONE) {
+      // Draw footer on current page
+      drawFooter(currentPage);
+      // New page
+      currentPage = doc.addPage([PAGE_W, PAGE_H]);
+      pageNum++;
+      // Mini header on continuation pages
+      currentPage.drawRectangle({ x: 0, y: PAGE_H - 36, width: PAGE_W, height: 36, color: blue });
+      currentPage.drawText("Relatório Executivo (cont.)", { x: marginLeft, y: PAGE_H - 24, size: 11, font: fontBold, color: white });
+      const pgStr = `Página ${pageNum}`;
+      const pgW = fontRegular.widthOfTextAtSize(pgStr, 8);
+      currentPage.drawText(pgStr, { x: PAGE_W - marginLeft - pgW, y: PAGE_H - 24, size: 8, font: fontRegular, color: rgb(0.85, 0.9, 1) });
+      y = PAGE_H - 52;
+    }
+  };
+
+  const drawFooter = (pg: any) => {
+    pg.drawLine({ start: { x: marginLeft, y: 40 }, end: { x: PAGE_W - marginLeft, y: 40 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
+    const footerText = "PredictSys AI · Relatório gerado automaticamente · Dados sujeitos a atualização";
+    const footerW = fontRegular.widthOfTextAtSize(footerText, 7);
+    pg.drawText(footerText, { x: PAGE_W / 2 - footerW / 2, y: 28, size: 7, font: fontRegular, color: lightGray });
+  };
+
+  // Helper: draw text on current page, return new y
   const drawText = (text: string, x: number, yPos: number, size: number, font = fontRegular, color = dark) => {
-    page.drawText(text, { x, y: yPos, size, font, color });
+    currentPage.drawText(text, { x, y: yPos, size, font, color });
     return yPos - size - 4;
   };
 
@@ -102,41 +131,42 @@ async function generatePDF(p: {
     return lines;
   };
 
-  // ─── Header ───
-  page.drawRectangle({ x: 0, y: height - 70, width, height: 70, color: blue });
-  drawText("Relatório Executivo", marginLeft, height - 30, 18, fontBold, white);
-  drawText(p.projectName, marginLeft, height - 50, 11, fontRegular, rgb(0.85, 0.9, 1));
+  // ─── Header (page 1) ───
+  currentPage.drawRectangle({ x: 0, y: PAGE_H - 70, width: PAGE_W, height: 70, color: blue });
+  drawText("Relatório Executivo", marginLeft, PAGE_H - 30, 18, fontBold, white);
+  drawText(p.projectName, marginLeft, PAGE_H - 50, 11, fontRegular, rgb(0.85, 0.9, 1));
 
-  // Right side: date
   const dateStr = `Gerado em ${p.generatedAt}`;
   const dateW = fontRegular.widthOfTextAtSize(dateStr, 9);
-  drawText(dateStr, width - marginLeft - dateW, height - 30, 9, fontRegular, rgb(0.85, 0.9, 1));
+  drawText(dateStr, PAGE_W - marginLeft - dateW, PAGE_H - 30, 9, fontRegular, rgb(0.85, 0.9, 1));
   const psText = "PredictSys AI";
   const psW = fontRegular.widthOfTextAtSize(psText, 8);
-  drawText(psText, width - marginLeft - psW, height - 44, 8, fontRegular, rgb(0.85, 0.9, 1));
+  drawText(psText, PAGE_W - marginLeft - psW, PAGE_H - 44, 8, fontRegular, rgb(0.85, 0.9, 1));
 
-  y = height - 85;
+  y = PAGE_H - 85;
 
-  // Industry + objective line
   const subline = `${p.industry} · ${p.objective}`.substring(0, 90);
   y = drawText(subline, marginLeft, y, 9, fontRegular, lightGray);
   y -= 6;
 
   // ─── Banners ───
   if (p.staleResults) {
-    page.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.953, 0.78) });
-    y = drawText("⚠ Resultados desatualizados: Configuração alterada após o último scoring. Rode o scoring novamente.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.6, 0.4, 0));
+    ensureSpace(30);
+    currentPage.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.953, 0.78) });
+    y = drawText("Resultados desatualizados: Configuracao alterada apos o ultimo scoring.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.6, 0.4, 0));
     y -= 10;
   }
 
   if (p.sanityFail) {
-    page.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.886, 0.886) });
-    y = drawText("🚨 Alerta de qualidade: Previsões com variância insuficiente. Revise target e features.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.7, 0.1, 0.1));
+    ensureSpace(30);
+    currentPage.drawRectangle({ x: marginLeft, y: y - 18, width: contentWidth, height: 22, color: rgb(0.996, 0.886, 0.886) });
+    y = drawText("Alerta de qualidade: Previsoes com variancia insuficiente. Revise target e features.", marginLeft + 8, y - 4, 8, fontRegular, rgb(0.7, 0.1, 0.1));
     y -= 10;
   }
 
   // ─── Main KPI box ───
-  page.drawRectangle({ x: marginLeft, y: y - 65, width: contentWidth, height: 65, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+  ensureSpace(75);
+  currentPage.drawRectangle({ x: marginLeft, y: y - 65, width: contentWidth, height: 65, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
 
   const headlineLines = wrapText(p.headline, contentWidth - 20, 14, fontBold);
   let hy = y - 16;
@@ -152,67 +182,80 @@ async function generatePDF(p: {
 
   // ─── Metric + threshold ───
   if (p.primaryMetricName && p.primaryMetricValue !== null) {
-    y = drawText(`Métrica principal: ${p.primaryMetricName} = ${p.primaryMetricValue.toFixed(4)}`, marginLeft, y, 9, fontRegular, gray);
+    ensureSpace(18);
+    y = drawText(`Metrica principal: ${p.primaryMetricName} = ${p.primaryMetricValue.toFixed(4)}`, marginLeft, y, 9, fontRegular, gray);
   }
   if (p.thresholdExplanation) {
-    y = drawText(`📊 ${p.thresholdExplanation}`, marginLeft, y, 8, fontRegular, lightGray);
+    ensureSpace(16);
+    y = drawText(p.thresholdExplanation, marginLeft, y, 8, fontRegular, lightGray);
   }
   y -= 8;
 
   // ─── Confidence + Entities row ───
+  ensureSpace(70);
   const boxW = (contentWidth - 16) / 2;
   const boxH = 55;
 
-  // Confidence box
-  page.drawRectangle({ x: marginLeft, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
-  drawText("Confiança", marginLeft + boxW / 2 - fontRegular.widthOfTextAtSize("Confiança", 9) / 2, y - 14, 9, fontRegular, lightGray);
-  const confStr = p.confidenceScore !== null ? String(p.confidenceScore) : "—";
+  currentPage.drawRectangle({ x: marginLeft, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+  drawText("Confianca", marginLeft + boxW / 2 - fontRegular.widthOfTextAtSize("Confianca", 9) / 2, y - 14, 9, fontRegular, lightGray);
+  const confStr = p.confidenceScore !== null ? String(p.confidenceScore) : "-";
   const confColor = (p.confidenceScore ?? 0) >= 70 ? green : (p.confidenceScore ?? 0) >= 40 ? amber : red;
   drawText(confStr, marginLeft + boxW / 2 - fontBold.widthOfTextAtSize(confStr, 22) / 2, y - 36, 22, fontBold, confColor);
   drawText(p.confidenceLabel, marginLeft + boxW / 2 - fontRegular.widthOfTextAtSize(p.confidenceLabel, 8) / 2, y - 48, 8, fontRegular, confColor);
 
-  // Entities box
   const ex = marginLeft + boxW + 16;
-  page.drawRectangle({ x: ex, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
+  currentPage.drawRectangle({ x: ex, y: y - boxH, width: boxW, height: boxH, color: bgLight, borderColor: rgb(0.886, 0.91, 0.937), borderWidth: 1 });
   drawText("Entidades analisadas", ex + boxW / 2 - fontRegular.widthOfTextAtSize("Entidades analisadas", 9) / 2, y - 14, 9, fontRegular, lightGray);
   const entStr = p.totalEntities.toLocaleString("pt-BR");
   drawText(entStr, ex + boxW / 2 - fontBold.widthOfTextAtSize(entStr, 22) / 2, y - 36, 22, fontBold, dark);
 
   y -= boxH + 12;
 
-  // ─── Buckets table ───
+  // ─── Buckets table (cap at 10, show note if more) ───
   if (p.buckets.length > 0) {
-    y = drawText("Distribuição de Probabilidade", marginLeft, y, 11, fontBold, dark);
+    ensureSpace(40);
+    y = drawText("Distribuicao de Probabilidade", marginLeft, y, 11, fontBold, dark);
     y -= 4;
 
-    // Table header
     const colFaixa = marginLeft;
     const colQtd = marginLeft + contentWidth * 0.55;
     const colPct = marginLeft + contentWidth * 0.8;
 
-    page.drawRectangle({ x: marginLeft, y: y - 14, width: contentWidth, height: 16, color: rgb(0.945, 0.961, 0.976) });
+    ensureSpace(20);
+    currentPage.drawRectangle({ x: marginLeft, y: y - 14, width: contentWidth, height: 16, color: rgb(0.945, 0.961, 0.976) });
     drawText("Faixa", colFaixa + 4, y - 10, 8, fontBold, dark);
     drawText("Quantidade", colQtd, y - 10, 8, fontBold, dark);
     drawText("%", colPct, y - 10, 8, fontBold, dark);
     y -= 18;
 
-    for (const b of p.buckets) {
+    const maxBuckets = 10;
+    const displayBuckets = p.buckets.slice(0, maxBuckets);
+
+    for (const b of displayBuckets) {
+      ensureSpace(18);
       drawText(b.bucket, colFaixa + 4, y - 10, 8, fontRegular, dark);
       drawText(b.count.toLocaleString("pt-BR"), colQtd, y - 10, 8, fontRegular, dark);
       drawText(`${b.percent.toFixed(1)}%`, colPct, y - 10, 8, fontRegular, dark);
-      page.drawLine({ start: { x: marginLeft, y: y - 14 }, end: { x: marginLeft + contentWidth, y: y - 14 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
+      currentPage.drawLine({ start: { x: marginLeft, y: y - 14 }, end: { x: marginLeft + contentWidth, y: y - 14 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
       y -= 16;
+    }
+
+    if (p.buckets.length > maxBuckets) {
+      ensureSpace(16);
+      y = drawText(`... e mais ${p.buckets.length - maxBuckets} faixas. Veja detalhes no dashboard.`, marginLeft + 4, y - 2, 7, fontRegular, lightGray);
     }
     y -= 6;
   }
 
   // ─── Recommended actions ───
   if (p.recommendedActions.length > 0) {
-    y = drawText("Ações Recomendadas", marginLeft, y, 11, fontBold, dark);
+    ensureSpace(24);
+    y = drawText("Acoes Recomendadas", marginLeft, y, 11, fontBold, dark);
     y -= 2;
     for (let i = 0; i < p.recommendedActions.length; i++) {
       const lines = wrapText(`${i + 1}. ${p.recommendedActions[i]}`, contentWidth - 10, 9, fontRegular);
       for (const line of lines) {
+        ensureSpace(16);
         y = drawText(line, marginLeft + 6, y, 9, fontRegular, gray);
       }
     }
@@ -221,9 +264,11 @@ async function generatePDF(p: {
 
   // ─── Health disclaimer ───
   if (p.isHealth) {
+    ensureSpace(40);
     y -= 4;
-    page.drawRectangle({ x: marginLeft, y: y - 28, width: contentWidth, height: 30, color: rgb(0.937, 0.965, 1), borderColor: rgb(0.231, 0.51, 0.965), borderWidth: 0.5 });
-    const disclaimerLines = wrapText(HEALTH_DISCLAIMER, contentWidth - 16, 7, fontRegular);
+    currentPage.drawRectangle({ x: marginLeft, y: y - 28, width: contentWidth, height: 30, color: rgb(0.937, 0.965, 1), borderColor: rgb(0.231, 0.51, 0.965), borderWidth: 0.5 });
+    const disclaimerText = "Uso operacional: Este resultado e suporte a operacao (agendamento, confirmacao, triagem), nao diagnostico clinico. Nao substitui avaliacao medica.";
+    const disclaimerLines = wrapText(disclaimerText, contentWidth - 16, 7, fontRegular);
     let dy = y - 8;
     for (const line of disclaimerLines) {
       dy = drawText(line, marginLeft + 8, dy, 7, fontRegular, rgb(0.2, 0.35, 0.6));
@@ -231,11 +276,8 @@ async function generatePDF(p: {
     y -= 36;
   }
 
-  // ─── Footer ───
-  page.drawLine({ start: { x: marginLeft, y: 40 }, end: { x: width - marginLeft, y: 40 }, thickness: 0.5, color: rgb(0.886, 0.91, 0.937) });
-  const footerText = "PredictSys AI · Relatório gerado automaticamente · Dados sujeitos a atualização";
-  const footerW = fontRegular.widthOfTextAtSize(footerText, 7);
-  drawText(footerText, width / 2 - footerW / 2, 28, 7, fontRegular, lightGray);
+  // ─── Footer on last page ───
+  drawFooter(currentPage);
 
   return await doc.save();
 }
@@ -722,7 +764,9 @@ Deno.serve(async (req) => {
     }
 
     // ═══ Step 6: Save to storage ═══
-    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const now = new Date();
+    const timestamp = now.toISOString().replace(/[:.]/g, "-");
+    const dateSlug = now.toISOString().slice(0, 10); // YYYY-MM-DD
     const filePath = `${project_id}/executive_report_${timestamp}.${fileExtension}`;
 
     const { error: uploadErr } = await supabase.storage
@@ -740,7 +784,8 @@ Deno.serve(async (req) => {
     }
 
     // ═══ Step 7: Generate signed URL ═══
-    const downloadName = `executive_report_${project.name.replace(/\s+/g, "_")}.${fileExtension}`;
+    const safeName = project.name.replace(/[^a-zA-Z0-9_-]/g, "_").replace(/_+/g, "_");
+    const downloadName = `PredictSys_Executive_${safeName}_${dateSlug}.${fileExtension}`;
     const { data: signedData, error: signedErr } = await supabase.storage
       .from("exports")
       .createSignedUrl(filePath, 10 * 60, { download: downloadName });
