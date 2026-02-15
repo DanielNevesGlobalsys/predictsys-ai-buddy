@@ -260,9 +260,11 @@ Gere o IntentContract JSON.`;
     const previousVersion = previousContract?.contract_version || previousContract?.version || 0;
 
     // ─── Build intent_base (universal) ───────────────────────
+    // RULE: declared_objective = the predictive goal (churn, no_show, etc.)
+    //        NOT the industry. Industry lives in domain_adapter.industry.
 
     const intent_base = {
-      declared_objective,
+      declared_objective, // e.g. "Prever churn nos próximos 90 dias"
       problem_type: contractJson.problem_type || "classification",
       target_expected: contractJson.target_expected || "event",
       requires_time_column: contractJson.requires_time_column ?? true,
@@ -277,13 +279,22 @@ Gere o IntentContract JSON.`;
       },
     };
 
+    // ─── Ensure adapter always has time_candidates ─────────
+
+    const safeAdapter = {
+      ...adapter,
+      time_candidates: adapter.time_candidates || [],
+    };
+
     // ─── Build full v2 contract ──────────────────────────────
 
     const newVersion = previousVersion + 1;
     const intentContractV2 = {
       intent_base,
-      domain_adapter: adapter,
+      domain_adapter: safeAdapter,
       contract_version: newVersion,
+      migration_from_legacy: previousVersion > 0 && !previousContract?.intent_base,
+      legacy_version: previousContract?.version ?? previousContract?.contract_version ?? null,
       created_at: new Date().toISOString(),
     };
 
@@ -404,8 +415,10 @@ Gere o IntentContract JSON.`;
         success: true,
         // New v2 format
         intent_base,
-        domain_adapter: adapter,
+        domain_adapter: safeAdapter,
         contract_version: newVersion,
+        migration_from_legacy: intentContractV2.migration_from_legacy,
+        legacy_version: intentContractV2.legacy_version,
         created_at: intentContractV2.created_at,
         // Legacy flat format (backward compat)
         intent_contract: intentContractLegacy,
