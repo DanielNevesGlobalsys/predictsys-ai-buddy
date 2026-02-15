@@ -417,6 +417,63 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9.5 METRICS_PROFILE_RESOLVED GATE =====
+    {
+      const intentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
+      const intentBaseObj = intentContract.intent_base || intentContract;
+      const domainAdapterObj = intentContract.domain_adapter || {};
+      const objective = String(intentBaseObj?.declared_objective || "").toLowerCase();
+      const industry = String(domainAdapterObj?.industry || "").toLowerCase();
+      const hasSpecificProfile = objective.includes("churn") || objective.includes("conversão") || objective.includes("receita") || objective.includes("no-show") || objective.includes("adesão") || industry.includes("saúde") || industry.includes("health");
+      gates.push({
+        gate: "metrics_profile",
+        status: hasSpecificProfile ? "PASS" : "WARN",
+        message: hasSpecificProfile
+          ? `Perfil de métricas resolvido a partir do objetivo/indústria.`
+          : `Perfil de métricas genérico (fallback). Defina o objetivo do projeto para otimizar a métrica principal.`,
+      });
+    }
+
+    // ===== 4.9.6 MIN_POSITIVES GATE =====
+    {
+      const lblBuilder = aiCtx?.label_builder;
+      const pr = lblBuilder?.preview_summary?.positive_rate;
+      if (pr != null) {
+        const totalRows = (datasetState as any)?.row_count || 0;
+        const positiveCount = Math.round(totalRows * pr);
+        const negativeCount = totalRows - positiveCount;
+        const minCount = Math.min(positiveCount, negativeCount);
+        if (minCount < 30) {
+          gates.push({
+            gate: "min_positives",
+            status: "BLOCK",
+            message: `Classe minoritária com apenas ${minCount} exemplos. Mínimo recomendado: 30.`,
+            details: { positive_count: positiveCount, negative_count: negativeCount },
+          });
+          canTrain = false;
+        } else if (minCount < 100) {
+          gates.push({
+            gate: "min_positives",
+            status: "WARN",
+            message: `Classe minoritária com ${minCount} exemplos. Recomendado: >= 100 para boa generalização.`,
+            details: { positive_count: positiveCount, negative_count: negativeCount },
+          });
+        }
+      }
+    }
+
+    // ===== 4.9.7 CALIBRATION_READY GATE =====
+    {
+      const totalRows = (datasetState as any)?.row_count || 0;
+      if (totalRows > 0 && totalRows < 500) {
+        gates.push({
+          gate: "calibration_ready",
+          status: "WARN",
+          message: `Dataset com ${totalRows} linhas — calibragem pode não ser confiável (recomendado: >= 500).`,
+        });
+      }
+    }
+
     // ===== 4.9 AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
