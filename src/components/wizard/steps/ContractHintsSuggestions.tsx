@@ -86,17 +86,36 @@ export default function ContractHintsSuggestions({ projectId, onHintsLoaded }: C
   }, [projectId]);
 
   const loadCachedHints = async () => {
-    const { data } = await supabase
-      .from("project_ai_context")
-      .select("context")
-      .eq("project_id", projectId)
-      .maybeSingle();
+    const [{ data: aiData }, { data: dsData }] = await Promise.all([
+      supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("project_dataset_state")
+        .select("active_dataset_ref, manifest_id")
+        .eq("project_id", projectId)
+        .maybeSingle(),
+    ]);
 
-    if (data?.context) {
-      const ctx = data.context as Record<string, any>;
+    if (aiData?.context) {
+      const ctx = aiData.context as Record<string, any>;
       if (ctx.contract_hints) {
         const hints = ctx.contract_hints;
-        // Reconstruct minimal result from cached hints
+        // Validate hints match current dataset
+        const currentRef = dsData?.active_dataset_ref || null;
+        const currentManifest = dsData?.manifest_id || null;
+        const hintsRef = hints.dataset_ref || null;
+        const hintsManifest = hints.manifest_id || null;
+        const refMatch = !hintsRef || hintsRef === currentRef;
+        const manifestMatch = !hintsManifest || hintsManifest === currentManifest;
+
+        if (!refMatch || !manifestMatch) {
+          console.log("[ContractHintsSuggestions] Stale hints ignored (dataset/manifest mismatch)");
+          return;
+        }
+
         const cached: InferenceResult = {
           success: true,
           suggestions: {

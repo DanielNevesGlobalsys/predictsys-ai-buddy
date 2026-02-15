@@ -280,7 +280,7 @@ serve(async (req) => {
       supabase.from("project_numeric_stats").select("column_name, null_count, min_value, max_value, mean_value").eq("project_id", project_id),
       supabase.from("project_categorical_stats").select("column_name, distinct_count, top_categories").eq("project_id", project_id),
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
-      supabase.from("project_dataset_state").select("row_count, col_count").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_dataset_state").select("row_count, col_count, active_dataset_ref, manifest_id").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const columns: ColumnRow[] = columnsRes.data || [];
@@ -393,35 +393,70 @@ serve(async (req) => {
         }
       : { columns: [], confidence: 0, reasons: ["Nenhuma coluna de valor numérico identificada"] };
 
-    // ─── Gates ───────────────────────────────────────────────
+    // ─── Resolve label_builder_required ─────────────────────
+
+    const labelBuilderRequired = intentContract?.intent_base?.label_builder_required
+      ?? intentContract?.label_builder_required
+      ?? false;
+
+    const isSupervised = problemType === "classification" || problemType === "regression";
+    const isSegmentation = problemType === "segmentation" || problemType === "clustering";
+
+    // ─── Gates (hardened by mode) ────────────────────────────
 
     const gates: GateResult[] = [];
 
     // Entity key gate
     if (!entitySuggestion.column) {
-      gates.push({
-        gate: "entity_key",
-        status: problemType === "segmentation" ? "WARN" : "WARN",
-        message: "Nenhuma coluna de entidade (ID) detectada automaticamente. Você pode selecionar manualmente no Step 4.",
-      });
+      if (isSegmentation) {
+        // Segmentation: entity_key is nice-to-have
+        gates.push({
+          gate: "entity_key",
+          status: "WARN",
+          message: "Nenhuma coluna de entidade detectada. Segmentação pode prosseguir, mas recomenda-se selecionar manualmente.",
+        });
+      } else {
+        // Supervised or label_builder: entity_key is required
+        gates.push({
+          gate: "entity_key",
+          status: "BLOCK",
+          message: "Nenhuma coluna de entidade (ID) detectada. Selecione manualmente no Step 4 antes de avançar.",
+        });
+      }
     } else {
       gates.push({
         gate: "entity_key",
         status: entitySuggestion.confidence >= 0.5 ? "PASS" : "WARN",
         message: entitySuggestion.confidence >= 0.5
           ? `Entidade detectada: "${entitySuggestion.column}" (confiança ${(entitySuggestion.confidence * 100).toFixed(0)}%)`
-          : `Possível entidade: "${entitySuggestion.column}" (confiança baixa — verifique manualmente)`,
+          : `Possível entidade: "${entitySuggestion.column}" (confiança baixa — confirme manualmente antes de avançar)`,
       });
     }
 
     // Time anchor gate
     if (requiresTime && !timeSuggestion.column) {
-      gates.push({
-        gate: "time_anchor",
-        status: "WARN",
-        message: "O objetivo requer coluna temporal, mas nenhuma foi detectada automaticamente. Selecione manualmente ou revise os dados.",
-      });
-    } else if (!timeSuggestion.column) {
+      if (labelBuilderRequired) {
+        // Label builder absolutely needs time
+        gates.push({
+          gate: "time_anchor",
+          status: "BLOCK",
+          message: "O label builder requer coluna temporal para construir o target, mas nenhuma foi detectada. Selecione manualmente ou revise os dados.",
+        });
+      } else if (isSupervised) {
+        // Supervised with requires_time: block
+        gates.push({
+          gate: "time_anchor",
+          status: "BLOCK",
+          message: "O objetivo requer coluna temporal para split temporal, mas nenhuma foi detectada. Selecione manualmente.",
+        });
+      } else {
+        gates.push({
+          gate: "time_anchor",
+          status: "WARN",
+          message: "Coluna temporal não encontrada. Para este tipo de problema, pode não ser necessária.",
+        });
+      }
+    } else if (!requiresTime && !timeSuggestion.column) {
       gates.push({
         gate: "time_anchor",
         status: "PASS",
@@ -433,13 +468,19 @@ serve(async (req) => {
         status: timeSuggestion.confidence >= 0.5 ? "PASS" : "WARN",
         message: timeSuggestion.confidence >= 0.5
           ? `Âncora temporal detectada: "${timeSuggestion.column}" (confiança ${(timeSuggestion.confidence * 100).toFixed(0)}%)`
-          : `Possível âncora temporal: "${timeSuggestion.column}" (confiança baixa — verifique manualmente)`,
+          : `Possível âncora temporal: "${timeSuggestion.column}" (confiança baixa — confirme manualmente)`,
       });
     }
 
-    // ─── Persist hints to project_ai_context ─────────────────
+    // ─── Persist hints to project_ai_context (versioned by dataset) ──
+
+    // Read dataset_ref and manifest_id for hint versioning
+    const datasetRef = dsStateRes.data?.active_dataset_ref ?? null;
+    const manifestId = dsStateRes.data?.manifest_id ?? null;
 
     const contractHints = {
+      dataset_ref: datasetRef,
+      manifest_id: manifestId,
       entity_key: entitySuggestion.column,
       time_anchor_column: timeSuggestion.column,
       event_candidates: eventSuggestion.columns,
@@ -459,9 +500,9 @@ serve(async (req) => {
         context: { ...currentCtx, contract_hints: contractHints },
         last_updated_at: new Date().toISOString(),
       }).eq("id", aiContextRes.data.id);
-      console.log(`[infer-entity-and-time] Hints persisted to project_ai_context`);
+      console.log(`[infer-entity-and-time] Hints persisted (dataset_ref=${datasetRef}, manifest_id=${manifestId})`);
     } else {
-      console.warn(`[infer-entity-and-time] No AI context found for project — hints not persisted (will be created on next intent contract generation)`);
+      console.warn(`[infer-entity-and-time] No AI context found for project — hints not persisted`);
     }
 
     // ─── Response ────────────────────────────────────────────
