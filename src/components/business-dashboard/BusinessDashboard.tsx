@@ -183,7 +183,14 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
       const response = result as ExecutiveReportResponse;
       if (response.success && response.signed_url) {
         window.open(response.signed_url, '_blank');
-        toast.success('Relatório executivo gerado com sucesso!');
+        if (response.format === 'html') {
+          toast.warning('Relatório gerado em HTML (fallback). Engine PDF indisponível.', {
+            description: 'O arquivo foi salvo como HTML em vez de PDF.',
+            duration: 6000,
+          });
+        } else {
+          toast.success('Relatório executivo PDF gerado com sucesso!');
+        }
       } else {
         const msg = response.error_friendly || response.error || 'Erro ao gerar relatório';
         toast.error(msg, {

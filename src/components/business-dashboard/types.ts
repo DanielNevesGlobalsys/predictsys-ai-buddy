@@ -150,6 +150,8 @@ export interface ExecutiveReportResponse {
   report_id?: string;
   signed_url?: string;
   file_path?: string;
+  format?: 'pdf' | 'html';
+  engine?: string;
   generated_at?: string;
   selection_version_scored?: number | null;
   selection_version_current?: number | null;
@@ -163,7 +165,6 @@ export interface ExecutiveReportResponse {
   error?: string;
   gates?: ExportGate[];
   ctas?: ExportCTA[];
-  selectionVersionCurrent: number | null;
 }
 
 export const PROBLEM_CONTEXT_LABELS: Record<string, { title: string; subtitle: string }> = {
