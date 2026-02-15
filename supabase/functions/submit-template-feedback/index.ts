@@ -6,6 +6,13 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// ── Improvement #7: Health compliance — block free comments, allow only predefined tags ──
+const HEALTH_ALLOWED_TAGS = [
+  "confuso", "bom", "métricas fracas", "dados ruins", "parâmetros errados",
+  "ações úteis", "não confio", "irrelevante", "preciso",
+  "sanity_fail", "cobertura_critica", "drift_alto", "versao_defasada",
+];
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -33,7 +40,7 @@ serve(async (req) => {
     }
 
     const body = await req.json();
-    const { project_id, template_id, rating, tags, comment } = body;
+    const { project_id, template_id, rating, tags, comment, source, recommendation_id } = body;
 
     if (!project_id || !template_id) {
       return new Response(JSON.stringify({ error: "project_id and template_id required" }), {
@@ -54,6 +61,20 @@ serve(async (req) => {
       });
     }
 
+    // ── Improvement #7: Health compliance ──
+    const isHealth = project.industry === "health" || project.industry === "saude";
+    let sanitizedComment = comment ?? null;
+    let sanitizedTags = tags ?? [];
+
+    if (isHealth) {
+      // Block free-text comments entirely
+      sanitizedComment = null;
+      // Allow only predefined tags
+      sanitizedTags = (sanitizedTags as string[]).filter((t: string) =>
+        HEALTH_ALLOWED_TAGS.includes(t)
+      );
+    }
+
     // Gather automatic signals in parallel
     const [selectionRes, predStateRes, monitoringRes, auditRes, modelRes] = await Promise.all([
       supabase.from("project_model_selection").select("selection_version, problem_type").eq("project_id", project_id).maybeSingle(),
@@ -69,7 +90,6 @@ serve(async (req) => {
     const audit = (auditRes.data as any)?.[0];
     const prodModel = modelRes.data as any;
 
-    // Extract champion metrics
     const hp = prodModel?.hyperparameters as any;
     const championScore = hp?.champion_score ?? hp?.best_score ?? null;
     const prAuc = hp?.pr_auc ?? null;
@@ -97,7 +117,7 @@ serve(async (req) => {
       || ctx?.intent_contract?.intent_id
       || null;
 
-    // Insert feedback
+    // ── Improvement #5: Track source (manual|recommended) and recommendation_id ──
     const { error: insertErr } = await supabase.from("project_template_feedback").insert({
       project_id,
       organization_id: project.organization_id,
@@ -109,9 +129,11 @@ serve(async (req) => {
       batch_id: predState?.latest_batch_id ?? null,
       feedback_type: "explicit",
       rating: rating ?? null,
-      tags: tags ?? [],
-      comment: comment ?? null,
+      tags: sanitizedTags,
+      comment: sanitizedComment,
       signals,
+      source: source || "manual",
+      recommendation_id: recommendation_id || null,
     });
 
     if (insertErr) {
@@ -141,7 +163,6 @@ serve(async (req) => {
 });
 
 async function updateTemplateStats(supabase: any, templateId: string, industry: string | null, intentId: string | null) {
-  // Aggregate from feedback table
   const { data: feedbacks } = await supabase
     .from("project_template_feedback")
     .select("rating, signals, feedback_type")
@@ -160,13 +181,12 @@ async function updateTemplateStats(supabase: any, templateId: string, industry: 
   const coverages = feedbacks.map((f: any) => f.signals?.coverage_pct).filter((v: any) => v != null);
   const avgCoverage = coverages.length > 0 ? coverages.reduce((a: number, b: number) => a + b, 0) / coverages.length : 0;
 
-  const sanityFails = feedbacks.filter((f: any) => f.signals?.sanity_fail === true).length;
-  const sanityFailRate = totalUses > 0 ? sanityFails / totalUses : 0;
-
   const predScores = feedbacks.map((f: any) => f.signals?.predictability_score).filter((v: any) => v != null);
   const avgConfidence = predScores.length > 0 ? predScores.reduce((a: number, b: number) => a + b, 0) / predScores.length : 0;
 
-  // Success = monitoring_score >= 70 AND no sanity_fail
+  const sanityFails = feedbacks.filter((f: any) => f.signals?.sanity_fail === true).length;
+  const sanityFailRate = totalUses > 0 ? sanityFails / totalUses : 0;
+
   const successes = feedbacks.filter((f: any) =>
     (f.signals?.monitoring_score ?? 100) >= 70 && !f.signals?.sanity_fail
   ).length;

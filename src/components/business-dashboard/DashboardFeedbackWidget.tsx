@@ -9,21 +9,25 @@ interface DashboardFeedbackWidgetProps {
 
 export function DashboardFeedbackWidget({ projectId }: DashboardFeedbackWidgetProps) {
   const [templateId, setTemplateId] = useState<string | null>(null);
+  const [industry, setIndustry] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     async function resolveTemplate() {
-      const { data } = await supabase
+      const { data: aiCtx } = await supabase
         .from('project_ai_context')
         .select('context')
         .eq('project_id', projectId)
         .maybeSingle();
 
-      if (data?.context) {
-        const ctx = data.context as any;
+      if (aiCtx?.context) {
+        const ctx = aiCtx.context as any;
         const tId = ctx?.intent_contract?.domain_adapter?.recommended_templates?.[0]?.template_id
           || ctx?.intent_contract?.template_id
           || 'unknown';
         setTemplateId(tId);
+        const ind = ctx?.intent_contract?.domain_adapter?.industry
+          || ctx?.intent_contract?.industry_hint;
+        if (ind) setIndustry(ind);
       }
     }
     resolveTemplate();
@@ -37,6 +41,7 @@ export function DashboardFeedbackWidget({ projectId }: DashboardFeedbackWidgetPr
         projectId={projectId}
         templateId={templateId}
         context="dashboard"
+        industry={industry}
       />
     </Card>
   );

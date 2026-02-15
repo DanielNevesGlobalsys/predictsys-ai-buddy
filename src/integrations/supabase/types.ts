@@ -3178,8 +3178,10 @@ export type Database = {
           organization_id: string
           project_id: string
           rating: number | null
+          recommendation_id: string | null
           selection_version: number | null
           signals: Json | null
+          source: string
           tags: string[] | null
           template_id: string
           user_id: string
@@ -3195,8 +3197,10 @@ export type Database = {
           organization_id: string
           project_id: string
           rating?: number | null
+          recommendation_id?: string | null
           selection_version?: number | null
           signals?: Json | null
+          source?: string
           tags?: string[] | null
           template_id: string
           user_id: string
@@ -3212,8 +3216,10 @@ export type Database = {
           organization_id?: string
           project_id?: string
           rating?: number | null
+          recommendation_id?: string | null
           selection_version?: number | null
           signals?: Json | null
+          source?: string
           tags?: string[] | null
           template_id?: string
           user_id?: string
