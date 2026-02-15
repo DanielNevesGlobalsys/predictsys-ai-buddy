@@ -128,3 +128,6 @@ verify_jwt = false
 
 [functions.preview-split-policy]
 verify_jwt = false
+
+[functions.audit-contract]
+verify_jwt = false
