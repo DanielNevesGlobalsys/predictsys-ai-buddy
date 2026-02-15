@@ -137,12 +137,50 @@ serve(async (req: Request) => {
     if (selection && (selection as any).target_column) {
       const sv = (selection as any).selection_version || 1;
       const feats = (selection as any).selected_features as string[] || [];
-      gates.push({
-        gate: "selection",
-        status: feats.length === 0 ? "WARN" : "PASS",
-        message: `Target: "${(selection as any).target_column}" (v${sv}), ${feats.length} features`,
-        details: { target_column: (selection as any).target_column, selection_version: sv, features_count: feats.length },
-      });
+      const targetCol = (selection as any).target_column as string;
+      const isLabelBuilder = targetCol === "_label_";
+
+      // If _label_, verify label builder exists and is ready
+      let labelBuilderOk = true;
+      if (isLabelBuilder) {
+        const { data: lblBuilder } = await supabase
+          .from("project_label_builders")
+          .select("id, status, template_id")
+          .eq("project_id", project_id)
+          .eq("status", "ready")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (!lblBuilder) {
+          labelBuilderOk = false;
+          gates.push({
+            gate: "selection",
+            status: "BLOCK",
+            message: "Target derivado (_label_) selecionado, mas nenhum Label Builder com status 'ready' encontrado. Execute o Target Builder.",
+            details: { target_column: targetCol, label_builder_missing: true },
+          });
+          canBuild = false;
+          canTrain = false;
+        } else {
+          gates.push({
+            gate: "selection",
+            status: feats.length === 0 ? "WARN" : "PASS",
+            message: `Target derivado via template "${lblBuilder.template_id}" (v${sv}), ${feats.length} features`,
+            details: { target_column: targetCol, selection_version: sv, features_count: feats.length, label_builder_id: lblBuilder.id },
+          });
+        }
+      }
+
+      if (!isLabelBuilder || labelBuilderOk) {
+        if (!isLabelBuilder) {
+          gates.push({
+            gate: "selection",
+            status: feats.length === 0 ? "WARN" : "PASS",
+            message: `Target: "${targetCol}" (v${sv}), ${feats.length} features`,
+            details: { target_column: targetCol, selection_version: sv, features_count: feats.length },
+          });
+        }
+      }
     } else {
       // Fallback: check project_settings
       const { data: settings } = await supabase

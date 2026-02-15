@@ -929,10 +929,10 @@ serve(async (req: Request) => {
           source_columns: [],
           window_days: windowDays,
           condition: `Target derivado via template "${builderData.template_id}"`,
-          output_column: `_label_${builderData.template_id || "custom"}`,
+          output_column: "_label_",
           output_type: "binary",
         };
-        targetColumn = labelPlan.output_column;
+        targetColumn = "_label_";
         targetType = "binary";
 
         // Note: leakage_watchlist from domain adapter will be applied after leakageCols is initialized
