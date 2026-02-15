@@ -2423,6 +2423,108 @@ export type Database = {
           },
         ]
       }
+      project_monitoring_reports: {
+        Row: {
+          batch_id: string | null
+          checks: Json
+          created_at: string
+          id: string
+          model_id: string | null
+          monitoring_score: number
+          project_id: string
+          selection_version_scored: number | null
+        }
+        Insert: {
+          batch_id?: string | null
+          checks?: Json
+          created_at?: string
+          id?: string
+          model_id?: string | null
+          monitoring_score?: number
+          project_id: string
+          selection_version_scored?: number | null
+        }
+        Update: {
+          batch_id?: string | null
+          checks?: Json
+          created_at?: string
+          id?: string
+          model_id?: string | null
+          monitoring_score?: number
+          project_id?: string
+          selection_version_scored?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_monitoring_reports_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_monitoring_reports_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      project_monitoring_state: {
+        Row: {
+          checks: Json
+          created_at: string
+          id: string
+          last_run_at: string | null
+          latest_batch_id: string | null
+          model_id: string | null
+          monitoring_score: number
+          project_id: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          checks?: Json
+          created_at?: string
+          id?: string
+          last_run_at?: string | null
+          latest_batch_id?: string | null
+          model_id?: string | null
+          monitoring_score?: number
+          project_id: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          checks?: Json
+          created_at?: string
+          id?: string
+          last_run_at?: string | null
+          latest_batch_id?: string | null
+          model_id?: string | null
+          monitoring_score?: number
+          project_id?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_monitoring_state_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_monitoring_state_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_numeric_stats: {
         Row: {
           column_name: string

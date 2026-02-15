@@ -137,3 +137,6 @@ verify_jwt = false
 
 [functions.generate-executive-report]
 verify_jwt = false
+
+[functions.run-monitoring-checks]
+verify_jwt = false
