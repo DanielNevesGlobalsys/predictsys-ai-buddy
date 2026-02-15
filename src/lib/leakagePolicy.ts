@@ -36,6 +36,7 @@ const ID_SUFFIX = /(_id|_key|_code|_cod|_numero|_num|_uuid)$/i;
  * 2. Heuristic by name (target/leakage keywords)
  * 3. Temporal heuristic (post-event columns)
  * 4. High cardinality IDs (not entity_key)
+ * 5. Time anchor column (never use raw anchor as feature)
  */
 export function applyLeakagePolicy(
   featureNames: string[],
@@ -68,8 +69,14 @@ export function applyLeakagePolicy(
     const colLower = col.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     let isRemoved = false;
 
+    // 0. Time anchor column — never use raw anchor as feature (proxy de tempo, domina modelo)
+    if (!isRemoved && timeAnchorColumn && col === timeAnchorColumn) {
+      removed.push({ column: col, reason: `Coluna âncora temporal não pode ser usada como feature crua (vira proxy de tempo e pode dominar o modelo). Use features derivadas (mês, dia_semana, recência).`, source: "time_anchor_raw" });
+      isRemoved = true;
+    }
+
     // 1. Adapter watchlist
-    if (watchlistSet.has(colLower)) {
+    if (!isRemoved && watchlistSet.has(colLower)) {
       removed.push({ column: col, reason: `Coluna na watchlist do adaptador de domínio`, source: "adapter_watchlist" });
       isRemoved = true;
     }

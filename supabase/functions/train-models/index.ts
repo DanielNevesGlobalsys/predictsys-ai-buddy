@@ -1248,13 +1248,14 @@ serve(async (req) => {
     console.log(`\n=== Training Gating (SSOT) ===`);
 
     // Parallel fetch all SSOT sources
-    const [projectRes, dsStateRes, selectionRes, modelingDatasetRes, contractRes, splitPolicyRes] = await Promise.all([
+    const [projectRes, dsStateRes, selectionRes, modelingDatasetRes, contractRes, splitPolicyRes, aiCtxRes] = await Promise.all([
       supabase.from("projects").select("*").eq("id", project_id).single(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_modeling_datasets").select("*").eq("project_id", project_id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).eq("status", "ready").order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const project = projectRes.data;
@@ -1268,6 +1269,8 @@ serve(async (req) => {
     const selection = selectionRes.data as any;
     const modelingDataset = modelingDatasetRes.data as any;
     const modelingContract = contractRes.data as any;
+    const trainAiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
+    const classBalanceMethod = trainAiCtx.class_balance?.method || "none";
 
     // ── Gate 1: Dataset (SSOT) ──
     if (dsState && (dsState.row_count > 0) && (dsState.col_count > 0)) {
@@ -2921,6 +2924,8 @@ serve(async (req) => {
           target_hash: currentTargetHash,
           builder_dataset_id: builderDatasetId,
           training_seed: trainingSeed,
+          // Class balance audit
+          class_balance_method: classBalanceMethod,
         },
       })
       .select()
