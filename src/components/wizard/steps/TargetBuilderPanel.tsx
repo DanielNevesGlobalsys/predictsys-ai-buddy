@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { TemplateFeedbackWidget } from "@/components/feedback/TemplateFeedbackWidget";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -389,11 +390,18 @@ export default function TargetBuilderPanel({
 
           {/* Ready confirmation */}
           {isReady && (
-            <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
-              <CheckCircle className="w-4 h-4 text-accent" />
-              <p className="text-sm font-medium">
-                Target builder pronto! O target será gerado automaticamente ao construir o dataset modelável.
-              </p>
+            <div className="space-y-3">
+              <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
+                <CheckCircle className="w-4 h-4 text-accent" />
+                <p className="text-sm font-medium">
+                  Target builder pronto! O target será gerado automaticamente ao construir o dataset modelável.
+                </p>
+              </div>
+              <TemplateFeedbackWidget
+                projectId={projectId}
+                templateId={selectedTemplate}
+                context="target_builder"
+              />
             </div>
           )}
         </div>

@@ -15,3 +15,4 @@ export { BusinessSummaryCard } from './BusinessSummaryCard';
 export { useSimulation } from './hooks/useSimulation';
 export * from './types';
 export { MonitoringPanel } from './MonitoringPanel';
+export { DashboardFeedbackWidget } from './DashboardFeedbackWidget';

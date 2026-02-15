@@ -3166,6 +3166,75 @@ export type Database = {
           },
         ]
       }
+      project_template_feedback: {
+        Row: {
+          batch_id: string | null
+          comment: string | null
+          created_at: string
+          feedback_type: string
+          id: string
+          industry: string | null
+          intent_id: string | null
+          organization_id: string
+          project_id: string
+          rating: number | null
+          selection_version: number | null
+          signals: Json | null
+          tags: string[] | null
+          template_id: string
+          user_id: string
+        }
+        Insert: {
+          batch_id?: string | null
+          comment?: string | null
+          created_at?: string
+          feedback_type?: string
+          id?: string
+          industry?: string | null
+          intent_id?: string | null
+          organization_id: string
+          project_id: string
+          rating?: number | null
+          selection_version?: number | null
+          signals?: Json | null
+          tags?: string[] | null
+          template_id: string
+          user_id: string
+        }
+        Update: {
+          batch_id?: string | null
+          comment?: string | null
+          created_at?: string
+          feedback_type?: string
+          id?: string
+          industry?: string | null
+          intent_id?: string | null
+          organization_id?: string
+          project_id?: string
+          rating?: number | null
+          selection_version?: number | null
+          signals?: Json | null
+          tags?: string[] | null
+          template_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_template_feedback_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_template_feedback_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           business_objective: string | null
@@ -3249,6 +3318,51 @@ export type Database = {
             referencedColumns: ["id"]
           },
         ]
+      }
+      template_quality_stats: {
+        Row: {
+          avg_confidence: number | null
+          avg_coverage: number | null
+          avg_monitoring_score: number | null
+          avg_rating: number | null
+          id: string
+          industry: string | null
+          intent_id: string | null
+          sanity_fail_rate: number | null
+          success_rate: number | null
+          template_id: string
+          total_uses: number
+          updated_at: string
+        }
+        Insert: {
+          avg_confidence?: number | null
+          avg_coverage?: number | null
+          avg_monitoring_score?: number | null
+          avg_rating?: number | null
+          id?: string
+          industry?: string | null
+          intent_id?: string | null
+          sanity_fail_rate?: number | null
+          success_rate?: number | null
+          template_id: string
+          total_uses?: number
+          updated_at?: string
+        }
+        Update: {
+          avg_confidence?: number | null
+          avg_coverage?: number | null
+          avg_monitoring_score?: number | null
+          avg_rating?: number | null
+          id?: string
+          industry?: string | null
+          intent_id?: string | null
+          sanity_fail_rate?: number | null
+          success_rate?: number | null
+          template_id?: string
+          total_uses?: number
+          updated_at?: string
+        }
+        Relationships: []
       }
     }
     Views: {

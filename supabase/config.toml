@@ -140,3 +140,9 @@ verify_jwt = false
 
 [functions.run-monitoring-checks]
 verify_jwt = false
+
+[functions.submit-template-feedback]
+verify_jwt = false
+
+[functions.get-template-recommendations]
+verify_jwt = false
