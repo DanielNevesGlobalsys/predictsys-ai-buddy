@@ -39,7 +39,7 @@ serve(async (req: Request) => {
       });
     }
 
-    const { project_id, model_id } = await req.json();
+    const { project_id, model_id, reason } = await req.json();
     if (!project_id || !model_id) {
       return new Response(JSON.stringify({ error: "project_id e model_id obrigatórios" }), {
         status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -49,13 +49,14 @@ serve(async (req: Request) => {
     console.log(`[deploy-model] Starting deploy for project=${project_id}, model=${model_id}, user=${user.id}`);
 
     // ===== LOAD ALL SOURCES IN PARALLEL =====
-    const [selectionRes, modelRes, datasetRes, dsStateRes, contractRes, projectRes] = await Promise.all([
+    const [selectionRes, modelRes, datasetRes, dsStateRes, contractRes, projectRes, auditRes] = await Promise.all([
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_models").select("*").eq("id", model_id).eq("project_id", project_id).maybeSingle(),
       supabase.from("project_modeling_datasets").select("*").eq("project_id", project_id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("projects").select("organization_id").eq("id", project_id).single(),
+      supabase.from("project_contract_audits").select("status, predictability_score").eq("project_id", project_id).order("audit_version", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
     const selection = selectionRes.data as any;
@@ -64,146 +65,132 @@ serve(async (req: Request) => {
     const dsState = dsStateRes.data as any;
     const contract = contractRes.data as any;
     const project = projectRes.data as any;
+    const latestAudit = auditRes.data as any;
 
     if (!model) {
-      return new Response(JSON.stringify({ error: "Modelo não encontrado", status: "BLOCKED", blocked_reason_code: "MODEL_NOT_FOUND" }), {
+      return new Response(JSON.stringify({ success: false, status: "BLOCKED", blocked_reason_code: "MODEL_NOT_FOUND", gates: [{ gate: "model_exists", status: "BLOCK", message: "Modelo não encontrado." }], ctas: [{ label: "Voltar ao Treino", go_to_step: 5 }] }), {
         status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
 
     const gates: DeployGate[] = [];
+    const ctas: { label: string; go_to_step?: number; action?: string }[] = [];
     const currentSelVersion = selection?.selection_version || 0;
     const hyper = (model.hyperparameters || {}) as Record<string, any>;
 
-    // Helper
-    const blockResult = (code: string, message: string, cta: { label: string; go_to_step?: number }) => {
-      console.error(`[deploy-model] BLOCKED: ${code} — ${message}`);
-      return new Response(JSON.stringify({
-        status: "BLOCKED",
-        selection_version: currentSelVersion,
-        model_id,
-        production_model_id: null,
-        deployed_at: null,
-        scoring_enabled: false,
-        dashboard_enabled: false,
-        blocked_reason_code: code,
-        gates,
-        ctas: [cta],
-      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-    };
+    // ===== GATE 1: Audit Contract (predictability score) =====
+    if (latestAudit) {
+      if (latestAudit.status === "block" || latestAudit.predictability_score < 60) {
+        gates.push({ gate: "audit_contract", status: "BLOCK", message: `Predictability score=${latestAudit.predictability_score}/100 (mínimo: 60).`, details: { score: latestAudit.predictability_score } });
+        ctas.push({ label: "Ver Auditoria do Contrato", go_to_step: 4 });
+        return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
+      }
+      gates.push({ gate: "audit_contract", status: latestAudit.status === "warn" ? "WARN" : "PASS", message: `Predictability score=${latestAudit.predictability_score}/100` });
+    } else {
+      gates.push({ gate: "audit_contract", status: "WARN", message: "Sem auditoria de contrato — continuando." });
+    }
 
-    // ===== GATE 1: Modelo Válido =====
+    // ===== GATE 2: Model Artifacts OK =====
+    const artifacts = hyper.model_artifacts;
+    const featureNames = hyper.feature_names as string[] | undefined;
+    const normalization = hyper.normalization;
+
+    if (!artifacts || (!artifacts.weights && !artifacts.trees)) {
+      gates.push({ gate: "model_artifacts", status: "BLOCK", message: "Modelo sem artefatos de treinamento." });
+      ctas.push({ label: "Retreinar Modelo", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
+    }
+    if (!featureNames || featureNames.length === 0) {
+      gates.push({ gate: "model_artifacts", status: "BLOCK", message: "Modelo sem feature_names salvas." });
+      ctas.push({ label: "Retreinar Modelo", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
+    }
+    if (!normalization?.means || !normalization?.stds) {
+      gates.push({ gate: "model_artifacts", status: "BLOCK", message: "Modelo sem normalização salva." });
+      ctas.push({ label: "Retreinar Modelo", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
+    }
+    gates.push({ gate: "model_artifacts", status: "PASS", message: `Artefatos OK: ${featureNames.length} features, normalization present` });
+
+    // ===== GATE 3: Model Quality =====
     const mqf = hyper.model_quality_flag || model.status;
     const dashAllowed = hyper.dashboard_allowed !== false;
     const canPromote = hyper.can_promote_to_production !== false;
 
     if (mqf !== "ok" && mqf !== "trained") {
-      gates.push({ gate: "model_valid", status: "BLOCK", message: `model_quality_flag=${mqf}. Modelo não aprovado.` });
-      return blockResult("MODEL_QUALITY_FAILED", `Modelo reprovado (quality=${mqf}). Retreine com dados melhores.`, { label: "Voltar ao Treino", go_to_step: 4 });
+      gates.push({ gate: "model_quality", status: "BLOCK", message: `model_quality_flag=${mqf}. Modelo não aprovado.` });
+      ctas.push({ label: "Voltar ao Treino", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
     }
-    if (!dashAllowed) {
-      gates.push({ gate: "model_valid", status: "BLOCK", message: "dashboard_allowed=false. Modelo sem permissão para dashboard." });
-      return blockResult("DASHBOARD_NOT_ALLOWED", "Modelo não tem permissão para dashboard. Retreine ou ajuste target.", { label: "Voltar ao Treino", go_to_step: 4 });
+    if (!dashAllowed || !canPromote) {
+      gates.push({ gate: "model_quality", status: "BLOCK", message: `dashboard_allowed=${dashAllowed}, can_promote=${canPromote}` });
+      ctas.push({ label: "Voltar ao Treino", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
     }
-    if (!canPromote) {
-      gates.push({ gate: "model_valid", status: "BLOCK", message: "can_promote_to_production=false." });
-      return blockResult("CANNOT_PROMOTE", "Modelo não elegível para produção (não supera baseline ou sanidade falhou).", { label: "Voltar ao Treino", go_to_step: 4 });
-    }
-    gates.push({ gate: "model_valid", status: "PASS", message: `Modelo válido: quality=${mqf}, dashboard=${dashAllowed}` });
+    gates.push({ gate: "model_quality", status: "PASS", message: `quality=${mqf}, dashboard=${dashAllowed}` });
 
-    // ===== GATE 2: Versionamento =====
+    // ===== GATE 4: Selection Version Match =====
     const modelSelVersion = hyper.selection_version || 0;
     if (currentSelVersion > 0 && modelSelVersion > 0 && modelSelVersion !== currentSelVersion) {
-      gates.push({ gate: "versioning", status: "BLOCK", message: `Modelo treinado com v${modelSelVersion}, seleção atual v${currentSelVersion}.`, details: { model_version: modelSelVersion, current_version: currentSelVersion } });
-      return blockResult("VERSION_MISMATCH", `Modelo desatualizado (treinado v${modelSelVersion}, atual v${currentSelVersion}). Retreine.`, { label: "Retreinar Modelo", go_to_step: 4 });
+      gates.push({ gate: "selection_version", status: "BLOCK", message: `Modelo treinado com v${modelSelVersion}, seleção atual v${currentSelVersion}.`, details: { model_version: modelSelVersion, current_version: currentSelVersion } });
+      ctas.push({ label: "Retreinar Modelo", go_to_step: 5 });
+      return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
     }
-    gates.push({ gate: "versioning", status: "PASS", message: `Versão OK: model=v${modelSelVersion}, selection=v${currentSelVersion}` });
+    gates.push({ gate: "selection_version", status: "PASS", message: `v${modelSelVersion} == v${currentSelVersion}` });
 
-    // ===== GATE 3: Dataset Atual =====
-    const modelDatasetId = hyper.builder_dataset_id || null;
+    // ===== GATE 5: Dataset Current =====
     if (builderDataset) {
       const builderSelVersion = (builderDataset as any).selection_version_used || 0;
-      if (modelDatasetId && modelDatasetId !== builderDataset.id) {
-        gates.push({ gate: "dataset_current", status: "BLOCK", message: `Modelo usa dataset ${modelDatasetId}, mas o atual é ${builderDataset.id}.` });
-        return blockResult("DATASET_MISMATCH", "Modelo treinado com dataset diferente do atual. Retreine.", { label: "Retreinar Modelo", go_to_step: 4 });
-      }
       if (currentSelVersion > 0 && builderSelVersion < currentSelVersion) {
         gates.push({ gate: "dataset_current", status: "BLOCK", message: `Builder dataset (v${builderSelVersion}) desatualizado vs seleção (v${currentSelVersion}).` });
-        return blockResult("BUILDER_OUTDATED", "Builder desatualizado. Regere o dataset modelável antes de promover.", { label: "Regerar Builder", go_to_step: 3 });
+        ctas.push({ label: "Regerar Builder", go_to_step: 4 });
+        return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
       }
-      gates.push({ gate: "dataset_current", status: "PASS", message: `Dataset atual: id=${builderDataset.id}, sel_v=${builderSelVersion}` });
+      gates.push({ gate: "dataset_current", status: "PASS", message: `Dataset OK: sel_v=${builderSelVersion}` });
     } else {
-      // No builder — warn but allow (legacy path)
-      gates.push({ gate: "dataset_current", status: "WARN", message: "Nenhum dataset modelável encontrado (legacy path)." });
+      gates.push({ gate: "dataset_current", status: "WARN", message: "Sem dataset modelável (legacy path)." });
     }
 
-    // ===== GATE 4: Contrato =====
+    // ===== GATE 6: Contract =====
     if (contract) {
       if (contract.status === "blocked") {
-        gates.push({ gate: "contract", status: "BLOCK", message: "Contrato de modelagem bloqueado.", details: { reasons: contract.blocked_reasons } });
-        return blockResult("CONTRACT_BLOCKED", "Contrato de modelagem está bloqueado. Revise Target/Features.", { label: "Revisar Contrato", go_to_step: 3 });
+        gates.push({ gate: "contract", status: "BLOCK", message: "Contrato de modelagem bloqueado." });
+        ctas.push({ label: "Revisar Contrato", go_to_step: 4 });
+        return blockResponse(gates, ctas, project_id, model_id, currentSelVersion);
       }
       gates.push({ gate: "contract", status: "PASS", message: `Contrato OK (status=${contract.status})` });
     } else {
-      gates.push({ gate: "contract", status: "WARN", message: "Sem contrato de modelagem — continuando sem contrato." });
+      gates.push({ gate: "contract", status: "WARN", message: "Sem contrato — continuando." });
     }
 
-    // ===== GATE 5: Audit Contract (predictability score) =====
-    const { data: latestAudit } = await supabase
-      .from("project_contract_audits")
-      .select("status, predictability_score")
-      .eq("project_id", project_id)
-      .eq("selection_version", currentSelVersion)
-      .order("audit_version", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+    // ===== ALL GATES PASSED — CALL ATOMIC RPC =====
+    console.log(`[deploy-model] All gates PASS. Calling rpc_promote_model_to_production`);
 
-    if (latestAudit) {
-      if (latestAudit.status === "block" || latestAudit.predictability_score < 60) {
-        gates.push({ gate: "audit_score", status: "BLOCK", message: `Predictability score=${latestAudit.predictability_score}/100 (mínimo: 60).`, details: { score: latestAudit.predictability_score } });
-        return blockResult("LOW_PREDICTABILITY", `Score de previsibilidade muito baixo (${latestAudit.predictability_score}/100). Corrija os gates da auditoria.`, { label: "Ver Auditoria do Contrato", go_to_step: 3 });
-      }
-      gates.push({ gate: "audit_score", status: latestAudit.status === "warn" ? "WARN" : "PASS", message: `Predictability score=${latestAudit.predictability_score}/100` });
+    const { data: rpcResult, error: rpcError } = await supabase.rpc("rpc_promote_model_to_production", {
+      p_project_id: project_id,
+      p_model_id: model_id,
+      p_reason: reason || "Deploy via UI",
+    });
+
+    if (rpcError) {
+      console.error("[deploy-model] RPC error:", rpcError);
+      gates.push({ gate: "atomic_promotion", status: "BLOCK", message: `Erro na promoção: ${rpcError.message}` });
+      return blockResponse(gates, [{ label: "Tentar novamente" }], project_id, model_id, currentSelVersion);
     }
 
-    // ===== ALL GATES PASSED — PROMOTE =====
-    console.log(`[deploy-model] All gates PASS. Promoting model ${model_id}`);
-
-    const deployedAt = new Date().toISOString();
-
-    // 1) Demote all existing production models for this project
-    await supabase
-      .from("project_models")
-      .update({ is_production: false })
-      .eq("project_id", project_id)
-      .eq("is_production", true);
-
-    // 2) Promote current model
-    await supabase
-      .from("project_models")
-      .update({
-        is_production: true,
-        deployed_at: deployedAt,
-        deployed_selection_version: currentSelVersion,
-        status: "trained",
-      })
-      .eq("id", model_id);
-
-    // 3) Update project_dataset_state with production_model_id
-    if (dsState) {
-      await supabase
-        .from("project_dataset_state")
-        .update({ production_model_id: model_id })
-        .eq("project_id", project_id);
+    const result = rpcResult as any;
+    if (!result?.success) {
+      console.error("[deploy-model] RPC returned failure:", result);
+      gates.push({ gate: "atomic_promotion", status: "BLOCK", message: result?.message || "Falha na promoção atômica." });
+      return blockResponse(gates, [{ label: "Voltar ao Treino", go_to_step: 5 }], project_id, model_id, currentSelVersion);
     }
 
-    // 4) Update project status
-    await supabase
-      .from("projects")
-      .update({ status: "deployed" })
-      .eq("id", project_id);
+    gates.push({ gate: "atomic_promotion", status: "PASS", message: `Promoted. deployment_id=${result.deployment_id}` });
 
-    // 5) Audit log
+    // Update project status
+    await supabase.from("projects").update({ status: "deployed" }).eq("id", project_id);
+
+    // Audit log
     if (project?.organization_id) {
       try {
         await supabase.from("audit_logs").insert({
@@ -215,9 +202,9 @@ serve(async (req: Request) => {
           resource_name: model.algorithm_name || model_id,
           metadata: {
             model_id,
-            selection_version: currentSelVersion,
-            model_quality_flag: mqf,
-            deployed_at: deployedAt,
+            deployment_id: result.deployment_id,
+            previous_model_id: result.previous_model_id,
+            selection_version: result.selection_version,
             gates: gates.map(g => ({ gate: g.gate, status: g.status })),
           },
         });
@@ -227,17 +214,19 @@ serve(async (req: Request) => {
     }
 
     const elapsedMs = Date.now() - startMs;
-    console.log(`[deploy-model] SUCCESS in ${elapsedMs}ms. Model ${model_id} is now production.`);
+    console.log(`[deploy-model] SUCCESS in ${elapsedMs}ms. deployment_id=${result.deployment_id}`);
 
     return new Response(JSON.stringify({
+      success: true,
       status: "DEPLOYED",
-      selection_version: currentSelVersion,
+      selection_version: result.selection_version,
       model_id,
-      production_model_id: model_id,
-      deployed_at: deployedAt,
+      production_model_id: result.production_model_id,
+      previous_model_id: result.previous_model_id,
+      deployment_id: result.deployment_id,
+      deployed_at: new Date().toISOString(),
       scoring_enabled: true,
       dashboard_enabled: dashAllowed,
-      blocked_reason_code: null,
       gates,
       ctas: [],
       elapsed_ms: elapsedMs,
@@ -249,12 +238,39 @@ serve(async (req: Request) => {
   } catch (error) {
     console.error("[deploy-model] Error:", error);
     return new Response(JSON.stringify({
+      success: false,
       status: "BLOCKED",
       error: error instanceof Error ? error.message : "Erro desconhecido",
       blocked_reason_code: "INTERNAL_ERROR",
+      gates: [],
+      ctas: [],
     }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });
+
+function blockResponse(
+  gates: DeployGate[],
+  ctas: { label: string; go_to_step?: number; action?: string }[],
+  projectId: string,
+  modelId: string,
+  selectionVersion: number,
+) {
+  return new Response(JSON.stringify({
+    success: false,
+    status: "BLOCKED",
+    selection_version: selectionVersion,
+    model_id: modelId,
+    production_model_id: null,
+    previous_model_id: null,
+    deployment_id: null,
+    deployed_at: null,
+    scoring_enabled: false,
+    dashboard_enabled: false,
+    blocked_reason_code: gates.find(g => g.status === "BLOCK")?.gate || "UNKNOWN",
+    gates,
+    ctas,
+  }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+}
