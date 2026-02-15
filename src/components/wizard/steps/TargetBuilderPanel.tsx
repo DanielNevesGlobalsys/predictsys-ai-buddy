@@ -20,11 +20,32 @@ import {
 } from "@/components/ui/tooltip";
 import {
   Sparkles, Loader2, CheckCircle, AlertTriangle, XCircle,
-  ChevronDown, ChevronUp, Eye, Save, Wand2, Info,
+  ChevronDown, ChevronUp, Eye, Save, Wand2, Info, ArrowRightLeft,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { LABEL_TEMPLATES, type LabelTemplate } from "@/config/labelTemplates";
+
+// ═══ Quality Gate Types ═══════════════════════════════════════
+interface TemplateQualityInfo {
+  confidence: number;
+  expected_fit: string;
+  is_hard_stop: boolean;
+  is_cold_start: boolean;
+  stats: {
+    total_uses: number;
+    success_rate: number;
+    sanity_fail_rate: number;
+    avg_rating: number;
+  };
+}
+
+interface RecommendedAlternative {
+  template_id: string;
+  confidence: number;
+  expected_fit: string;
+  reason_codes: string[];
+}
 
 // ═══ Types ═════════════════════════════════════════════════════
 
@@ -88,6 +109,11 @@ export default function TargetBuilderPanel({
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PreviewResult | null>(null);
 
+  // Quality Gate state
+  const [qualityInfo, setQualityInfo] = useState<TemplateQualityInfo | null>(null);
+  const [topAlternative, setTopAlternative] = useState<RecommendedAlternative | null>(null);
+  const [qualityLoading, setQualityLoading] = useState(false);
+
   // Available templates for this industry
   const availableTemplates: LabelTemplate[] = [];
   if (recommendedTemplates) {
@@ -105,9 +131,13 @@ export default function TargetBuilderPanel({
     }
   }
 
-  // Initialize params when template changes
+  // Fetch quality gate when template changes
   useEffect(() => {
-    if (!selectedTemplate) return;
+    if (!selectedTemplate) {
+      setQualityInfo(null);
+      setTopAlternative(null);
+      return;
+    }
     const template = LABEL_TEMPLATES[selectedTemplate];
     if (!template) return;
     const defaults: Record<string, any> = {};
@@ -116,7 +146,50 @@ export default function TargetBuilderPanel({
     }
     setParams(defaults);
     setResult(null);
-  }, [selectedTemplate]);
+
+    // Fetch recommendations to get quality info for selected + top alternative
+    const fetchQuality = async () => {
+      setQualityLoading(true);
+      try {
+        const { data, error } = await supabase.functions.invoke("get-template-recommendations", {
+          body: { industry: industry || "generic", intent_id: null, project_id: projectId },
+        });
+        if (error) throw error;
+        const recs = data?.recommendations || [];
+        const current = recs.find((r: any) => r.template_id === selectedTemplate);
+        if (current) {
+          setQualityInfo({
+            confidence: current.confidence,
+            expected_fit: current.expected_fit,
+            is_hard_stop: current.is_hard_stop,
+            is_cold_start: current.is_cold_start,
+            stats: current.stats,
+          });
+        } else {
+          setQualityInfo(null);
+        }
+        // Find top alternative (not the current one, not blocked)
+        const alt = recs.find((r: any) => r.template_id !== selectedTemplate && !r.is_hard_stop);
+        if (alt && current && alt.confidence > current.confidence) {
+          setTopAlternative({
+            template_id: alt.template_id,
+            confidence: alt.confidence,
+            expected_fit: alt.expected_fit,
+            reason_codes: alt.reason_codes,
+          });
+        } else {
+          setTopAlternative(null);
+        }
+      } catch (err) {
+        console.error("[QualityGate] Error:", err);
+        setQualityInfo(null);
+        setTopAlternative(null);
+      } finally {
+        setQualityLoading(false);
+      }
+    };
+    fetchQuality();
+  }, [selectedTemplate, industry, projectId]);
 
   const runPreview = useCallback(async () => {
     if (!selectedTemplate) return;
@@ -227,6 +300,58 @@ export default function TargetBuilderPanel({
             </Select>
             {template && (
               <p className="text-xs text-muted-foreground">{template.description}</p>
+            )}
+
+            {/* Quality Gate Banner */}
+            {selectedTemplate && qualityLoading && (
+              <div className="flex items-center gap-2 text-xs text-muted-foreground p-2">
+                <Loader2 className="w-3 h-3 animate-spin" />
+                Verificando qualidade do template...
+              </div>
+            )}
+            {selectedTemplate && !qualityLoading && qualityInfo && (qualityInfo.is_hard_stop || qualityInfo.stats.success_rate < 0.5 || qualityInfo.stats.sanity_fail_rate > 0.1) && (
+              <div className={`flex flex-col gap-2 p-3 rounded-lg border ${
+                qualityInfo.is_hard_stop
+                  ? "bg-destructive/10 border-destructive/20"
+                  : "bg-amber-500/10 border-amber-500/20"
+              }`}>
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className={`w-4 h-4 mt-0.5 flex-shrink-0 ${
+                    qualityInfo.is_hard_stop ? "text-destructive" : "text-amber-500"
+                  }`} />
+                  <div className="space-y-1">
+                    <p className={`text-xs font-medium ${
+                      qualityInfo.is_hard_stop ? "text-destructive" : "text-amber-600 dark:text-amber-400"
+                    }`}>
+                      {qualityInfo.is_hard_stop
+                        ? "Template bloqueado — alta taxa de falha de sanidade"
+                        : qualityInfo.stats.success_rate < 0.5
+                          ? "Baixa taxa de sucesso histórica"
+                          : "Taxa de falha de sanidade elevada"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      Sucesso: {(qualityInfo.stats.success_rate * 100).toFixed(0)}%
+                      {" · "}Sanity fail: {(qualityInfo.stats.sanity_fail_rate * 100).toFixed(0)}%
+                      {" · "}Rating: {qualityInfo.stats.avg_rating?.toFixed(1) ?? "—"}
+                      {qualityInfo.is_cold_start && " · Poucos dados"}
+                    </p>
+                  </div>
+                </div>
+                {topAlternative && LABEL_TEMPLATES[topAlternative.template_id] && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-xs w-full border-primary/30 hover:bg-primary/10"
+                    onClick={() => setSelectedTemplate(topAlternative.template_id)}
+                  >
+                    <ArrowRightLeft className="w-3.5 h-3.5 mr-1.5" />
+                    Trocar para recomendado: {LABEL_TEMPLATES[topAlternative.template_id]?.display_name}
+                    <Badge variant="outline" className="ml-2 text-[9px]">
+                      {(topAlternative.confidence * 100).toFixed(0)}% fit
+                    </Badge>
+                  </Button>
+                )}
+              </div>
             )}
           </div>
 
