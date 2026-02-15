@@ -617,20 +617,25 @@ serve(async (req) => {
 
     // ─── Load data in parallel ───────────────────────────────
 
-    const [catStatsRes, numStatsRes, aiContextRes, dsStateRes, selectionRes] = await Promise.all([
+    const [catStatsRes, numStatsRes, aiContextRes, dsStateRes, selectionRes, projectRes] = await Promise.all([
       supabase.from("project_categorical_stats").select("column_name, distinct_count, top_categories").eq("project_id", project_id),
       supabase.from("project_numeric_stats").select("column_name, null_count, min_value, max_value, mean_value").eq("project_id", project_id),
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("row_count, col_count, active_dataset_ref, manifest_id").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle(),
+      supabase.from("projects").select("dataset_rows, dataset_columns, total_rows").eq("id", project_id).maybeSingle(),
     ]);
 
     const catStats: CategoricalStat[] = (catStatsRes.data || []) as CategoricalStat[];
     const numStats: NumericStat[] = (numStatsRes.data || []) as NumericStat[];
-    const totalRows = dsStateRes.data?.row_count || 0;
+    // Fallback chain: project_dataset_state → projects.dataset_rows → projects.total_rows → stats count
+    const totalRows = dsStateRes.data?.row_count
+      || (projectRes.data as any)?.dataset_rows
+      || (projectRes.data as any)?.total_rows
+      || (catStats.length > 0 || numStats.length > 0 ? 1000 : 0);
     const currentSelectionVersion = selection_version || (selectionRes.data as any)?.selection_version || 1;
 
-    if (totalRows === 0) {
+    if (totalRows === 0 && catStats.length === 0 && numStats.length === 0) {
       return new Response(
         JSON.stringify({ error: "Nenhum dado encontrado. Execute a importação primeiro." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
