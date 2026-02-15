@@ -1248,12 +1248,13 @@ serve(async (req) => {
     console.log(`\n=== Training Gating (SSOT) ===`);
 
     // Parallel fetch all SSOT sources
-    const [projectRes, dsStateRes, selectionRes, modelingDatasetRes, contractRes] = await Promise.all([
+    const [projectRes, dsStateRes, selectionRes, modelingDatasetRes, contractRes, splitPolicyRes] = await Promise.all([
       supabase.from("projects").select("*").eq("id", project_id).single(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_modeling_datasets").select("*").eq("project_id", project_id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_split_policies").select("*").eq("project_id", project_id).eq("status", "ready").order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
     const project = projectRes.data;

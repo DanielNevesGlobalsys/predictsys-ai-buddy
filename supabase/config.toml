@@ -125,3 +125,6 @@ verify_jwt = false
 
 [functions.preview-target-template]
 verify_jwt = false
+
+[functions.preview-split-policy]
+verify_jwt = false

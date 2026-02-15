@@ -2739,6 +2739,56 @@ export type Database = {
           },
         ]
       }
+      project_split_policies: {
+        Row: {
+          created_at: string
+          entity_key_column: string | null
+          id: string
+          params: Json
+          preview: Json | null
+          project_id: string
+          selection_version: number
+          status: string
+          strategy: string
+          time_anchor_column: string | null
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          entity_key_column?: string | null
+          id?: string
+          params?: Json
+          preview?: Json | null
+          project_id: string
+          selection_version: number
+          status?: string
+          strategy?: string
+          time_anchor_column?: string | null
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          entity_key_column?: string | null
+          id?: string
+          params?: Json
+          preview?: Json | null
+          project_id?: string
+          selection_version?: number
+          status?: string
+          strategy?: string
+          time_anchor_column?: string | null
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_split_policies_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       projects: {
         Row: {
           business_objective: string | null

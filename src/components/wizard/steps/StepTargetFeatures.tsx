@@ -31,6 +31,7 @@ import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
 import TargetBuilderPanel from "./TargetBuilderPanel";
+import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -982,6 +983,11 @@ const StepTargetFeatures = ({
               A seleção de target/features mudou desde o último build. Regere o Dataset Modelável abaixo para poder treinar.
             </p>
           </div>
+        )}
+
+        {/* Split & Leakage Guard Panel */}
+        {projectData.id && targetColumn && (
+          <SplitAndLeakagePanel projectId={projectData.id} />
         )}
 
         {/* === Dataset Modelável Section === */}

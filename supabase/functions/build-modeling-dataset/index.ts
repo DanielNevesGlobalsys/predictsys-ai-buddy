@@ -1067,7 +1067,7 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Entity: ${entityKey}, Anchor: ${anchorTimeCol}`);
 
-    // ==================== LEAKAGE COLS FROM CONTRACT ====================
+    // ==================== LEAKAGE COLS FROM CONTRACT + LEAKAGE GUARD ====================
     const leakageCols: string[] = [];
     if (existingContract?.leakage_flags && Array.isArray(existingContract.leakage_flags)) {
       for (const lf of existingContract.leakage_flags as any[]) {
@@ -1076,15 +1076,64 @@ serve(async (req: Request) => {
       }
     }
 
-    // Apply domain adapter leakage watchlist (from label builder path)
-    if (labelBuilderId) {
-      const domainAdapter = aiCtx?.intent_contract?.domain_adapter || {};
-      if (domainAdapter.leakage_watchlist && Array.isArray(domainAdapter.leakage_watchlist)) {
-        for (const lw of domainAdapter.leakage_watchlist) {
-          if (typeof lw === "string" && !leakageCols.includes(lw)) leakageCols.push(lw);
-        }
+    // Apply domain adapter leakage watchlist
+    const domainAdapter = aiCtx?.intent_contract?.domain_adapter || {};
+    if (domainAdapter.leakage_watchlist && Array.isArray(domainAdapter.leakage_watchlist)) {
+      for (const lw of domainAdapter.leakage_watchlist) {
+        if (typeof lw === "string" && !leakageCols.includes(lw)) leakageCols.push(lw);
       }
     }
+
+    // Leakage Guard v1: keyword + temporal heuristics
+    const LEAKAGE_KEYWORDS = ["target","label","churn","cancel","outcome","death","dt_obito","discharge","status_final","final_status","resultado","y_true","y_pred","output_final"];
+    const POST_EVENT_KEYWORDS = ["updated_at","finished_at","end_date","closed_at","completed_at","dt_saida","dt_resultado","data_fim","dt_alta","resolved_at"];
+    const leakageGuardRemovals: { column: string; reason: string; source: string }[] = [];
+
+    for (const col of enrichedColumns) {
+      if (col.name === targetColumn || col.name === entityKey) continue;
+      const colLower = col.name.toLowerCase();
+
+      // Keyword leakage
+      for (const kw of LEAKAGE_KEYWORDS) {
+        if (colLower.includes(kw) && !leakageCols.includes(col.name)) {
+          leakageCols.push(col.name);
+          leakageGuardRemovals.push({ column: col.name, reason: `Nome contém "${kw}"`, source: "keyword_heuristic" });
+          break;
+        }
+      }
+
+      // Post-event temporal leakage
+      if (anchorTimeCol) {
+        for (const kw of POST_EVENT_KEYWORDS) {
+          if ((colLower === kw || colLower.endsWith(`_${kw}`)) && !leakageCols.includes(col.name)) {
+            leakageCols.push(col.name);
+            leakageGuardRemovals.push({ column: col.name, reason: "Coluna temporal pós-evento", source: "temporal_heuristic" });
+            break;
+          }
+        }
+      }
+
+      // High-cardinality ID (not entity_key)
+      const uniqueRatio = totalRows > 0 ? (col.distinct_count || 0) / totalRows : 0;
+      const ID_PAT = /^(id|_id|codigo|cod_|numero|num_|chave|key|uuid|pk|fk|idx|index)/i;
+      const ID_SUFFIX = /(_id|_key|_code|_cod|_uuid)$/i;
+      if ((ID_PAT.test(colLower) || ID_SUFFIX.test(colLower)) && uniqueRatio > 0.5 && !leakageCols.includes(col.name)) {
+        leakageCols.push(col.name);
+        leakageGuardRemovals.push({ column: col.name, reason: `ID técnico alta cardinalidade (${(uniqueRatio * 100).toFixed(0)}%)`, source: "id_cardinality" });
+      }
+    }
+
+    console.log(`[build-modeling-dataset] LeakageGuard: ${leakageGuardRemovals.length} removals, total leakage cols: ${leakageCols.length}`);
+
+    // ==================== LOAD SPLIT POLICY ====================
+    const { data: splitPolicyData } = await supabase
+      .from("project_split_policies")
+      .select("*")
+      .eq("project_id", project_id)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const splitPolicyId = splitPolicyData?.id || null;
 
     // ==================== BUILD FEATURE REPORT ====================
     const report = buildFeatureReport(enrichedColumns, targetColumn, entityKey, anchorTimeCol, leakageCols, totalRows, intent);
@@ -1100,9 +1149,13 @@ serve(async (req: Request) => {
       allBlockedReasons.push("Menos de 2 features válidas disponíveis. Adicione mais colunas ao dataset.");
     }
 
-    // ==================== SPLIT STRATEGY ====================
-    let splitStrategy = existingContract?.split_strategy || "stratified";
-    if (!existingContract?.split_strategy) {
+    // ==================== SPLIT STRATEGY (from policy or auto) ====================
+    let splitStrategy = "stratified";
+    if (splitPolicyData && splitPolicyData.status === "ready") {
+      splitStrategy = splitPolicyData.strategy || "stratified";
+    } else if (existingContract?.split_strategy) {
+      splitStrategy = existingContract.split_strategy;
+    } else {
       if (anchorTimeCol) splitStrategy = "temporal";
       else if (entityKey) splitStrategy = "group";
     }
@@ -1223,6 +1276,11 @@ serve(async (req: Request) => {
             overfit_warning: report.overfit_warning,
           },
           training_gate: trainingGate,
+          split_policy_id: splitPolicyId,
+          leakage_guard: {
+            removals_count: leakageGuardRemovals.length,
+            removals_sample: leakageGuardRemovals.slice(0, 10),
+          },
           timestamp: new Date().toISOString(),
         },
       })
