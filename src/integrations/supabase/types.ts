@@ -1721,6 +1721,72 @@ export type Database = {
           },
         ]
       }
+      project_exports: {
+        Row: {
+          batch_id: string | null
+          confidence_score: number | null
+          created_at: string
+          export_type: string
+          file_path: string
+          id: string
+          meta: Json | null
+          organization_id: string
+          project_id: string
+          selection_version_current: number | null
+          selection_version_scored: number | null
+          status: string
+          updated_at: string
+          user_id: string | null
+        }
+        Insert: {
+          batch_id?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          export_type: string
+          file_path: string
+          id?: string
+          meta?: Json | null
+          organization_id: string
+          project_id: string
+          selection_version_current?: number | null
+          selection_version_scored?: number | null
+          status?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Update: {
+          batch_id?: string | null
+          confidence_score?: number | null
+          created_at?: string
+          export_type?: string
+          file_path?: string
+          id?: string
+          meta?: Json | null
+          organization_id?: string
+          project_id?: string
+          selection_version_current?: number | null
+          selection_version_scored?: number | null
+          status?: string
+          updated_at?: string
+          user_id?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_exports_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_exports_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_feature_importances: {
         Row: {
           created_at: string

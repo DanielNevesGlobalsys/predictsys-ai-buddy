@@ -134,3 +134,6 @@ verify_jwt = false
 
 [functions.rollback-model]
 verify_jwt = false
+
+[functions.generate-executive-report]
+verify_jwt = false
