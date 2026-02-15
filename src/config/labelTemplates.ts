@@ -120,6 +120,41 @@ export const LABEL_TEMPLATES: Record<string, LabelTemplate> = {
     derivation_summary:
       "target = 1 se o paciente tiver gap > window_days entre consultas",
   },
+
+  churn_generic: {
+    template_id: "churn_generic",
+    display_name: "Churn de Clientes (Genérico)",
+    problem_type: "classification",
+    industry: "generic",
+    description:
+      "Target = 1 se o cliente não realizou atividade nos últimos N dias. " +
+      "Funciona com qualquer dataset que tenha identificador de entidade e coluna temporal. " +
+      "Para dados já agregados, detecta colunas como last_activity_date ou days_since_last_purchase.",
+    requires_entity_key: true,
+    requires_time_anchor: true,
+    requires_event_column: false,
+    params: [
+      {
+        key: "window_days",
+        label: "Janela (dias)",
+        type: "number",
+        default_value: 90,
+        description: "Clientes sem atividade há mais que N dias são marcados como churn.",
+      },
+      {
+        key: "reference_date_strategy",
+        label: "Data de referência",
+        type: "string",
+        default_value: "max_date",
+        description:
+          "'max_date' = última data do dataset; 'today' = data atual; " +
+          "'multi_period' = gera múltiplos pontos no tempo por entidade.",
+      },
+    ],
+    required_column_roles: ["entity_key", "time_anchor"],
+    derivation_summary:
+      "target = 1 se a última atividade do cliente for anterior a (referência − window_days)",
+  },
 };
 
 export function getTemplatesForIndustry(industry: string): LabelTemplate[] {
