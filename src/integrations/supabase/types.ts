@@ -1857,6 +1857,60 @@ export type Database = {
           },
         ]
       }
+      project_model_deployments: {
+        Row: {
+          created_at: string
+          deployed_by: string | null
+          id: string
+          metadata: Json | null
+          model_id: string
+          previous_model_id: string | null
+          project_id: string
+          reason: string | null
+          selection_version: number
+          status: string
+        }
+        Insert: {
+          created_at?: string
+          deployed_by?: string | null
+          id?: string
+          metadata?: Json | null
+          model_id: string
+          previous_model_id?: string | null
+          project_id: string
+          reason?: string | null
+          selection_version?: number
+          status?: string
+        }
+        Update: {
+          created_at?: string
+          deployed_by?: string | null
+          id?: string
+          metadata?: Json | null
+          model_id?: string
+          previous_model_id?: string | null
+          project_id?: string
+          reason?: string | null
+          selection_version?: number
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_model_deployments_model_id_fkey"
+            columns: ["model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_model_deployments_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_model_insights: {
         Row: {
           created_at: string
@@ -3009,6 +3063,10 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      rpc_promote_model_to_production: {
+        Args: { p_model_id: string; p_project_id: string; p_reason?: string }
+        Returns: Json
+      }
       rpc_upsert_model_selection: {
         Args: {
           p_excluded_features: string[]

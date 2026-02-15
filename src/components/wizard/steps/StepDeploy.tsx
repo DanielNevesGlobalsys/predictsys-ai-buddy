@@ -11,6 +11,7 @@ import { supabase } from "@/integrations/supabase/client";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import DeployAiInsight from "@/components/deploy/DeployAiInsight";
+import DeployPanel from "./DeployPanel";
 
 interface StepDeployProps {
   projectData: ProjectData;
@@ -26,6 +27,7 @@ interface ModelResult {
   status: string;
   is_production: boolean;
   metrics: { metric_name: string; metric_value: number }[];
+  hyperparameters?: Record<string, any>;
 }
 
 const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: StepDeployProps) => {
@@ -57,7 +59,14 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           const { data: metrics } = await supabase
             .from("project_model_metrics").select("metric_name, metric_value")
             .eq("project_model_id", model.id);
-          return { id: model.id, algorithm_name: model.algorithm_name, status: model.status, is_production: model.is_production, metrics: metrics || [] };
+          return {
+            id: model.id,
+            algorithm_name: model.algorithm_name,
+            status: model.status,
+            is_production: model.is_production,
+            metrics: metrics || [],
+            hyperparameters: (model.hyperparameters || {}) as Record<string, any>,
+          };
         })
       );
       setModels(modelsWithMetrics);
@@ -75,17 +84,36 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
     }
   };
 
-  const getBestModel = () => {
+  // Build champion info from trained models
+  const getChampionInfo = () => {
     const trainedModels = models.filter(m => m.status === "trained");
     if (trainedModels.length === 0) return null;
-    return trainedModels.reduce((best, current) => {
+
+    // Find the model marked as champion (is_production or best score)
+    const champion = trainedModels.find(m => m.is_production) || trainedModels.reduce((best, current) => {
       const bestMetric = best.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
       const currentMetric = current.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0;
       return currentMetric > bestMetric ? current : best;
     });
+
+    const hyper = champion.hyperparameters || {};
+    const metricsProfile = hyper.metrics_profile || {};
+    const pMetric = metricsProfile.primary || primaryMetric;
+    const score = champion.metrics.find(m => m.metric_name === pMetric)?.metric_value
+      ?? champion.metrics.find(m => m.metric_name === primaryMetric)?.metric_value ?? 0;
+
+    return {
+      model_id: champion.id,
+      name: champion.algorithm_name,
+      score,
+      primary_metric: pMetric,
+      quality_flag: hyper.model_quality_flag || "ok",
+      calibration: hyper.calibration || undefined,
+      recommended_threshold: hyper.recommended_threshold ?? undefined,
+    };
   };
 
-  const bestModel = getBestModel();
+  const championInfo = getChampionInfo();
   const productionModel = models.find(m => m.is_production);
 
   const generateExampleFeatures = () => {
@@ -126,7 +154,17 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
           </p>
         </div>
 
-        {/* Model selection */}
+        {/* Deploy Panel v2 */}
+        {!loadingModels && projectData.id && (
+          <DeployPanel
+            projectId={projectData.id}
+            problemType={projectData.problem_type}
+            champion={championInfo}
+            onDeploySuccess={loadModels}
+          />
+        )}
+
+        {/* Model table */}
         {loadingModels ? (
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
@@ -149,7 +187,7 @@ const StepDeploy = ({ projectData, onBack, onComplete, loading, saveProject }: S
             </div>
             <ModelResultsTable
               models={models} problemType={projectData.problem_type}
-              bestModelId={bestModel?.id} projectId={projectData.id}
+              bestModelId={championInfo?.model_id} projectId={projectData.id}
               allowSelectProduction={true} onProductionChange={loadModels}
             />
           </div>

@@ -131,3 +131,6 @@ verify_jwt = false
 
 [functions.audit-contract]
 verify_jwt = false
+
+[functions.rollback-model]
+verify_jwt = false
