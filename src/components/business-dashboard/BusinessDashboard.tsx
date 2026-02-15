@@ -11,6 +11,7 @@ import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessAIInsights } from './BusinessAIInsights';
 import { ExecutiveNarrative } from './ExecutiveNarrative';
 import { FullReportPDFExport } from './pdf/FullReportPDFExport';
+import { MonitoringPanel } from './MonitoringPanel';
 import { ConfidenceCard } from './ConfidenceCard';
 import { BusinessSummaryCard } from './BusinessSummaryCard';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
@@ -439,6 +440,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         <div className="flex items-center justify-between flex-wrap gap-3">
           <TabsList>
             <TabsTrigger value="dashboard">Dashboard</TabsTrigger>
+            <TabsTrigger value="monitoring">Monitoramento</TabsTrigger>
             <TabsTrigger value="audit">Auditoria & Governança</TabsTrigger>
           </TabsList>
 
@@ -572,6 +574,10 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             kpis={displayKpis} segmentationBands={data.segmentationBands}
             groupSegmentation={data.groupSegmentation} viewMode={filters.viewMode}
           />
+        </TabsContent>
+
+        <TabsContent value="monitoring" className="space-y-6 mt-4">
+          <MonitoringPanel projectId={projectId} />
         </TabsContent>
 
         <TabsContent value="audit" className="space-y-6 mt-4">

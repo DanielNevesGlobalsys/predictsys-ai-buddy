@@ -953,6 +953,21 @@ serve(async (req) => {
       });
     } catch (_) {}
 
+    // ===== BEST-EFFORT: Trigger monitoring checks =====
+    try {
+      console.log(`[Scoring] Triggering monitoring checks (best-effort)...`);
+      await fetch(`${supabaseUrl}/functions/v1/run-monitoring-checks`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseServiceKey}`,
+        },
+        body: JSON.stringify({ project_id, batch_id: batchId }),
+      });
+    } catch (monErr) {
+      console.warn(`[Scoring] Monitoring trigger failed (non-blocking):`, monErr);
+    }
+
     console.log(`[Scoring] DONE: ${cumulativeScored} predictions, coverage=${coveragePct.toFixed(1)}%, latest_count=${finalLatestCount}`);
 
     return new Response(JSON.stringify({
