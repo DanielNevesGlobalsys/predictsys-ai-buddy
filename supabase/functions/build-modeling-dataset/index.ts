@@ -899,7 +899,47 @@ serve(async (req: Request) => {
     let targetSource: "direct" | "label_builder" = "direct";
     let labelPlan: LabelPlan | null = null;
     let windowDays: number | null = null;
+    let labelBuilderId: string | null = null;
     const allBlockedReasons: string[] = [];
+
+    // ── LABEL BUILDER: If target is "_label_", load from project_label_builders ──
+    if (targetColumn === "_label_") {
+      const { data: builderData } = await supabase
+        .from("project_label_builders")
+        .select("*")
+        .eq("project_id", project_id)
+        .eq("status", "ready")
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (!builderData) {
+        allBlockedReasons.push("Target derivado selecionado (_label_), mas nenhum label builder com status 'ready' foi encontrado. Execute o Target Builder primeiro.");
+        targetColumn = null;
+      } else {
+        labelBuilderId = builderData.id;
+        targetSource = "label_builder";
+        const builderParams = builderData.params as Record<string, any> || {};
+        windowDays = builderParams.window_days || null;
+
+        // Create a synthetic label plan from the builder
+        labelPlan = {
+          strategy: builderData.template_id?.includes("churn") ? "state_change" :
+                    builderData.template_id?.includes("no_show") ? "direct" : "event_window",
+          source_columns: [],
+          window_days: windowDays,
+          condition: `Target derivado via template "${builderData.template_id}"`,
+          output_column: `_label_${builderData.template_id || "custom"}`,
+          output_type: "binary",
+        };
+        targetColumn = labelPlan.output_column;
+        targetType = "binary";
+
+        // Note: leakage_watchlist from domain adapter will be applied after leakageCols is initialized
+
+        console.log(`[build-modeling-dataset] Label builder resolved: id=${labelBuilderId}, template=${builderData.template_id}, window=${windowDays}`);
+      }
+    }
 
     // SSOT: If project_model_selection exists but has no target, BLOCK immediately
     if (modelSelection && !modelSelection.target_column) {
@@ -1033,6 +1073,16 @@ serve(async (req: Request) => {
       for (const lf of existingContract.leakage_flags as any[]) {
         if (typeof lf === "string") leakageCols.push(lf);
         else if (lf?.column) leakageCols.push(lf.column);
+      }
+    }
+
+    // Apply domain adapter leakage watchlist (from label builder path)
+    if (labelBuilderId) {
+      const domainAdapter = aiCtx?.intent_contract?.domain_adapter || {};
+      if (domainAdapter.leakage_watchlist && Array.isArray(domainAdapter.leakage_watchlist)) {
+        for (const lw of domainAdapter.leakage_watchlist) {
+          if (typeof lw === "string" && !leakageCols.includes(lw)) leakageCols.push(lw);
+        }
       }
     }
 
