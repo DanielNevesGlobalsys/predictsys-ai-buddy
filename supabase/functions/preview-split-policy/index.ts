@@ -55,23 +55,31 @@ serve(async (req: Request) => {
     console.log(`[preview-split-policy] Starting for project ${project_id}`);
 
     // Parallel fetch
-    const [aiCtxRes, dsStateRes, selectionRes, numStatsRes] = await Promise.all([
+    const [aiCtxRes, dsStateRes, selectionRes, numStatsRes, projectRes] = await Promise.all([
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("row_count, col_count").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_numeric_stats").select("column_name, min_value, max_value").eq("project_id", project_id),
+      supabase.from("projects").select("dataset_rows, total_rows").eq("id", project_id).maybeSingle(),
     ]);
 
-    // Fallback: if dataset_state missing, estimate from numeric stats (id column range)
-    let totalRows = dsStateRes.data?.row_count || 0;
+    // Fallback chain: dataset_state → projects table → numeric stats estimate
+    let totalRows = dsStateRes.data?.row_count
+      || (projectRes.data as any)?.dataset_rows
+      || (projectRes.data as any)?.total_rows
+      || 0;
     if (totalRows === 0 && numStatsRes.data && numStatsRes.data.length > 0) {
-      // Use max_value of first numeric column as rough row estimate
       const idStat = numStatsRes.data.find((n: any) => /^id/i.test(n.column_name));
       const anyStat = idStat || numStatsRes.data[0];
       if (anyStat?.max_value && Number(anyStat.max_value) > 0) {
         totalRows = Math.round(Number(anyStat.max_value));
         console.log(`[preview-split-policy] Fallback row estimate from ${anyStat.column_name}: ${totalRows}`);
       }
+    }
+    // Last resort: if we have any stats at all, assume minimum viable dataset
+    if (totalRows === 0 && numStatsRes.data && numStatsRes.data.length > 0) {
+      totalRows = 1000;
+      console.log(`[preview-split-policy] Last-resort fallback: assuming ${totalRows} rows`);
     }
     const currentSelVersion = selection_version || (selectionRes.data as any)?.selection_version || 1;
     const aiContext = (aiCtxRes.data?.context as Record<string, any>) || {};
