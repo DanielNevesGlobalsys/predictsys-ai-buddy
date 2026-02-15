@@ -93,6 +93,14 @@ function GateIcon({ status }: { status: "PASS" | "WARN" | "BLOCK" }) {
   return <XCircle className="w-3.5 h-3.5 text-destructive" />;
 }
 
+// ═══ Universal fallback template IDs ══════════════════════════
+const UNIVERSAL_TEMPLATE_IDS = [
+  "generic_event_no_activity",
+  "generic_threshold_binary",
+  "generic_future_sum_regression",
+  "churn_generic",
+];
+
 // ═══ Component ═════════════════════════════════════════════════
 
 export default function TargetBuilderPanel({
@@ -108,51 +116,105 @@ export default function TargetBuilderPanel({
   const [params, setParams] = useState<Record<string, any>>({});
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<PreviewResult | null>(null);
+  const [autoSelected, setAutoSelected] = useState(false);
 
   // Quality Gate state
   const [qualityInfo, setQualityInfo] = useState<TemplateQualityInfo | null>(null);
   const [topAlternative, setTopAlternative] = useState<RecommendedAlternative | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
 
-  // Available templates for this industry (with fallback)
-  const availableTemplates: LabelTemplate[] = [];
-  let usingFallback = false;
+  // Intent contract state (fetched from AI context)
+  const [resolvedIndustry, setResolvedIndustry] = useState<string>(industry || "");
+  const [declaredObjective, setDeclaredObjective] = useState<string>("");
+  const [adapterTemplates, setAdapterTemplates] = useState<{ template_id: string; display_name: string; problem_type: string }[]>([]);
+  const [contextLoaded, setContextLoaded] = useState(false);
 
-  if (recommendedTemplates) {
-    for (const rt of recommendedTemplates) {
-      const t = LABEL_TEMPLATES[rt.template_id];
-      if (t) availableTemplates.push(t);
+  // Fetch intent contract from project_ai_context
+  useEffect(() => {
+    const fetchContext = async () => {
+      try {
+        const { data } = await supabase
+          .from("project_ai_context")
+          .select("context")
+          .eq("project_id", projectId)
+          .maybeSingle();
+        if (data?.context) {
+          const ctx = data.context as Record<string, any>;
+          const ic = ctx.intent_contract || ctx.intent || {};
+          const intentBase = ic.intent_base || ic;
+          const domainAdapter = ic.domain_adapter || {};
+
+          if (domainAdapter.industry) setResolvedIndustry(domainAdapter.industry);
+          if (intentBase.declared_objective) setDeclaredObjective(intentBase.declared_objective);
+          if (domainAdapter.recommended_templates?.length) {
+            setAdapterTemplates(domainAdapter.recommended_templates);
+          }
+        }
+      } catch (err) {
+        console.error("[TargetBuilderPanel] Failed to load AI context:", err);
+      } finally {
+        setContextLoaded(true);
+      }
+    };
+    fetchContext();
+  }, [projectId]);
+
+  // Build available templates: adapter first, then universal fallback
+  const effectiveIndustry = resolvedIndustry || industry || "";
+  const mergedRecommended = adapterTemplates.length > 0 ? adapterTemplates : (recommendedTemplates || []);
+
+  const availableTemplates: LabelTemplate[] = [];
+  let templateSource: "adapter" | "fallback" = "fallback";
+
+  // 1) Adapter recommended templates (highest priority)
+  for (const rt of mergedRecommended) {
+    const t = LABEL_TEMPLATES[rt.template_id];
+    if (t) {
+      availableTemplates.push(t);
+      templateSource = "adapter";
     }
   }
-  // Add templates matching industry
-  if (industry) {
+
+  // 2) Industry-matching templates
+  if (effectiveIndustry) {
     for (const t of Object.values(LABEL_TEMPLATES)) {
-      if (t.industry === industry && !availableTemplates.find(a => a.template_id === t.template_id)) {
+      if (t.industry === effectiveIndustry && !availableTemplates.find(a => a.template_id === t.template_id)) {
         availableTemplates.push(t);
+        templateSource = "adapter";
       }
     }
   }
 
-  // If no industry-specific templates found, mark fallback
-  if (availableTemplates.length === 0) {
-    usingFallback = true;
-  }
-
-  // Fallback: always include "generic" templates
-  for (const t of Object.values(LABEL_TEMPLATES)) {
-    if (t.industry === "generic" && !availableTemplates.find(a => a.template_id === t.template_id)) {
+  // 3) Always add universal templates
+  const hadAdapterTemplates = availableTemplates.length > 0;
+  for (const uid of UNIVERSAL_TEMPLATE_IDS) {
+    const t = LABEL_TEMPLATES[uid];
+    if (t && !availableTemplates.find(a => a.template_id === t.template_id)) {
       availableTemplates.push(t);
     }
   }
-  // Last resort: if still empty, show ALL templates
+
+  // 4) If still empty (shouldn't happen), add ALL
   if (availableTemplates.length === 0) {
-    usingFallback = true;
     for (const t of Object.values(LABEL_TEMPLATES)) {
       if (!availableTemplates.find(a => a.template_id === t.template_id)) {
         availableTemplates.push(t);
       }
     }
   }
+
+  if (!hadAdapterTemplates) templateSource = "fallback";
+
+  // Auto-select first recommended template
+  useEffect(() => {
+    if (autoSelected || !contextLoaded || selectedTemplate) return;
+    if (!labelBuilderRequired) return;
+
+    if (availableTemplates.length > 0) {
+      setSelectedTemplate(availableTemplates[0].template_id);
+      setAutoSelected(true);
+    }
+  }, [contextLoaded, labelBuilderRequired, availableTemplates.length, autoSelected, selectedTemplate]);
 
   // Fetch quality gate when template changes
   useEffect(() => {
@@ -303,13 +365,25 @@ export default function TargetBuilderPanel({
             </div>
           )}
 
-          {/* Fallback alert */}
-          {usingFallback && (
-            <div className="flex items-start gap-2 p-3 bg-amber-500/10 border border-amber-500/20 rounded-lg">
-              <AlertTriangle className="w-4 h-4 text-amber-500 mt-0.5 flex-shrink-0" />
+          {/* Debug line for QA */}
+          <p className="text-[10px] text-muted-foreground/60 font-mono">
+            Industry: {effectiveIndustry || "—"} | Objective: {declaredObjective || "—"} | Source: {templateSource}
+          </p>
+
+          {/* Adapter / Fallback badge */}
+          {templateSource === "adapter" && effectiveIndustry && (
+            <div className="flex items-start gap-2 p-2.5 bg-accent/10 border border-accent/20 rounded-lg">
+              <CheckCircle className="w-3.5 h-3.5 text-accent mt-0.5 flex-shrink-0" />
+              <p className="text-xs text-accent">
+                Template do setor: <strong>{effectiveIndustry.charAt(0).toUpperCase() + effectiveIndustry.slice(1)}</strong>
+              </p>
+            </div>
+          )}
+          {templateSource === "fallback" && (
+            <div className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Usando template genérico por ausência de template específico da indústria.
-                Os templates universais funcionam com qualquer dataset.
+                Fallback genérico (sem template específico para o objetivo/indústria). Os templates universais funcionam com qualquer dataset.
               </p>
             </div>
           )}
@@ -327,6 +401,9 @@ export default function TargetBuilderPanel({
                     <div className="flex items-center gap-2">
                       <span>{t.display_name}</span>
                       <Badge variant="outline" className="text-[10px]">{t.problem_type}</Badge>
+                      {UNIVERSAL_TEMPLATE_IDS.includes(t.template_id) && (
+                        <Badge variant="secondary" className="text-[9px]">universal</Badge>
+                      )}
                     </div>
                   </SelectItem>
                 ))}
