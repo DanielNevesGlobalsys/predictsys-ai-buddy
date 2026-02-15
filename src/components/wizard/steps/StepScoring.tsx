@@ -43,29 +43,66 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
   const [checkingStatus, setCheckingStatus] = useState(true);
   const [productionModelName, setProductionModelName] = useState<string | null>(null);
 
+  const [failedPromotion, setFailedPromotion] = useState<{ batchId: string; count: number } | null>(null);
+  const [promotionRecovering, setPromotionRecovering] = useState(false);
+
   const [scoring, setScoring] = useState<ScoringState>({
     status: "idle", batchId: null, totalScored: 0, totalExpected: 0,
     currentPass: 0, coveragePct: 0, errorCode: null, errorFriendly: null,
     warnings: [], ctas: [], missingFeaturePct: 0,
   });
 
-  // Check existing predictions + production model
+  // Check existing predictions + production model + failed promotion state
   useEffect(() => {
     if (!projectData.id) return;
     const init = async () => {
       setCheckingStatus(true);
-      const [predRes, modelRes] = await Promise.all([
+      const [predRes, modelRes, stateRes] = await Promise.all([
         supabase.from("predictions").select("id", { count: "exact", head: true })
           .eq("project_id", projectData.id!).eq("is_latest", true),
         supabase.from("project_models").select("algorithm_name")
           .eq("project_id", projectData.id!).eq("is_production", true).limit(1).maybeSingle(),
+        supabase.from("project_prediction_state").select("status, latest_batch_id, predictions_count")
+          .eq("project_id", projectData.id!).maybeSingle(),
       ]);
-      setHasScoringDone((predRes.count ?? 0) > 0);
+      const latestCount = predRes.count ?? 0;
+      setHasScoringDone(latestCount > 0);
       setProductionModelName(modelRes.data?.algorithm_name || null);
+
+      // Detect failed promotion: state has predictions but none are is_latest
+      const st = stateRes.data;
+      if (st && st.predictions_count > 0 && latestCount === 0 && st.latest_batch_id) {
+        setFailedPromotion({ batchId: st.latest_batch_id, count: st.predictions_count });
+      } else {
+        setFailedPromotion(null);
+      }
+
       setCheckingStatus(false);
     };
     init();
   }, [projectData.id]);
+
+  const recoverPromotion = useCallback(async () => {
+    if (!failedPromotion || !projectData.id) return;
+    setPromotionRecovering(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("finalize-prediction-promotion", {
+        body: { project_id: projectData.id, batch_id: failedPromotion.batchId },
+      });
+      if (error) throw error;
+      if (data?.success) {
+        toast.success(`✅ ${failedPromotion.count.toLocaleString()} previsões promovidas com sucesso`);
+        setHasScoringDone(true);
+        setFailedPromotion(null);
+      } else {
+        toast.error(data?.message || "Falha ao finalizar promoção");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Erro ao finalizar promoção");
+    } finally {
+      setPromotionRecovering(false);
+    }
+  }, [failedPromotion, projectData.id]);
 
   const runScoring = useCallback(async () => {
     if (!projectData.id) return;
@@ -231,6 +268,32 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
             <span className="text-sm text-destructive">
               Nenhum modelo em produção. Volte à etapa anterior e faça o deploy.
             </span>
+          </div>
+        )}
+
+        {/* Failed promotion recovery */}
+        {failedPromotion && (
+          <div className="p-4 bg-yellow-500/10 border border-yellow-500/30 rounded-lg space-y-3">
+            <div className="flex items-center gap-2 text-yellow-700 dark:text-yellow-400">
+              <AlertTriangle className="w-5 h-5" />
+              <span className="font-medium">Promoção de batch pendente</span>
+            </div>
+            <p className="text-sm text-muted-foreground">
+              {failedPromotion.count.toLocaleString()} previsões foram geradas (batch {failedPromotion.batchId.slice(0, 8)}…) mas a promoção falhou (timeout). Clique abaixo para finalizar.
+            </p>
+            <Button
+              onClick={recoverPromotion}
+              disabled={promotionRecovering}
+              size="sm"
+              variant="outline"
+              className="border-yellow-500/50"
+            >
+              {promotionRecovering ? (
+                <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Finalizando...</>
+              ) : (
+                <><RefreshCw className="w-4 h-4 mr-2" />Finalizar Promoção</>
+              )}
+            </Button>
           </div>
         )}
 
