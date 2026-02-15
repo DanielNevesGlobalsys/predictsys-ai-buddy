@@ -8,11 +8,15 @@ import { Textarea } from "@/components/ui/textarea";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { FileText, Target, Lightbulb, Sparkles, Info } from "lucide-react";
+import { FileText, Target, Lightbulb, Sparkles, Info, AlertTriangle, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectAIContext, type AIContextIntent } from "@/hooks/useProjectAIContext";
 import IntentContractSummary from "./IntentContractSummary";
+import IndustrySelector from "./IndustrySelector";
 import type { ProjectData } from "../WizardContainer";
+import type { IndustryKey, IntentContractV2 } from "@/types/intentContract";
+import { normalizeIntentContract, validateIntentGates } from "@/types/intentContract";
+import { hasAdapter, getDomainAdapter } from "@/config/domainAdapters";
 
 interface StepProjectInfoProps {
   projectData: ProjectData;
@@ -44,20 +48,46 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     problem_type: projectData.problem_type || "auto",
     declared_objective: "",
   });
+  const [selectedIndustry, setSelectedIndustry] = useState<IndustryKey | "">("");
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [intentContract, setIntentContract] = useState<AIContextIntent | null>(null);
+  const [intentContractV2, setIntentContractV2] = useState<IntentContractV2 | null>(null);
   const [generatingContract, setGeneratingContract] = useState(false);
+  const [gateWarnings, setGateWarnings] = useState<{ status: string; code: string; message: string; cta?: string }[]>([]);
 
   // Load existing contract on mount
   useEffect(() => {
     if (projectData.id) {
       loadContext().then((ctx) => {
-        if (ctx && (ctx as any).intent?.declared_objective) {
-          setIntentContract((ctx as any).intent);
-          setFormData(prev => ({
-            ...prev,
-            declared_objective: (ctx as any).intent.declared_objective || "",
-          }));
+        if (!ctx) return;
+        const anyCtx = ctx as any;
+
+        // Try v2 format first
+        if (anyCtx.intent_contract) {
+          const normalized = normalizeIntentContract(anyCtx.intent_contract);
+          if (normalized) {
+            setIntentContractV2(normalized);
+            setSelectedIndustry(normalized.domain_adapter.industry as IndustryKey);
+            setFormData(prev => ({
+              ...prev,
+              declared_objective: normalized.intent_base.declared_objective || prev.declared_objective,
+            }));
+          }
+        }
+
+        // Also load legacy for backward compat rendering
+        if (anyCtx.intent?.declared_objective) {
+          setIntentContract(anyCtx.intent);
+          if (!intentContractV2) {
+            setFormData(prev => ({
+              ...prev,
+              declared_objective: anyCtx.intent.declared_objective || prev.declared_objective,
+            }));
+            // Try to set industry from legacy
+            if (anyCtx.intent.industry_hint && !selectedIndustry) {
+              setSelectedIndustry(anyCtx.intent.industry_hint as IndustryKey);
+            }
+          }
         }
       });
     }
@@ -74,6 +104,26 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     if (!formData.declared_objective && !formData.business_objective.trim()) {
       newErrors.declared_objective = "Selecione ou descreva o objetivo do projeto";
     }
+
+    // Gate validations
+    const objective = formData.declared_objective === "outro"
+      ? formData.business_objective
+      : formData.declared_objective;
+    const gates = validateIntentGates(
+      selectedIndustry || undefined,
+      objective,
+      selectedIndustry ? hasAdapter(selectedIndustry) : false
+    );
+    
+    const blocks = gates.filter(g => g.status === "BLOCK");
+    if (blocks.length > 0) {
+      blocks.forEach(b => {
+        if (b.code === "OBJECTIVE_EMPTY") newErrors.declared_objective = b.message;
+        if (b.code === "INDUSTRY_NOT_SELECTED") newErrors.industry = b.message;
+      });
+    }
+
+    setGateWarnings(gates.filter(g => g.status === "WARN"));
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
   };
@@ -91,6 +141,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           project_name: data.name,
           project_description: data.description,
           declared_objective: objective,
+          industry: selectedIndustry || undefined,
         },
       });
 
@@ -99,6 +150,21 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
         return;
       }
 
+      // Handle v2 response
+      if (result?.intent_base && result?.domain_adapter) {
+        setIntentContractV2({
+          intent_base: result.intent_base,
+          domain_adapter: result.domain_adapter,
+          contract_version: result.contract_version,
+          created_at: result.created_at,
+        });
+        // Also set industry from response
+        if (result.domain_adapter.industry) {
+          setSelectedIndustry(result.domain_adapter.industry as IndustryKey);
+        }
+      }
+
+      // Legacy compat
       if (result?.intent_contract) {
         setIntentContract(result.intent_contract);
       }
@@ -107,7 +173,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     } finally {
       setGeneratingContract(false);
     }
-  }, []);
+  }, [selectedIndustry]);
 
   const handleSubmit = () => {
     if (validate()) {
@@ -126,7 +192,6 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     }
   };
 
-  // Auto-generate contract when project exists and objective changes
   const handleGenerateContract = () => {
     if (!projectData.id) return;
     const objective = formData.declared_objective === "outro" 
@@ -135,6 +200,16 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     if (!objective) return;
     generateIntentContract(projectData.id, formData);
   };
+
+  const handleRegenerateContract = () => {
+    handleGenerateContract();
+  };
+
+  const canGenerate = !!(
+    (formData.declared_objective || formData.business_objective.trim()) &&
+    selectedIndustry &&
+    projectData.id
+  );
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -182,6 +257,13 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             />
           </div>
 
+          {/* ═══ Industry Selector (NEW) ═══ */}
+          <IndustrySelector
+            value={selectedIndustry}
+            onChange={setSelectedIndustry}
+            error={errors.industry}
+          />
+
           {/* Objetivo declarado (dropdown) */}
           <div className="space-y-2">
             <Label className="text-base font-medium flex items-center gap-2">
@@ -206,7 +288,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
             {errors.declared_objective && <p className="text-sm text-destructive">{errors.declared_objective}</p>}
           </div>
 
-          {/* Objetivo de negócio (text) - always visible but specially important if "outro" */}
+          {/* Objetivo de negócio (text) */}
           <div className="space-y-2">
             <Label htmlFor="business_objective" className="text-base font-medium flex items-center gap-2">
               <Lightbulb className="w-4 h-4 text-secondary" />
@@ -288,19 +370,46 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           </div>
         </div>
 
-        {/* Intent Contract Summary */}
-        <IntentContractSummary contract={intentContract!} loading={generatingContract} />
+        {/* Gate warnings */}
+        {gateWarnings.length > 0 && (
+          <div className="space-y-2">
+            {gateWarnings.map((w, i) => (
+              <Alert key={i} className="bg-amber-500/10 border-amber-500/20">
+                <AlertTriangle className="w-4 h-4 text-amber-500" />
+                <AlertDescription className="text-amber-700 dark:text-amber-400 text-sm">
+                  {w.message}
+                </AlertDescription>
+              </Alert>
+            ))}
+          </div>
+        )}
 
-        {/* Generate contract button (if project exists but contract not yet generated) */}
-        {projectData.id && !intentContract && !generatingContract && (
+        {/* Intent Contract Summary (supports v2 + legacy) */}
+        <IntentContractSummary
+          contract={intentContract!}
+          contractV2={intentContractV2}
+          loading={generatingContract}
+        />
+
+        {/* Generate / Regenerate contract button */}
+        {projectData.id && !generatingContract && (
           <Button 
-            variant="outline" 
-            onClick={handleGenerateContract}
-            disabled={!formData.declared_objective && !formData.business_objective.trim()}
-            className="w-full"
+            variant={intentContractV2 || intentContract ? "outline" : "default"}
+            onClick={handleRegenerateContract}
+            disabled={!canGenerate}
+            className={`w-full ${!(intentContractV2 || intentContract) ? "bg-gradient-primary hover:shadow-hover" : ""}`}
           >
-            <Sparkles className="w-4 h-4 mr-2" />
-            Gerar Contrato de Intenção
+            {intentContractV2 || intentContract ? (
+              <>
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Regenerar Contrato de Intenção
+              </>
+            ) : (
+              <>
+                <Sparkles className="w-4 h-4 mr-2" />
+                Gerar Contrato de Intenção
+              </>
+            )}
           </Button>
         )}
 

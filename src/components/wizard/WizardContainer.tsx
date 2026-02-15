@@ -230,6 +230,8 @@ const WizardContainer = () => {
           project_name: name,
           project_description: description,
           declared_objective: objective,
+          // Industry will be sent from StepProjectInfo directly; 
+          // this fire-and-forget call uses auto-detect as fallback
         },
       });
       console.log("[WizardContainer] Intent contract generated");
