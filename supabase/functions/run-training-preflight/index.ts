@@ -47,7 +47,7 @@ serve(async (req: Request) => {
     console.log(`[run-training-preflight] Starting for project ${project_id}`);
 
     // Parallel fetch all needed data
-    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes] = await Promise.all([
+    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes, splitPolicyRes] = await Promise.all([
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
@@ -66,6 +66,7 @@ serve(async (req: Request) => {
         return { data: null, error: null };
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -316,6 +317,88 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.6 SPLIT SANITY GATE =====
+    const splitPolicy = splitPolicyRes.data;
+    const intentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
+    const intentBase = intentContract.intent_base || intentContract;
+    const requiresTime = intentBase.requires_time_column ?? false;
+    const contractHints = aiCtx?.contract_hints || {};
+    const timeAnchorHint = contractHints.time_anchor_column || null;
+
+    if (splitPolicy) {
+      if (splitPolicy.status === "ready") {
+        gates.push({
+          gate: "split_policy",
+          status: "PASS",
+          message: `Split ${splitPolicy.strategy}: treino/valid/teste configurado.`,
+          details: { strategy: splitPolicy.strategy, status: splitPolicy.status },
+        });
+      } else if (splitPolicy.status === "blocked") {
+        gates.push({
+          gate: "split_policy",
+          status: "BLOCK",
+          message: "Split policy bloqueada. Revise a configuração de split.",
+          details: { status: splitPolicy.status },
+        });
+        canTrain = false;
+      }
+    } else if (requiresTime && !timeAnchorHint) {
+      gates.push({
+        gate: "split_policy",
+        status: "WARN",
+        message: "Split temporal recomendado, mas sem coluna de tempo detectada. O treino usará split aleatório.",
+      });
+    }
+
+    // ===== 4.7 LEAKAGE GUARD GATE =====
+    if (modelingDataset) {
+      const buildLog = (modelingDataset as any).build_log as Record<string, any> | null;
+      const leakageGuard = buildLog?.leakage_guard;
+      if (leakageGuard && leakageGuard.removals_count > 0) {
+        gates.push({
+          gate: "leakage_guard",
+          status: "PASS",
+          message: `Leakage Guard: ${leakageGuard.removals_count} coluna(s) removida(s) por risco de vazamento.`,
+          details: { removals_count: leakageGuard.removals_count },
+        });
+      }
+
+      // Check if selected features contain leakage keywords
+      const leakageReport = (modelingDataset as any).leakage_report as any[] || [];
+      if (leakageReport.length > 0) {
+        const criticalLeakage = leakageReport.filter((l: any) => l.reason?.includes("LEAKAGE") || l.reason?.includes("vazamento"));
+        if (criticalLeakage.length > 0) {
+          gates.push({
+            gate: "leakage_guard",
+            status: "WARN",
+            message: `${criticalLeakage.length} coluna(s) com suspeita de leakage no dataset modelável.`,
+            details: { leakage_columns: criticalLeakage.map((l: any) => l.column) },
+          });
+        }
+      }
+    }
+
+    // ===== 4.8 CLASS BALANCE GATE =====
+    const labelBuilder = aiCtx?.label_builder;
+    if (labelBuilder?.preview_summary?.positive_rate) {
+      const pr = labelBuilder.preview_summary.positive_rate;
+      const topClassPct = Math.max(pr, 1 - pr);
+      if (topClassPct > 0.90) {
+        gates.push({
+          gate: "class_balance",
+          status: "WARN",
+          message: `Desbalanceamento: classe dominante ${(topClassPct * 100).toFixed(1)}%. class_weight será aplicado automaticamente.`,
+          details: { top_class_pct: topClassPct, auto_method: "class_weight" },
+        });
+      } else {
+        gates.push({
+          gate: "class_balance",
+          status: "PASS",
+          message: `Balanceamento OK (classe dominante: ${(topClassPct * 100).toFixed(1)}%).`,
+        });
+      }
+    }
+
     // Derive final flags
     canDeploy = canTrain;
     canSchedule = canTrain;
@@ -338,6 +421,9 @@ serve(async (req: Request) => {
       selection: "Voltar e selecionar target",
       builder: "Voltar para Etapa 4 e Regerar Dataset Modelável",
       training_gate: "Revisar configuração do modelo",
+      split_policy: "Configurar Split Policy na Etapa 4",
+      leakage_guard: "Revisar colunas removidas por leakage",
+      class_balance: "Configurar balanceamento de classes",
     };
 
     const result = {
