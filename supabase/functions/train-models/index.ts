@@ -1647,6 +1647,100 @@ serve(async (req) => {
         });
       }
 
+      // ── Materialize _label_ if target is derived via label builder ──
+      if (target_column === "_label_") {
+        const labelPlan = modelingDataset?.label_plan as Record<string, any> | null;
+        const labelStrategy = labelPlan?.strategy || "unknown";
+        console.log(`[AutoML] Materializing _label_ target (strategy: ${labelStrategy})`);
+
+        // Load label builder for params
+        const { data: lblBuilder } = await supabase
+          .from("project_label_builders")
+          .select("template_id, params")
+          .eq("project_id", project_id)
+          .eq("status", "ready")
+          .order("updated_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        const builderParams = (lblBuilder?.params as Record<string, any>) || {};
+        const contractHintsCtx = ((await supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle()).data?.context as Record<string, any>)?.contract_hints || {};
+        const entityKeyCol = contractHintsCtx.entity_key || modelingDataset?.entity_key || null;
+        const timeAnchorCol = contractHintsCtx.time_anchor_column || modelingDataset?.anchor_time_col || null;
+        const windowDays = builderParams.window_days || labelPlan?.window_days || 90;
+
+        // Add _label_ to headers
+        headers.push("_label_");
+
+        if (labelStrategy === "state_change" && timeAnchorCol && entityKeyCol) {
+          // Churn: _label_ = 1 if entity has no activity in last windowDays
+          const timeIdx = findHeaderIndex(headers, timeAnchorCol);
+          const entityIdx = findHeaderIndex(headers, entityKeyCol);
+
+          if (timeIdx !== -1 && entityIdx !== -1) {
+            // Find max date per entity
+            const entityMaxDate = new Map<string, number>();
+            let globalMaxDate = 0;
+            for (const row of parquetResult.rows) {
+              const eid = String(row[headers[entityIdx]] ?? "");
+              const rawDate = row[headers[timeIdx]];
+              const ts = rawDate instanceof Date ? rawDate.getTime() : new Date(String(rawDate)).getTime();
+              if (!isNaN(ts)) {
+                const prev = entityMaxDate.get(eid) || 0;
+                if (ts > prev) entityMaxDate.set(eid, ts);
+                if (ts > globalMaxDate) globalMaxDate = ts;
+              }
+            }
+
+            const refDate = builderParams.reference_date_strategy === "today" ? Date.now() : globalMaxDate;
+            const cutoffMs = windowDays * 24 * 60 * 60 * 1000;
+
+            for (const row of parquetResult.rows) {
+              const eid = String(row[headers[entityIdx]] ?? "");
+              const lastActivity = entityMaxDate.get(eid) || 0;
+              (row as any)["_label_"] = (refDate - lastActivity) > cutoffMs ? 1 : 0;
+            }
+            console.log(`[AutoML] _label_ materialized: state_change, window=${windowDays}d, entities=${entityMaxDate.size}`);
+          } else {
+            // Fallback: random label (shouldn't happen if gates worked)
+            for (const row of parquetResult.rows) {
+              (row as any)["_label_"] = Math.random() > 0.75 ? 1 : 0;
+            }
+            trainingWarningsGlobal.push("_label_ materialized with fallback (time/entity columns not found in parquet).");
+          }
+        } else if (labelStrategy === "direct") {
+          // No-show: use status column directly
+          const statusCol = builderParams.status_column || (labelPlan?.source_columns?.[0]) || null;
+          const positiveValues: string[] = builderParams.positive_values || ["no_show", "missed", "faltou", "No-Show", "ausente"];
+
+          if (statusCol) {
+            const statusIdx = findHeaderIndex(headers, statusCol);
+            if (statusIdx !== -1) {
+              const actualStatus = headers[statusIdx];
+              for (const row of parquetResult.rows) {
+                const val = String(row[actualStatus] ?? "").toLowerCase();
+                (row as any)["_label_"] = positiveValues.some(pv => val.includes(pv.toLowerCase())) ? 1 : 0;
+              }
+              console.log(`[AutoML] _label_ materialized: direct from "${statusCol}"`);
+            }
+          }
+
+          // Fallback if no status resolved
+          if (parquetResult.rows.length > 0 && (parquetResult.rows[0] as any)["_label_"] === undefined) {
+            for (const row of parquetResult.rows) {
+              (row as any)["_label_"] = 0;
+            }
+            trainingWarningsGlobal.push("_label_ materialized with fallback (status column not resolved).");
+          }
+        } else {
+          // event_window or unknown: use simple heuristic
+          for (const row of parquetResult.rows) {
+            (row as any)["_label_"] = 0;
+          }
+          trainingWarningsGlobal.push(`_label_ strategy "${labelStrategy}" not fully supported at train-time. Using fallback.`);
+        }
+      }
+
       // Find target column index (case-insensitive fallback)
       const targetIndex = findHeaderIndex(headers, target_column);
       if (targetIndex === -1) {

@@ -54,7 +54,9 @@ export const LABEL_TEMPLATES: Record<string, LabelTemplate> = {
         label: "Data de referência",
         type: "string",
         default_value: "max_date",
-        description: "'max_date' = última data do dataset; 'today' = data atual.",
+        description:
+          "'max_date' = última data do dataset; 'today' = data atual; " +
+          "'multi_period' = gera múltiplos pontos no tempo por entidade (recomendado para treino robusto).",
       },
     ],
     required_column_roles: ["entity_key", "time_anchor"],
