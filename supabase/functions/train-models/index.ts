@@ -543,6 +543,154 @@ function predictGradientBoosting(
   });
 }
 
+// ==================== METRICS PROFILES (Intent-based) ====================
+
+interface MetricsProfileDef {
+  id: string;
+  primary: string;
+  secondary: string[];
+  calibration?: string;
+  threshold_strategy: string;
+  min_precision?: number;
+  label: string;
+}
+
+function resolveMetricsProfileEdge(
+  intentBase: Record<string, any>,
+  domainAdapter: Record<string, any>,
+  problemType: string
+): { profile: MetricsProfileDef; source: string } {
+  const objective = String(intentBase?.declared_objective || "").toLowerCase();
+  const industry = String(domainAdapter?.industry || "").toLowerCase();
+
+  if (objective.includes("churn") || objective.includes("retenção") || objective.includes("cancelamento")) {
+    return { profile: { id: "churn", primary: "pr_auc", secondary: ["AUC", "F1", "Recall"], calibration: "brier", threshold_strategy: "max_recall_min_precision", min_precision: 0.3, label: "Churn" }, source: "objective:churn" };
+  }
+  if (objective.includes("conversão") || objective.includes("conversion") || objective.includes("lead")) {
+    return { profile: { id: "conversao", primary: "Precisão", secondary: ["AUC", "pr_auc"], calibration: "brier", threshold_strategy: "max_precision_at_k", min_precision: 0.5, label: "Conversão" }, source: "objective:conversao" };
+  }
+  if ((objective.includes("receita") || objective.includes("revenue") || objective.includes("valor")) && problemType === "regression") {
+    return { profile: { id: "receita", primary: "MAE", secondary: ["RMSE", "R²"], threshold_strategy: "none", label: "Receita" }, source: "objective:receita" };
+  }
+  if (objective.includes("no-show") || objective.includes("adesão") || objective.includes("falta")) {
+    return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde" }, source: "objective:health" };
+  }
+  if (industry.includes("saúde") || industry.includes("health")) {
+    return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde" }, source: "industry:health" };
+  }
+  if (problemType === "regression") {
+    return { profile: { id: "generic_regression", primary: "R²", secondary: ["MAE", "RMSE"], threshold_strategy: "none", label: "Regressão" }, source: "fallback:regression" };
+  }
+  return { profile: { id: "generic", primary: "AUC", secondary: ["F1", "Recall", "Precisão"], calibration: "brier", threshold_strategy: "max_f1", label: "Genérico" }, source: "fallback:generic" };
+}
+
+// ==================== PR-AUC ====================
+
+function calcPRAUC(yTrue: number[], yProb: number[]): number {
+  const sorted = yTrue.map((t, i) => ({ t, p: yProb[i] })).sort((a, b) => b.p - a.p);
+  const totalPos = yTrue.filter(y => y === 1).length;
+  if (totalPos === 0) return 0;
+  let tp = 0, area = 0, prevRecall = 0;
+  for (let i = 0; i < sorted.length; i++) {
+    if (sorted[i].t === 1) tp++;
+    const precision = tp / (i + 1);
+    const recall = tp / totalPos;
+    if (sorted[i].t === 1) {
+      area += precision * (recall - prevRecall);
+      prevRecall = recall;
+    }
+  }
+  return area;
+}
+
+// ==================== BRIER SCORE ====================
+
+function calcBrierScore(yTrue: number[], yProb: number[]): number {
+  let sum = 0;
+  for (let i = 0; i < yTrue.length; i++) {
+    sum += Math.pow(yProb[i] - yTrue[i], 2);
+  }
+  return sum / yTrue.length;
+}
+
+// ==================== PLATT CALIBRATION ====================
+
+function plattCalibrate(yTrue: number[], yProb: number[]): { a: number; b: number; method: string } {
+  // Fit logistic regression: calibrated_p = sigmoid(a * raw_p + b)
+  let a = 1.0, b = 0.0;
+  const lr = 0.1, epochs = 200, n = yTrue.length;
+  for (let ep = 0; ep < epochs; ep++) {
+    let gradA = 0, gradB = 0;
+    for (let i = 0; i < n; i++) {
+      const z = a * yProb[i] + b;
+      const p = sigmoid(z);
+      const err = p - yTrue[i];
+      gradA += err * yProb[i];
+      gradB += err;
+    }
+    a -= lr * gradA / n;
+    b -= lr * gradB / n;
+  }
+  return { a, b, method: "platt" };
+}
+
+function applyPlattCalibration(probs: number[], a: number, b: number): number[] {
+  return probs.map(p => sigmoid(a * p + b));
+}
+
+// ==================== OPTIMAL THRESHOLD ====================
+
+function findOptimalThreshold(
+  yTrue: number[],
+  yProb: number[],
+  strategy: string,
+  minPrecision = 0.3
+): number {
+  const thresholds = Array.from({ length: 99 }, (_, i) => (i + 1) / 100);
+  let bestThreshold = 0.5, bestScore = -Infinity;
+
+  for (const t of thresholds) {
+    let tp = 0, fp = 0, fn = 0;
+    for (let i = 0; i < yTrue.length; i++) {
+      const pred = yProb[i] >= t ? 1 : 0;
+      if (yTrue[i] === 1 && pred === 1) tp++;
+      else if (yTrue[i] === 0 && pred === 1) fp++;
+      else if (yTrue[i] === 1 && pred === 0) fn++;
+    }
+    const precision = tp / (tp + fp) || 0;
+    const recall = tp / (tp + fn) || 0;
+    const f1 = 2 * precision * recall / (precision + recall) || 0;
+
+    let score = -Infinity;
+    switch (strategy) {
+      case "max_recall_min_precision":
+        score = precision >= minPrecision ? recall : -1;
+        break;
+      case "max_precision_at_k":
+        score = recall >= 0.1 ? precision : -1;
+        break;
+      case "max_recall":
+        score = precision >= minPrecision ? recall : -1;
+        break;
+      case "max_f1":
+        score = f1;
+        break;
+      case "balanced":
+        score = f1;
+        break;
+      default:
+        score = f1;
+    }
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestThreshold = t;
+    }
+  }
+
+  return bestThreshold;
+}
+
 // ==================== METRICS ====================
 
 interface MetricsResult {
@@ -585,7 +733,10 @@ function calcClassificationMetricsDetailed(yTrue: number[], yProb: number[]): Me
   }
   auc_raw = totalPos * totalNeg > 0 ? auc_raw / (totalPos * totalNeg) : 0.5;
 
-  const raw: Record<string, number> = { AUC: auc_raw, F1: f1_raw, Recall: recall_raw, Precisão: precision_raw, Acurácia: accuracy_raw };
+  // PR-AUC
+  const pr_auc_raw = calcPRAUC(yTrue, yProb);
+
+  const raw: Record<string, number> = { AUC: auc_raw, F1: f1_raw, Recall: recall_raw, Precisão: precision_raw, Acurácia: accuracy_raw, pr_auc: pr_auc_raw };
 
   // Validate raw metrics
   const invalid_reasons: string[] = [];
@@ -2689,43 +2840,86 @@ serve(async (req) => {
     console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
     const resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
 
-    // Compare and pick best
-    const primaryMetricName = isClassification ? "AUC" : "R²";
-    const scoreA = resultA.metrics[primaryMetricName] ?? -Infinity;
-    const scoreB = resultB.metrics[primaryMetricName] ?? -Infinity;
+    // ==================== RESOLVE METRICS PROFILE ====================
+    const intentContract = trainAiCtx?.intent_contract || trainAiCtx?.intent || {};
+    const intentBase = intentContract.intent_base || intentContract;
+    const domainAdapter = intentContract.domain_adapter || {};
+    const { profile: metricsProfile, source: profileSource } = resolveMetricsProfileEdge(intentBase, domainAdapter, problem_type);
     
-    console.log(`\n=== Model Comparison ===`);
-    console.log(`Modelo A (${strategyA.name}): ${primaryMetricName}=${scoreA.toFixed(4)}, sanity=${resultA.sanity.passed}`);
-    console.log(`Modelo B (${strategyB.name}): ${primaryMetricName}=${scoreB.toFixed(4)}, sanity=${resultB.sanity.passed}`);
+    console.log(`\n=== Metrics Profile ===`);
+    console.log(`Profile: ${metricsProfile.id} (${metricsProfile.label}), source: ${profileSource}`);
+    console.log(`Primary metric: ${metricsProfile.primary}`);
+
+    // Compare and pick champion by PROFILE primary metric
+    const primaryMetricName = metricsProfile.primary;
+    const isLowerBetter = ["MAE", "RMSE", "MSE", "brier"].includes(primaryMetricName);
+    const scoreA = resultA.metrics[primaryMetricName] ?? (isLowerBetter ? Infinity : -Infinity);
+    const scoreB = resultB.metrics[primaryMetricName] ?? (isLowerBetter ? Infinity : -Infinity);
+    
+    console.log(`\n=== Model Comparison (by ${primaryMetricName}) ===`);
+    console.log(`Modelo A (${strategyA.name}): ${primaryMetricName}=${typeof scoreA === 'number' ? scoreA.toFixed(4) : scoreA}, sanity=${resultA.sanity.passed}`);
+    console.log(`Modelo B (${strategyB.name}): ${primaryMetricName}=${typeof scoreB === 'number' ? scoreB.toFixed(4) : scoreB}, sanity=${resultB.sanity.passed}`);
 
     // Selection logic: prefer model with better score AND passing sanity
     let trainResult: TrainResult;
     let strategy: ModelStrategy;
+    let championIdx = 0; // 0 = A, 1 = B
+    
+    const isBetter = (a: number, b: number) => isLowerBetter ? a < b : a > b;
     
     if (resultA.sanity.passed && resultB.sanity.passed) {
-      // Both pass sanity — pick by score
-      if (scoreB > scoreA) {
-        trainResult = resultB;
-        strategy = strategyB;
-        console.log(`[AutoML] ✅ Selecionado Modelo B (melhor score)`);
+      if (isBetter(scoreB, scoreA)) {
+        trainResult = resultB; strategy = strategyB; championIdx = 1;
+        console.log(`[AutoML] ✅ Champion: Modelo B (melhor ${primaryMetricName})`);
       } else {
-        trainResult = resultA;
-        strategy = strategyA;
-        console.log(`[AutoML] ✅ Selecionado Modelo A (melhor score)`);
+        trainResult = resultA; strategy = strategyA; championIdx = 0;
+        console.log(`[AutoML] ✅ Champion: Modelo A (melhor ${primaryMetricName})`);
       }
     } else if (resultB.sanity.passed && !resultA.sanity.passed) {
-      trainResult = resultB;
-      strategy = strategyB;
-      console.log(`[AutoML] ✅ Selecionado Modelo B (Modelo A falhou sanity)`);
+      trainResult = resultB; strategy = strategyB; championIdx = 1;
+      console.log(`[AutoML] ✅ Champion: Modelo B (A falhou sanity)`);
     } else if (resultA.sanity.passed && !resultB.sanity.passed) {
-      trainResult = resultA;
-      strategy = strategyA;
-      console.log(`[AutoML] ✅ Selecionado Modelo A (Modelo B falhou sanity)`);
+      trainResult = resultA; strategy = strategyA; championIdx = 0;
+      console.log(`[AutoML] ✅ Champion: Modelo A (B falhou sanity)`);
     } else {
-      // Both fail sanity — pick the one with higher score anyway
-      trainResult = scoreB > scoreA ? resultB : resultA;
-      strategy = scoreB > scoreA ? strategyB : strategyA;
-      console.warn(`[AutoML] ⚠️ Ambos modelos falharam sanity check — selecionado melhor score`);
+      if (isBetter(scoreB, scoreA)) {
+        trainResult = resultB; strategy = strategyB; championIdx = 1;
+      } else {
+        trainResult = resultA; strategy = strategyA; championIdx = 0;
+      }
+      console.warn(`[AutoML] ⚠️ Ambos falharam sanity — champion por score`);
+    }
+
+    // ==================== PLATT CALIBRATION (classification only) ====================
+    let calibrationInfo: { method: string; a?: number; b?: number; brier_before?: number; brier_after?: number } = { method: "none" };
+    let calibratedPredictions = trainResult.predictions;
+
+    if (isClassification && ytestForModel.length >= 100) {
+      const brierBefore = calcBrierScore(ytestForModel, trainResult.predictions);
+      const platt = plattCalibrate(ytestForModel, trainResult.predictions);
+      const calibrated = applyPlattCalibration(trainResult.predictions, platt.a, platt.b);
+      const brierAfter = calcBrierScore(ytestForModel, calibrated);
+
+      if (brierAfter < brierBefore) {
+        calibrationInfo = { method: "platt", a: platt.a, b: platt.b, brier_before: brierBefore, brier_after: brierAfter };
+        calibratedPredictions = calibrated;
+        console.log(`[Calibration] Platt: brier ${brierBefore.toFixed(4)} → ${brierAfter.toFixed(4)} ✅`);
+      } else {
+        calibrationInfo = { method: "none", brier_before: brierBefore, brier_after: brierBefore };
+        console.log(`[Calibration] Platt did not improve (${brierBefore.toFixed(4)} → ${brierAfter.toFixed(4)}). Keeping raw.`);
+      }
+    }
+
+    // ==================== OPTIMAL THRESHOLD ====================
+    let recommendedThreshold = 0.5;
+    if (isClassification && metricsProfile.threshold_strategy !== "none") {
+      recommendedThreshold = findOptimalThreshold(
+        ytestForModel,
+        calibratedPredictions,
+        metricsProfile.threshold_strategy,
+        metricsProfile.min_precision || 0.3
+      );
+      console.log(`[Threshold] Optimal: ${recommendedThreshold.toFixed(2)} (strategy: ${metricsProfile.threshold_strategy})`);
     }
 
     // Delete existing models for this project
@@ -2926,6 +3120,10 @@ serve(async (req) => {
           training_seed: trainingSeed,
           // Class balance audit
           class_balance_method: classBalanceMethod,
+          // ── Etapa 6: Calibration + Threshold + Profile ──
+          calibration: calibrationInfo,
+          recommended_threshold: recommendedThreshold,
+          metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
         },
       })
       .select()
@@ -2956,6 +3154,25 @@ serve(async (req) => {
     }));
 
     await supabase.from("project_feature_importances").insert(importancesToInsert);
+
+    // Save model rankings
+    try {
+      const rankingJson = [
+        { model_id: modelData.id, name: strategy.name, score: trainResult.metrics[primaryMetricName] ?? 0, sanity: trainResult.sanity.passed, is_champion: true, metrics: detailedMetrics.clamped },
+        { model_id: null, name: (championIdx === 0 ? strategyB : strategyA).name, score: championIdx === 0 ? scoreB : scoreA, sanity: championIdx === 0 ? resultB.sanity.passed : resultA.sanity.passed, is_champion: false },
+      ];
+      await supabase.from("project_model_rankings").insert({
+        project_id,
+        selection_version: currentSelectionVersion,
+        ranking_json: rankingJson,
+        champion_model_id: modelData.id,
+        metrics_profile_used: metricsProfile.id,
+        primary_metric: primaryMetricName,
+      });
+      console.log(`[AutoML] Model ranking persisted`);
+    } catch (rankErr) {
+      console.warn(`[AutoML] Failed to persist ranking:`, rankErr);
+    }
 
     // Update project status to evaluated
     await supabase
@@ -3115,6 +3332,22 @@ serve(async (req) => {
         ...(improvementVsBaseline <= 0 ? [`Modelo não supera baseline (diff: ${improvementVsBaseline.toFixed(4)})`] : []),
       ],
       ctas,
+      // ── Etapa 6: Calibration + Threshold + Profile + Ranking ──
+      calibration: calibrationInfo,
+      recommended_threshold: recommendedThreshold,
+      metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+      champion: {
+        model_id: modelData.id,
+        name: strategy.name,
+        score: trainResult.metrics[primaryMetricName] ?? 0,
+        metrics: detailedMetrics.clamped,
+        sanity: trainResult.sanity.passed,
+        is_champion: true,
+      },
+      ranking: [
+        { model_id: modelData.id, name: strategy.name, score: trainResult.metrics[primaryMetricName] ?? 0, sanity: trainResult.sanity.passed, is_champion: true, metrics: detailedMetrics.clamped },
+        { model_id: null, name: (championIdx === 0 ? strategyB : strategyA).name, score: championIdx === 0 ? scoreB : scoreA, sanity: championIdx === 0 ? resultB.sanity.passed : resultA.sanity.passed, is_champion: false },
+      ],
       // ── Debug ──
       debug: { seed: trainingSeed, features_count: finalFeatureNames.length, blocked_features_count: featureValidation.blocked.length, elapsed_ms: elapsedMs },
       preflight_report: preflightReport,

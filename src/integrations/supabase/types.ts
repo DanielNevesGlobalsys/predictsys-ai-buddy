@@ -1936,6 +1936,54 @@ export type Database = {
           },
         ]
       }
+      project_model_rankings: {
+        Row: {
+          champion_model_id: string | null
+          created_at: string
+          id: string
+          metrics_profile_used: string
+          primary_metric: string
+          project_id: string
+          ranking_json: Json
+          selection_version: number
+        }
+        Insert: {
+          champion_model_id?: string | null
+          created_at?: string
+          id?: string
+          metrics_profile_used?: string
+          primary_metric?: string
+          project_id: string
+          ranking_json?: Json
+          selection_version?: number
+        }
+        Update: {
+          champion_model_id?: string | null
+          created_at?: string
+          id?: string
+          metrics_profile_used?: string
+          primary_metric?: string
+          project_id?: string
+          ranking_json?: Json
+          selection_version?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_model_rankings_champion_model_id_fkey"
+            columns: ["champion_model_id"]
+            isOneToOne: false
+            referencedRelation: "project_models"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_model_rankings_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_model_selection: {
         Row: {
           excluded_features: Json | null

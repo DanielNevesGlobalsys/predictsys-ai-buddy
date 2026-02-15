@@ -265,6 +265,8 @@ serve(async (req) => {
     const modelArtifacts = hyperparams.model_artifacts;
     const savedNormalization = hyperparams.normalization;
     const savedFeatureNames = hyperparams.feature_names as string[] | undefined;
+    const calibration = hyperparams.calibration as { method?: string; a?: number; b?: number } | null;
+    const recommendedThreshold = typeof hyperparams.recommended_threshold === "number" ? hyperparams.recommended_threshold : 0.5;
 
     if (!modelArtifacts || (!modelArtifacts.weights && !modelArtifacts.trees)) {
       return blockResponse(gates, "NO_MODEL_ARTIFACTS", "Modelo sem artefatos de treinamento. Re-treine.", [
@@ -486,7 +488,11 @@ serve(async (req) => {
           }
           if (isClassification) {
             probability = sigmoid(pred);
-            predictedClass = probability >= 0.5 ? "1" : "0";
+            // Apply Platt calibration if available
+            if (calibration?.method === "platt" && calibration.a != null && calibration.b != null) {
+              probability = sigmoid(calibration.a * probability + calibration.b);
+            }
+            predictedClass = probability >= recommendedThreshold ? "1" : "0";
           } else {
             predictedValue = pred;
           }
@@ -498,7 +504,11 @@ serve(async (req) => {
           }
           if (isClassification) {
             probability = sigmoid(z);
-            predictedClass = probability >= 0.5 ? "1" : "0";
+            // Apply Platt calibration if available
+            if (calibration?.method === "platt" && calibration.a != null && calibration.b != null) {
+              probability = sigmoid(calibration.a * probability + calibration.b);
+            }
+            predictedClass = probability >= recommendedThreshold ? "1" : "0";
           } else {
             predictedValue = z;
           }

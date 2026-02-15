@@ -18,6 +18,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
+import TrainingResultsPanel from "./TrainingResultsPanel";
 import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
@@ -917,6 +918,23 @@ const StepTraining = ({
               </div>
             )}
           </div>
+        )}
+
+        {/* Training Results Panel — champion/challenger + calibration + threshold */}
+        {trainingComplete && qualityResult && (
+          <TrainingResultsPanel
+            projectId={projectData.id}
+            problemType={projectData.problem_type}
+            models={(qualityResult as any).ranking || [
+              { model_id: bestModel?.id || "", name: bestModel?.algorithm_name || "", score: bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel?.metrics.map(m => [m.metric_name, m.metric_value]) || []) },
+            ]}
+            champion={(qualityResult as any).champion || (bestModel ? { model_id: bestModel.id, name: bestModel.algorithm_name, score: bestModel.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel.metrics.map(m => [m.metric_name, m.metric_value])) } : null)}
+            calibration={(qualityResult as any).calibration || null}
+            recommendedThreshold={(qualityResult as any).recommended_threshold || null}
+            profile={(qualityResult as any).metrics_profile || null}
+            profileSource={(qualityResult as any).metrics_profile?.source || null}
+            canDeploy={qualityResult.can_promote_to_production}
+          />
         )}
 
         {/* Results section */}
