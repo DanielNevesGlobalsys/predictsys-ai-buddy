@@ -326,19 +326,37 @@ serve(async (req: Request) => {
     const timeAnchorHint = contractHints.time_anchor_column || null;
 
     if (splitPolicy) {
-      if (splitPolicy.status === "ready") {
+      // Check policy drift: if selection_version changed since policy was created
+      const policySelVersion = (splitPolicy as any).selection_version || 0;
+      if (policySelVersion < selectionVersion) {
+        gates.push({
+          gate: "split_policy",
+          status: "BLOCK",
+          message: `Split policy desatualizada (v${policySelVersion}) — seleção atual é v${selectionVersion}. Regere a Split Policy.`,
+          details: { policy_version: policySelVersion, current_version: selectionVersion, drift: true },
+        });
+        canTrain = false;
+      } else if ((splitPolicy as any).status === "outdated") {
+        gates.push({
+          gate: "split_policy",
+          status: "BLOCK",
+          message: "Split policy marcada como desatualizada. Regere a Split Policy.",
+          details: { status: "outdated" },
+        });
+        canTrain = false;
+      } else if ((splitPolicy as any).status === "ready") {
         gates.push({
           gate: "split_policy",
           status: "PASS",
-          message: `Split ${splitPolicy.strategy}: treino/valid/teste configurado.`,
-          details: { strategy: splitPolicy.strategy, status: splitPolicy.status },
+          message: `Split ${(splitPolicy as any).strategy}: treino/valid/teste configurado (v${policySelVersion}).`,
+          details: { strategy: (splitPolicy as any).strategy, status: (splitPolicy as any).status, version: policySelVersion },
         });
-      } else if (splitPolicy.status === "blocked") {
+      } else if ((splitPolicy as any).status === "blocked") {
         gates.push({
           gate: "split_policy",
           status: "BLOCK",
           message: "Split policy bloqueada. Revise a configuração de split.",
-          details: { status: splitPolicy.status },
+          details: { status: (splitPolicy as any).status },
         });
         canTrain = false;
       }

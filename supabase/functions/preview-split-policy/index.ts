@@ -151,10 +151,41 @@ serve(async (req: Request) => {
       // Generate time ranges from numeric stats
       const timeStat = (numStatsRes.data || []).find((n: any) => n.column_name === timeAnchor);
       const timeRanges: { split: string; from: string; to: string }[] = [];
+      let dataSpanMonths = 0;
 
-      if (timeStat) {
+      if (timeStat && timeStat.min_value && timeStat.max_value) {
+        // Use actual data range for more accurate ranges
+        const minDate = new Date(timeStat.min_value);
+        const maxDate = new Date(timeStat.max_value);
+        const isValidDate = !isNaN(minDate.getTime()) && !isNaN(maxDate.getTime()) && minDate.getFullYear() > 1900;
+
+        if (isValidDate) {
+          dataSpanMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
+          const totalM = totalMonths;
+          const testStart = new Date(maxDate.getFullYear(), maxDate.getMonth() - testMonths + 1, 1);
+          const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
+          const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
+
+          timeRanges.push(
+            { split: "train", from: trainStart.toISOString().slice(0, 10), to: validStart.toISOString().slice(0, 10) },
+            { split: "valid", from: validStart.toISOString().slice(0, 10), to: testStart.toISOString().slice(0, 10) },
+            { split: "test", from: testStart.toISOString().slice(0, 10), to: maxDate.toISOString().slice(0, 10) },
+          );
+        } else {
+          // Fallback to now-based ranges
+          const now = new Date();
+          const testStart = new Date(now.getFullYear(), now.getMonth() - testMonths, 1);
+          const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
+          const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
+
+          timeRanges.push(
+            { split: "train", from: trainStart.toISOString().slice(0, 10), to: validStart.toISOString().slice(0, 10) },
+            { split: "valid", from: validStart.toISOString().slice(0, 10), to: testStart.toISOString().slice(0, 10) },
+            { split: "test", from: testStart.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) },
+          );
+        }
+      } else {
         const now = new Date();
-        const totalM = totalMonths;
         const testStart = new Date(now.getFullYear(), now.getMonth() - testMonths, 1);
         const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
         const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
@@ -169,14 +200,48 @@ serve(async (req: Request) => {
       preview = { train_rows: trainRows, valid_rows: validRows, test_rows: testRows, time_ranges: timeRanges, notes: [] };
       notes.push(`Split temporal: treino=${trainMonths}m, validação=${validMonths}m, teste=${testMonths}m`);
 
+      // === TEMPORAL COVERAGE GATES ===
+
+      // 1. Minimum train months
+      if (trainMonths < 6) {
+        const objective = (intentBase.declared_objective || intentBase.objective || "").toLowerCase();
+        const isChurnLike = /churn|convers|inadimpl|atrit|evas|cancel|reten/.test(objective);
+        gates.push({
+          gate: "SPLIT_SANITY",
+          status: isChurnLike ? "BLOCK" : "WARN",
+          message: `Período de treino de ${trainMonths} meses é curto${isChurnLike ? " para problemas de churn/conversão" : ""}. Recomendado: ≥ 6 meses.`,
+          details: { train_months: trainMonths, recommended_min: 6 },
+        });
+      }
+
+      // 2. Data span vs requested span (temporal gaps)
+      if (dataSpanMonths > 0 && dataSpanMonths < totalMonths) {
+        gates.push({
+          gate: "SPLIT_SANITY",
+          status: "WARN",
+          message: `Dataset cobre apenas ${dataSpanMonths} meses, mas split solicita ${totalMonths} meses. Podem existir buracos temporais.`,
+          details: { data_span_months: dataSpanMonths, requested_months: totalMonths },
+        });
+      }
+
+      // 3. Minimum row counts per split
       if (testRows < 200) {
         gates.push({
           gate: "SPLIT_SANITY",
           status: "BLOCK",
           message: `Split temporal produz apenas ${testRows} linhas de teste (mínimo: 200). Aumente os dados ou ajuste as proporções.`,
-          details: { test_rows: testRows },
+          details: { test_rows: testRows, min_required: 200 },
         });
-      } else if (trainRows < 500) {
+      }
+      if (validRows < 200) {
+        gates.push({
+          gate: "SPLIT_SANITY",
+          status: "WARN",
+          message: `Split temporal produz apenas ${validRows} linhas de validação (mínimo recomendado: 200). Resultados de validação podem ser instáveis.`,
+          details: { valid_rows: validRows, min_recommended: 200 },
+        });
+      }
+      if (trainRows < 500) {
         gates.push({
           gate: "SPLIT_SANITY",
           status: "WARN",
@@ -278,6 +343,31 @@ serve(async (req: Request) => {
       }).eq("id", aiCtxRes.data.id);
     }
 
+    // === POLICY DRIFT: check if selection_version changed ===
+    const existingPolicyVersion = (await supabase
+      .from("project_split_policies")
+      .select("selection_version")
+      .eq("project_id", project_id)
+      .neq("status", "outdated")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle()).data;
+
+    if (existingPolicyVersion && existingPolicyVersion.selection_version < currentSelVersion) {
+      // Mark old policies as outdated
+      await supabase.from("project_split_policies")
+        .update({ status: "outdated", updated_at: new Date().toISOString() })
+        .eq("project_id", project_id)
+        .lt("selection_version", currentSelVersion);
+
+      gates.push({
+        gate: "POLICY_DRIFT",
+        status: "WARN",
+        message: `Split policy anterior (v${existingPolicyVersion.selection_version}) ficou desatualizada após mudança de seleção (v${currentSelVersion}). Nova policy gerada.`,
+        details: { old_version: existingPolicyVersion.selection_version, new_version: currentSelVersion },
+      });
+    }
+
     // CLASS BALANCE auto-detection
     let classBalancePolicy: Record<string, any> | null = null;
     const labelBuilder = aiContext.label_builder;
@@ -285,14 +375,31 @@ serve(async (req: Request) => {
       const pr = labelBuilder.preview_summary.positive_rate;
       const topClassPct = Math.max(pr, 1 - pr);
       if (topClassPct > 0.90) {
-        classBalancePolicy = { method: "class_weight", threshold: topClassPct };
+        const method = topClassPct > 0.95 ? "undersample" : "class_weight";
+        classBalancePolicy = { method, threshold: topClassPct, auto_applied: true };
         gates.push({
           gate: "CLASS_BALANCE",
           status: "WARN",
-          message: `Desbalanceamento detectado (classe dominante: ${(topClassPct * 100).toFixed(1)}%). Será aplicado class_weight automaticamente.`,
-          details: { top_class_pct: topClassPct, method: "class_weight" },
+          message: `Desbalanceamento detectado (classe dominante: ${(topClassPct * 100).toFixed(1)}%). Será aplicado ${method} automaticamente.`,
+          details: { top_class_pct: topClassPct, method },
         });
       }
+    }
+
+    // Persist class_balance in AI context
+    if (aiCtxRes.data && classBalancePolicy) {
+      const currentCtx2 = (await supabase.from("project_ai_context").select("context").eq("id", aiCtxRes.data.id).single()).data;
+      const ctx2 = (currentCtx2?.context as Record<string, any>) || {};
+      await supabase.from("project_ai_context").update({
+        context: {
+          ...ctx2,
+          class_balance: {
+            ...classBalancePolicy,
+            updated_at: new Date().toISOString(),
+          },
+        },
+        last_updated_at: new Date().toISOString(),
+      }).eq("id", aiCtxRes.data.id);
     }
 
     console.log(`[preview-split-policy] Done: strategy=${strategy}, status=${policyStatus}`);
