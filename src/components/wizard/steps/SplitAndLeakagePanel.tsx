@@ -216,7 +216,7 @@ const SplitAndLeakagePanel = ({
           </div>
 
           {/* Time ranges */}
-          {preview.time_ranges && preview.time_ranges.length > 0 && (
+          {preview.time_ranges && preview.time_ranges.length > 0 ? (
             <div className="text-xs space-y-1 p-2 bg-muted/30 rounded">
               {preview.time_ranges.map((r, i) => (
                 <div key={i} className="flex justify-between">
@@ -225,7 +225,12 @@ const SplitAndLeakagePanel = ({
                 </div>
               ))}
             </div>
-          )}
+          ) : strategy === "temporal" && hasLoaded ? (
+            <div className="text-xs p-2 bg-amber-500/5 border border-amber-500/20 rounded flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+              <span>Datas indisponíveis — coluna temporal não contém datas válidas. Selecione outra coluna de data na Etapa 2.</span>
+            </div>
+          ) : null}
         </div>
       )}
 
