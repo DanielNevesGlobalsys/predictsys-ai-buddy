@@ -2664,6 +2664,7 @@ export type Database = {
           coverage_pct: number
           last_error_code: string | null
           last_error_message: string | null
+          last_heartbeat_at: string | null
           latest_batch_id: string | null
           latest_job_id: string | null
           latest_model_id: string | null
@@ -2677,6 +2678,7 @@ export type Database = {
           coverage_pct?: number
           last_error_code?: string | null
           last_error_message?: string | null
+          last_heartbeat_at?: string | null
           latest_batch_id?: string | null
           latest_job_id?: string | null
           latest_model_id?: string | null
@@ -2690,6 +2692,7 @@ export type Database = {
           coverage_pct?: number
           last_error_code?: string | null
           last_error_message?: string | null
+          last_heartbeat_at?: string | null
           latest_batch_id?: string | null
           latest_job_id?: string | null
           latest_model_id?: string | null

@@ -52,7 +52,7 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
     warnings: [], ctas: [], missingFeaturePct: 0,
   });
 
-  // Check existing predictions + production model + failed promotion state
+  // Check existing predictions + production model + failed/stale state
   useEffect(() => {
     if (!projectData.id) return;
     const init = async () => {
@@ -62,17 +62,40 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
           .eq("project_id", projectData.id!).eq("is_latest", true),
         supabase.from("project_models").select("algorithm_name")
           .eq("project_id", projectData.id!).eq("is_production", true).limit(1).maybeSingle(),
-        supabase.from("project_prediction_state").select("status, latest_batch_id, predictions_count")
+        supabase.from("project_prediction_state").select("status, latest_batch_id, predictions_count, last_error_code, last_heartbeat_at, updated_at")
           .eq("project_id", projectData.id!).maybeSingle(),
       ]);
       const latestCount = predRes.count ?? 0;
       setHasScoringDone(latestCount > 0);
       setProductionModelName(modelRes.data?.algorithm_name || null);
 
-      // Detect failed promotion: state has predictions but none are is_latest
       const st = stateRes.data;
-      if (st && st.predictions_count > 0 && latestCount === 0 && st.latest_batch_id) {
-        setFailedPromotion({ batchId: st.latest_batch_id, count: st.predictions_count });
+      if (st) {
+        // Auto-recover stale states: if running/finalizing for >10min, mark as failed
+        const isStuck = st.status === "running" || st.status === "finalizing";
+        if (isStuck) {
+          const heartbeat = st.last_heartbeat_at || st.updated_at;
+          const staleMs = heartbeat ? Date.now() - new Date(heartbeat).getTime() : Infinity;
+          if (staleMs > 10 * 60 * 1000) {
+            // Auto-recover: mark as failed
+            await supabase.from("project_prediction_state").update({
+              status: "failed",
+              last_error_code: "STALE_JOB",
+              last_error_message: "Job ficou preso por mais de 10 minutos e foi marcado como falho automaticamente.",
+              updated_at: new Date().toISOString(),
+            }).eq("project_id", projectData.id!);
+            // Refresh state
+            st.status = "failed";
+            st.last_error_code = "STALE_JOB";
+          }
+        }
+
+        // Detect failed promotion: state has predictions but none are is_latest
+        if (st.status === "failed" && st.predictions_count > 0 && latestCount === 0 && st.latest_batch_id) {
+          setFailedPromotion({ batchId: st.latest_batch_id, count: st.predictions_count });
+        } else {
+          setFailedPromotion(null);
+        }
       } else {
         setFailedPromotion(null);
       }
@@ -231,6 +254,7 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
 
   const handleCtaClick = (cta: { label: string; go_to_step?: number; action?: string }) => {
     if (cta.action === "retry") runScoring();
+    else if (cta.action === "finalize_promotion") recoverPromotion();
     else if (cta.go_to_step !== undefined) onBack();
   };
 

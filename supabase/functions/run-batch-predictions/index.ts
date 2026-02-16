@@ -468,6 +468,7 @@ serve(async (req) => {
         last_error_code: null,
         last_error_message: null,
         updated_at: new Date().toISOString(),
+        last_heartbeat_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
 
       // Idempotency: insert new predictions with is_latest=false, promote at end
@@ -800,12 +801,13 @@ serve(async (req) => {
     }
 
     if (hasMore) {
-      // Heartbeat: update prediction_state.updated_at so stale lock detection works
+      // Heartbeat: update prediction_state timestamps so stale lock detection works
       await supabase.from("project_prediction_state").upsert({
         project_id,
         status: "running",
         predictions_count: countBatch ?? cumulativeScored,
         updated_at: new Date().toISOString(),
+        last_heartbeat_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
 
       return new Response(JSON.stringify({
@@ -849,6 +851,7 @@ serve(async (req) => {
         predictions_count: batchCountForFinalizing,
         coverage_pct: +coveragePct.toFixed(2),
         updated_at: new Date().toISOString(),
+        last_heartbeat_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
 
       await supabase.from("project_scoring_jobs").update({
@@ -872,14 +875,36 @@ serve(async (req) => {
 
     if (promoteError) {
       console.error("[Scoring] RPC promote error:", promoteError);
-      // Fallback: update state to failed
+      // Update state to failed and return ERROR immediately
       await supabase.from("project_prediction_state").upsert({
         project_id,
         status: "failed",
+        predictions_count: cumulativeScored,
+        coverage_pct: +coveragePct.toFixed(2),
         last_error_code: "PROMOTE_RPC_FAILED",
         last_error_message: promoteError.message,
         updated_at: new Date().toISOString(),
+        last_heartbeat_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
+
+      if (jobId) {
+        await supabase.from("project_scoring_jobs").update({
+          status: "failed",
+          finished_at: new Date().toISOString(),
+          diagnostics: { ...passDiag, promote_error: promoteError.message },
+        }).eq("id", jobId);
+      }
+
+      return new Response(JSON.stringify({
+        status: "ERROR",
+        project_id, model_id: productionModelId, batch_id: batchId,
+        error_code: "PROMOTE_RPC_FAILED",
+        error_friendly: "Promoção do batch falhou. Use 'Finalizar Promoção' para tentar novamente.",
+        predictions_count: cumulativeScored,
+        coverage_pct: +coveragePct.toFixed(2),
+        warnings: [...warnings, "PROMOTE_RPC_FAILED: " + promoteError.message],
+        ctas: [{ label: "Finalizar Promoção", action: "finalize_promotion" }],
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     const promoteData = promoteResult as any;
