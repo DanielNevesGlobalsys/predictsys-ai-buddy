@@ -54,13 +54,14 @@ serve(async (req: Request) => {
 
     console.log(`[preview-split-policy] Starting for project ${project_id}`);
 
-    // Parallel fetch
-    const [aiCtxRes, dsStateRes, selectionRes, numStatsRes, projectRes] = await Promise.all([
+    // Parallel fetch (include EDA snapshot for date column ranges)
+    const [aiCtxRes, dsStateRes, selectionRes, numStatsRes, projectRes, edaSnapRes] = await Promise.all([
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("row_count, col_count").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_numeric_stats").select("column_name, min_value, max_value").eq("project_id", project_id),
       supabase.from("projects").select("dataset_rows, total_rows").eq("id", project_id).maybeSingle(),
+      supabase.from("project_eda_snapshots").select("eda_json").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
     // Fallback chain: dataset_state → projects table → numeric stats estimate
@@ -166,56 +167,174 @@ serve(async (req: Request) => {
       const validRows = Math.floor(totalRows * validPct);
       const testRows = totalRows - trainRows - validRows;
 
-      // Generate time ranges from numeric stats
-      const timeStat = (numStatsRes.data || []).find((n: any) => n.column_name === timeAnchor);
+      // --- Detect actual date range from multiple sources ---
+      const formatLocalDate = (d: Date): string => {
+        const y = d.getFullYear();
+        const m = String(d.getMonth() + 1).padStart(2, "0");
+        const day = String(d.getDate()).padStart(2, "0");
+        return `${y}-${m}-${day}`;
+      };
+
+      // Try parse a date string in multiple formats
+      const tryParseDate = (val: unknown): Date | null => {
+        if (!val) return null;
+        const s = String(val).trim();
+        // ISO / YYYY-MM-DD
+        const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+        if (isoMatch) {
+          const d = new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+          return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+        }
+        // dd/MM/yyyy
+        const brMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+        if (brMatch) {
+          const d = new Date(Number(brMatch[3]), Number(brMatch[2]) - 1, Number(brMatch[1]));
+          return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+        }
+        // Epoch number
+        const num = Number(s);
+        if (!isNaN(num) && num > 946684800000 && num < 4102444800000) {
+          return new Date(num);
+        }
+        if (!isNaN(num) && num > 946684800 && num < 4102444800) {
+          return new Date(num * 1000);
+        }
+        // Fallback: native parse
+        const d = new Date(s);
+        return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+      };
+
+      let detectedMinDate: Date | null = null;
+      let detectedMaxDate: Date | null = null;
+      let dateSourceUsed = "none";
+      let dateParseWarning = false;
+
+      // Source 1: EDA snapshot — look for time anchor column stats
+      if (edaSnapRes.data?.eda_json && timeAnchor) {
+        const eda = edaSnapRes.data.eda_json as Record<string, any>;
+        // EDA JSON may store per-column stats in various structures
+        const colStats = eda.column_stats || eda.columns || {};
+        const anchorStats = colStats[timeAnchor] || {};
+        
+        const edaMin = tryParseDate(anchorStats.min || anchorStats.min_value || anchorStats.earliest);
+        const edaMax = tryParseDate(anchorStats.max || anchorStats.max_value || anchorStats.latest);
+        
+        if (edaMin && edaMax && edaMax > edaMin) {
+          detectedMinDate = edaMin;
+          detectedMaxDate = edaMax;
+          dateSourceUsed = "eda_snapshot";
+        }
+
+        // Also check temporal_summary if available
+        if (!detectedMinDate && eda.temporal_summary) {
+          const ts = eda.temporal_summary;
+          const tsMin = tryParseDate(ts.min_date || ts.start_date);
+          const tsMax = tryParseDate(ts.max_date || ts.end_date);
+          if (tsMin && tsMax && tsMax > tsMin) {
+            detectedMinDate = tsMin;
+            detectedMaxDate = tsMax;
+            dateSourceUsed = "eda_temporal_summary";
+          }
+        }
+      }
+
+      // Source 2: Numeric stats (existing behavior — works if dates stored as epoch)
+      if (!detectedMinDate && timeAnchor) {
+        const timeStat = (numStatsRes.data || []).find((n: any) => n.column_name === timeAnchor);
+        if (timeStat?.min_value != null && timeStat?.max_value != null) {
+          const parsedMin = tryParseDate(timeStat.min_value);
+          const parsedMax = tryParseDate(timeStat.max_value);
+          if (parsedMin && parsedMax && parsedMax > parsedMin) {
+            detectedMinDate = parsedMin;
+            detectedMaxDate = parsedMax;
+            dateSourceUsed = "numeric_stats";
+          }
+        }
+      }
+
+      // Source 3: Categorical stats — top categories might contain date strings
+      if (!detectedMinDate && timeAnchor) {
+        const { data: catStats } = await supabase
+          .from("project_categorical_stats")
+          .select("top_categories")
+          .eq("project_id", project_id)
+          .eq("column_name", timeAnchor)
+          .maybeSingle();
+        
+        if (catStats?.top_categories) {
+          const cats = Array.isArray(catStats.top_categories) ? catStats.top_categories : [];
+          const parsedDates: Date[] = [];
+          let failCount = 0;
+          for (const cat of cats) {
+            const val = typeof cat === "object" ? (cat as any).value || (cat as any).category : cat;
+            const d = tryParseDate(val);
+            if (d) parsedDates.push(d);
+            else failCount++;
+          }
+          if (parsedDates.length >= 2) {
+            parsedDates.sort((a, b) => a.getTime() - b.getTime());
+            detectedMinDate = parsedDates[0];
+            detectedMaxDate = parsedDates[parsedDates.length - 1];
+            dateSourceUsed = "categorical_stats";
+            if (failCount > parsedDates.length * 0.3) {
+              dateParseWarning = true;
+            }
+          }
+        }
+      }
+
+      console.log(`[preview-split-policy] Date detection: source=${dateSourceUsed}, min=${detectedMinDate ? formatLocalDate(detectedMinDate) : "null"}, max=${detectedMaxDate ? formatLocalDate(detectedMaxDate) : "null"}`);
+
+      // Build time ranges from detected dates
       const timeRanges: { split: string; from: string; to: string }[] = [];
       let dataSpanMonths = 0;
 
-      if (timeStat && timeStat.min_value && timeStat.max_value) {
-        // Use actual data range for more accurate ranges
-        const minDate = new Date(timeStat.min_value);
-        const maxDate = new Date(timeStat.max_value);
-        const isValidDate = !isNaN(minDate.getTime()) && !isNaN(maxDate.getTime()) && minDate.getFullYear() > 1900;
+      if (detectedMinDate && detectedMaxDate && detectedMaxDate > detectedMinDate) {
+        dataSpanMonths = (detectedMaxDate.getFullYear() - detectedMinDate.getFullYear()) * 12 
+          + (detectedMaxDate.getMonth() - detectedMinDate.getMonth());
 
-        if (isValidDate) {
-          dataSpanMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
-          const totalM = totalMonths;
-          const testStart = new Date(maxDate.getFullYear(), maxDate.getMonth() - testMonths + 1, 1);
-          const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
-          const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
+        // Split points relative to max_date (ref_end), never "today"
+        const totalSpanMs = detectedMaxDate.getTime() - detectedMinDate.getTime();
+        const trainEndMs = detectedMinDate.getTime() + totalSpanMs * trainPct;
+        const validEndMs = trainEndMs + totalSpanMs * validPct;
 
-          timeRanges.push(
-            { split: "train", from: trainStart.toISOString().slice(0, 10), to: validStart.toISOString().slice(0, 10) },
-            { split: "valid", from: validStart.toISOString().slice(0, 10), to: testStart.toISOString().slice(0, 10) },
-            { split: "test", from: testStart.toISOString().slice(0, 10), to: maxDate.toISOString().slice(0, 10) },
-          );
-        } else {
-          // Fallback to now-based ranges
-          const now = new Date();
-          const testStart = new Date(now.getFullYear(), now.getMonth() - testMonths, 1);
-          const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
-          const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
-
-          timeRanges.push(
-            { split: "train", from: trainStart.toISOString().slice(0, 10), to: validStart.toISOString().slice(0, 10) },
-            { split: "valid", from: validStart.toISOString().slice(0, 10), to: testStart.toISOString().slice(0, 10) },
-            { split: "test", from: testStart.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) },
-          );
-        }
-      } else {
-        const now = new Date();
-        const testStart = new Date(now.getFullYear(), now.getMonth() - testMonths, 1);
-        const validStart = new Date(testStart.getFullYear(), testStart.getMonth() - validMonths, 1);
-        const trainStart = new Date(validStart.getFullYear(), validStart.getMonth() - trainMonths, 1);
+        const trainEnd = new Date(trainEndMs);
+        const validEnd = new Date(validEndMs);
 
         timeRanges.push(
-          { split: "train", from: trainStart.toISOString().slice(0, 10), to: validStart.toISOString().slice(0, 10) },
-          { split: "valid", from: validStart.toISOString().slice(0, 10), to: testStart.toISOString().slice(0, 10) },
-          { split: "test", from: testStart.toISOString().slice(0, 10), to: now.toISOString().slice(0, 10) },
+          { split: "train", from: formatLocalDate(detectedMinDate), to: formatLocalDate(trainEnd) },
+          { split: "valid", from: formatLocalDate(trainEnd), to: formatLocalDate(validEnd) },
+          { split: "test", from: formatLocalDate(validEnd), to: formatLocalDate(detectedMaxDate) },
         );
+      } else if (timeAnchor) {
+        // Could not detect valid dates — add gate
+        gates.push({
+          gate: "SPLIT_SANITY",
+          status: "BLOCK",
+          message: `Não foi possível detectar datas válidas na coluna "${timeAnchor}". Verifique se a coluna contém datas no formato YYYY-MM-DD ou dd/MM/yyyy.`,
+          details: { time_anchor: timeAnchor, date_source: dateSourceUsed },
+        });
       }
 
-      preview = { train_rows: trainRows, valid_rows: validRows, test_rows: testRows, time_ranges: timeRanges, notes: [] };
+      // Add parse quality warning
+      if (dateParseWarning) {
+        gates.push({
+          gate: "SPLIT_SANITY",
+          status: "WARN",
+          message: `Mais de 30% dos valores da coluna "${timeAnchor}" não puderam ser interpretados como data. As datas detectadas podem ser aproximadas.`,
+          details: { time_anchor: timeAnchor },
+        });
+      }
+
+      preview = {
+        train_rows: trainRows,
+        valid_rows: validRows,
+        test_rows: testRows,
+        time_ranges: timeRanges,
+        detected_min_date: detectedMinDate ? formatLocalDate(detectedMinDate) : null,
+        detected_max_date: detectedMaxDate ? formatLocalDate(detectedMaxDate) : null,
+        notes: [],
+      } as any;
       notes.push(`Split temporal: treino=${trainMonths}m, validação=${validMonths}m, teste=${testMonths}m`);
 
       // === TEMPORAL COVERAGE GATES ===
