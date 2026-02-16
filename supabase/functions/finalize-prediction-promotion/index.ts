@@ -28,6 +28,13 @@ Deno.serve(async (req) => {
       .eq("project_id", project_id)
       .maybeSingle();
 
+    // Update heartbeat before attempting promotion
+    await supabase.from("project_prediction_state").update({
+      status: "finalizing",
+      last_heartbeat_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    }).eq("project_id", project_id);
+
     const { data: result, error } = await supabase.rpc("rpc_promote_prediction_batch", {
       p_project_id: project_id,
       p_batch_id: batch_id,
