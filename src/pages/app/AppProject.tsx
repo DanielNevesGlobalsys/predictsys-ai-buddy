@@ -99,20 +99,26 @@ const AppProject = () => {
           });
         }
         
-        // Fetch situation data (high risk predictions)
+        // Get latest batch_id from SSOT
+        const { data: predState } = await supabase
+          .from('project_prediction_state')
+          .select('latest_batch_id')
+          .eq('project_id', projectId)
+          .maybeSingle();
+        const batchId = predState?.latest_batch_id;
+
         const { count: highRiskCount } = await supabase
           .from('predictions')
           .select('*', { count: 'exact', head: true })
           .eq('project_id', projectId)
-          .eq('is_latest', true)
+          .eq(batchId ? 'batch_id' : 'is_latest', batchId || true)
           .gte('probability_event', 0.7);
         
-        // Get segment with most high-risk
         const { data: segmentData } = await supabase
           .from('predictions')
           .select('segment')
           .eq('project_id', projectId)
-          .eq('is_latest', true)
+          .eq(batchId ? 'batch_id' : 'is_latest', batchId || true)
           .gte('probability_event', 0.7)
           .not('segment', 'is', null);
         

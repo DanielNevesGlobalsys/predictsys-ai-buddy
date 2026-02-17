@@ -119,13 +119,12 @@ export function FullReportPDFExport(props: FullReportPDFExportProps) {
           .select('context')
           .eq('project_id', props.projectId)
           .maybeSingle(),
-        // Predictions count — use select count instead of HEAD to avoid ERR_ABORTED
+        // Predictions count from SSOT
         supabase
-          .from('predictions')
-          .select('id', { count: 'exact' })
+          .from('project_prediction_state')
+          .select('predictions_count')
           .eq('project_id', props.projectId)
-          .eq('is_latest', true)
-          .limit(1),
+          .maybeSingle(),
       ]);
 
       // Dataset info
@@ -216,7 +215,7 @@ export function FullReportPDFExport(props: FullReportPDFExportProps) {
           predictionSanity: hp?.prediction_sanity ?? null,
           preflightReport: hp?.preflight_report ?? null,
           featuresBlocked: hp?.features_blocked || [],
-          predictionsCount: predictionsCountRes.count ?? 0,
+          predictionsCount: (predictionsCountRes.data as any)?.predictions_count ?? 0,
           scoreCoveragePct: scoreReport?.coverage_pct ?? null,
           batchId: scoreReport?.batch_id ?? null,
         },

@@ -92,18 +92,25 @@ const ExecutiveHome = () => {
       let projectsWithROI = 0;
       
       for (const project of projectsData || []) {
-        const { count: predictionsCount } = await supabase
-          .from('predictions')
-          .select('*', { count: 'exact', head: true })
+        // Get latest batch_id from SSOT
+        const { data: predState } = await supabase
+          .from('project_prediction_state')
+          .select('latest_batch_id, predictions_count')
           .eq('project_id', project.id)
-          .eq('is_latest', true);
-        
-        const { count: highRiskCount } = await supabase
-          .from('predictions')
-          .select('*', { count: 'exact', head: true })
-          .eq('project_id', project.id)
-          .eq('is_latest', true)
-          .gte('probability_event', 0.7);
+          .maybeSingle();
+        const batchId = predState?.latest_batch_id;
+        const predictionsCount = predState?.predictions_count ?? 0;
+
+        let highRiskCount = 0;
+        if (batchId) {
+          const { count } = await supabase
+            .from('predictions')
+            .select('*', { count: 'exact', head: true })
+            .eq('project_id', project.id)
+            .eq('batch_id', batchId)
+            .gte('probability_event', 0.7);
+          highRiskCount = count ?? 0;
+        }
         
         const { data: configData } = await supabase
           .from('project_business_config')

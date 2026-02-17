@@ -48,11 +48,18 @@ const AppProjects = () => {
         const projectsWithRisk: ProjectItem[] = [];
 
         for (const project of projectsData || []) {
+          const { data: predState } = await supabase
+            .from('project_prediction_state')
+            .select('latest_batch_id')
+            .eq('project_id', project.id)
+            .maybeSingle();
+          const batchId = predState?.latest_batch_id;
+
           const { count: highRiskCount } = await supabase
             .from('predictions')
             .select('*', { count: 'exact', head: true })
             .eq('project_id', project.id)
-            .eq('is_latest', true)
+            .eq(batchId ? 'batch_id' : 'is_latest', batchId || true)
             .gte('probability_event', 0.7);
 
           projectsWithRisk.push({

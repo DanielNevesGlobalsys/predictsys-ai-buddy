@@ -66,14 +66,17 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
     setRlsError(null);
 
     try {
-      // 5 parallel queries — prediction_state is the new SSOT
-      const [predStateRes, reportRes, totalRes, latestRes, horizonRes] = await Promise.all([
-        // A) Prediction state (SSOT)
-        supabase
-          .from("project_prediction_state")
-          .select("status, latest_batch_id, predictions_count, coverage_pct, last_error_code, last_error_message")
-          .eq("project_id", projectId)
-          .maybeSingle(),
+      // Phase 1: Get prediction state (SSOT) to determine batch_id
+      const { data: predStateData, error: predStateError } = await supabase
+        .from("project_prediction_state")
+        .select("status, latest_batch_id, predictions_count, coverage_pct, last_error_code, last_error_message")
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      const batchId = predStateData?.latest_batch_id;
+
+      // Phase 2: Parallel queries using batch_id from SSOT
+      const [reportRes, totalRes, latestRes, horizonRes] = await Promise.all([
         // B) Latest score report
         supabase
           .from("project_score_reports")
@@ -87,20 +90,22 @@ export function useDashboardDataStatus(projectId: string | undefined): Dashboard
           .from("predictions")
           .select("id", { count: "exact", head: true })
           .eq("project_id", projectId),
-        // D) Latest predictions count
-        supabase
-          .from("predictions")
-          .select("id", { count: "exact", head: true })
-          .eq("project_id", projectId)
-          .eq("is_latest", true),
+        // D) Latest predictions count — filter by batch_id
+        batchId
+          ? supabase.from("predictions").select("id", { count: "exact", head: true })
+              .eq("project_id", projectId).eq("batch_id", batchId)
+          : supabase.from("predictions").select("id", { count: "exact", head: true })
+              .eq("project_id", projectId).eq("is_latest", true),
         // E) Horizons
-        supabase
-          .from("predictions")
-          .select("horizon_days")
-          .eq("project_id", projectId)
-          .eq("is_latest", true)
-          .limit(1000),
+        batchId
+          ? supabase.from("predictions").select("horizon_days")
+              .eq("project_id", projectId).eq("batch_id", batchId).limit(1000)
+          : supabase.from("predictions").select("horizon_days")
+              .eq("project_id", projectId).eq("is_latest", true).limit(1000),
       ]);
+
+      // Combine for unified error check
+      const predStateRes = { data: predStateData, error: predStateError };
 
       // Check for RLS errors
       const errors = [predStateRes.error, reportRes.error, totalRes.error, latestRes.error, horizonRes.error].filter(Boolean);

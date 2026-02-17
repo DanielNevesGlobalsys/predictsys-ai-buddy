@@ -263,13 +263,17 @@ serve(async (req) => {
         .from('predictions')
         .select(field)
         .eq('project_id', project_id)
-        .eq('is_latest', true)
         .not(field, 'is', null)
         .limit(100);
 
+      // Prefer batch_id from SSOT over is_latest
       if (latestBatchId) {
         query = query.eq('batch_id', latestBatchId);
+      } else {
+        query = query.eq('is_latest', true);
       }
+
+      // (removed duplicate batch_id filter)
 
       const { data: segData } = await query;
 

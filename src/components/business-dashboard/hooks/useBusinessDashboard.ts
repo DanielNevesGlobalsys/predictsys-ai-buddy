@@ -2,6 +2,7 @@ import { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useDashboardMetrics } from './useDashboardMetrics';
 import { trackEventWithTiming } from '@/lib/platformTracking';
+import { getLatestBatchId } from '@/lib/getLatestBatchId';
 import type { 
   Prediction, 
   DashboardFilters, 
@@ -68,9 +69,17 @@ export function useBusinessDashboard(projectId: string) {
     if (!projectId) return;
     setLoading(true);
     try {
+      // Use batch_id from SSOT instead of is_latest
+      const batchId = await getLatestBatchId(projectId);
       let query = supabase.from('predictions').select('*')
-        .eq('project_id', projectId).eq('is_latest', true)
+        .eq('project_id', projectId)
         .lte('horizon_days', filters.horizon);
+      if (batchId) {
+        query = query.eq('batch_id', batchId);
+      } else {
+        // Legacy fallback
+        query = query.eq('is_latest', true);
+      }
       if (filters.segmentField && filters.segmentValue) {
         query = query.eq(filters.segmentField as keyof Prediction, filters.segmentValue);
       }

@@ -189,17 +189,19 @@ const StepScheduling = ({ projectData, onBack, loading, saveProject, onFinalComp
       });
     }
 
-    // Check predictions exist
-    const { count } = await supabase
-      .from("predictions")
-      .select("id", { count: "exact", head: true })
+    // Check predictions exist via SSOT
+    const { data: predState } = await supabase
+      .from("project_prediction_state")
+      .select("predictions_count, status")
       .eq("project_id", projectId)
-      .eq("is_latest", true);
+      .maybeSingle();
+    const predCount = predState?.predictions_count ?? 0;
+    const predOk = predCount > 0 && (predState?.status === 'done' || predState?.status === 'sanity_fail');
     checks.push({
       label: "Previsões válidas",
-      status: (count ?? 0) > 0 ? "pass" : "block",
-      detail: (count ?? 0) > 0 ? `${count} previsões ativas` : "Nenhuma previsão gerada",
-      cta: (count ?? 0) > 0 ? undefined : { label: "Gerar previsões", step: 6 },
+      status: predOk ? "pass" : "block",
+      detail: predOk ? `${predCount} previsões ativas` : "Nenhuma previsão gerada",
+      cta: predOk ? undefined : { label: "Gerar previsões", step: 6 },
     });
 
     // Check selection version
