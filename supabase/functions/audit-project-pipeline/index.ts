@@ -214,7 +214,7 @@ serve(async (req) => {
       supabase.from("project_numeric_stats").select("column_name, min_value, max_value, mean_value, median_value, std_value, null_count").eq("project_id", project_id),
       supabase.from("project_categorical_stats").select("column_name, distinct_count, top_categories").eq("project_id", project_id),
       supabase.from("project_models").select("id, algorithm_name, status, is_production, problem_type").eq("project_id", project_id),
-      supabase.from("predictions").select("id", { count: "exact", head: true }).eq("project_id", project_id).eq("is_latest", true),
+      supabase.from("project_prediction_state").select("predictions_count, latest_batch_id, status").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const project = projectRes.data;
@@ -231,7 +231,7 @@ serve(async (req) => {
     const numericStats = numericStatsRes.data || [];
     const categoricalStats = categoricalStatsRes.data || [];
     const models = modelsRes.data || [];
-    const predictionsCount = predictionsCountRes.count || 0;
+    const predictionsCount = (predictionsCountRes.data as any)?.predictions_count || 0;
 
     // Get metrics and feature importances for trained models
     const trainedModels = models.filter(m => m.status === "trained");

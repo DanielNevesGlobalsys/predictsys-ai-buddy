@@ -3421,19 +3421,33 @@ export type Database = {
         Args: { p_model_id: string; p_project_id: string; p_reason?: string }
         Returns: Json
       }
-      rpc_promote_prediction_batch: {
-        Args: {
-          p_batch_id: string
-          p_coverage_pct?: number
-          p_is_sanity_fail?: boolean
-          p_job_id?: string
-          p_model_id?: string
-          p_predictions_count?: number
-          p_project_id: string
-          p_selection_version?: number
-        }
-        Returns: Json
-      }
+      rpc_promote_prediction_batch:
+        | {
+            Args: {
+              p_batch_id: string
+              p_coverage_pct?: number
+              p_is_sanity_fail?: boolean
+              p_job_id?: string
+              p_model_id?: string
+              p_predictions_count?: number
+              p_project_id: string
+              p_selection_version?: number
+            }
+            Returns: Json
+          }
+        | {
+            Args: {
+              p_batch_id: string
+              p_coverage_pct?: number
+              p_is_sanity_fail?: boolean
+              p_job_id?: string
+              p_model_id?: string
+              p_predictions_count?: number
+              p_project_id: string
+              p_selection_version?: number
+            }
+            Returns: Json
+          }
       rpc_upsert_model_selection: {
         Args: {
           p_excluded_features: string[]

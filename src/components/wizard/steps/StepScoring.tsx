@@ -58,15 +58,18 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
     const init = async () => {
       setCheckingStatus(true);
       const [predRes, modelRes, stateRes] = await Promise.all([
-        supabase.from("predictions").select("id", { count: "exact", head: true })
-          .eq("project_id", projectData.id!).eq("is_latest", true),
+        // Use prediction_state count instead of scanning predictions table
+        supabase.from("project_prediction_state").select("predictions_count, latest_batch_id, status")
+          .eq("project_id", projectData.id!).maybeSingle(),
         supabase.from("project_models").select("algorithm_name")
           .eq("project_id", projectData.id!).eq("is_production", true).limit(1).maybeSingle(),
         supabase.from("project_prediction_state").select("status, latest_batch_id, predictions_count, last_error_code, last_heartbeat_at, updated_at")
           .eq("project_id", projectData.id!).maybeSingle(),
       ]);
-      const latestCount = predRes.count ?? 0;
-      setHasScoringDone(latestCount > 0);
+      const predState = predRes.data;
+      const latestCount = predState?.predictions_count ?? 0;
+      const predStatus = predState?.status;
+      setHasScoringDone(latestCount > 0 && (predStatus === 'done' || predStatus === 'sanity_fail'));
       setProductionModelName(modelRes.data?.algorithm_name || null);
 
       const st = stateRes.data;

@@ -139,10 +139,10 @@ export function useTrainingInsightContext(projectId: string | undefined) {
               .maybeSingle()
           : Promise.resolve({ data: null }),
         supabase
-          .from("predictions")
-          .select("id", { count: "exact", head: true })
+          .from("project_prediction_state")
+          .select("predictions_count")
           .eq("project_id", projectId)
-          .eq("is_latest", true),
+          .maybeSingle(),
       ]);
 
       const aiCtx = aiCtxRes.data?.context as Record<string, any> | null;
@@ -156,7 +156,7 @@ export function useTrainingInsightContext(projectId: string | undefined) {
       const qualityInfo: ModelQualityInfo = {
         model_quality_flag: hp?.model_quality_flag || null,
         baseline_metrics: hp?.baseline_metrics || null,
-        predictions_count: predictionsCountRes.count ?? null,
+        predictions_count: predictionsCountRes.data?.predictions_count ?? null,
         preflight_report: hp?.preflight_report || null,
         split_strategy: hp?.split_strategy || null,
         split_datetime_col: hp?.split_datetime_col || null,
