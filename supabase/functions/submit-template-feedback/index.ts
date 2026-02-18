@@ -48,15 +48,29 @@ serve(async (req) => {
       });
     }
 
-    // Validate project ownership
+    // Validate project access via organization membership
     const { data: project, error: projErr } = await supabase
       .from("projects")
-      .select("id, organization_id, industry, user_id")
+      .select("id, organization_id, industry")
       .eq("id", project_id)
       .single();
 
-    if (projErr || !project || project.user_id !== user.id) {
-      return new Response(JSON.stringify({ error: "project not found or not owned" }), {
+    if (projErr || !project) {
+      return new Response(JSON.stringify({ error: "project not found" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Check user belongs to the project's organization
+    const { data: membership } = await supabase
+      .from("organization_users")
+      .select("id")
+      .eq("user_id", user.id)
+      .eq("organization_id", project.organization_id)
+      .maybeSingle();
+
+    if (!membership) {
+      return new Response(JSON.stringify({ error: "not authorized for this project" }), {
         status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
