@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { applyFeatureTransforms, type ProjectFeature, type FeatureExpression } from "../_shared/feature-engineering.ts";
+import { parquetRead } from "npm:hyparquet@1.24.1";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -615,6 +616,8 @@ serve(async (req) => {
       if (reachedLimit) break;
       console.log(`[Scoring] Processing file: ${filePath}`);
 
+      const isParquetFile = filePath.toLowerCase().endsWith('.parquet') || filePath.toLowerCase().endsWith('.parq') || filePath.toLowerCase().endsWith('.pq');
+
       const { data: signedUrlData, error: signedUrlError } = await supabase.storage
         .from("datasets").createSignedUrl(filePath, 600);
 
@@ -623,111 +626,105 @@ serve(async (req) => {
         continue;
       }
 
-      const response = await fetch(signedUrlData.signedUrl);
-      if (!response.ok || !response.body) {
-        console.error(`[Scoring] HTTP error for ${filePath}: ${response.status}`);
-        continue;
-      }
+      if (isParquetFile) {
+        // ===== PARQUET PATH =====
+        console.log(`[Scoring] Parsing parquet file: ${filePath}`);
+        const response = await fetch(signedUrlData.signedUrl);
+        if (!response.ok) {
+          console.error(`[Scoring] HTTP error for ${filePath}: ${response.status}`);
+          continue;
+        }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder("utf-8");
-      let buffer = "";
-      let chunkRows: string[] = [];
-      let isFirstLineOfFile = true;
+        const arrayBuffer = await response.arrayBuffer();
+        let parquetRows: Record<string, unknown>[] = [];
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        const lineBreaks = buffer.split(/\r?\n/);
+        await parquetRead({
+          file: arrayBuffer,
+          rowFormat: "object",
+          onComplete: (data: Record<string, unknown>[]) => {
+            parquetRows = data;
+          },
+        });
 
-        for (let i = 0; i < lineBreaks.length - 1; i++) {
-          const line = lineBreaks[i].trim();
-          if (!line) continue;
+        if (parquetRows.length === 0) {
+          console.warn(`[Scoring] Empty parquet file: ${filePath}`);
+          continue;
+        }
 
-          if (isFirstFile && isFirstLineOfFile) {
-            headers = parseCSVLine(line, delimiter);
-            const headersLower = headers.map(h => h.toLowerCase().trim());
+        // Extract headers from first row
+        const parquetHeaders = Object.keys(parquetRows[0]);
 
-            // Case-insensitive feature matching
-            featureIndices = baseFeatureNames.map(name => {
-              const exact = headers.indexOf(name);
-              if (exact !== -1) return exact;
-              return headersLower.indexOf(name.toLowerCase());
-            });
+        if (isFirstFile) {
+          headers = parquetHeaders;
+          const headersLower = headers.map(h => h.toLowerCase().trim());
 
-            // Case-insensitive entity_id detection
-            let detectedEntityIdCol: string | null = null;
-            for (const candidate of entityIdCandidates) {
-              const idx = headersLower.indexOf(candidate.toLowerCase());
-              if (idx !== -1) {
-                entityIdIndex = idx;
-                detectedEntityIdCol = headers[idx];
-                break;
-              }
+          // Case-insensitive feature matching
+          featureIndices = baseFeatureNames.map(name => {
+            const exact = headers.indexOf(name);
+            if (exact !== -1) return exact;
+            return headersLower.indexOf(name.toLowerCase());
+          });
+
+          // Case-insensitive entity_id detection
+          let detectedEntityIdCol: string | null = null;
+          for (const candidate of entityIdCandidates) {
+            const idx = headersLower.indexOf(candidate.toLowerCase());
+            if (idx !== -1) {
+              entityIdIndex = idx;
+              detectedEntityIdCol = headers[idx];
+              break;
             }
+          }
 
-            // === GATE: Validate feature coverage ===
-            const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
-            const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
-            const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+          // === GATE: Validate feature coverage ===
+          const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
+          const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
+          const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
 
-            if (modelMissingPct > 20 || baseMissing.length > 0) {
-              const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
-              gates.push({
-                gate: "feature_validation",
-                status: "BLOCK",
-                message: `Features ausentes: ${missingList.join(", ")}${missingList.length < baseMissing.length + modelMissing.length ? "..." : ""} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
-              });
-              return blockResponse(
-                gates,
-                "MISSING_FEATURES",
-                "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.",
-                [
-                  { label: "Regerar Builder", go_to_step: 3 },
-                  { label: "Retreinar", go_to_step: 4 },
-                ],
-                project_id,
-                productionModelId,
-              );
-            }
+          if (modelMissingPct > 20 || baseMissing.length > 0) {
+            const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
             gates.push({
               gate: "feature_validation",
-              status: modelMissing.length > 0 ? "WARN" : "PASS",
-              message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+              status: "BLOCK",
+              message: `Features ausentes: ${missingList.join(", ")} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
             });
+            return blockResponse(gates, "MISSING_FEATURES", "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.", [
+              { label: "Regerar Builder", go_to_step: 3 },
+              { label: "Retreinar", go_to_step: 4 },
+            ], project_id, productionModelId);
+          }
+          gates.push({
+            gate: "feature_validation",
+            status: modelMissing.length > 0 ? "WARN" : "PASS",
+            message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+          });
 
-            // Segmentation: already case-insensitive
-            segmentColNames.forEach(name => {
-              const idx = headersLower.indexOf(name.toLowerCase());
-              if (idx !== -1) segmentationCandidates[name] = idx;
-            });
-            for (const [name] of Object.entries(segmentationCandidates)) {
-              if (name.includes('segment')) segmentKeyMap[name] = 'segment';
-              else if (name.includes('region') || name.includes('regiao')) segmentKeyMap[name] = 'region';
-              else if (name.includes('state') || name.includes('estado')) segmentKeyMap[name] = 'state';
-              else if (name.includes('city') || name.includes('cidade')) segmentKeyMap[name] = 'city';
-              else if (name.includes('channel') || name.includes('canal')) segmentKeyMap[name] = 'channel';
-              else if (name.includes('campaign') || name.includes('campanha')) segmentKeyMap[name] = 'campaign';
-              else if (name.includes('cohort') || name.includes('coorte')) segmentKeyMap[name] = 'cohort';
-              else if (name.includes('age') || name.includes('etaria')) segmentKeyMap[name] = 'age_group';
-              else if (name.includes('category') || name.includes('categoria')) segmentKeyMap[name] = 'product_category';
-            }
-
-            console.log(`[Scoring] Headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}, base_missing=${baseMissing.length}, model_missing=${modelMissing.length}`);
-            isFirstLineOfFile = false;
-            isFirstFile = false;
-            continue;
+          // Segmentation
+          segmentColNames.forEach(name => {
+            const idx = headersLower.indexOf(name.toLowerCase());
+            if (idx !== -1) segmentationCandidates[name] = idx;
+          });
+          for (const [name] of Object.entries(segmentationCandidates)) {
+            if (name.includes('segment')) segmentKeyMap[name] = 'segment';
+            else if (name.includes('region') || name.includes('regiao')) segmentKeyMap[name] = 'region';
+            else if (name.includes('state') || name.includes('estado')) segmentKeyMap[name] = 'state';
+            else if (name.includes('city') || name.includes('cidade')) segmentKeyMap[name] = 'city';
+            else if (name.includes('channel') || name.includes('canal')) segmentKeyMap[name] = 'channel';
+            else if (name.includes('campaign') || name.includes('campanha')) segmentKeyMap[name] = 'campaign';
+            else if (name.includes('cohort') || name.includes('coorte')) segmentKeyMap[name] = 'cohort';
+            else if (name.includes('age') || name.includes('etaria')) segmentKeyMap[name] = 'age_group';
+            else if (name.includes('category') || name.includes('categoria')) segmentKeyMap[name] = 'product_category';
           }
 
-          if (isFirstLineOfFile) {
-            const possibleHeaders = parseCSVLine(line, delimiter);
-            if (possibleHeaders.length === headers.length && possibleHeaders[0] === headers[0]) {
-              isFirstLineOfFile = false;
-              continue;
-            }
-            isFirstLineOfFile = false;
-          }
+          console.log(`[Scoring] Parquet headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}`);
+          isFirstFile = false;
+        }
+
+        // Process parquet rows - convert each row object to CSV-like string array for processChunk
+        // But processChunk expects CSV lines, so we convert rows to value arrays and call processChunk with pseudo-CSV lines
+        const chunkRows: string[] = [];
+        for (let ri = 0; ri < parquetRows.length; ri++) {
+          if (reachedLimit) break;
 
           if (globalRowIndex < pass_offset) {
             globalRowIndex++;
@@ -740,25 +737,164 @@ serve(async (req) => {
           }
 
           globalRowIndex++;
-          chunkRows.push(line);
+          // Convert parquet row to CSV-like line using headers order
+          const row = parquetRows[ri];
+          const values = headers.map(h => {
+            const v = row[h];
+            if (v === null || v === undefined) return "";
+            if (typeof v === "bigint") return String(Number(v));
+            return String(v);
+          });
+          chunkRows.push(values.join(delimiter));
 
           if (chunkRows.length >= CHUNK_SIZE) {
             await processChunk(chunkRows);
-            chunkRows = [];
+            chunkRows.length = 0;
           }
         }
-
-        if (reachedLimit) break;
-        buffer = lineBreaks[lineBreaks.length - 1];
-      }
-
-      try { await reader.cancel(); } catch (_) {}
-
-      if (!reachedLimit) {
-        if (buffer.trim()) chunkRows.push(buffer.trim());
-        if (chunkRows.length > 0) {
+        if (!reachedLimit && chunkRows.length > 0) {
           await processChunk(chunkRows);
-          chunkRows = [];
+        }
+
+      } else {
+        // ===== CSV PATH (original) =====
+        const response = await fetch(signedUrlData.signedUrl);
+        if (!response.ok || !response.body) {
+          console.error(`[Scoring] HTTP error for ${filePath}: ${response.status}`);
+          continue;
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder("utf-8");
+        let buffer = "";
+        let chunkRows: string[] = [];
+        let isFirstLineOfFile = true;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lineBreaks = buffer.split(/\r?\n/);
+
+          for (let i = 0; i < lineBreaks.length - 1; i++) {
+            const line = lineBreaks[i].trim();
+            if (!line) continue;
+
+            if (isFirstFile && isFirstLineOfFile) {
+              headers = parseCSVLine(line, delimiter);
+              const headersLower = headers.map(h => h.toLowerCase().trim());
+
+              // Case-insensitive feature matching
+              featureIndices = baseFeatureNames.map(name => {
+                const exact = headers.indexOf(name);
+                if (exact !== -1) return exact;
+                return headersLower.indexOf(name.toLowerCase());
+              });
+
+              // Case-insensitive entity_id detection
+              let detectedEntityIdCol: string | null = null;
+              for (const candidate of entityIdCandidates) {
+                const idx = headersLower.indexOf(candidate.toLowerCase());
+                if (idx !== -1) {
+                  entityIdIndex = idx;
+                  detectedEntityIdCol = headers[idx];
+                  break;
+                }
+              }
+
+              // === GATE: Validate feature coverage ===
+              const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
+              const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
+              const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+
+              if (modelMissingPct > 20 || baseMissing.length > 0) {
+                const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
+                gates.push({
+                  gate: "feature_validation",
+                  status: "BLOCK",
+                  message: `Features ausentes: ${missingList.join(", ")}${missingList.length < baseMissing.length + modelMissing.length ? "..." : ""} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
+                });
+                return blockResponse(
+                  gates,
+                  "MISSING_FEATURES",
+                  "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.",
+                  [
+                    { label: "Regerar Builder", go_to_step: 3 },
+                    { label: "Retreinar", go_to_step: 4 },
+                  ],
+                  project_id,
+                  productionModelId,
+                );
+              }
+              gates.push({
+                gate: "feature_validation",
+                status: modelMissing.length > 0 ? "WARN" : "PASS",
+                message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+              });
+
+              // Segmentation: already case-insensitive
+              segmentColNames.forEach(name => {
+                const idx = headersLower.indexOf(name.toLowerCase());
+                if (idx !== -1) segmentationCandidates[name] = idx;
+              });
+              for (const [name] of Object.entries(segmentationCandidates)) {
+                if (name.includes('segment')) segmentKeyMap[name] = 'segment';
+                else if (name.includes('region') || name.includes('regiao')) segmentKeyMap[name] = 'region';
+                else if (name.includes('state') || name.includes('estado')) segmentKeyMap[name] = 'state';
+                else if (name.includes('city') || name.includes('cidade')) segmentKeyMap[name] = 'city';
+                else if (name.includes('channel') || name.includes('canal')) segmentKeyMap[name] = 'channel';
+                else if (name.includes('campaign') || name.includes('campanha')) segmentKeyMap[name] = 'campaign';
+                else if (name.includes('cohort') || name.includes('coorte')) segmentKeyMap[name] = 'cohort';
+                else if (name.includes('age') || name.includes('etaria')) segmentKeyMap[name] = 'age_group';
+                else if (name.includes('category') || name.includes('categoria')) segmentKeyMap[name] = 'product_category';
+              }
+
+              console.log(`[Scoring] Headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}, base_missing=${baseMissing.length}, model_missing=${modelMissing.length}`);
+              isFirstLineOfFile = false;
+              isFirstFile = false;
+              continue;
+            }
+
+            if (isFirstLineOfFile) {
+              const possibleHeaders = parseCSVLine(line, delimiter);
+              if (possibleHeaders.length === headers.length && possibleHeaders[0] === headers[0]) {
+                isFirstLineOfFile = false;
+                continue;
+              }
+              isFirstLineOfFile = false;
+            }
+
+            if (globalRowIndex < pass_offset) {
+              globalRowIndex++;
+              continue;
+            }
+
+            if (totalRowsScored + totalRowsInvalid >= MAX_ROWS_PER_PASS) {
+              reachedLimit = true;
+              break;
+            }
+
+            globalRowIndex++;
+            chunkRows.push(line);
+
+            if (chunkRows.length >= CHUNK_SIZE) {
+              await processChunk(chunkRows);
+              chunkRows = [];
+            }
+          }
+
+          if (reachedLimit) break;
+          buffer = lineBreaks[lineBreaks.length - 1];
+        }
+
+        try { await reader.cancel(); } catch (_) {}
+
+        if (!reachedLimit) {
+          if (buffer.trim()) chunkRows.push(buffer.trim());
+          if (chunkRows.length > 0) {
+            await processChunk(chunkRows);
+            chunkRows = [];
+          }
         }
       }
     }
