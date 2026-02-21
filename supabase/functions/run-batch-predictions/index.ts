@@ -472,10 +472,12 @@ serve(async (req) => {
         last_heartbeat_at: new Date().toISOString(),
       }, { onConflict: "project_id" });
 
-      // Idempotency: insert new predictions with is_latest=false, promote at end
-      // Clean old non-latest predictions to prevent bloat
-      await supabase.from("predictions").delete()
-        .eq("project_id", project_id).eq("is_latest", false);
+      // Idempotency: insert new predictions with is_latest=true directly
+      // Clean old non-latest predictions to prevent bloat (best-effort)
+      try {
+        await supabase.from("predictions").delete()
+          .eq("project_id", project_id).eq("is_latest", false);
+      } catch (_) { /* non-blocking */ }
     }
 
     // ===== SCORING STATE =====
@@ -593,7 +595,7 @@ serve(async (req) => {
           predicted_class: isClassification ? predictedClass : null,
           predicted_value: isClassification ? null : predictedValue,
           potential_value: isClassification ? null : predictedValue,
-          batch_id: batchId, is_latest: false,
+          batch_id: batchId, is_latest: true,
           ...segmentValues,
           metadata: { model_id: productionModelId, model_name: productionModel.algorithm_name, selection_version: currentSelVersion }
         });
@@ -906,9 +908,8 @@ serve(async (req) => {
     const hasMore = reachedLimit;
     const elapsedMs = Date.now() - startTime;
 
-    const { count: countBatch } = await supabase
-      .from("predictions").select("id", { count: "exact", head: true })
-      .eq("project_id", project_id).eq("batch_id", batchId);
+    // Use known count — NO COUNT(*) query
+    const countBatch = cumulativeScored;
 
     const passDiag = {
       project_id, model_id: productionModelId, batch_id: batchId,
@@ -1001,12 +1002,8 @@ serve(async (req) => {
     const { data: promoteResult, error: promoteError } = await supabase.rpc("rpc_promote_prediction_batch", {
       p_project_id: project_id,
       p_batch_id: batchId,
-      p_model_id: productionModelId,
-      p_selection_version: currentSelVersion,
-      p_job_id: jobId,
       p_predictions_count: cumulativeScored,
       p_coverage_pct: +coveragePct.toFixed(2),
-      p_is_sanity_fail: isSanityFail,
     });
 
     if (promoteError) {

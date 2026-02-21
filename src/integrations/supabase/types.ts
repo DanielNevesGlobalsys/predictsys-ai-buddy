@@ -3425,12 +3425,8 @@ export type Database = {
         Args: {
           p_batch_id: string
           p_coverage_pct?: number
-          p_is_sanity_fail?: boolean
-          p_job_id?: string
-          p_model_id?: string
           p_predictions_count?: number
           p_project_id: string
-          p_selection_version?: number
         }
         Returns: Json
       }
