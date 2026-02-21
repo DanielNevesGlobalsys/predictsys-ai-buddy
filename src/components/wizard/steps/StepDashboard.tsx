@@ -48,52 +48,53 @@ const StepDashboard = ({ projectData, onBack, loading, saveProject, onFinalCompl
     if (!projectData.id) return;
     setPromoting(true);
     try {
-      let passOffset = 0;
-      let batchId: string | undefined;
-      let runningStats: any = null;
-      let totalScoredPrev = 0;
-      let totalInvalidPrev = 0;
-      let jobId: string | undefined;
-      let passes = 0;
-      const MAX_PASSES = 100;
+      // Get current prediction state to find batch_id and counts
+      const { data: predState } = await supabase
+        .from("project_prediction_state")
+        .select("latest_batch_id, predictions_count, coverage_pct")
+        .eq("project_id", projectData.id)
+        .maybeSingle();
 
-      while (passes < MAX_PASSES) {
-        passes++;
+      const batchId = predState?.latest_batch_id;
+      if (!batchId) {
+        // No batch to promote — run scoring from scratch
         const { data, error } = await supabase.functions.invoke("run-batch-predictions", {
           body: {
             project_id: projectData.id,
             horizon_days: dataStatus.bestHorizon ?? 30,
-            pass_offset: passOffset,
-            batch_id: batchId,
-            running_stats: runningStats,
-            total_scored_prev: totalScoredPrev,
-            total_invalid_prev: totalInvalidPrev,
-            job_id: jobId,
           },
         });
 
         if (error) {
           toast.error(`Erro no scoring: ${error.message}`);
-          break;
-        }
-        if (data?.status === "BLOCKED" || data?.status === "ERROR") {
+        } else if (data?.status === "BLOCKED" || data?.status === "ERROR") {
           toast.error(data.error_friendly || data.error || "Erro no scoring");
-          break;
+        } else {
+          toast.success("Scoring finalizado! Recarregando...");
+          dataStatus.refetch();
         }
-        if (data?.status === "CONTINUE" || data?.continue) {
-          passOffset = data.next_offset;
-          batchId = data.batch_id;
-          runningStats = data.running_stats;
-          totalScoredPrev = data.total_scored_prev;
-          totalInvalidPrev = data.total_invalid_prev;
-          jobId = data.job_id;
-          continue;
-        }
-        // DONE
-        toast.success("Scoring finalizado! Recarregando...");
-        dataStatus.refetch();
-        break;
+        setPromoting(false);
+        return;
       }
+
+      // Call finalize-prediction-promotion (always HTTP 200)
+      const { data, error } = await supabase.functions.invoke("finalize-prediction-promotion", {
+        body: {
+          project_id: projectData.id,
+          batch_id: batchId,
+          predictions_count: predState?.predictions_count ?? 0,
+          coverage_pct: predState?.coverage_pct ?? 0,
+        },
+      });
+
+      if (error) {
+        toast.error(`Erro na promoção: ${error.message}`);
+      } else if (data?.success === false) {
+        toast.error(data.error_friendly || "Erro na promoção do batch");
+      } else {
+        toast.success("Promoção concluída! Recarregando...");
+      }
+      dataStatus.refetch();
     } catch (err) {
       toast.error("Erro inesperado ao promover batch");
       console.error(err);

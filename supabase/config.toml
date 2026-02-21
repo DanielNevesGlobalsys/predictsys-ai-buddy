@@ -146,3 +146,6 @@ verify_jwt = false
 
 [functions.get-template-recommendations]
 verify_jwt = false
+
+[functions.finalize-prediction-promotion]
+verify_jwt = false
