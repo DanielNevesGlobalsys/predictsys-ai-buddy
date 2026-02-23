@@ -3086,6 +3086,7 @@ export type Database = {
           selected_template_id: string | null
           selected_template_params: Json | null
           target_column: string | null
+          target_quality_report: Json | null
           target_source: string
           target_suggestion_meta: Json | null
           updated_at: string
@@ -3104,6 +3105,7 @@ export type Database = {
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
+          target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string
@@ -3122,6 +3124,7 @@ export type Database = {
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
+          target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string

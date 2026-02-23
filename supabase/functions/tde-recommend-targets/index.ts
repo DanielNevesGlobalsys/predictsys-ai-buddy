@@ -170,6 +170,8 @@ interface Recommendation {
   required_signals: string[];
   expected_problem_type: string;
   is_fallback: boolean;
+  rank_reason: string;
+  expected_quality: "high" | "medium" | "low" | "unknown";
 }
 
 interface Signals {
@@ -365,6 +367,10 @@ serve(async (req) => {
 
       if (isFallback) fallbackUsed = true;
 
+      // Compute rank_reason and expected_quality
+      const rankReason = item.reasons.length > 0 ? item.reasons[0] : (isFallback ? "Template universal de fallback" : "Compatível com o dataset");
+      const expectedQuality: "high" | "medium" | "low" | "unknown" = item.score >= 0.75 ? "high" : item.score >= 0.5 ? "medium" : item.score >= 0.3 ? "low" : "unknown";
+
       recommendations.push({
         template_id: item.tid,
         confidence: Math.round(item.score * 100) / 100,
@@ -374,6 +380,8 @@ serve(async (req) => {
         required_signals: spec.required_signals,
         expected_problem_type: spec.problem_type,
         is_fallback: isFallback,
+        rank_reason: rankReason,
+        expected_quality: expectedQuality,
       });
       usedIds.add(item.tid);
     }
@@ -394,6 +402,8 @@ serve(async (req) => {
           required_signals: fbSpec.required_signals,
           expected_problem_type: fbSpec.problem_type,
           is_fallback: true,
+          rank_reason: "Template universal de fallback",
+          expected_quality: "low",
         };
         fallbackUsed = true;
       }
@@ -414,6 +424,8 @@ serve(async (req) => {
         required_signals: spec.required_signals,
         expected_problem_type: spec.problem_type,
         is_fallback: true,
+        rank_reason: "Template universal de fallback",
+        expected_quality: "low",
       });
       usedIds.add(filler);
       fallbackUsed = true;

@@ -34,6 +34,7 @@ import ProblemInferencePanel from "./ProblemInferencePanel";
 import TargetBuilderPanel from "./TargetBuilderPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
+import TargetQualityCard from "./TargetQualityCard";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -925,6 +926,14 @@ const StepTargetFeatures = ({
               </strong>
             </span>
           </div>
+        )}
+
+        {/* Target Quality Card */}
+        {projectData.id && targetColumn && appliedTargetColumn && (
+          <TargetQualityCard
+            projectId={projectData.id}
+            refreshKey={preflightRefreshKey}
+          />
         )}
 
         {/* Label builder badge */}

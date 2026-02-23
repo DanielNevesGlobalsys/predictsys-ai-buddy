@@ -158,3 +158,6 @@ verify_jwt = false
 
 [functions.activate-target-template]
 verify_jwt = false
+
+[functions.tde-evaluate-target-quality]
+verify_jwt = false
