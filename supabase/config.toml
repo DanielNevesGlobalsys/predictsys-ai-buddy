@@ -149,3 +149,6 @@ verify_jwt = false
 
 [functions.finalize-prediction-promotion]
 verify_jwt = false
+
+[functions.tde-profile-dataset]
+verify_jwt = false
