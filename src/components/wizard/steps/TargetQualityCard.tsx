@@ -45,6 +45,8 @@ interface TargetQualityReport {
   dominant_rate: number;
   classes: number;
   template_id: string | null;
+  params_hash?: string | null;
+  dataset_version?: number | null;
   quality_label: string;
   created_at: string;
 }
@@ -86,20 +88,30 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
+  const [currentSelectionVersion, setCurrentSelectionVersion] = useState<number | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     // Reset on project change to avoid stale cross-project data
     setReport(null);
     setError(null);
+    setCurrentSelectionVersion(null);
     (async () => {
-      const { data } = await supabase
-        .from("project_settings")
-        .select("target_quality_report, target_source, weak_label_result")
-        .eq("project_id", projectId)
-        .maybeSingle();
-      if (data && (data as any).target_quality_report) {
-        const r = (data as any).target_quality_report as TargetQualityReport;
+      const [{ data: settingsData }, { data: selData }] = await Promise.all([
+        supabase
+          .from("project_settings")
+          .select("target_quality_report")
+          .eq("project_id", projectId)
+          .maybeSingle(),
+        supabase
+          .from("project_model_selection")
+          .select("selection_version")
+          .eq("project_id", projectId)
+          .maybeSingle(),
+      ]);
+      if (selData) setCurrentSelectionVersion((selData as any).selection_version ?? null);
+      if (settingsData && (settingsData as any).target_quality_report) {
+        const r = (settingsData as any).target_quality_report as TargetQualityReport;
         // Validate the report has real data (not a default placeholder)
         if (r.created_at && r.quality_score != null) {
           setReport(r);
@@ -107,6 +119,10 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
       }
     })();
   }, [projectId, refreshKey]);
+
+  // Staleness detection: report's dataset_version doesn't match current selection_version
+  const isStale = report && currentSelectionVersion != null &&
+    report.dataset_version != null && report.dataset_version !== currentSelectionVersion;
 
   const evaluate = useCallback(async () => {
     if (!projectId) return;
@@ -175,6 +191,16 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
             {report ? "Reavaliar" : "Avaliar"}
           </Button>
         </div>
+
+        {/* Staleness warning */}
+        {isStale && !loading && (
+          <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>
+              Desatualizado — avaliado na v{report?.dataset_version}, seleção atual v{currentSelectionVersion}. Clique "Reavaliar".
+            </span>
+          </div>
+        )}
 
         {error && (
           <Alert className="bg-destructive/5 border-destructive/20">

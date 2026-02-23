@@ -630,13 +630,14 @@ serve(async (req) => {
 
     // ─── Load data in parallel ───────────────────────────────
 
-    const [catStatsRes, numStatsRes, aiContextRes, dsStateRes, selectionRes, projectRes] = await Promise.all([
+    const [catStatsRes, numStatsRes, aiContextRes, dsStateRes, selectionRes, projectRes, settingsRes] = await Promise.all([
       supabase.from("project_categorical_stats").select("column_name, distinct_count, top_categories").eq("project_id", project_id),
       supabase.from("project_numeric_stats").select("column_name, null_count, min_value, max_value, mean_value").eq("project_id", project_id),
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("row_count, col_count, active_dataset_ref, manifest_id").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("selection_version").eq("project_id", project_id).maybeSingle(),
       supabase.from("projects").select("dataset_rows, dataset_columns, total_rows").eq("id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("entity_key, time_anchor_column, value_column").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const catStats: CategoricalStat[] = (catStatsRes.data || []) as CategoricalStat[];
@@ -655,16 +656,28 @@ serve(async (req) => {
       );
     }
 
-    // ─── Read contract hints + intent ────────────────────────
+    // ─── Read prerequisites: SSOT (project_settings) first, then contract_hints fallback ────
 
+    const projectSettings = (settingsRes.data as Record<string, any>) || {};
     const aiContext = (aiContextRes.data?.context as Record<string, any>) || {};
     const contractHints = aiContext.contract_hints || {};
+    const tdeProfile = aiContext.tde_profile as Record<string, any> | null;
+    const tdeCandidates = tdeProfile?.candidates || {};
     const intentContract = aiContext.intent_contract || aiContext.intent || {};
     const intentBase = intentContract.intent_base || intentContract;
     const domainAdapter = intentContract.domain_adapter || {};
 
-    const entityKey: string | null = contractHints.entity_key || null;
-    const timeAnchor: string | null = contractHints.time_anchor_column || null;
+    // SSOT-first resolution chain: project_settings > contract_hints > TDE profile best candidate
+    const entityKey: string | null =
+      projectSettings.entity_key ||
+      contractHints.entity_key ||
+      (tdeCandidates.entity_candidates?.[0]?.score >= 8 ? tdeCandidates.entity_candidates[0].column : null) ||
+      null;
+    const timeAnchor: string | null =
+      projectSettings.time_anchor_column ||
+      contractHints.time_anchor_column ||
+      (tdeCandidates.time_candidates?.[0]?.score >= 8 ? tdeCandidates.time_candidates[0].column : null) ||
+      null;
     const eventCandidates: string[] = contractHints.event_candidates || domainAdapter.event_candidates || [];
     const valueCandidates: string[] = contractHints.value_candidates || domainAdapter.value_candidates || [];
     const requiresTime = intentBase.requires_time_column ?? true;
@@ -682,21 +695,33 @@ serve(async (req) => {
     const gates: GateResult[] = [];
 
     if (templateConfig.requires_entity_key && !entityKey) {
+      const entitySuggestions = (tdeCandidates.entity_candidates || []).slice(0, 5).map((c: any) => ({
+        column: c.column, score: c.score, reasons: c.reasons || [],
+      }));
       gates.push({
         gate: "ENTITY_KEY_REQUIRED",
         status: "BLOCK",
         message: "Precisamos da coluna que identifica o cliente/paciente (ID).",
-        details: "Selecione a coluna de entidade no Step 3 (EDA) ou configure manualmente.",
-      });
+        details: entitySuggestions.length > 0
+          ? `Candidatos detectados: ${entitySuggestions.map((s: any) => `${s.column}(${s.score})`).join(", ")}`
+          : "Nenhum candidato detectado. Configure manualmente.",
+        suggested_candidates: entitySuggestions,
+      } as any);
     }
 
     if (templateConfig.requires_time_anchor && !timeAnchor) {
+      const timeSuggestions = (tdeCandidates.time_candidates || []).slice(0, 5).map((c: any) => ({
+        column: c.column, score: c.score, reasons: c.reasons || [],
+      }));
       gates.push({
         gate: "TIME_ANCHOR_REQUIRED",
         status: "BLOCK",
         message: "Precisamos de uma coluna de data para calcular o target na janela temporal.",
-        details: "Selecione a coluna de data no Step 3 (EDA) ou configure manualmente.",
-      });
+        details: timeSuggestions.length > 0
+          ? `Candidatos detectados: ${timeSuggestions.map((s: any) => `${s.column}(${s.score})`).join(", ")}`
+          : "Nenhum candidato temporal detectado. Configure manualmente.",
+        suggested_candidates: timeSuggestions,
+      } as any);
     }
 
     if (templateConfig.requires_event_column && eventCandidates.length === 0) {
