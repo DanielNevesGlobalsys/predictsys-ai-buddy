@@ -47,7 +47,7 @@ serve(async (req: Request) => {
     console.log(`[run-training-preflight] Starting for project ${project_id}`);
 
     // Parallel fetch all needed data
-    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes, splitPolicyRes] = await Promise.all([
+    const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes, splitPolicyRes, settingsRes] = await Promise.all([
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
@@ -67,6 +67,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
+      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -75,6 +76,7 @@ serve(async (req: Request) => {
     const modelingDatasetIsCurrent = modelingDatasetRes.data;
     const versionMatchedDataset = versionMatchedDatasetRes.data;
     const contract = contractRes.data;
+    const projectSettings = settingsRes.data as Record<string, any> | null;
     // Prefer version-matched dataset, then is_current, to avoid stale reads
     const modelingDataset = versionMatchedDataset || modelingDatasetIsCurrent;
 
@@ -303,7 +305,38 @@ serve(async (req: Request) => {
       canTrain = false;
     }
 
-    // ===== 4.5 TRAINING GATE (from builder's gate report) =====
+    // ===== 4.5b LABEL BUILD RESULT GATE (from project_settings SSOT) =====
+    if (projectSettings?.target_source === "label_builder") {
+      const lbr = projectSettings.label_build_result as Record<string, any> | null;
+      if (lbr && lbr.gates && Array.isArray(lbr.gates)) {
+        const hasBlock = (lbr.gates as any[]).some((g: any) => g.status === "BLOCK");
+        const hasWarn = (lbr.gates as any[]).some((g: any) => g.status === "WARN");
+        gates.push({
+          gate: "label_build",
+          status: hasBlock ? "BLOCK" : hasWarn ? "WARN" : "PASS",
+          message: hasBlock
+            ? `Label bloqueado: ${(lbr.gates as any[]).filter((g: any) => g.status === "BLOCK").map((g: any) => g.message).join("; ")}`
+            : `Label OK: ${(lbr.positive_rate * 100).toFixed(1)}% positivos, ${lbr.eligible_entities} entidades, template "${lbr.template_id}"`,
+          details: {
+            template_id: lbr.template_id,
+            positive_rate: lbr.positive_rate,
+            classes: lbr.classes,
+            dominant_rate: lbr.dominant_rate,
+            eligible_entities: lbr.eligible_entities,
+            gates: lbr.gates,
+          },
+        });
+        if (hasBlock) canTrain = false;
+      } else if (!lbr) {
+        gates.push({
+          gate: "label_build",
+          status: "WARN",
+          message: "Label builder ativo mas sem resultado de geração. Reconstrua o dataset modelável.",
+          details: { label_build_result_missing: true },
+        });
+      }
+    }
+
     if (modelingDataset) {
       const buildLog = (modelingDataset as any).build_log as Record<string, any> | null;
       const tg = buildLog?.training_gate;

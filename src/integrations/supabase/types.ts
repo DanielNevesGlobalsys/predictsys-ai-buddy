@@ -3077,6 +3077,7 @@ export type Database = {
           feature_columns: Json | null
           industry: string
           industry_source: string
+          label_build_result: Json | null
           org_id: string | null
           problem_type: string | null
           project_id: string
@@ -3094,6 +3095,7 @@ export type Database = {
           feature_columns?: Json | null
           industry?: string
           industry_source?: string
+          label_build_result?: Json | null
           org_id?: string | null
           problem_type?: string | null
           project_id: string
@@ -3111,6 +3113,7 @@ export type Database = {
           feature_columns?: Json | null
           industry?: string
           industry_source?: string
+          label_build_result?: Json | null
           org_id?: string | null
           problem_type?: string | null
           project_id?: string
