@@ -34,17 +34,22 @@ const STRATEGY_MESSAGES_OK: Record<string, string> = {
 const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const { t } = useTranslation();
   const ds = useDatasetState(projectData.id);
-  const [tdeAutoTriggered, setTdeAutoTriggered] = useState(false);
+  const [tdeAutoTriggered, setTdeAutoTriggered] = useState<string | null>(null);
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
 
   useEffect(() => {
-    if (projectData.id) ds.load();
+    if (projectData.id) {
+      ds.load();
+      // Reset auto-trigger flag when project/dataset changes
+      setTdeAutoTriggered(null);
+    }
   }, [projectData.id]);
 
   // Auto-trigger TDE profile after EDA completes (idempotent, best-effort)
   const handleEDAComplete = useCallback(async () => {
-    if (!projectData.id || tdeAutoTriggered) return;
-    setTdeAutoTriggered(true);
+    const triggerId = projectData.id;
+    if (!triggerId || tdeAutoTriggered === triggerId) return;
+    setTdeAutoTriggered(triggerId);
     try {
       await supabase.functions.invoke("tde-profile-dataset", {
         body: { project_id: projectData.id },
