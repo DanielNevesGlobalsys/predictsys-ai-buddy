@@ -30,7 +30,7 @@ import { LABEL_TEMPLATES } from "@/config/labelTemplates";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
-import ProblemInferencePanel from "./ProblemInferencePanel";
+
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
@@ -40,7 +40,7 @@ import HumanLabelingCard from "./HumanLabelingCard";
 import TargetLifecycleCard from "./TargetLifecycleCard";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
-import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
+import { useProblemInference } from "@/hooks/useProblemInference";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useDatasetState } from "@/hooks/useDatasetState";
 
@@ -486,50 +486,6 @@ const StepTargetFeatures = ({
     );
   };
 
-  // ── Apply inference target suggestion ────────────────────────────
-  const handleApplyInferenceTarget = (target: SuggestedTarget, predictors: SuggestedPredictor[]) => {
-    setTargetColumn(target.column);
-    setAppliedTargetColumn(target.column);
-
-    const problemType = target.type === "regression" ? "regression" : "classification";
-    setInferredProblemType(problemType);
-
-    const colNames = new Set(columns.map((c) => c.name));
-    const recommended = predictors
-      .filter((p) => colNames.has(p.column) && p.column !== target.column)
-      .map((p) => p.column);
-
-    if (recommended.length > 0) {
-      setSelectedFeatures(recommended);
-    }
-
-    const recommendedSet = new Set(recommended);
-    const excluded = columns
-      .filter((c) => c.name !== target.column && !recommendedSet.has(c.name))
-      .map((c) => c.name);
-    setExcludedColumns(excluded);
-
-    if (initialTargetRef.current && target.column !== initialTargetRef.current && !hasChangedConfig.current) {
-      hasChangedConfig.current = true;
-      onConfigChange?.();
-    }
-
-    if (projectData.id) {
-      logProjectAuditEvent(
-        projectData.id,
-        "config_updated",
-        "config",
-        target.column,
-        { source: "lys_inference", problem_type: problemType, confidence: target.confidence }
-      ).catch(() => {});
-    }
-
-    toast({
-      title: t("inference.targetApplied", "Sugestão aplicada!"),
-      description: t("inference.targetAppliedDesc", "Target, tipo de problema e preditoras foram configurados pela Lys."),
-    });
-  };
-
   const handleSaveSettings = async (): Promise<boolean> => {
     if (!projectData.id || !targetColumn) return false;
 
@@ -759,22 +715,6 @@ const StepTargetFeatures = ({
             )}
           </div>
         )}
-        {/* Lys — orientação apenas (sem sugestões de target/features) */}
-        <ProblemInferencePanel
-          inference={inference}
-          loading={inferenceLoading}
-          error={inferenceError}
-          onGenerate={() => loadInference(true)}
-          hasEDA={hasEDA}
-          targetSource={targetSource !== "manual" ? targetSource : null}
-          onScrollToBuilder={() => {
-            document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
-          }}
-          onScrollToActiveTarget={() => {
-            document.getElementById("target-quality-card")?.scrollIntoView({ behavior: "smooth" });
-          }}
-        />
-
         {/* ═══ Unified Strategy Panel ═══ */}
         {projectData.id && (
           <div id="target-builder-panel">
