@@ -1722,6 +1722,18 @@ serve(async (req: Request) => {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
 
+    // ===== BEST-EFFORT: Trigger target lifecycle check =====
+    try {
+      console.log("[build-modeling-dataset] Triggering target lifecycle check (best-effort)...");
+      await fetch(`${supabaseUrl}/functions/v1/tde-check-target-lifecycle`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "Authorization": `Bearer ${supabaseKey}` },
+        body: JSON.stringify({ project_id }),
+      });
+    } catch (lcErr) {
+      console.warn("[build-modeling-dataset] Lifecycle check failed (non-blocking):", lcErr);
+    }
+
   } catch (error) {
     console.error("[build-modeling-dataset] Error:", error);
     return new Response(JSON.stringify({

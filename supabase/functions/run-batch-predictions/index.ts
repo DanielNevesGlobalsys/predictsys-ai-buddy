@@ -1126,6 +1126,21 @@ serve(async (req) => {
       console.warn(`[Scoring] Monitoring trigger failed (non-blocking):`, monErr);
     }
 
+    // ===== BEST-EFFORT: Trigger target lifecycle check =====
+    try {
+      console.log(`[Scoring] Triggering target lifecycle check (best-effort)...`);
+      await fetch(`${supabaseUrl}/functions/v1/tde-check-target-lifecycle`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${supabaseServiceKey}`,
+        },
+        body: JSON.stringify({ project_id }),
+      });
+    } catch (lcErr) {
+      console.warn(`[Scoring] Lifecycle check failed (non-blocking):`, lcErr);
+    }
+
     console.log(`[Scoring] DONE: ${cumulativeScored} predictions, coverage=${coveragePct.toFixed(1)}%, latest_count=${finalLatestCount}`);
 
     return new Response(JSON.stringify({

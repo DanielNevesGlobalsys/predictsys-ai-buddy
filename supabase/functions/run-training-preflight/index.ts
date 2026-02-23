@@ -638,6 +638,51 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9.3 TARGET LIFECYCLE GATE (TDE Etapa G) =====
+    {
+      const { data: lifecycleSettings } = await supabase
+        .from("project_settings")
+        .select("target_lifecycle_state")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      const tls = (lifecycleSettings as any)?.target_lifecycle_state as Record<string, any> | null;
+      if (tls && tls.target_health_score != null) {
+        const tlsScore = tls.target_health_score || 0;
+        const tlsStatus = tls.status || "ok";
+        const hasLeakageReco = tls.recommendation?.type === "fix_leakage";
+        if (tlsStatus === "alert" && hasLeakageReco) {
+          gates.push({
+            gate: "target_lifecycle",
+            status: "BLOCK",
+            message: `Ciclo de vida do target crítico (${tlsScore}/100). ${tls.recommendation?.message || "Corrija antes de treinar."}`,
+            details: { score: tlsScore, status: tlsStatus, recommendation_type: tls.recommendation?.type },
+          });
+          canTrain = false;
+        } else if (tlsStatus === "alert") {
+          gates.push({
+            gate: "target_lifecycle",
+            status: "WARN",
+            message: `Saúde do target em alerta (${tlsScore}/100). ${(tls.reasons as string[] || []).slice(0, 1).join(". ")}`,
+            details: { score: tlsScore, status: tlsStatus },
+          });
+        } else if (tlsStatus === "warn") {
+          gates.push({
+            gate: "target_lifecycle",
+            status: "WARN",
+            message: `Saúde do target regular (${tlsScore}/100). ${(tls.reasons as string[] || []).slice(0, 1).join(". ")}`,
+            details: { score: tlsScore, status: tlsStatus },
+          });
+        } else {
+          gates.push({
+            gate: "target_lifecycle",
+            status: "PASS",
+            message: `Ciclo de vida OK (${tlsScore}/100).`,
+            details: { score: tlsScore },
+          });
+        }
+      }
+    }
+
     // ===== 4.9b AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
@@ -688,6 +733,7 @@ serve(async (req: Request) => {
       target_quality: "Avaliar e corrigir qualidade do target na Etapa 3",
       weak_label_health: "Ajustar regras do Modo Assistido na Etapa 3",
       human_label_health: "Rotular mais entidades na Etapa 3",
+      target_lifecycle: "Verificar Ciclo de Vida do Target na Etapa 3",
     };
 
     const result = {

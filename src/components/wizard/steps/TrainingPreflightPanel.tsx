@@ -39,6 +39,7 @@ const GATE_ICONS: Record<string, React.ReactNode> = {
   builder: <Package className="w-3.5 h-3.5" />,
   training_gate: <Cpu className="w-3.5 h-3.5" />,
   target_quality: <Shield className="w-3.5 h-3.5" />,
+  target_lifecycle: <RefreshCw className="w-3.5 h-3.5" />,
 };
 
 const GATE_LABELS: Record<string, string> = {
@@ -50,6 +51,7 @@ const GATE_LABELS: Record<string, string> = {
   target_quality: "Qualidade",
   weak_label_health: "Assistido",
   human_label_health: "Rotulagem",
+  target_lifecycle: "Ciclo de Vida",
 };
 
 interface Props {
