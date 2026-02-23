@@ -77,6 +77,9 @@ const TargetLifecycleCard = ({ projectId, refreshKey = 0, onNavigateToStep }: Pr
 
   useEffect(() => {
     if (!projectId) return;
+    // Reset on project change to avoid stale cross-project data
+    setState(null);
+    setError(null);
     (async () => {
       const { data } = await supabase
         .from("project_settings")
@@ -85,7 +88,9 @@ const TargetLifecycleCard = ({ projectId, refreshKey = 0, onNavigateToStep }: Pr
         .maybeSingle();
       if (data) {
         const tls = (data as any).target_lifecycle_state as TargetLifecycleState | null;
-        if (tls && tls.target_health_score != null) setState(tls);
+        if (tls && tls.target_health_score != null && tls.last_checked_at) {
+          setState(tls);
+        }
       }
     })();
   }, [projectId, refreshKey]);
