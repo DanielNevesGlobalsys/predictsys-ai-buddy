@@ -1463,6 +1463,12 @@ serve(async (req) => {
       return blockResponse("NO_TARGET_SELECTED", "Nenhum target selecionado. Volte à Etapa 3.", { label: "Selecionar target", go_to_step: 3 });
     }
 
+    // ── Normalize virtual target: "label" → "_label_" when label builder is active ──
+    if (target_column === "label" && modelingDataset?.label_plan) {
+      console.log(`[Gating] Normalizing target_column "label" → "_label_" (label builder active)`);
+      target_column = "_label_";
+    }
+
     // ── Gate 3: Builder (must be current + matching selection_version) ──
     const trainingWarningsGlobal: string[] = [];
     let builderDatasetId: string | null = null;
