@@ -112,7 +112,7 @@ interface TargetBuilderPanelProps {
   labelBuilderRequired: boolean;
   recommendedTemplates?: { template_id: string; display_name: string; problem_type: string }[];
   industry?: string;
-  onBuilderReady?: (builderId: string, templateId: string) => void;
+  onBuilderReady?: (builderId: string, templateId: string, params: Record<string, any>) => void;
 }
 
 // ═══ Gate Icon ═════════════════════════════════════════════════
@@ -437,7 +437,35 @@ export default function TargetBuilderPanel({
       setResult(data as PreviewResult);
 
       if (data?.builder_status === "ready" && data?.builder_id) {
-        onBuilderReady?.(data.builder_id, selectedTemplate);
+        // Auto-activate: persist target_column="label" via edge function
+        try {
+          const templateDef = LABEL_TEMPLATES[selectedTemplate];
+          const { data: activateData, error: activateErr } = await supabase.functions.invoke(
+            "activate-target-template",
+            {
+              body: {
+                project_id: projectId,
+                template_id: selectedTemplate,
+                params: {
+                  ...params,
+                  problem_type: templateDef?.problem_type || "classification",
+                },
+              },
+            },
+          );
+          if (activateErr) {
+            console.error("[TargetBuilderPanel] Activate error:", activateErr);
+          } else if (activateData?.success) {
+            toast({
+              title: "Target definido",
+              description: "Target persistido como \"label\" (gerado automaticamente).",
+            });
+          }
+        } catch (activateEx) {
+          console.error("[TargetBuilderPanel] Activate exception:", activateEx);
+        }
+
+        onBuilderReady?.(data.builder_id, selectedTemplate, params);
       }
     } catch (err) {
       console.error("[TargetBuilderPanel] Preview error:", err);

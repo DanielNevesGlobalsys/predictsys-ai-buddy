@@ -155,3 +155,6 @@ verify_jwt = false
 
 [functions.tde-recommend-targets]
 verify_jwt = false
+
+[functions.activate-target-template]
+verify_jwt = false

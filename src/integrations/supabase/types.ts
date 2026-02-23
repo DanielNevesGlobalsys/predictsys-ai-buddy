@@ -3078,7 +3078,10 @@ export type Database = {
           org_id: string | null
           problem_type: string | null
           project_id: string
+          selected_template_id: string | null
+          selected_template_params: Json | null
           target_column: string | null
+          target_source: string
           target_suggestion_meta: Json | null
           updated_at: string
         }
@@ -3088,7 +3091,10 @@ export type Database = {
           org_id?: string | null
           problem_type?: string | null
           project_id: string
+          selected_template_id?: string | null
+          selected_template_params?: Json | null
           target_column?: string | null
+          target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string
         }
@@ -3098,7 +3104,10 @@ export type Database = {
           org_id?: string | null
           problem_type?: string | null
           project_id?: string
+          selected_template_id?: string | null
+          selected_template_params?: Json | null
           target_column?: string | null
+          target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string
         }
