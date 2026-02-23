@@ -823,6 +823,20 @@ const StepTraining = ({
                   {t("stepTraining.trainingCompleteDesc", { count: models.filter(m => m.status === "trained").length })}
                 </p>
               </div>
+              <Button
+                variant="outline"
+                size="lg"
+                onClick={() => {
+                  setTrainingComplete(false);
+                  setModels([]);
+                  setQualityResult(null);
+                  setError(null);
+                }}
+                className="mt-2"
+              >
+                <Play className="w-5 h-5 mr-2" />
+                Retreinar Modelos
+              </Button>
             </div>
           )}
         </div>
