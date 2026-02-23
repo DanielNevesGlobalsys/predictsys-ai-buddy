@@ -8,6 +8,7 @@ import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import ContractHintsSuggestions from "./ContractHintsSuggestions";
+import TDEProfileCard from "./TDEProfileCard";
 
 interface StepEDAProps {
   projectData: ProjectData;
@@ -182,6 +183,11 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
         {/* Contract Hints - Auto-detection */}
         {projectData.id && !edaBlocked && (
           <ContractHintsSuggestions projectId={projectData.id} />
+        )}
+
+        {/* TDE Profile - Dataset Structure */}
+        {projectData.id && !edaBlocked && (
+          <TDEProfileCard projectId={projectData.id} />
         )}
 
         {/* Info message */}
