@@ -255,7 +255,7 @@ const StepTargetFeatures = ({
         // TDE stores "reasons" (string[]), UI expects "reason" (string) — normalize
         const normalizeCandidate = (c: any) => ({
           column: c.column as string,
-          score: (c.score as number) || 0,
+          score: Math.min((c.score as number) || 0, 1),
           reason: Array.isArray(c.reasons) ? (c.reasons as string[]).join("; ") : (c.reason as string | undefined),
         });
         const tdeStatusCandidates = ((tdeCandidates.status_candidates || []) as any[]).map(normalizeCandidate);
@@ -787,8 +787,15 @@ const StepTargetFeatures = ({
                   key={`status-${c.column}`}
                   onClick={() => {
                     if (columns.some(col => col.name === c.column)) {
-                      handleTargetChange(c.column);
+                      setTargetColumn(c.column);
+                      setTargetSource("manual");
                       setAppliedTargetColumn(c.column);
+                      setSelectedFeatures((prev) => prev.filter((f) => f !== c.column));
+                      // Infer problem type from column type
+                      const colInfo = columns.find(col => col.name === c.column);
+                      if (colInfo && (colInfo.type === "categórico" || colInfo.type === "booleano")) {
+                        setInferredProblemType("classification");
+                      }
                       toast({
                         title: "Target aplicado",
                         description: `"${c.column}" definido como target manual.`,
@@ -810,7 +817,7 @@ const StepTargetFeatures = ({
                   <Target className="w-3 h-3" />
                   <span className="font-mono font-medium">{c.column}</span>
                   <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(c.score * 100)}%
+                    {Math.round(Math.min(c.score, 1) * 100)}%
                   </Badge>
                   {c.reason && (
                     <span className="text-muted-foreground text-[10px] max-w-[120px] truncate">{c.reason}</span>
@@ -822,9 +829,11 @@ const StepTargetFeatures = ({
                   key={`value-${c.column}`}
                   onClick={() => {
                     if (columns.some(col => col.name === c.column)) {
-                      handleTargetChange(c.column);
+                      setTargetColumn(c.column);
+                      setTargetSource("manual");
                       setAppliedTargetColumn(c.column);
                       setInferredProblemType("regression");
+                      setSelectedFeatures((prev) => prev.filter((f) => f !== c.column));
                       toast({
                         title: "Target aplicado",
                         description: `"${c.column}" definido como target (regressão).`,
@@ -849,7 +858,7 @@ const StepTargetFeatures = ({
                     valor
                   </Badge>
                   <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(c.score * 100)}%
+                    {Math.round(Math.min(c.score, 1) * 100)}%
                   </Badge>
                 </button>
               ))}
