@@ -252,8 +252,14 @@ const StepTargetFeatures = ({
         // Extract TDE profile candidates (status/event/value)
         const tdeProfile = ctx.tde_profile as Record<string, any> | null;
         const tdeCandidates = tdeProfile?.candidates || {};
-        const tdeStatusCandidates = (tdeCandidates.status_candidates || []) as { column: string; score: number; reason?: string }[];
-        const tdeValueCandidates = (tdeCandidates.value_candidates || []) as { column: string; score: number; reason?: string }[];
+        // TDE stores "reasons" (string[]), UI expects "reason" (string) — normalize
+        const normalizeCandidate = (c: any) => ({
+          column: c.column as string,
+          score: (c.score as number) || 0,
+          reason: Array.isArray(c.reasons) ? (c.reasons as string[]).join("; ") : (c.reason as string | undefined),
+        });
+        const tdeStatusCandidates = ((tdeCandidates.status_candidates || []) as any[]).map(normalizeCandidate);
+        const tdeValueCandidates = ((tdeCandidates.value_candidates || []) as any[]).map(normalizeCandidate);
         
         if (refMatch && manifestMatch) {
           setContractHints({
