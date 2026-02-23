@@ -761,6 +761,7 @@ const StepTargetFeatures = ({
         )}
         {/* Target Builder Panel (Etapa 3) */}
         {projectData.id && (
+          <div id="target-builder-panel">
           <TargetBuilderPanel
             projectId={projectData.id}
             labelBuilderRequired={intentInfo.labelBuilderRequired}
@@ -778,6 +779,7 @@ const StepTargetFeatures = ({
               setInferredProblemType(tmpl?.problem_type || "classification");
             }}
           />
+          </div>
         )}
 
         {/* Weak Supervision / Assisted Mode (Etapa E) */}
@@ -924,9 +926,14 @@ const StepTargetFeatures = ({
           loading={inferenceLoading}
           error={inferenceError}
           onGenerate={() => loadInference(true)}
-          onApplyTarget={handleApplyInferenceTarget}
-          appliedTargetColumn={appliedTargetColumn}
           hasEDA={hasEDA}
+          targetSource={targetSource !== "manual" ? targetSource : null}
+          onScrollToBuilder={() => {
+            document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+          }}
+          onScrollToActiveTarget={() => {
+            document.getElementById("target-quality-card")?.scrollIntoView({ behavior: "smooth" });
+          }}
         />
 
         {/* Column Inference Matrix (collapsible) */}
@@ -964,10 +971,12 @@ const StepTargetFeatures = ({
 
         {/* Target Quality Card */}
         {projectData.id && targetColumn && appliedTargetColumn && (
+          <div id="target-quality-card">
           <TargetQualityCard
             projectId={projectData.id}
             refreshKey={preflightRefreshKey}
           />
+          </div>
         )}
 
         {/* Target Lifecycle Card (Etapa G) */}
@@ -978,17 +987,18 @@ const StepTargetFeatures = ({
           />
         )}
 
-        {/* Label builder badge */}
+        {/* Target source badge */}
         {targetSource === "label_builder" && targetColumn === "label" && (
           <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
             <Sparkles className="w-4 h-4 text-accent" />
             <div className="flex-1">
               <p className="text-sm font-medium">
-                Target gerado automaticamente: <strong>label</strong>
+                <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] mr-2">Alvo gerado automaticamente</Badge>
+                <strong>label</strong>
               </p>
               {selectedTemplateId && LABEL_TEMPLATES[selectedTemplateId] && (
                 <p className="text-xs text-muted-foreground">
-                  Template: {LABEL_TEMPLATES[selectedTemplateId].display_name}
+                  Forma: {LABEL_TEMPLATES[selectedTemplateId].display_name}
                 </p>
               )}
             </div>
@@ -1002,6 +1012,34 @@ const StepTargetFeatures = ({
                 setAppliedTargetColumn(null);
               }}
             >
+              Trocar para manual
+            </Button>
+          </div>
+        )}
+        {targetSource === "weak_supervision" && targetColumn === "label" && (
+          <div className="flex items-center gap-2 p-3 bg-secondary/10 border border-secondary/20 rounded-lg">
+            <Sparkles className="w-4 h-4 text-secondary" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-[10px] mr-2">Alvo assistido por regras</Badge>
+                <strong>label</strong>
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => { setTargetSource("manual"); setTargetColumn(""); setAppliedTargetColumn(null); }}>
+              Trocar para manual
+            </Button>
+          </div>
+        )}
+        {targetSource === "human_labeling" && targetColumn === "label" && (
+          <div className="flex items-center gap-2 p-3 bg-primary/10 border border-primary/20 rounded-lg">
+            <Sparkles className="w-4 h-4 text-primary" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] mr-2">Alvo definido manualmente com rotulagem</Badge>
+                <strong>label</strong>
+              </p>
+            </div>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => { setTargetSource("manual"); setTargetColumn(""); setAppliedTargetColumn(null); }}>
               Trocar para manual
             </Button>
           </div>
