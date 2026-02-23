@@ -496,8 +496,9 @@ function runTrainingGate(
 
   // ========== LABEL GATE ==========
 
-  // 2.1 Target existence
-  if (!targetColData) {
+  // 2.1 Target existence — skip for label_builder virtual targets
+  const isVirtualLabel = targetCol === "label" && !targetColData;
+  if (!targetColData && !isVirtualLabel) {
     blocked_reason_code = "BLOCKED_LABEL_MISSING";
     can_train = false;
     labelWarnings.push(`Target "${targetCol}" não encontrado no dataset.`);
@@ -902,8 +903,12 @@ serve(async (req: Request) => {
     let labelBuilderId: string | null = null;
     const allBlockedReasons: string[] = [];
 
-    // ── LABEL BUILDER: If target is "_label_", load from project_label_builders ──
-    if (targetColumn === "_label_") {
+    // ── LABEL BUILDER: If target is "label" or "_label_" (virtual target from label builder) ──
+    // Also check target_source from settings to handle "label" set via activate-target-template
+    const settingsTargetSource = (settings as any)?.target_source || "manual";
+    const isLabelBuilderTarget = targetColumn === "_label_" || targetColumn === "label" || settingsTargetSource === "label_builder";
+
+    if (isLabelBuilderTarget) {
       const { data: builderData } = await supabase
         .from("project_label_builders")
         .select("*")
@@ -914,13 +919,17 @@ serve(async (req: Request) => {
         .maybeSingle();
 
       if (!builderData) {
-        allBlockedReasons.push("Target derivado selecionado (_label_), mas nenhum label builder com status 'ready' foi encontrado. Execute o Target Builder primeiro.");
+        allBlockedReasons.push("Target derivado selecionado (label), mas nenhum label builder com status 'ready' foi encontrado. Execute o Target Builder primeiro.");
         targetColumn = null;
       } else {
         labelBuilderId = builderData.id;
         targetSource = "label_builder";
         const builderParams = builderData.params as Record<string, any> || {};
         windowDays = builderParams.window_days || null;
+
+        // Resolve problem_type from template or settings
+        const templateProblemType = (settings as any)?.selected_template_params?.problem_type || "classification";
+        const resolvedOutputType = templateProblemType === "regression" ? "regression" : "binary";
 
         // Create a synthetic label plan from the builder
         labelPlan = {
@@ -929,11 +938,11 @@ serve(async (req: Request) => {
           source_columns: [],
           window_days: windowDays,
           condition: `Target derivado via template "${builderData.template_id}"`,
-          output_column: "_label_",
-          output_type: "binary",
+          output_column: "label",
+          output_type: resolvedOutputType as "binary" | "multiclass" | "regression",
         };
-        targetColumn = "_label_";
-        targetType = "binary";
+        targetColumn = "label";
+        targetType = resolvedOutputType as "binary" | "multiclass" | "regression";
 
         // Note: leakage_watchlist from domain adapter will be applied after leakageCols is initialized
 
@@ -961,8 +970,9 @@ serve(async (req: Request) => {
       else if (td?.derived_target) targetColumn = td.derived_target;
     }
 
-    if (targetColumn) {
+    if (targetColumn && targetSource !== "label_builder") {
       // ── CANONICAL TARGET RESOLVER: case-insensitive match ──
+      // Skip this validation for label_builder targets — "label" is virtual and will be materialized
       let col = enrichedColumns.find(c => c.name === targetColumn);
       if (!col) {
         // Try case-insensitive match

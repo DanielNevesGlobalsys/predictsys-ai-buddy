@@ -55,9 +55,24 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
   const [generatingContract, setGeneratingContract] = useState(false);
   const [gateWarnings, setGateWarnings] = useState<{ status: string; code: string; message: string; cta?: string }[]>([]);
 
-  // Load existing contract on mount
+  // Load existing contract + industry from SSOT on mount
   useEffect(() => {
     if (projectData.id) {
+      // Load industry from project_settings SSOT
+      supabase
+        .from("project_settings")
+        .select("industry, industry_source")
+        .eq("project_id", projectData.id)
+        .maybeSingle()
+        .then(({ data }) => {
+          if (data) {
+            const ind = (data as any).industry;
+            if (ind && ind !== "generic" && !selectedIndustry) {
+              setSelectedIndustry(ind as IndustryKey);
+            }
+          }
+        });
+
       loadContext().then((ctx) => {
         if (!ctx) return;
         const anyCtx = ctx as any;
@@ -67,7 +82,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           const normalized = normalizeIntentContract(anyCtx.intent_contract);
           if (normalized) {
             setIntentContractV2(normalized);
-            setSelectedIndustry(normalized.domain_adapter.industry as IndustryKey);
+            // Only set industry from contract if not already loaded from SSOT
+            if (!selectedIndustry) {
+              setSelectedIndustry(normalized.domain_adapter.industry as IndustryKey);
+            }
             setFormData(prev => ({
               ...prev,
               declared_objective: normalized.intent_base.declared_objective || prev.declared_objective,
@@ -83,7 +101,6 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               ...prev,
               declared_objective: anyCtx.intent.declared_objective || prev.declared_objective,
             }));
-            // Try to set industry from legacy
             if (anyCtx.intent.industry_hint && !selectedIndustry) {
               setSelectedIndustry(anyCtx.intent.industry_hint as IndustryKey);
             }
@@ -175,11 +192,26 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     }
   }, [selectedIndustry]);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (validate()) {
       const effectiveProblemType = formData.problem_type === "auto" 
         ? "classification" 
         : formData.problem_type as "classification" | "regression";
+
+      // Persist industry to project_settings SSOT
+      if (projectData.id && selectedIndustry) {
+        await supabase
+          .from("project_settings")
+          .upsert(
+            {
+              project_id: projectData.id,
+              industry: selectedIndustry,
+              industry_source: "user",
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "project_id" }
+          );
+      }
       
       onNext({
         name: formData.name,
