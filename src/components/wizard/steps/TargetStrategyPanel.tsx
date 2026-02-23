@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { extractErrorMessage } from "@/lib/extractErrorMessage";
 import { LABEL_TEMPLATES, type LabelTemplate } from "@/config/labelTemplates";
 import {
   TARGET_STRATEGIES, STRATEGY_LIST, resolveStrategyFromSignals,
@@ -75,10 +76,19 @@ interface TDERecommendResponse {
   };
 }
 
+interface ModalCandidate {
+  column: string;
+  confidence: number | null;
+  source: "ssot" | "tde_profile" | "contract_hints" | "heuristic";
+  reason?: string;
+  reasons?: string[];
+}
+
 interface GateResult {
   gate: string;
   status: "PASS" | "WARN" | "BLOCK";
   message: string;
+  suggested_candidates?: ModalCandidate[];
 }
 
 interface PreviewStats {
@@ -126,6 +136,62 @@ function normalizeConfidencePercent(score: unknown): number | null {
   if (n <= 1) return Math.round(n * 100);
   if (n <= 10) return Math.round(n * 10);
   return Math.min(Math.round(n), 100);
+}
+
+function boostEntityConfidence(column: string, baseConfidence: number | null): number | null {
+  if (baseConfidence === null) return null;
+  const normalized = column.toLowerCase();
+  let score = baseConfidence;
+
+  if (/^(id_cliente|cliente_id|customer_id|id_customer)/i.test(normalized)) score += 25;
+  else if (/^(id_|id$)|cliente|customer|account|user|usuario/i.test(normalized)) score += 12;
+
+  if (/pedido|order|produto|product|sku|item|transa(c|ç)(a|ã)o/i.test(normalized)) score -= 18;
+
+  return Math.max(5, Math.min(95, Math.round(score)));
+}
+
+function rankModalCandidates(candidates: ModalCandidate[]): ModalCandidate[] {
+  const priority: Record<ModalCandidate["source"], number> = {
+    ssot: 4,
+    tde_profile: 3,
+    contract_hints: 2,
+    heuristic: 1,
+  };
+
+  return [...candidates].sort((a, b) => {
+    const aHas = a.confidence !== null;
+    const bHas = b.confidence !== null;
+    if (aHas && bHas && a.confidence !== b.confidence) return (b.confidence ?? 0) - (a.confidence ?? 0);
+    if (aHas !== bHas) return aHas ? -1 : 1;
+    return priority[b.source] - priority[a.source] || a.column.localeCompare(b.column);
+  });
+}
+
+function mergeCandidates(...groups: ModalCandidate[][]): ModalCandidate[] {
+  const map = new Map<string, ModalCandidate>();
+
+  for (const group of groups) {
+    for (const candidate of group) {
+      const key = candidate.column;
+      const prev = map.get(key);
+      if (!prev) {
+        map.set(key, candidate);
+        continue;
+      }
+
+      const nextConfidence = candidate.confidence ?? -1;
+      const prevConfidence = prev.confidence ?? -1;
+
+      if (nextConfidence > prevConfidence) {
+        map.set(key, candidate);
+      } else if (nextConfidence === prevConfidence && candidate.source === "tde_profile" && prev.source !== "tde_profile") {
+        map.set(key, candidate);
+      }
+    }
+  }
+
+  return rankModalCandidates(Array.from(map.values()));
 }
 
 function ConfidencePill({ score }: { score: number }) {
@@ -261,6 +327,18 @@ export default function TargetStrategyPanel({
   // Prerequisites modal
   const [prereqOpen, setPrereqOpen] = useState(false);
   const [missingFields, setMissingFields] = useState<string[]>([]);
+  const [prereqCandidates, setPrereqCandidates] = useState<{
+    entity_candidates: ModalCandidate[];
+    time_candidates: ModalCandidate[];
+    value_candidates: ModalCandidate[];
+    status_candidates: ModalCandidate[];
+  }>({
+    entity_candidates: [],
+    time_candidates: [],
+    value_candidates: [],
+    status_candidates: [],
+  });
+  const activationNonceRef = useRef(0);
 
   // Expanded sections
   const [showDatasetDetails, setShowDatasetDetails] = useState(false);
@@ -344,119 +422,170 @@ export default function TargetStrategyPanel({
   }, [fetchRecommendations]);
 
   // ─── Auto-resolve & check prerequisites ──────────────────────
-  // Score threshold: TDE uses 0-10 scale, so >=8 means 80% confidence.
-  // If scores are in 0-100, normalize to 0-10 first.
-  const normalizeScore = (score: number): number => {
-    if (score > 10) return score / 10; // 0-100 → 0-10
-    return score; // already 0-10
-  };
+  const AUTO_CONF_THRESHOLD = 80;
 
-  const AUTO_CONF_THRESHOLD = 8; // score >= 8 (out of 10) = auto-resolve
+  const ENTITY_HEURISTIC = /(^(id_|id$)|cliente|customer|cpf|cnpj|patient|paciente|user|usuario|account)/i;
+  const TIME_HEURISTIC = /(data|date|dt_|emissao|purchase|created|timestamp|periodo|mes|month|ano|year|dia|day)/i;
 
-  // Name-based heuristic fallback when no profile is available
-  const ENTITY_HEURISTIC = /^(id|cliente|customer|cpf|cnpj|patient|paciente|user|usuario|entity|cod_|id_)/i;
-  const TIME_HEURISTIC = /^(data|date|dt_|emissao|purchase|created|timestamp|periodo|mes|month|ano|year|dia|day)/i;
+  const toModalCandidate = useCallback(
+    (
+      candidate: { column: string; score?: unknown; reasons?: string[] },
+      source: ModalCandidate["source"],
+      type: "entity" | "time" | "value" | "status",
+    ): ModalCandidate => {
+      const normalized = normalizeConfidencePercent(candidate.score);
+      const confidence = type === "entity"
+        ? boostEntityConfidence(candidate.column, normalized)
+        : normalized;
 
-  const autoResolvePrerequisites = useCallback(async (templateId: string): Promise<string[]> => {
+      return {
+        column: candidate.column,
+        confidence,
+        source,
+        reasons: candidate.reasons,
+        reason: candidate.reasons?.join("; "),
+      };
+    },
+    [],
+  );
+
+  const autoResolvePrerequisites = useCallback(async (templateId: string) => {
     const tmpl = LABEL_TEMPLATES[templateId];
-    if (!tmpl) return [];
+    if (!tmpl) {
+      return {
+        missing: [] as string[],
+        candidates: {
+          entity_candidates: [] as ModalCandidate[],
+          time_candidates: [] as ModalCandidate[],
+          value_candidates: [] as ModalCandidate[],
+          status_candidates: [] as ModalCandidate[],
+        },
+      };
+    }
 
-    // 1. Read current SSOT to check if already resolved
-    const { data: currentSettings } = await supabase
-      .from("project_settings")
-      .select("entity_key, time_anchor_column, value_column")
-      .eq("project_id", projectId)
-      .maybeSingle();
+    const [{ data: currentSettings }, { data: aiContextData }, { data: columnsData }] = await Promise.all([
+      supabase
+        .from("project_settings")
+        .select("entity_key, time_anchor_column, value_column, tde_profile_result")
+        .eq("project_id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectId)
+        .maybeSingle(),
+      supabase
+        .from("project_columns")
+        .select("column_name")
+        .eq("project_id", projectId),
+    ]);
 
-    const ssot = currentSettings as Record<string, any> | null;
+    const ssot = (currentSettings as Record<string, any>) || {};
+    const aiContext = (aiContextData?.context as Record<string, any>) || {};
+    const contractHints = (aiContext.contract_hints || {}) as Record<string, any>;
+    const ssotProfile = ssot.tde_profile_result as TDEProfile | null;
+    const aiProfile = aiContext.tde_profile as TDEProfile | null;
+    const effectiveProfile = ssotProfile?.candidates ? ssotProfile : profile || aiProfile;
+    const profileCandidates = effectiveProfile?.candidates;
+    const columnNames = ((columnsData || []) as Array<{ column_name: string }>).map(c => c.column_name);
+
+    const entityFromProfile = (profileCandidates?.entity_candidates || []).map((c) => toModalCandidate(c, "tde_profile", "entity"));
+    const timeFromProfile = (profileCandidates?.time_candidates || []).map((c) => toModalCandidate(c, "tde_profile", "time"));
+    const valueFromProfile = (profileCandidates?.value_candidates || []).map((c) => toModalCandidate(c, "tde_profile", "value"));
+    const statusFromProfile = (profileCandidates?.status_candidates || []).map((c) => toModalCandidate(c, "tde_profile", "status"));
+
+    const entityHeuristic = columnNames
+      .filter((name) => ENTITY_HEURISTIC.test(name))
+      .map((name) => ({
+        column: name,
+        confidence: null,
+        source: "heuristic" as const,
+        reason: "Nome da coluna sugere identificador, mas sem estatística de unicidade.",
+      }));
+
+    const timeHeuristic = columnNames
+      .filter((name) => TIME_HEURISTIC.test(name))
+      .map((name) => ({
+        column: name,
+        confidence: null,
+        source: "heuristic" as const,
+        reason: "Nome da coluna sugere data/tempo, mas sem score estatístico.",
+      }));
+
+    const entityFromHints = contractHints.entity_key
+      ? [{ column: contractHints.entity_key as string, confidence: null, source: "contract_hints" as const, reason: "Detectado em contract_hints." }]
+      : [];
+    const timeFromHints = contractHints.time_anchor_column
+      ? [{ column: contractHints.time_anchor_column as string, confidence: null, source: "contract_hints" as const, reason: "Detectado em contract_hints." }]
+      : [];
+
+    const candidates = {
+      entity_candidates: mergeCandidates(
+        ssot.entity_key ? [{ column: ssot.entity_key, confidence: null, source: "ssot" as const, reason: "Já salvo no projeto." }] : [],
+        entityFromProfile,
+        entityFromHints,
+        entityHeuristic,
+      ),
+      time_candidates: mergeCandidates(
+        ssot.time_anchor_column ? [{ column: ssot.time_anchor_column, confidence: null, source: "ssot" as const, reason: "Já salvo no projeto." }] : [],
+        timeFromProfile,
+        timeFromHints,
+        timeHeuristic,
+      ),
+      value_candidates: mergeCandidates(
+        ssot.value_column ? [{ column: ssot.value_column, confidence: null, source: "ssot" as const, reason: "Já salvo no projeto." }] : [],
+        valueFromProfile,
+      ),
+      status_candidates: mergeCandidates(statusFromProfile),
+    };
+
+    setPrereqCandidates(candidates);
 
     const resolved: Record<string, string> = {};
     const missing: string[] = [];
 
-    // 2. Build candidate sources: SSOT > profile > name heuristic
-    const cands = profile?.candidates;
-
-    // Helper: find best candidate from TDE profile
-    const bestCandidate = (key: keyof NonNullable<typeof cands>): ScoredCandidate | null => {
-      if (!cands) return null;
-      const list = cands[key];
-      if (!list?.length) return null;
-      const best = list[0];
-      return normalizeScore(best.score) >= AUTO_CONF_THRESHOLD ? best : null;
-    };
-
-    // Entity key resolution
     if (tmpl.requires_entity_key) {
-      if (ssot?.entity_key) {
-        resolved.entity_key = ssot.entity_key;
-      } else {
-        const best = bestCandidate("entity_candidates");
-        if (best) {
-          resolved.entity_key = best.column;
-        } else {
-          // Name heuristic fallback: scan all candidates for pattern match
-          const allEntityCands = cands?.entity_candidates || [];
-          const heuristicMatch = allEntityCands.find(c => ENTITY_HEURISTIC.test(c.column));
-          if (heuristicMatch && normalizeScore(heuristicMatch.score) >= 5) {
-            resolved.entity_key = heuristicMatch.column;
-          } else {
-            missing.push("entity_key");
-          }
-        }
-      }
+      const selected = candidates.entity_candidates[0];
+      if (ssot.entity_key) resolved.entity_key = ssot.entity_key;
+      else if (selected?.confidence !== null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.entity_key = selected.column;
+      else missing.push("entity_key");
     }
 
-    // Time anchor resolution
     if (tmpl.requires_time_anchor) {
-      if (ssot?.time_anchor_column) {
-        resolved.time_anchor = ssot.time_anchor_column;
-      } else {
-        const best = bestCandidate("time_candidates");
-        if (best) {
-          resolved.time_anchor = best.column;
-        } else {
-          const allTimeCands = cands?.time_candidates || [];
-          const heuristicMatch = allTimeCands.find(c => TIME_HEURISTIC.test(c.column));
-          if (heuristicMatch && normalizeScore(heuristicMatch.score) >= 5) {
-            resolved.time_anchor = heuristicMatch.column;
-          } else {
-            missing.push("time_anchor");
-          }
-        }
-      }
+      const selected = candidates.time_candidates[0];
+      if (ssot.time_anchor_column) resolved.time_anchor = ssot.time_anchor_column;
+      else if (selected?.confidence !== null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.time_anchor = selected.column;
+      else missing.push("time_anchor");
     }
 
-    // 3. Persist resolved values to SSOT (only new ones not already in SSOT)
     const updatePayload: Record<string, unknown> = {};
-    if (resolved.entity_key && resolved.entity_key !== ssot?.entity_key) {
-      updatePayload.entity_key = resolved.entity_key;
-    }
-    if (resolved.time_anchor && resolved.time_anchor !== ssot?.time_anchor_column) {
-      updatePayload.time_anchor_column = resolved.time_anchor;
-    }
+    if (resolved.entity_key && resolved.entity_key !== ssot.entity_key) updatePayload.entity_key = resolved.entity_key;
+    if (resolved.time_anchor && resolved.time_anchor !== ssot.time_anchor_column) updatePayload.time_anchor_column = resolved.time_anchor;
 
     if (Object.keys(updatePayload).length > 0) {
       updatePayload.prerequisites_resolved_at = new Date().toISOString();
-      updatePayload.prerequisites_source = "tde_auto";
+      updatePayload.prerequisites_source = "auto";
 
-      console.log("[TargetStrategyPanel] Auto-resolving prerequisites:", updatePayload);
-
-      const { error: saveErr } = await supabase
+      const { data: savedRow, error: saveErr } = await supabase
         .from("project_settings")
         .update(updatePayload as any)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .select("project_id, entity_key, time_anchor_column")
+        .maybeSingle();
 
       if (saveErr) {
-        console.error("[TargetStrategyPanel] Failed to persist prerequisites:", saveErr);
-        // On save failure, treat as missing to avoid running gates on stale SSOT
-        return [...missing, ...Object.keys(resolved).filter(k => updatePayload[k === "entity_key" ? "entity_key" : "time_anchor_column"])];
+        console.error("[TargetStrategyPanel] Failed to persist prerequisites", saveErr);
+        throw new Error(await extractErrorMessage(saveErr));
+      }
+
+      if (!savedRow) {
+        throw new Error("Não foi possível persistir pré-requisitos no projeto atual.");
       }
     }
 
-    return missing;
-  }, [profile, projectId]);
+    return { missing, candidates };
+  }, [profile, projectId, toModalCandidate]);
 
-  // ─── Select recommendation ──────────────────────────────────
   const handleSelectRecommendation = (rec: TDERecommendation) => {
     setSelectedTemplateId(rec.template_id);
     const tmpl = LABEL_TEMPLATES[rec.template_id];
@@ -470,146 +599,157 @@ export default function TargetStrategyPanel({
     setPreviewResult(null);
   };
 
+  const runPreviewAndActivation = useCallback(async () => {
+    if (!selectedTemplateId) return { hasBlock: false };
+
+    const { data, error } = await supabase.functions.invoke("preview-target-template", {
+      body: { project_id: projectId, template_id: selectedTemplateId, params },
+    });
+
+    if (error) throw error;
+    const result = data as PreviewResult;
+    setPreviewResult(result);
+
+    const blocks = (result?.gates || []).filter(g => g.status === "BLOCK");
+    const hasBlock = blocks.length > 0;
+
+    const entitySuggestions = blocks.find(g => g.gate === "ENTITY_KEY_REQUIRED")?.suggested_candidates || [];
+    const timeSuggestions = blocks.find(g => g.gate === "TIME_ANCHOR_REQUIRED")?.suggested_candidates || [];
+
+    if (entitySuggestions.length > 0 || timeSuggestions.length > 0) {
+      setPrereqCandidates((prev) => ({
+        entity_candidates: entitySuggestions.length > 0 ? mergeCandidates(prev.entity_candidates, entitySuggestions) : prev.entity_candidates,
+        time_candidates: timeSuggestions.length > 0 ? mergeCandidates(prev.time_candidates, timeSuggestions) : prev.time_candidates,
+        value_candidates: prev.value_candidates,
+        status_candidates: prev.status_candidates,
+      }));
+    }
+
+    if (result?.builder_status === "ready" && result?.builder_id && !hasBlock) {
+      const tmplDef = LABEL_TEMPLATES[selectedTemplateId];
+      const { data: activateData, error: activateErr } = await supabase.functions.invoke(
+        "activate-target-template",
+        {
+          body: {
+            project_id: projectId,
+            template_id: selectedTemplateId,
+            params: { ...params, problem_type: tmplDef?.problem_type || "classification" },
+          },
+        },
+      );
+
+      if (activateErr) {
+        console.error("[TargetStrategyPanel] Activate error:", activateErr);
+      } else if (activateData?.success) {
+        toast({
+          title: "Alvo definido com sucesso",
+          description: "O alvo foi gerado e configurado automaticamente.",
+        });
+      }
+      onBuilderReady?.(result.builder_id, selectedTemplateId, params);
+      return { hasBlock: false };
+    }
+
+    if (hasBlock) {
+      const blockMessages = blocks.map(g => g.message);
+      toast({
+        title: "Verificação falhou",
+        description: blockMessages.length > 0
+          ? blockMessages.join(" | ")
+          : "O alvo não passou nas verificações de qualidade. Ajuste os parâmetros.",
+        variant: "destructive",
+      });
+    }
+
+    return { hasBlock };
+  }, [selectedTemplateId, projectId, params, onBuilderReady, toast]);
+
   // ─── Run preview & activate ─────────────────────────────────
   const handleActivate = useCallback(async () => {
     if (!selectedTemplateId) return;
 
-    // Auto-resolve high-confidence prerequisites, only prompt for truly missing ones
-    const missing = await autoResolvePrerequisites(selectedTemplateId);
-    if (missing.length > 0) {
-      const FIELD_LABELS: Record<string, string> = {
-        entity_key: "Coluna de entidade (ID)",
-        time_anchor: "Coluna de data/tempo",
-        value_column: "Coluna de valor numérico",
-        status_column: "Coluna de status/evento",
-      };
-      toast({
-        title: "Pré-requisitos pendentes",
-        description: `Configure: ${missing.map(m => FIELD_LABELS[m] || m).join(", ")}`,
-      });
-      setMissingFields(missing);
-      setPrereqOpen(true);
-      return;
-    }
-
+    const requestId = ++activationNonceRef.current;
     setPreviewLoading(true);
+
     try {
-      // Preview
-      const { data, error } = await supabase.functions.invoke("preview-target-template", {
-        body: { project_id: projectId, template_id: selectedTemplateId, params },
-      });
-      if (error) throw error;
-      const result = data as PreviewResult;
-      setPreviewResult(result);
+      const { missing } = await autoResolvePrerequisites(selectedTemplateId);
+      if (requestId !== activationNonceRef.current) return;
 
-      const hasBlock = result?.gates?.some(g => g.status === "BLOCK");
-
-      if (result?.builder_status === "ready" && result?.builder_id && !hasBlock) {
-        // Activate
-        const tmplDef = LABEL_TEMPLATES[selectedTemplateId];
-        const { data: activateData, error: activateErr } = await supabase.functions.invoke(
-          "activate-target-template",
-          {
-            body: {
-              project_id: projectId,
-              template_id: selectedTemplateId,
-              params: { ...params, problem_type: tmplDef?.problem_type || "classification" },
-            },
-          },
-        );
-        if (activateErr) {
-          console.error("[TargetStrategyPanel] Activate error:", activateErr);
-        } else if (activateData?.success) {
-          toast({
-            title: "Alvo definido com sucesso",
-            description: "O alvo foi gerado e configurado automaticamente.",
-          });
-        }
-        onBuilderReady?.(result.builder_id, selectedTemplateId, params);
-      } else if (hasBlock) {
-        const blockMessages = result.gates.filter(g => g.status === "BLOCK").map(g => g.message);
+      if (missing.length > 0) {
+        const FIELD_LABELS: Record<string, string> = {
+          entity_key: "Coluna de entidade (ID)",
+          time_anchor: "Coluna de data/tempo",
+          value_column: "Coluna de valor numérico",
+          status_column: "Coluna de status/evento",
+        };
         toast({
-          title: "Verificação falhou",
-          description: blockMessages.length > 0
-            ? blockMessages.join(" | ")
-            : "O alvo não passou nas verificações de qualidade. Ajuste os parâmetros.",
-          variant: "destructive",
+          title: "Pré-requisitos pendentes",
+          description: `Configure: ${missing.map(m => FIELD_LABELS[m] || m).join(", ")}`,
         });
+        setMissingFields(missing);
+        setPrereqOpen(true);
+        return;
       }
+
+      await runPreviewAndActivation();
     } catch (err) {
       console.error("[TargetStrategyPanel] Preview/activate error:", err);
       toast({
         title: "Erro",
-        description: err instanceof Error ? err.message : "Tente novamente.",
+        description: await extractErrorMessage(err),
         variant: "destructive",
       });
     } finally {
-      setPreviewLoading(false);
+      if (requestId === activationNonceRef.current) {
+        setPreviewLoading(false);
+      }
     }
-  }, [projectId, selectedTemplateId, params, onBuilderReady, toast, profile, autoResolvePrerequisites]);
+  }, [selectedTemplateId, autoResolvePrerequisites, runPreviewAndActivation, toast]);
 
-  // After modal saves prerequisites, go directly to preview/gates (skip autoResolve to avoid loop)
-  const handlePrereqSave = useCallback(async (config: Record<string, string>) => {
-    // Close modal immediately and clear state to prevent reopening
-    setPrereqOpen(false);
-    setMissingFields([]);
-
-    // Small delay for DB write propagation
-    await new Promise(r => setTimeout(r, 300));
-
-    // Run preview/gates directly — prerequisites are now persisted
+  // After modal saves prerequisites, reload SSOT and re-run preview/gates safely
+  const handlePrereqSave = useCallback(async () => {
     if (!selectedTemplateId) return;
+
     setPreviewLoading(true);
     try {
-      const { data, error } = await supabase.functions.invoke("preview-target-template", {
-        body: { project_id: projectId, template_id: selectedTemplateId, params },
-      });
-      if (error) throw error;
-      const result = data as PreviewResult;
-      setPreviewResult(result);
+      const { data: ssot, error: ssotErr } = await supabase
+        .from("project_settings")
+        .select("entity_key, time_anchor_column, value_column")
+        .eq("project_id", projectId)
+        .maybeSingle();
 
-      const hasBlock = result?.gates?.some(g => g.status === "BLOCK");
+      if (ssotErr) throw ssotErr;
 
-      if (result?.builder_status === "ready" && result?.builder_id && !hasBlock) {
-        const tmplDef = LABEL_TEMPLATES[selectedTemplateId];
-        const { data: activateData, error: activateErr } = await supabase.functions.invoke(
-          "activate-target-template",
-          {
-            body: {
-              project_id: projectId,
-              template_id: selectedTemplateId,
-              params: { ...params, problem_type: tmplDef?.problem_type || "classification" },
-            },
-          },
-        );
-        if (activateErr) {
-          console.error("[TargetStrategyPanel] Activate error:", activateErr);
-        } else if (activateData?.success) {
-          toast({
-            title: "Alvo definido com sucesso",
-            description: "O alvo foi gerado e configurado automaticamente.",
-          });
-        }
-        onBuilderReady?.(result.builder_id, selectedTemplateId, params);
-      } else if (hasBlock) {
-        const blockMessages = result.gates.filter(g => g.status === "BLOCK").map(g => g.message);
-        toast({
-          title: "Verificação falhou",
-          description: blockMessages.join(" | ") || "Ajuste os parâmetros.",
-          variant: "destructive",
-        });
+      const templateDef = LABEL_TEMPLATES[selectedTemplateId];
+      const pending: string[] = [];
+      if (templateDef?.requires_entity_key && !(ssot as any)?.entity_key) pending.push("entity_key");
+      if (templateDef?.requires_time_anchor && !(ssot as any)?.time_anchor_column) pending.push("time_anchor");
+
+      if (pending.length > 0) {
+        setMissingFields(pending);
+        setPrereqOpen(true);
+        return;
+      }
+
+      const { hasBlock } = await runPreviewAndActivation();
+      if (!hasBlock) {
+        setMissingFields([]);
+        setPrereqOpen(false);
+      } else {
+        setPrereqOpen(true);
       }
     } catch (err) {
       console.error("[TargetStrategyPanel] Post-prereq preview error:", err);
       toast({
         title: "Erro",
-        description: err instanceof Error ? err.message : "Tente novamente.",
+        description: await extractErrorMessage(err),
         variant: "destructive",
       });
+      setPrereqOpen(true);
     } finally {
       setPreviewLoading(false);
     }
-  }, [selectedTemplateId, projectId, params, onBuilderReady, toast]);
+  }, [selectedTemplateId, projectId, runPreviewAndActivation, toast]);
 
   const template = selectedTemplateId ? LABEL_TEMPLATES[selectedTemplateId] : null;
   const hasBlock = previewResult?.gates?.some(g => g.status === "BLOCK");
@@ -899,21 +1039,14 @@ export default function TargetStrategyPanel({
         </div>
 
         {/* Prerequisites Modal */}
-        {profile && (
-          <TargetPrerequisitesModal
-            open={prereqOpen}
-            onOpenChange={setPrereqOpen}
-            projectId={projectId}
-            requiredFields={missingFields}
-            candidates={{
-              entity_candidates: profile.candidates.entity_candidates,
-              time_candidates: profile.candidates.time_candidates,
-              value_candidates: profile.candidates.value_candidates,
-              status_candidates: profile.candidates.status_candidates,
-            }}
-            onSave={handlePrereqSave}
-          />
-        )}
+        <TargetPrerequisitesModal
+          open={prereqOpen}
+          onOpenChange={setPrereqOpen}
+          projectId={projectId}
+          requiredFields={missingFields}
+          candidates={prereqCandidates}
+          onSave={handlePrereqSave}
+        />
       </Card>
     </TooltipProvider>
   );

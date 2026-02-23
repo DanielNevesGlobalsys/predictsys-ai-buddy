@@ -11,11 +11,15 @@ import {
 import { CheckCircle, AlertTriangle, Settings2, Loader2 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { extractErrorMessage } from "@/lib/extractErrorMessage";
 
 interface Candidate {
   column: string;
-  score: number;
-  reasons: string[];
+  score?: number | null;
+  confidence?: number | null;
+  reasons?: string[];
+  source?: "ssot" | "tde_profile" | "contract_hints" | "heuristic";
+  reason?: string;
 }
 
 interface TargetPrerequisitesModalProps {
@@ -29,7 +33,7 @@ interface TargetPrerequisitesModalProps {
     value_candidates: Candidate[];
     status_candidates: Candidate[];
   };
-  onSave: (config: Record<string, string>) => void;
+  onSave: (config: Record<string, string>) => void | Promise<void>;
 }
 
 const FIELD_META: Record<string, { label: string; description: string; candidateKey: string }> = {
@@ -68,7 +72,10 @@ function normalizeConfidenceScore(score: unknown): number | null {
   return Math.min(Math.round(n), 100);      // already 0-100
 }
 
-// Confidence label when no numeric score is meaningful
+function getCandidateConfidence(candidate: Candidate): number | null {
+  return normalizeConfidenceScore(candidate.confidence ?? candidate.score);
+}
+
 function confidenceLabel(pct: number | null): { text: string; className: string } | null {
   if (pct === null) return null;
   if (pct >= 70) return { text: "alta confiança", className: "bg-accent/20 text-accent border-accent/30" };
@@ -97,7 +104,7 @@ export default function TargetPrerequisitesModal({
       if (!meta) continue;
       const fieldCandidates = (candidates as any)[meta.candidateKey] as Candidate[] | undefined;
       if (fieldCandidates && fieldCandidates.length > 0) {
-        const pct = normalizeConfidenceScore(fieldCandidates[0].score);
+        const pct = getCandidateConfidence(fieldCandidates[0]);
         if (pct !== null && pct >= 70) {
           auto[field] = fieldCandidates[0].column;
         }
@@ -128,18 +135,27 @@ export default function TargetPrerequisitesModal({
       updatePayload.prerequisites_resolved_at = new Date().toISOString();
       updatePayload.prerequisites_source = "manual";
 
-      const { error } = await supabase
+      const { data: savedSettings, error } = await supabase
         .from("project_settings")
         .update(updatePayload as any)
-        .eq("project_id", projectId);
+        .eq("project_id", projectId)
+        .select("project_id, entity_key, time_anchor_column, value_column")
+        .maybeSingle();
 
       if (error) throw error;
+      if (!savedSettings) {
+        throw new Error("Não foi possível localizar as configurações do projeto para salvar os pré-requisitos.");
+      }
 
-      onSave(values);
-      // onSave will handle closing the modal and continuing
+      await onSave(values);
       toast({ title: "Configuração salva", description: "Pré-requisitos configurados com sucesso." });
     } catch (err) {
-      toast({ title: "Erro ao salvar", description: String(err), variant: "destructive" });
+      console.error("[TargetPrerequisitesModal] Save error:", err);
+      toast({
+        title: "Erro ao salvar",
+        description: `Erro ao salvar: ${await extractErrorMessage(err)}`,
+        variant: "destructive",
+      });
       // Keep modal open on error — don't close
     } finally {
       setSaving(false);
@@ -185,19 +201,21 @@ export default function TargetPrerequisitesModal({
                   <SelectContent className="bg-popover border border-border shadow-lg z-50">
                     {hasCandidates ? (
                       fieldCandidates.map((c) => {
-                        const pct = normalizeConfidenceScore(c.score);
+                        const pct = getCandidateConfidence(c);
                         const label = confidenceLabel(pct);
+                        const showPercent = pct !== null && c.source === "tde_profile" && pct < 100;
+                        const showAutoLabel = !showPercent;
                         return (
                           <SelectItem key={c.column} value={c.column}>
                             <div className="flex items-center gap-2">
                               <span className="font-mono text-sm">{c.column}</span>
-                              {pct !== null && pct > 0 && pct < 100 ? (
+                              {showPercent ? (
                                 <Badge variant="outline" className="text-[9px]">
                                   {pct}%
                                 </Badge>
-                              ) : label ? (
-                                <Badge variant="outline" className={`text-[9px] ${label.className}`}>
-                                  {label.text}
+                              ) : showAutoLabel ? (
+                                <Badge variant="outline" className={`text-[9px] ${label?.className ?? "border-muted-foreground/50 text-muted-foreground"}`}>
+                                  {label?.text ?? "auto"}
                                 </Badge>
                               ) : null}
                             </div>

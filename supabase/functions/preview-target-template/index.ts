@@ -668,15 +668,35 @@ serve(async (req) => {
     const domainAdapter = intentContract.domain_adapter || {};
 
     // SSOT-first resolution chain: project_settings > contract_hints > TDE profile best candidate
+    const normalizeCandidateScore = (score: unknown): number | null => {
+      if (score === null || score === undefined) return null;
+      const n = typeof score === "number" ? score : Number(score);
+      if (!Number.isFinite(n) || n < 0) return null;
+      if (n <= 1) return n * 100;
+      if (n <= 10) return n * 10;
+      return Math.min(n, 100);
+    };
+
+    const getStrongCandidate = (list: any[]): string | null => {
+      if (!Array.isArray(list) || list.length === 0) return null;
+      const scored = list
+        .map((c) => ({ column: c.column as string, confidence: normalizeCandidateScore(c.score) }))
+        .filter((c) => Boolean(c.column) && c.confidence !== null)
+        .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0));
+
+      if (!scored[0] || (scored[0].confidence ?? 0) < 80) return null;
+      return scored[0].column;
+    };
+
     const entityKey: string | null =
       projectSettings.entity_key ||
       contractHints.entity_key ||
-      (tdeCandidates.entity_candidates?.[0]?.score >= 8 ? tdeCandidates.entity_candidates[0].column : null) ||
+      getStrongCandidate(tdeCandidates.entity_candidates || []) ||
       null;
     const timeAnchor: string | null =
       projectSettings.time_anchor_column ||
       contractHints.time_anchor_column ||
-      (tdeCandidates.time_candidates?.[0]?.score >= 8 ? tdeCandidates.time_candidates[0].column : null) ||
+      getStrongCandidate(tdeCandidates.time_candidates || []) ||
       null;
     const eventCandidates: string[] = contractHints.event_candidates || domainAdapter.event_candidates || [];
     const valueCandidates: string[] = contractHints.value_candidates || domainAdapter.value_candidates || [];
