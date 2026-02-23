@@ -46,6 +46,13 @@ interface ScoredCandidate {
 
 type DatasetShape = "transactional" | "snapshot" | "events" | "timeseries";
 
+// ═══ Helpers ═══════════════════════════════════════════════════
+
+/** Convert a raw 0-10 score to a 0-95 integer percentage */
+function normalizeScore(raw: number): number {
+  return Math.min(Math.round(Math.max(raw, 0) * 10), 95);
+}
+
 // ═══ Generic adapter fallback ══════════════════════════════════
 
 const GENERIC_ADAPTER = {
