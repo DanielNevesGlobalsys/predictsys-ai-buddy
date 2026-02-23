@@ -161,3 +161,6 @@ verify_jwt = false
 
 [functions.tde-evaluate-target-quality]
 verify_jwt = false
+
+[functions.tde-generate-weak-label]
+verify_jwt = false

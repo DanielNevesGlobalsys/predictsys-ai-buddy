@@ -147,7 +147,23 @@ const UNIVERSAL_IDS = [
   "generic_event_no_activity",
   "generic_threshold_binary",
   "generic_future_sum_regression",
+  "weak_supervision_assisted",
 ];
+
+// ═══ Weak supervision pseudo-template ═════════════════════════
+TEMPLATE_REGISTRY["weak_supervision_assisted"] = {
+  template_id: "weak_supervision_assisted",
+  display_name: "Modo Assistido (Supervisão Fraca)",
+  problem_type: "classification",
+  industry: "generic",
+  requires_entity_key: false,
+  requires_time_anchor: false,
+  requires_event_column: false,
+  required_signals: [],
+  compatible_shapes: ["transactional", "events", "snapshot", "timeseries"],
+  family: ["weak", "assisted", "multi_rule", "precario"],
+  default_params: { threshold: 0.6 },
+};
 
 // ═══ Signal strength normalizer ═══════════════════════════════
 
@@ -313,6 +329,19 @@ serve(async (req) => {
       if (problemType && spec.problem_type === problemType) {
         score += 0.15;
         reasons.push(`Tipo de problema compatível (${problemType})`);
+      }
+
+      // Boost weak_supervision_assisted for precarious datasets
+      if (tid === "weak_supervision_assisted") {
+        const hasOutcome = signals.status_ok || signals.value_ok;
+        if (!hasOutcome) {
+          score += 0.20;
+          reasons.push("Dados sem outcome claro — modo assistido combina múltiplos sinais");
+        }
+        if (signals.entity_ok && signals.time_ok) {
+          score += 0.10;
+          reasons.push("Entidade e tempo detectados — boa base para regras temporais");
+        }
       }
 
       // +0.15 max for required_signals satisfaction

@@ -85,7 +85,7 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
     (async () => {
       const { data } = await supabase
         .from("project_settings")
-        .select("target_quality_report")
+        .select("target_quality_report, target_source, weak_label_result")
         .eq("project_id", projectId)
         .maybeSingle();
       if (data && (data as any).target_quality_report) {
