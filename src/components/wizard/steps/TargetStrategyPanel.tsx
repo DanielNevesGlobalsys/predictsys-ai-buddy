@@ -118,8 +118,23 @@ const SHAPE_LABELS: Record<string, string> = {
   timeseries: "Série temporal",
 };
 
+// Normalize score from any scale (0-1, 0-10, 0-100) to 0-100 or null
+function normalizeConfidencePercent(score: unknown): number | null {
+  if (score === null || score === undefined) return null;
+  const n = typeof score === "number" ? score : parseFloat(String(score));
+  if (!Number.isFinite(n) || n < 0) return null;
+  if (n <= 1) return Math.round(n * 100);
+  if (n <= 10) return Math.round(n * 10);
+  return Math.min(Math.round(n), 100);
+}
+
 function ConfidencePill({ score }: { score: number }) {
-  const pct = Math.min(Math.round(score * 10), 100);
+  const pct = normalizeConfidencePercent(score);
+  if (pct === null || pct <= 0) return null;
+  if (pct >= 100) {
+    // Don't show 100% — use label instead
+    return <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">alta confiança</Badge>;
+  }
   if (pct >= 70) return <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">{pct}%</Badge>;
   if (pct >= 40) return <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]">{pct}%</Badge>;
   return <Badge variant="outline" className="text-[10px]">{pct}%</Badge>;
@@ -533,12 +548,68 @@ export default function TargetStrategyPanel({
     }
   }, [projectId, selectedTemplateId, params, onBuilderReady, toast, profile, autoResolvePrerequisites]);
 
+  // After modal saves prerequisites, go directly to preview/gates (skip autoResolve to avoid loop)
   const handlePrereqSave = useCallback(async (config: Record<string, string>) => {
-    // Prerequisites were saved by the modal, now retry activation
-    // Small delay to ensure DB write propagation
+    // Close modal immediately and clear state to prevent reopening
+    setPrereqOpen(false);
+    setMissingFields([]);
+
+    // Small delay for DB write propagation
     await new Promise(r => setTimeout(r, 300));
-    handleActivate();
-  }, [handleActivate]);
+
+    // Run preview/gates directly — prerequisites are now persisted
+    if (!selectedTemplateId) return;
+    setPreviewLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("preview-target-template", {
+        body: { project_id: projectId, template_id: selectedTemplateId, params },
+      });
+      if (error) throw error;
+      const result = data as PreviewResult;
+      setPreviewResult(result);
+
+      const hasBlock = result?.gates?.some(g => g.status === "BLOCK");
+
+      if (result?.builder_status === "ready" && result?.builder_id && !hasBlock) {
+        const tmplDef = LABEL_TEMPLATES[selectedTemplateId];
+        const { data: activateData, error: activateErr } = await supabase.functions.invoke(
+          "activate-target-template",
+          {
+            body: {
+              project_id: projectId,
+              template_id: selectedTemplateId,
+              params: { ...params, problem_type: tmplDef?.problem_type || "classification" },
+            },
+          },
+        );
+        if (activateErr) {
+          console.error("[TargetStrategyPanel] Activate error:", activateErr);
+        } else if (activateData?.success) {
+          toast({
+            title: "Alvo definido com sucesso",
+            description: "O alvo foi gerado e configurado automaticamente.",
+          });
+        }
+        onBuilderReady?.(result.builder_id, selectedTemplateId, params);
+      } else if (hasBlock) {
+        const blockMessages = result.gates.filter(g => g.status === "BLOCK").map(g => g.message);
+        toast({
+          title: "Verificação falhou",
+          description: blockMessages.join(" | ") || "Ajuste os parâmetros.",
+          variant: "destructive",
+        });
+      }
+    } catch (err) {
+      console.error("[TargetStrategyPanel] Post-prereq preview error:", err);
+      toast({
+        title: "Erro",
+        description: err instanceof Error ? err.message : "Tente novamente.",
+        variant: "destructive",
+      });
+    } finally {
+      setPreviewLoading(false);
+    }
+  }, [selectedTemplateId, projectId, params, onBuilderReady, toast]);
 
   const template = selectedTemplateId ? LABEL_TEMPLATES[selectedTemplateId] : null;
   const hasBlock = previewResult?.gates?.some(g => g.status === "BLOCK");
