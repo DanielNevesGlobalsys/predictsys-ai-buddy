@@ -259,7 +259,8 @@ const StepTargetFeatures = ({
         // TDE stores "reasons" (string[]), UI expects "reason" (string) — normalize
         const normalizeCandidate = (c: any) => ({
           column: c.column as string,
-          score: Math.min((c.score as number) || 0, 1),
+          score: Math.min((c.score as number) || 0, 95),
+          reasons: Array.isArray(c.reasons) ? (c.reasons as string[]) : [],
           reason: Array.isArray(c.reasons) ? (c.reasons as string[]).join("; ") : (c.reason as string | undefined),
         });
         const tdeStatusCandidates = ((tdeCandidates.status_candidates || []) as any[]).map(normalizeCandidate);
@@ -863,10 +864,10 @@ const StepTargetFeatures = ({
                   <Target className="w-3 h-3" />
                   <span className="font-mono font-medium">{c.column}</span>
                   <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(Math.min(c.score, 1) * 100)}%
+                    {Math.round(c.score)}%
                   </Badge>
                   {c.reason && (
-                    <span className="text-muted-foreground text-[10px] max-w-[120px] truncate">{c.reason}</span>
+                    <span className="text-muted-foreground text-[10px] max-w-[120px] truncate" title={c.reason}>{c.reason}</span>
                   )}
                 </button>
               ))}
@@ -909,7 +910,7 @@ const StepTargetFeatures = ({
                     valor
                   </Badge>
                   <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(Math.min(c.score, 1) * 100)}%
+                    {Math.round(c.score)}%
                   </Badge>
                 </button>
               ))}
