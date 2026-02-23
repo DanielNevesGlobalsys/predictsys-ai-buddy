@@ -32,6 +32,7 @@ import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
 import TargetBuilderPanel from "./TargetBuilderPanel";
+import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
 import TargetQualityCard from "./TargetQualityCard";
@@ -759,26 +760,24 @@ const StepTargetFeatures = ({
             )}
           </div>
         )}
-        {/* Target Builder Panel (Etapa 3) */}
+        {/* ═══ Unified Strategy Panel ═══ */}
         {projectData.id && (
           <div id="target-builder-panel">
-          <TargetBuilderPanel
-            projectId={projectData.id}
-            labelBuilderRequired={intentInfo.labelBuilderRequired}
-            recommendedTemplates={intentInfo.recommendedTemplates}
-            industry={intentInfo.industry}
-            onBuilderReady={(builderId, templateId, templateParams) => {
-              setLabelBuilderId(builderId);
-              setLabelTemplateId(templateId);
-              // Set target to "label" (what build-modeling-dataset expects)
-              setTargetColumn("label");
-              setTargetSource("label_builder");
-              setSelectedTemplateId(templateId);
-              setAppliedTargetColumn("label");
-              const tmpl = LABEL_TEMPLATES[templateId];
-              setInferredProblemType(tmpl?.problem_type || "classification");
-            }}
-          />
+            <TargetStrategyPanel
+              projectId={projectData.id}
+              industry={intentInfo.industry}
+              onBuilderReady={(builderId, templateId, templateParams) => {
+                setLabelBuilderId(builderId);
+                setLabelTemplateId(templateId);
+                setTargetColumn("label");
+                setTargetSource("label_builder");
+                setSelectedTemplateId(templateId);
+                setAppliedTargetColumn("label");
+                const tmpl = LABEL_TEMPLATES[templateId];
+                setInferredProblemType(tmpl?.problem_type || "classification");
+                setPreflightRefreshKey(k => k + 1);
+              }}
+            />
           </div>
         )}
 
@@ -810,114 +809,6 @@ const StepTargetFeatures = ({
               setPreflightRefreshKey(k => k + 1);
             }}
           />
-        )}
-
-        {/* TDE Status/Event Candidate Suggestions */}
-        {contractHints != null &&
-          targetSource !== "label_builder" &&
-          ((contractHints.tde_status_candidates?.length ?? 0) > 0 ||
-           (contractHints.tde_value_candidates?.length ?? 0) > 0) && (
-          <div className="p-4 rounded-lg border border-secondary/30 bg-secondary/5 space-y-3">
-            <div className="flex items-center gap-2">
-              <Sparkles className="w-4 h-4 text-secondary" />
-              <h4 className="text-sm font-semibold">Sugestões de coluna-alvo (detectadas pela Lys)</h4>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Colunas identificadas automaticamente como candidatas a target preditivo. Clique para usar como target manual.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              {(contractHints.tde_status_candidates || []).map((c) => (
-                <button
-                  key={`status-${c.column}`}
-                  onClick={async () => {
-                    if (columns.some(col => col.name === c.column)) {
-                      setTargetColumn(c.column);
-                      setTargetSource("manual");
-                      setAppliedTargetColumn(c.column);
-                      setSelectedFeatures((prev) => prev.filter((f) => f !== c.column));
-                      // Infer problem type from column type
-                      const colInfo = columns.find(col => col.name === c.column);
-                      if (colInfo && (colInfo.type === "categórico" || colInfo.type === "booleano")) {
-                        setInferredProblemType("classification");
-                      }
-                      // Persist target_source change to DB
-                      await supabase
-                        .from("project_settings")
-                        .update({ target_source: "manual", target_column: c.column, selected_template_id: null } as any)
-                        .eq("project_id", projectData.id);
-                      toast({
-                        title: "Target aplicado",
-                        description: `"${c.column}" definido como target manual.`,
-                      });
-                    } else {
-                      toast({
-                        title: "Coluna não encontrada",
-                        description: `"${c.column}" não está disponível no dataset atual.`,
-                        variant: "destructive",
-                      });
-                    }
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs transition-all hover:shadow-sm cursor-pointer ${
-                    appliedTargetColumn === c.column
-                      ? "border-primary bg-primary/10 text-primary font-medium"
-                      : "border-secondary/40 bg-background hover:border-secondary/60"
-                  }`}
-                >
-                  <Target className="w-3 h-3" />
-                  <span className="font-mono font-medium">{c.column}</span>
-                  <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(c.score)}%
-                  </Badge>
-                  {c.reason && (
-                    <span className="text-muted-foreground text-[10px] max-w-[120px] truncate" title={c.reason}>{c.reason}</span>
-                  )}
-                </button>
-              ))}
-              {(contractHints.tde_value_candidates || []).map((c) => (
-                <button
-                  key={`value-${c.column}`}
-                  onClick={async () => {
-                    if (columns.some(col => col.name === c.column)) {
-                      setTargetColumn(c.column);
-                      setTargetSource("manual");
-                      setAppliedTargetColumn(c.column);
-                      setInferredProblemType("regression");
-                      setSelectedFeatures((prev) => prev.filter((f) => f !== c.column));
-                      // Persist target_source change to DB
-                      await supabase
-                        .from("project_settings")
-                        .update({ target_source: "manual", target_column: c.column, selected_template_id: null } as any)
-                        .eq("project_id", projectData.id);
-                      toast({
-                        title: "Target aplicado",
-                        description: `"${c.column}" definido como target (regressão).`,
-                      });
-                    } else {
-                      toast({
-                        title: "Coluna não encontrada",
-                        description: `"${c.column}" não está disponível no dataset atual.`,
-                        variant: "destructive",
-                      });
-                    }
-                  }}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs transition-all hover:shadow-sm cursor-pointer ${
-                    appliedTargetColumn === c.column
-                      ? "border-primary bg-primary/10 text-primary font-medium"
-                      : "border-accent/40 bg-background hover:border-accent/60"
-                  }`}
-                >
-                  <Target className="w-3 h-3" />
-                  <span className="font-mono font-medium">{c.column}</span>
-                  <Badge variant="outline" className="text-[9px] py-0 px-1">
-                    valor
-                  </Badge>
-                  <Badge variant="secondary" className="text-[9px] py-0 px-1">
-                    {Math.round(c.score)}%
-                  </Badge>
-                </button>
-              ))}
-            </div>
-          </div>
         )}
 
         {/* Problem Inference Panel (replaces old Lys suggestions) */}
