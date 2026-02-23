@@ -314,20 +314,54 @@ export default function TargetStrategyPanel({
     fetchRecommendations();
   }, [fetchRecommendations]);
 
-  // ─── Check prerequisites ─────────────────────────────────────
-  const checkPrerequisites = (templateId: string): string[] => {
+  // ─── Auto-resolve & check prerequisites ──────────────────────
+  const AUTO_CONF_THRESHOLD = 8; // score >= 8 (out of 10) = auto-resolve
+
+  const autoResolvePrerequisites = useCallback(async (templateId: string): Promise<string[]> => {
     const tmpl = LABEL_TEMPLATES[templateId];
     if (!tmpl) return [];
-    const missing: string[] = [];
     const cands = profile?.candidates;
-    if (tmpl.requires_entity_key && (!cands?.entity_candidates?.length || cands.entity_candidates[0].score < 6)) {
-      missing.push("entity_key");
+    if (!cands) return [];
+
+    const resolved: Record<string, string> = {};
+    const missing: string[] = [];
+
+    // Entity key
+    if (tmpl.requires_entity_key) {
+      const best = cands.entity_candidates?.[0];
+      if (best && best.score >= AUTO_CONF_THRESHOLD) {
+        resolved.entity_key = best.column;
+      } else {
+        missing.push("entity_key");
+      }
     }
-    if (tmpl.requires_time_anchor && (!cands?.time_candidates?.length || cands.time_candidates[0].score < 6)) {
-      missing.push("time_anchor");
+
+    // Time anchor
+    if (tmpl.requires_time_anchor) {
+      const best = cands.time_candidates?.[0];
+      if (best && best.score >= AUTO_CONF_THRESHOLD) {
+        resolved.time_anchor = best.column;
+      } else {
+        missing.push("time_anchor");
+      }
     }
+
+    // If we have auto-resolved values, persist them to SSOT
+    if (Object.keys(resolved).length > 0) {
+      const updatePayload: Record<string, unknown> = {};
+      if (resolved.entity_key) updatePayload.entity_key = resolved.entity_key;
+      if (resolved.time_anchor) updatePayload.time_anchor_column = resolved.time_anchor;
+
+      console.log("[TargetStrategyPanel] Auto-resolving prerequisites:", resolved);
+
+      await supabase
+        .from("project_settings")
+        .update(updatePayload as any)
+        .eq("project_id", projectId);
+    }
+
     return missing;
-  };
+  }, [profile, projectId]);
 
   // ─── Select recommendation ──────────────────────────────────
   const handleSelectRecommendation = (rec: TDERecommendation) => {
@@ -347,8 +381,8 @@ export default function TargetStrategyPanel({
   const handleActivate = useCallback(async () => {
     if (!selectedTemplateId) return;
 
-    // Check prerequisites first
-    const missing = checkPrerequisites(selectedTemplateId);
+    // Auto-resolve high-confidence prerequisites, only prompt for truly missing ones
+    const missing = await autoResolvePrerequisites(selectedTemplateId);
     if (missing.length > 0) {
       setMissingFields(missing);
       setPrereqOpen(true);
@@ -390,9 +424,12 @@ export default function TargetStrategyPanel({
         }
         onBuilderReady?.(result.builder_id, selectedTemplateId, params);
       } else if (hasBlock) {
+        const blockMessages = result.gates.filter(g => g.status === "BLOCK").map(g => g.message);
         toast({
           title: "Verificação falhou",
-          description: "O alvo não passou nas verificações de qualidade. Ajuste os parâmetros.",
+          description: blockMessages.length > 0
+            ? blockMessages.join(" | ")
+            : "O alvo não passou nas verificações de qualidade. Ajuste os parâmetros.",
           variant: "destructive",
         });
       }
@@ -406,7 +443,7 @@ export default function TargetStrategyPanel({
     } finally {
       setPreviewLoading(false);
     }
-  }, [projectId, selectedTemplateId, params, onBuilderReady, toast, profile]);
+  }, [projectId, selectedTemplateId, params, onBuilderReady, toast, profile, autoResolvePrerequisites]);
 
   const handlePrereqSave = (config: Record<string, string>) => {
     // After saving prereqs, retry activation

@@ -746,6 +746,23 @@ const StepTargetFeatures = ({
               setSelectedTemplateId("weak_supervision_assisted");
               setAppliedTargetColumn("label");
               setInferredProblemType("classification");
+
+              // BUG 3 fix: preserve features, only remove leakage source columns
+              setSelectedFeatures(prev => {
+                if (prev.length === 0) {
+                  // No previous selection: auto-select all valid columns except structural/leakage
+                  const structuralCols = new Set<string>();
+                  if (contractHints?.entity_key) structuralCols.add(contractHints.entity_key);
+                  if (contractHints?.time_anchor_column) structuralCols.add(contractHints.time_anchor_column);
+                  structuralCols.add("label");
+                  return columns
+                    .filter(c => !structuralCols.has(c.name) && !c.featureHasError)
+                    .map(c => c.name);
+                }
+                // Keep existing selection (leakage columns will be handled by build-modeling-dataset)
+                return prev.filter(f => f !== "label");
+              });
+
               setPreflightRefreshKey(k => k + 1);
             }}
           />

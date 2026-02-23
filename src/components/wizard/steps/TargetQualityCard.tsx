@@ -89,6 +89,9 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
 
   useEffect(() => {
     if (!projectId) return;
+    // Reset on project change to avoid stale cross-project data
+    setReport(null);
+    setError(null);
     (async () => {
       const { data } = await supabase
         .from("project_settings")
@@ -96,7 +99,11 @@ const TargetQualityCard = ({ projectId, refreshKey = 0 }: Props) => {
         .eq("project_id", projectId)
         .maybeSingle();
       if (data && (data as any).target_quality_report) {
-        setReport((data as any).target_quality_report as TargetQualityReport);
+        const r = (data as any).target_quality_report as TargetQualityReport;
+        // Validate the report has real data (not a default placeholder)
+        if (r.created_at && r.quality_score != null) {
+          setReport(r);
+        }
       }
     })();
   }, [projectId, refreshKey]);
