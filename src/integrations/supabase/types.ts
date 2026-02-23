@@ -3090,6 +3090,8 @@ export type Database = {
           target_source: string
           target_suggestion_meta: Json | null
           updated_at: string
+          weak_label_config: Json | null
+          weak_label_result: Json | null
         }
         Insert: {
           excluded_columns?: Json | null
@@ -3109,6 +3111,8 @@ export type Database = {
           target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string
+          weak_label_config?: Json | null
+          weak_label_result?: Json | null
         }
         Update: {
           excluded_columns?: Json | null
@@ -3128,6 +3132,8 @@ export type Database = {
           target_source?: string
           target_suggestion_meta?: Json | null
           updated_at?: string
+          weak_label_config?: Json | null
+          weak_label_result?: Json | null
         }
         Relationships: [
           {

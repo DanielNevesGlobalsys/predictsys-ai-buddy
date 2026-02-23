@@ -1078,8 +1078,48 @@ serve(async (req: Request) => {
     // Also check target_source from settings to handle "label" set via activate-target-template
     const settingsTargetSource = (settings as any)?.target_source || "manual";
     const isLabelBuilderTarget = targetColumn === "_label_" || targetColumn === "label" || settingsTargetSource === "label_builder";
+    const isWeakSupervisionTarget = settingsTargetSource === "weak_supervision";
 
-    if (isLabelBuilderTarget) {
+    if (isWeakSupervisionTarget) {
+      // Weak supervision mode: mark as label_builder with virtual label
+      targetSource = "label_builder";
+      targetColumn = "label";
+      targetType = "binary";
+
+      // Read weak_label_result for leakage source columns
+      const weakResult = (settings as any)?.weak_label_result as Record<string, any> | null;
+      const weakLeakageCols = (weakResult?.leakage_source_columns || []) as string[];
+
+      // Generate a synthetic label build result
+      labelBuildResult = {
+        template_id: "weak_supervision_assisted",
+        params: { mode: "weak_supervision", threshold: (settings as any)?.weak_label_config?.threshold || 0.6 },
+        entity_key: null,
+        time_key: null,
+        reference_date: new Date().toISOString(),
+        window_days: null,
+        positive_rate: weakResult?.prevalence || 0.25,
+        classes: 2,
+        dominant_rate: Math.max(weakResult?.prevalence || 0.25, 1 - (weakResult?.prevalence || 0.25)),
+        eligible_entities: weakResult?.labeled_rows || totalRows,
+        rows_used: weakResult?.labeled_rows || totalRows,
+        stability_by_period: [],
+        gates: [{ gate: "WEAK_SUPERVISION", status: "OK" as const, message: `Target assistido: ${weakResult?.top_rules?.length || 0} regras, cobertura ${((weakResult?.coverage || 0) * 100).toFixed(0)}%` }],
+        leakage_source_columns: weakLeakageCols,
+        generated_at: new Date().toISOString(),
+      };
+
+      labelPlan = {
+        strategy: "weak_supervision",
+        source_columns: weakLeakageCols,
+        window_days: null,
+        condition: "Target derivado via supervisão fraca (múltiplas regras combinadas)",
+        output_column: "label",
+        output_type: "binary",
+      };
+
+      console.log(`[build-modeling-dataset] Weak supervision mode. leakage_cols=${weakLeakageCols.length}, prevalence=${weakResult?.prevalence}`);
+    } else if (isLabelBuilderTarget) {
       const { data: builderData } = await supabase
         .from("project_label_builders")
         .select("*")

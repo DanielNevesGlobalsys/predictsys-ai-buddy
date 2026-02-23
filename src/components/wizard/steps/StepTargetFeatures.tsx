@@ -35,6 +35,7 @@ import TargetBuilderPanel from "./TargetBuilderPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
 import TargetQualityCard from "./TargetQualityCard";
+import WeakLabelBuilderCard from "./WeakLabelBuilderCard";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -136,8 +137,8 @@ const StepTargetFeatures = ({
   const [labelBuilderId, setLabelBuilderId] = useState<string | null>(null);
   const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
 
-  // Track target source (manual vs label_builder)
-  const [targetSource, setTargetSource] = useState<"manual" | "label_builder">("manual");
+  // Track target source (manual vs label_builder vs weak_supervision)
+  const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision">("manual");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -772,6 +773,21 @@ const StepTargetFeatures = ({
               setAppliedTargetColumn("label");
               const tmpl = LABEL_TEMPLATES[templateId];
               setInferredProblemType(tmpl?.problem_type || "classification");
+            }}
+          />
+        )}
+
+        {/* Weak Supervision / Assisted Mode (Etapa E) */}
+        {projectData.id && (
+          <WeakLabelBuilderCard
+            projectId={projectData.id}
+            onActivated={() => {
+              setTargetColumn("label");
+              setTargetSource("weak_supervision");
+              setSelectedTemplateId("weak_supervision_assisted");
+              setAppliedTargetColumn("label");
+              setInferredProblemType("classification");
+              setPreflightRefreshKey(k => k + 1);
             }}
           />
         )}

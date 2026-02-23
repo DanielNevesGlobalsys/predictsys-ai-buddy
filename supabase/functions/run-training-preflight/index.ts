@@ -67,7 +67,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -545,6 +545,56 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9.1 WEAK LABEL HEALTH GATE (TDE Etapa E) =====
+    if (projectSettings?.target_source === "weak_supervision" && projectSettings?.weak_label_result) {
+      const wlr = projectSettings.weak_label_result as Record<string, any>;
+      const coverage = wlr.coverage || 0;
+      const prevalence = wlr.prevalence || 0;
+      const conflictRate = wlr.conflict_rate || 0;
+      const avgConfidence = wlr.avg_confidence || 0;
+      const agreementRate = wlr.agreement_rate || 0;
+
+      if (coverage < 0.2) {
+        gates.push({
+          gate: "weak_label_health",
+          status: "BLOCK",
+          message: `Cobertura do target assistido muito baixa: ${(coverage * 100).toFixed(0)}%. Mínimo: 20%. Adicione mais dados ou ajuste as regras.`,
+          details: { coverage, prevalence, conflict_rate: conflictRate },
+        });
+        canTrain = false;
+      } else if (prevalence < 0.01 || prevalence > 0.99) {
+        gates.push({
+          gate: "weak_label_health",
+          status: "BLOCK",
+          message: `Prevalência extrema: ${(prevalence * 100).toFixed(1)}%. Target assistido degenerado — quase todos positivos ou negativos. Ajuste o limiar ou as regras.`,
+          details: { prevalence, coverage },
+        });
+        canTrain = false;
+      } else if (conflictRate > 0.6) {
+        gates.push({
+          gate: "weak_label_health",
+          status: "BLOCK",
+          message: `Conflito entre regras muito alto: ${(conflictRate * 100).toFixed(0)}%. Desative regras conflitantes antes de treinar.`,
+          details: { conflict_rate: conflictRate, agreement_rate: agreementRate },
+        });
+        canTrain = false;
+      } else if (avgConfidence < 0.3 || agreementRate < 0.5) {
+        gates.push({
+          gate: "weak_label_health",
+          status: "WARN",
+          message: `Target assistido com confiança ${avgConfidence < 0.3 ? "baixa" : "moderada"} (${(avgConfidence * 100).toFixed(0)}%). Resultados podem ser menos confiáveis.`,
+          details: { avg_confidence: avgConfidence, agreement_rate: agreementRate },
+        });
+      } else {
+        gates.push({
+          gate: "weak_label_health",
+          status: "PASS",
+          message: `Target assistido OK: cobertura ${(coverage * 100).toFixed(0)}%, concordância ${(agreementRate * 100).toFixed(0)}%, confiança ${(avgConfidence * 100).toFixed(0)}%.`,
+          details: { coverage, prevalence, agreement_rate: agreementRate, avg_confidence: avgConfidence },
+        });
+      }
+    }
+
     // ===== 4.9b AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
@@ -593,6 +643,7 @@ serve(async (req: Request) => {
       class_balance: "Configurar balanceamento de classes",
       audit_contract: "Rodar Auditoria do Contrato",
       target_quality: "Avaliar e corrigir qualidade do target na Etapa 3",
+      weak_label_health: "Ajustar regras do Modo Assistido na Etapa 3",
     };
 
     const result = {
