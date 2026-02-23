@@ -400,7 +400,7 @@ serve(async (req) => {
       }
 
       // Clamp
-      score = Math.max(0, Math.min(1, score));
+      score = Math.max(0, Math.min(0.95, score));
 
       scored.push({ tid, score, reasons, notes });
     }

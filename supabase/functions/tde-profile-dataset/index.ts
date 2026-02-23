@@ -447,16 +447,64 @@ serve(async (req) => {
     summary.push(`Dataset classificado como **${SHAPE_LABELS[datasetShape]}** (${totalRows.toLocaleString()} linhas, ${columns.length} colunas).`);
 
     if (bestEntity) {
-      summary.push(`Provável entidade: **${bestEntity.column}** (confiança ${Math.min(Math.round(bestEntity.score * 10), 100)}%).`);
+      summary.push(`Provável entidade: **${bestEntity.column}** (confiança ${normalizeScore(bestEntity.score)}%).`);
     } else {
       summary.push("Nenhuma coluna de entidade detectada automaticamente.");
     }
 
     if (bestTime) {
-      summary.push(`Provável âncora temporal: **${bestTime.column}** (confiança ${Math.min(Math.round(bestTime.score * 10), 100)}%).`);
+      summary.push(`Provável âncora temporal: **${bestTime.column}** (confiança ${normalizeScore(bestTime.score)}%).`);
     } else {
       summary.push("Nenhuma coluna temporal detectada automaticamente.");
     }
+
+    // ─── Compute column_stats ───────────────────────────────
+
+    const columnStats: Record<string, any> = {};
+    for (const col of columns) {
+      const ns = numStatMap.get(col.column_name);
+      const cs = catStatMap.get(col.column_name);
+      const missingRate = (ns?.null_count != null && totalRows > 0) ? ns.null_count / totalRows : null;
+      const nunique = cs?.distinct_count ?? null;
+      const cardRatio = (nunique != null && totalRows > 0) ? nunique / totalRows : null;
+      let entropyApprox: number | null = null;
+      if (cs?.top_categories && Array.isArray(cs.top_categories) && cs.top_categories.length > 0) {
+        const totalCat = cs.top_categories.reduce((s: number, c: any) => s + (c.count || 0), 0);
+        if (totalCat > 0) {
+          entropyApprox = 0;
+          for (const cat of cs.top_categories) {
+            const p = (cat.count || 0) / totalCat;
+            if (p > 0) entropyApprox -= p * Math.log2(p);
+          }
+          entropyApprox = Math.round(entropyApprox * 100) / 100;
+        }
+      }
+      const isDateType = ["data", "date", "datetime", "timestamp"].some(dt => col.inferred_type.toLowerCase().includes(dt));
+      columnStats[col.column_name] = {
+        dtype_inferred: col.inferred_type,
+        missing_rate: missingRate != null ? Math.round(missingRate * 10000) / 10000 : null,
+        nunique,
+        card_ratio: cardRatio != null ? Math.round(cardRatio * 10000) / 10000 : null,
+        entropy_approx: entropyApprox,
+        date_parse_rate: isDateType ? 1.0 : null,
+        sample_top_values: cs?.top_categories?.slice(0, 5).map((c: any) => c.category) ?? null,
+      };
+    }
+
+    // ─── Normalize candidate scores (0-95 continuous) ───────
+
+    const normalizeCandidates = (arr: ScoredCandidate[]) =>
+      arr.map(c => {
+        const stats = columnStats[c.column];
+        const enrichedReasons = [...c.reasons];
+        if (stats) {
+          if (stats.nunique != null) enrichedReasons.push(`Cardinalidade: ${stats.nunique} valores`);
+          if (stats.missing_rate != null && stats.missing_rate > 0.01) enrichedReasons.push(`Missing: ${(stats.missing_rate * 100).toFixed(1)}%`);
+          if (stats.entropy_approx != null) enrichedReasons.push(`Entropia: ${stats.entropy_approx.toFixed(2)}`);
+          if (stats.date_parse_rate != null) enrichedReasons.push(`Date parse: ${(stats.date_parse_rate * 100).toFixed(0)}%`);
+        }
+        return { ...c, score: normalizeScore(c.score), reasons: enrichedReasons };
+      });
 
     // ─── Build tde_profile ──────────────────────────────────
 
@@ -464,12 +512,13 @@ serve(async (req) => {
       dataset_shape: datasetShape,
       dataset_shape_label: SHAPE_LABELS[datasetShape],
       candidates: {
-        entity_candidates: topEntities,
-        time_candidates: topTimes,
-        value_candidates: topValues,
-        status_candidates: topStatus,
-        text_candidates: topTexts,
+        entity_candidates: normalizeCandidates(topEntities),
+        time_candidates: normalizeCandidates(topTimes),
+        value_candidates: normalizeCandidates(topValues),
+        status_candidates: normalizeCandidates(topStatus),
+        text_candidates: normalizeCandidates(topTexts),
       },
+      column_stats: columnStats,
       summary,
       gates,
       dataset_ref: datasetRef,
@@ -494,10 +543,10 @@ serve(async (req) => {
       // Slim version for contract_hints.tde
       const tdeSlim = {
         dataset_shape: datasetShape,
-        entity: bestEntity ? { column: bestEntity.column, score: bestEntity.score } : null,
-        time: bestTime ? { column: bestTime.column, score: bestTime.score } : null,
-        value: topValues[0] ? { column: topValues[0].column, score: topValues[0].score } : null,
-        status: topStatus[0] ? { column: topStatus[0].column, score: topStatus[0].score } : null,
+        entity: bestEntity ? { column: bestEntity.column, score: normalizeScore(bestEntity.score) } : null,
+        time: bestTime ? { column: bestTime.column, score: normalizeScore(bestTime.score) } : null,
+        value: topValues[0] ? { column: topValues[0].column, score: normalizeScore(topValues[0].score) } : null,
+        status: topStatus[0] ? { column: topStatus[0].column, score: normalizeScore(topStatus[0].score) } : null,
         profiled_at: tdeProfile.profiled_at,
       };
 
