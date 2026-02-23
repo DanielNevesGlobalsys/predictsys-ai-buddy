@@ -258,7 +258,7 @@ const StepScoring = ({ projectData, onNext, onBack, loading, saveProject }: Step
   const handleCtaClick = (cta: { label: string; go_to_step?: number; action?: string }) => {
     if (cta.action === "retry") runScoring();
     else if (cta.action === "finalize_promotion") recoverPromotion();
-    else if (cta.go_to_step !== undefined) onBack();
+    else if (cta.go_to_step !== undefined) saveProject({}, cta.go_to_step);
   };
 
   const progressPct = scoring.totalExpected > 0
