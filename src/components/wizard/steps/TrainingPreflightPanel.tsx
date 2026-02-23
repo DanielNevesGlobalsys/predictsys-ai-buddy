@@ -48,6 +48,8 @@ const GATE_LABELS: Record<string, string> = {
   builder: "Builder",
   training_gate: "Gates",
   target_quality: "Qualidade",
+  weak_label_health: "Assistido",
+  human_label_health: "Rotulagem",
 };
 
 interface Props {

@@ -1876,6 +1876,56 @@ export type Database = {
           },
         ]
       }
+      project_human_labels: {
+        Row: {
+          created_at: string
+          entity_id: string
+          entity_type: string
+          id: string
+          label: number
+          label_status: string
+          notes: string | null
+          project_id: string
+          reference_date: string | null
+          round_id: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          entity_id: string
+          entity_type?: string
+          id?: string
+          label: number
+          label_status?: string
+          notes?: string | null
+          project_id: string
+          reference_date?: string | null
+          round_id: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          entity_id?: string
+          entity_type?: string
+          id?: string
+          label?: number
+          label_status?: string
+          notes?: string | null
+          project_id?: string
+          reference_date?: string | null
+          round_id?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_human_labels_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_label_builders: {
         Row: {
           created_at: string
@@ -3075,6 +3125,8 @@ export type Database = {
         Row: {
           excluded_columns: Json | null
           feature_columns: Json | null
+          human_label_config: Json | null
+          human_label_result: Json | null
           industry: string
           industry_source: string
           label_build_result: Json | null
@@ -3096,6 +3148,8 @@ export type Database = {
         Insert: {
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          human_label_config?: Json | null
+          human_label_result?: Json | null
           industry?: string
           industry_source?: string
           label_build_result?: Json | null
@@ -3117,6 +3171,8 @@ export type Database = {
         Update: {
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          human_label_config?: Json | null
+          human_label_result?: Json | null
           industry?: string
           industry_source?: string
           label_build_result?: Json | null
