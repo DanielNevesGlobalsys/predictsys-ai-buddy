@@ -250,10 +250,24 @@ export default function TargetStrategyPanel({
   // Expanded sections
   const [showDatasetDetails, setShowDatasetDetails] = useState(false);
 
-  // ─── Load TDE Profile from cache ─────────────────────────────
+  // ─── Load TDE Profile from SSOT (project_settings) first, then AI context ─
   useEffect(() => {
     if (!projectId) return;
     (async () => {
+      // Try SSOT first (project_settings.tde_profile_result)
+      const { data: settingsData } = await supabase
+        .from("project_settings")
+        .select("tde_profile_result, entity_key, time_anchor_column")
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      const ssotProfile = (settingsData as any)?.tde_profile_result as TDEProfile | null;
+      if (ssotProfile?.candidates) {
+        setProfile(ssotProfile);
+        return;
+      }
+
+      // Fallback: AI context
       const { data } = await supabase
         .from("project_ai_context")
         .select("context")
@@ -315,49 +329,113 @@ export default function TargetStrategyPanel({
   }, [fetchRecommendations]);
 
   // ─── Auto-resolve & check prerequisites ──────────────────────
+  // Score threshold: TDE uses 0-10 scale, so >=8 means 80% confidence.
+  // If scores are in 0-100, normalize to 0-10 first.
+  const normalizeScore = (score: number): number => {
+    if (score > 10) return score / 10; // 0-100 → 0-10
+    return score; // already 0-10
+  };
+
   const AUTO_CONF_THRESHOLD = 8; // score >= 8 (out of 10) = auto-resolve
+
+  // Name-based heuristic fallback when no profile is available
+  const ENTITY_HEURISTIC = /^(id|cliente|customer|cpf|cnpj|patient|paciente|user|usuario|entity|cod_|id_)/i;
+  const TIME_HEURISTIC = /^(data|date|dt_|emissao|purchase|created|timestamp|periodo|mes|month|ano|year|dia|day)/i;
 
   const autoResolvePrerequisites = useCallback(async (templateId: string): Promise<string[]> => {
     const tmpl = LABEL_TEMPLATES[templateId];
     if (!tmpl) return [];
-    const cands = profile?.candidates;
-    if (!cands) return [];
+
+    // 1. Read current SSOT to check if already resolved
+    const { data: currentSettings } = await supabase
+      .from("project_settings")
+      .select("entity_key, time_anchor_column, value_column")
+      .eq("project_id", projectId)
+      .maybeSingle();
+
+    const ssot = currentSettings as Record<string, any> | null;
 
     const resolved: Record<string, string> = {};
     const missing: string[] = [];
 
-    // Entity key
+    // 2. Build candidate sources: SSOT > profile > name heuristic
+    const cands = profile?.candidates;
+
+    // Helper: find best candidate from TDE profile
+    const bestCandidate = (key: keyof NonNullable<typeof cands>): ScoredCandidate | null => {
+      if (!cands) return null;
+      const list = cands[key];
+      if (!list?.length) return null;
+      const best = list[0];
+      return normalizeScore(best.score) >= AUTO_CONF_THRESHOLD ? best : null;
+    };
+
+    // Entity key resolution
     if (tmpl.requires_entity_key) {
-      const best = cands.entity_candidates?.[0];
-      if (best && best.score >= AUTO_CONF_THRESHOLD) {
-        resolved.entity_key = best.column;
+      if (ssot?.entity_key) {
+        resolved.entity_key = ssot.entity_key;
       } else {
-        missing.push("entity_key");
+        const best = bestCandidate("entity_candidates");
+        if (best) {
+          resolved.entity_key = best.column;
+        } else {
+          // Name heuristic fallback: scan all candidates for pattern match
+          const allEntityCands = cands?.entity_candidates || [];
+          const heuristicMatch = allEntityCands.find(c => ENTITY_HEURISTIC.test(c.column));
+          if (heuristicMatch && normalizeScore(heuristicMatch.score) >= 5) {
+            resolved.entity_key = heuristicMatch.column;
+          } else {
+            missing.push("entity_key");
+          }
+        }
       }
     }
 
-    // Time anchor
+    // Time anchor resolution
     if (tmpl.requires_time_anchor) {
-      const best = cands.time_candidates?.[0];
-      if (best && best.score >= AUTO_CONF_THRESHOLD) {
-        resolved.time_anchor = best.column;
+      if (ssot?.time_anchor_column) {
+        resolved.time_anchor = ssot.time_anchor_column;
       } else {
-        missing.push("time_anchor");
+        const best = bestCandidate("time_candidates");
+        if (best) {
+          resolved.time_anchor = best.column;
+        } else {
+          const allTimeCands = cands?.time_candidates || [];
+          const heuristicMatch = allTimeCands.find(c => TIME_HEURISTIC.test(c.column));
+          if (heuristicMatch && normalizeScore(heuristicMatch.score) >= 5) {
+            resolved.time_anchor = heuristicMatch.column;
+          } else {
+            missing.push("time_anchor");
+          }
+        }
       }
     }
 
-    // If we have auto-resolved values, persist them to SSOT
-    if (Object.keys(resolved).length > 0) {
-      const updatePayload: Record<string, unknown> = {};
-      if (resolved.entity_key) updatePayload.entity_key = resolved.entity_key;
-      if (resolved.time_anchor) updatePayload.time_anchor_column = resolved.time_anchor;
+    // 3. Persist resolved values to SSOT (only new ones not already in SSOT)
+    const updatePayload: Record<string, unknown> = {};
+    if (resolved.entity_key && resolved.entity_key !== ssot?.entity_key) {
+      updatePayload.entity_key = resolved.entity_key;
+    }
+    if (resolved.time_anchor && resolved.time_anchor !== ssot?.time_anchor_column) {
+      updatePayload.time_anchor_column = resolved.time_anchor;
+    }
 
-      console.log("[TargetStrategyPanel] Auto-resolving prerequisites:", resolved);
+    if (Object.keys(updatePayload).length > 0) {
+      updatePayload.prerequisites_resolved_at = new Date().toISOString();
+      updatePayload.prerequisites_source = "tde_auto";
 
-      await supabase
+      console.log("[TargetStrategyPanel] Auto-resolving prerequisites:", updatePayload);
+
+      const { error: saveErr } = await supabase
         .from("project_settings")
         .update(updatePayload as any)
         .eq("project_id", projectId);
+
+      if (saveErr) {
+        console.error("[TargetStrategyPanel] Failed to persist prerequisites:", saveErr);
+        // On save failure, treat as missing to avoid running gates on stale SSOT
+        return [...missing, ...Object.keys(resolved).filter(k => updatePayload[k === "entity_key" ? "entity_key" : "time_anchor_column"])];
+      }
     }
 
     return missing;
@@ -384,6 +462,16 @@ export default function TargetStrategyPanel({
     // Auto-resolve high-confidence prerequisites, only prompt for truly missing ones
     const missing = await autoResolvePrerequisites(selectedTemplateId);
     if (missing.length > 0) {
+      const FIELD_LABELS: Record<string, string> = {
+        entity_key: "Coluna de entidade (ID)",
+        time_anchor: "Coluna de data/tempo",
+        value_column: "Coluna de valor numérico",
+        status_column: "Coluna de status/evento",
+      };
+      toast({
+        title: "Pré-requisitos pendentes",
+        description: `Configure: ${missing.map(m => FIELD_LABELS[m] || m).join(", ")}`,
+      });
       setMissingFields(missing);
       setPrereqOpen(true);
       return;
@@ -445,10 +533,12 @@ export default function TargetStrategyPanel({
     }
   }, [projectId, selectedTemplateId, params, onBuilderReady, toast, profile, autoResolvePrerequisites]);
 
-  const handlePrereqSave = (config: Record<string, string>) => {
-    // After saving prereqs, retry activation
-    setTimeout(() => handleActivate(), 500);
-  };
+  const handlePrereqSave = useCallback(async (config: Record<string, string>) => {
+    // Prerequisites were saved by the modal, now retry activation
+    // Small delay to ensure DB write propagation
+    await new Promise(r => setTimeout(r, 300));
+    handleActivate();
+  }, [handleActivate]);
 
   const template = selectedTemplateId ? LABEL_TEMPLATES[selectedTemplateId] : null;
   const hasBlock = previewResult?.gates?.some(g => g.status === "BLOCK");

@@ -74,26 +74,40 @@ const TargetLifecycleCard = ({ projectId, refreshKey = 0, onNavigateToStep }: Pr
   const [state, setState] = useState<TargetLifecycleState | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [currentSelectionVersion, setCurrentSelectionVersion] = useState<number | null>(null);
 
   useEffect(() => {
     if (!projectId) return;
     // Reset on project change to avoid stale cross-project data
     setState(null);
     setError(null);
+    setCurrentSelectionVersion(null);
     (async () => {
-      const { data } = await supabase
-        .from("project_settings")
-        .select("target_lifecycle_state")
-        .eq("project_id", projectId)
-        .maybeSingle();
-      if (data) {
-        const tls = (data as any).target_lifecycle_state as TargetLifecycleState | null;
+      const [{ data: settingsData }, { data: selData }] = await Promise.all([
+        supabase
+          .from("project_settings")
+          .select("target_lifecycle_state")
+          .eq("project_id", projectId)
+          .maybeSingle(),
+        supabase
+          .from("project_model_selection")
+          .select("selection_version")
+          .eq("project_id", projectId)
+          .maybeSingle(),
+      ]);
+      if (selData) setCurrentSelectionVersion((selData as any).selection_version ?? null);
+      if (settingsData) {
+        const tls = (settingsData as any).target_lifecycle_state as TargetLifecycleState | null;
         if (tls && tls.target_health_score != null && tls.last_checked_at) {
           setState(tls);
         }
       }
     })();
   }, [projectId, refreshKey]);
+
+  // Staleness: lifecycle was computed with a different selection_version
+  const isStale = state && currentSelectionVersion != null &&
+    state.related_versions.selection_current !== currentSelectionVersion;
 
   const runCheck = useCallback(async () => {
     if (!projectId) return;
@@ -157,6 +171,16 @@ const TargetLifecycleCard = ({ projectId, refreshKey = 0, onNavigateToStep }: Pr
             {state ? "Reavaliar" : "Verificar"}
           </Button>
         </div>
+
+        {/* Staleness warning */}
+        {isStale && !loading && (
+          <div className="flex items-center gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
+            <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+            <span>
+              Desatualizado — verificado na v{state?.related_versions.selection_current}, seleção atual v{currentSelectionVersion}. Clique "Reavaliar".
+            </span>
+          </div>
+        )}
 
         {error && (
           <Alert className="bg-destructive/5 border-destructive/20">
