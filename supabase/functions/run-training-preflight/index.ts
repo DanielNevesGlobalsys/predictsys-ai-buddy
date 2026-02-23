@@ -67,7 +67,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -595,6 +595,49 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9.2 HUMAN LABEL HEALTH GATE (TDE Etapa F) =====
+    if (projectSettings?.target_source === "human_labeling" && projectSettings?.human_label_result) {
+      const hlr = projectSettings.human_label_result as Record<string, any>;
+      const nLabeled = hlr.n_labeled || 0;
+      const nPositive = hlr.n_positive || 0;
+      const nNegative = nLabeled - nPositive;
+      const minClass = Math.min(nPositive, nNegative);
+      const seedMetrics = hlr.model_metrics as Record<string, any> | null;
+      const seedAUC = seedMetrics?.auc || 0;
+
+      if (nLabeled < 30) {
+        gates.push({
+          gate: "human_label_health",
+          status: "BLOCK",
+          message: `Apenas ${nLabeled} rótulos humanos. Mínimo: 30. Rotule mais entidades na Etapa 3.`,
+          details: { n_labeled: nLabeled },
+        });
+        canTrain = false;
+      } else if (minClass < 10) {
+        gates.push({
+          gate: "human_label_health",
+          status: "BLOCK",
+          message: `Classe minoritária com apenas ${minClass} exemplos. Mínimo: 10. Rotule mais casos da classe sub-representada.`,
+          details: { n_positive: nPositive, n_negative: nNegative },
+        });
+        canTrain = false;
+      } else if (seedAUC < 0.6) {
+        gates.push({
+          gate: "human_label_health",
+          status: "WARN",
+          message: `Modelo seed com AUC baixo (${(seedAUC * 100).toFixed(0)}%). Resultados podem ser pouco confiáveis. Considere rotular mais casos.`,
+          details: { auc: seedAUC, n_labeled: nLabeled },
+        });
+      } else {
+        gates.push({
+          gate: "human_label_health",
+          status: "PASS",
+          message: `Rotulagem OK: ${nLabeled} rótulos, AUC seed ${(seedAUC * 100).toFixed(0)}%, balance ${(hlr.balance * 100).toFixed(0)}%.`,
+          details: { n_labeled: nLabeled, auc: seedAUC, balance: hlr.balance },
+        });
+      }
+    }
+
     // ===== 4.9b AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
@@ -644,6 +687,7 @@ serve(async (req: Request) => {
       audit_contract: "Rodar Auditoria do Contrato",
       target_quality: "Avaliar e corrigir qualidade do target na Etapa 3",
       weak_label_health: "Ajustar regras do Modo Assistido na Etapa 3",
+      human_label_health: "Rotular mais entidades na Etapa 3",
     };
 
     const result = {

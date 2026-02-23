@@ -148,7 +148,23 @@ const UNIVERSAL_IDS = [
   "generic_threshold_binary",
   "generic_future_sum_regression",
   "weak_supervision_assisted",
+  "human_labeling_assisted",
 ];
+
+// ═══ Human labeling pseudo-template ═══════════════════════════
+TEMPLATE_REGISTRY["human_labeling_assisted"] = {
+  template_id: "human_labeling_assisted",
+  display_name: "Rotulagem Rápida (Human-in-the-loop)",
+  problem_type: "classification",
+  industry: "generic",
+  requires_entity_key: false,
+  requires_time_anchor: false,
+  requires_event_column: false,
+  required_signals: [],
+  compatible_shapes: ["transactional", "events", "snapshot", "timeseries"],
+  family: ["human", "labeling", "manual", "precario", "rotulagem"],
+  default_params: { threshold: 0.6 },
+};
 
 // ═══ Weak supervision pseudo-template ═════════════════════════
 TEMPLATE_REGISTRY["weak_supervision_assisted"] = {
@@ -341,6 +357,18 @@ serve(async (req) => {
         if (signals.entity_ok && signals.time_ok) {
           score += 0.10;
           reasons.push("Entidade e tempo detectados — boa base para regras temporais");
+        }
+      }
+
+      // Boost human_labeling_assisted when weak supervision is insufficient
+      if (tid === "human_labeling_assisted") {
+        const hasOutcome = signals.status_ok || signals.value_ok;
+        if (!hasOutcome && !signals.time_ok) {
+          score += 0.25;
+          reasons.push("Dados insuficientes para inferir target com alta confiança — rotulagem rápida destrava");
+        } else if (!hasOutcome) {
+          score += 0.15;
+          reasons.push("Sem outcome detectado — rotulagem humana pode complementar sinais fracos");
         }
       }
 

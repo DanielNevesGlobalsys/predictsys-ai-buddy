@@ -164,3 +164,12 @@ verify_jwt = false
 
 [functions.tde-generate-weak-label]
 verify_jwt = false
+
+[functions.tde-sample-entities-for-labeling]
+verify_jwt = false
+
+[functions.tde-submit-human-labels]
+verify_jwt = false
+
+[functions.tde-train-human-seed-model]
+verify_jwt = false

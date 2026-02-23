@@ -1079,8 +1079,61 @@ serve(async (req: Request) => {
     const settingsTargetSource = (settings as any)?.target_source || "manual";
     const isLabelBuilderTarget = targetColumn === "_label_" || targetColumn === "label" || settingsTargetSource === "label_builder";
     const isWeakSupervisionTarget = settingsTargetSource === "weak_supervision";
+    const isHumanLabelingTarget = settingsTargetSource === "human_labeling";
 
-    if (isWeakSupervisionTarget) {
+    if (isHumanLabelingTarget) {
+      // Human labeling mode: use human labels + seed model to generate labels
+      targetSource = "label_builder";
+      targetColumn = "label";
+      targetType = "binary";
+
+      const humanResult = (settings as any)?.human_label_result as Record<string, any> | null;
+      const nLabeled = humanResult?.n_labeled || 0;
+      const seedReady = humanResult?.seed_model_ready || false;
+
+      labelBuildResult = {
+        template_id: "human_labeling_assisted",
+        params: { mode: "human_labeling", threshold: humanResult?.threshold || 0.6, n_labeled: nLabeled },
+        entity_key: null,
+        time_key: null,
+        reference_date: new Date().toISOString(),
+        window_days: null,
+        positive_rate: humanResult?.balance || 0.5,
+        classes: 2,
+        dominant_rate: Math.max(humanResult?.balance || 0.5, 1 - (humanResult?.balance || 0.5)),
+        eligible_entities: nLabeled,
+        rows_used: totalRows,
+        stability_by_period: [],
+        gates: [
+          {
+            gate: "HUMAN_LABELING",
+            status: (nLabeled >= 30 ? "OK" : "BLOCK") as "OK" | "BLOCK",
+            message: nLabeled >= 30
+              ? `Rotulagem humana: ${nLabeled} rótulos, seed ${seedReady ? "pronto" : "pendente"}`
+              : `Apenas ${nLabeled} rótulos (mínimo: 30)`,
+          },
+        ],
+        leakage_source_columns: [],
+        generated_at: new Date().toISOString(),
+      };
+
+      labelPlan = {
+        strategy: "human_labeling",
+        source_columns: [],
+        window_days: null,
+        condition: "Target derivado via rotulagem humana + modelo seed",
+        output_column: "label",
+        output_type: "binary",
+      };
+
+      // Update label_build_result in settings
+      await supabase
+        .from("project_settings")
+        .update({ label_build_result: { ...labelBuildResult, source: "human_labeling" } } as any)
+        .eq("project_id", project_id);
+
+      console.log(`[build-modeling-dataset] Human labeling mode. n_labeled=${nLabeled}, seed_ready=${seedReady}`);
+    } else if (isWeakSupervisionTarget) {
       // Weak supervision mode: mark as label_builder with virtual label
       targetSource = "label_builder";
       targetColumn = "label";

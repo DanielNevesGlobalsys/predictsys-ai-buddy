@@ -52,7 +52,7 @@ interface AnchorInfo {
 interface TargetPresenceScanProps {
   projectId: string;
   targetColumn: string | null;
-  targetSource?: "manual" | "label_builder" | "weak_supervision";
+  targetSource?: "manual" | "label_builder" | "weak_supervision" | "human_labeling";
 }
 
 const TargetPresenceScan = ({ projectId, targetColumn, targetSource }: TargetPresenceScanProps) => {

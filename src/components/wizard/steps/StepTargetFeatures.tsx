@@ -36,6 +36,7 @@ import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
 import TargetQualityCard from "./TargetQualityCard";
 import WeakLabelBuilderCard from "./WeakLabelBuilderCard";
+import HumanLabelingCard from "./HumanLabelingCard";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -138,7 +139,7 @@ const StepTargetFeatures = ({
   const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
 
   // Track target source (manual vs label_builder vs weak_supervision)
-  const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision">("manual");
+  const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision" | "human_labeling">("manual");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   useEffect(() => {
@@ -785,6 +786,21 @@ const StepTargetFeatures = ({
               setTargetColumn("label");
               setTargetSource("weak_supervision");
               setSelectedTemplateId("weak_supervision_assisted");
+              setAppliedTargetColumn("label");
+              setInferredProblemType("classification");
+              setPreflightRefreshKey(k => k + 1);
+            }}
+          />
+        )}
+
+        {/* Human Labeling Card (Etapa F) */}
+        {projectData.id && (
+          <HumanLabelingCard
+            projectId={projectData.id}
+            onActivated={() => {
+              setTargetColumn("label");
+              setTargetSource("human_labeling");
+              setSelectedTemplateId("human_labeling_assisted");
               setAppliedTargetColumn("label");
               setInferredProblemType("classification");
               setPreflightRefreshKey(k => k + 1);
