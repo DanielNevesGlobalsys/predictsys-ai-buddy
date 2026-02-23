@@ -119,6 +119,9 @@ const StepTargetFeatures = ({
     time_anchor_column?: string | null;
     event_candidates?: string[];
     value_candidates?: string[];
+    status_candidates?: { column: string; score: number; reason?: string }[];
+    tde_status_candidates?: { column: string; score: number; reason?: string }[];
+    tde_value_candidates?: { column: string; score: number; reason?: string }[];
   } | null>(null);
 
   // Intent contract info for target builder
@@ -235,8 +238,8 @@ const StepTargetFeatures = ({
     ]);
     if (aiCtxData?.context) {
       const ctx = aiCtxData.context as Record<string, any>;
-      if (ctx.contract_hints) {
-        const hints = ctx.contract_hints;
+      if (ctx.contract_hints || ctx.tde_profile) {
+        const hints = ctx.contract_hints || {};
         // Only use hints if they match the current dataset/manifest
         const currentRef = dsStateData?.active_dataset_ref || null;
         const currentManifest = dsStateData?.manifest_id || null;
@@ -245,8 +248,26 @@ const StepTargetFeatures = ({
         // If hints have a dataset_ref, it must match current; otherwise accept (legacy hints)
         const refMatch = !hintsRef || hintsRef === currentRef;
         const manifestMatch = !hintsManifest || hintsManifest === currentManifest;
+        
+        // Extract TDE profile candidates (status/event/value)
+        const tdeProfile = ctx.tde_profile as Record<string, any> | null;
+        const tdeCandidates = tdeProfile?.candidates || {};
+        const tdeStatusCandidates = (tdeCandidates.status_candidates || []) as { column: string; score: number; reason?: string }[];
+        const tdeValueCandidates = (tdeCandidates.value_candidates || []) as { column: string; score: number; reason?: string }[];
+        
         if (refMatch && manifestMatch) {
-          setContractHints(hints);
+          setContractHints({
+            ...hints,
+            tde_status_candidates: tdeStatusCandidates,
+            tde_value_candidates: tdeValueCandidates,
+          });
+        } else if (tdeStatusCandidates.length > 0 || tdeValueCandidates.length > 0) {
+          // Even if hints are stale, TDE candidates may still be relevant
+          setContractHints({
+            tde_status_candidates: tdeStatusCandidates,
+            tde_value_candidates: tdeValueCandidates,
+          });
+          console.log("[StepTargetFeatures] Stale contract_hints ignored but TDE candidates kept");
         } else {
           console.log("[StepTargetFeatures] Stale contract_hints ignored (dataset/manifest mismatch)");
         }
@@ -739,6 +760,95 @@ const StepTargetFeatures = ({
               setInferredProblemType(tmpl?.problem_type || "classification");
             }}
           />
+        )}
+
+        {/* TDE Status/Event Candidate Suggestions */}
+        {contractHints && (
+          ((contractHints.tde_status_candidates?.length ?? 0) > 0 ||
+          (contractHints.tde_value_candidates?.length ?? 0) > 0)
+        ) && targetSource !== "label_builder" && (
+          <div className="p-4 rounded-lg border border-secondary/30 bg-secondary/5 space-y-3">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-4 h-4 text-secondary" />
+              <h4 className="text-sm font-semibold">Sugestões de coluna-alvo (detectadas pela Lys)</h4>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Colunas identificadas automaticamente como candidatas a target preditivo. Clique para usar como target manual.
+            </p>
+            <div className="flex flex-wrap gap-2">
+              {(contractHints.tde_status_candidates || []).map((c) => (
+                <button
+                  key={`status-${c.column}`}
+                  onClick={() => {
+                    if (columns.some(col => col.name === c.column)) {
+                      handleTargetChange(c.column);
+                      setAppliedTargetColumn(c.column);
+                      toast({
+                        title: "Target aplicado",
+                        description: `"${c.column}" definido como target manual.`,
+                      });
+                    } else {
+                      toast({
+                        title: "Coluna não encontrada",
+                        description: `"${c.column}" não está disponível no dataset atual.`,
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs transition-all hover:shadow-sm cursor-pointer ${
+                    appliedTargetColumn === c.column
+                      ? "border-primary bg-primary/10 text-primary font-medium"
+                      : "border-secondary/40 bg-background hover:border-secondary/60"
+                  }`}
+                >
+                  <Target className="w-3 h-3" />
+                  <span className="font-mono font-medium">{c.column}</span>
+                  <Badge variant="secondary" className="text-[9px] py-0 px-1">
+                    {Math.round(c.score * 100)}%
+                  </Badge>
+                  {c.reason && (
+                    <span className="text-muted-foreground text-[10px] max-w-[120px] truncate">{c.reason}</span>
+                  )}
+                </button>
+              ))}
+              {(contractHints.tde_value_candidates || []).map((c) => (
+                <button
+                  key={`value-${c.column}`}
+                  onClick={() => {
+                    if (columns.some(col => col.name === c.column)) {
+                      handleTargetChange(c.column);
+                      setAppliedTargetColumn(c.column);
+                      setInferredProblemType("regression");
+                      toast({
+                        title: "Target aplicado",
+                        description: `"${c.column}" definido como target (regressão).`,
+                      });
+                    } else {
+                      toast({
+                        title: "Coluna não encontrada",
+                        description: `"${c.column}" não está disponível no dataset atual.`,
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md border text-xs transition-all hover:shadow-sm cursor-pointer ${
+                    appliedTargetColumn === c.column
+                      ? "border-primary bg-primary/10 text-primary font-medium"
+                      : "border-accent/40 bg-background hover:border-accent/60"
+                  }`}
+                >
+                  <Target className="w-3 h-3" />
+                  <span className="font-mono font-medium">{c.column}</span>
+                  <Badge variant="outline" className="text-[9px] py-0 px-1">
+                    valor
+                  </Badge>
+                  <Badge variant="secondary" className="text-[9px] py-0 px-1">
+                    {Math.round(c.score * 100)}%
+                  </Badge>
+                </button>
+              ))}
+            </div>
+          </div>
         )}
 
         {/* Problem Inference Panel (replaces old Lys suggestions) */}

@@ -125,12 +125,17 @@ serve(async (req: Request) => {
     }
 
     // ===== 4.2 INTENT/CONTRACT GATE =====
-    const hasIntent = !!(aiCtx?.intent?.objective);
+    // Check multiple possible field names for backward compat
+    const intentObj = aiCtx?.intent || {};
+    const intentContract = aiCtx?.intent_contract || {};
+    const intentBase = intentContract?.intent_base || {};
+    const intentDeclaredObj = intentObj.declared_objective || intentBase.declared_objective || intentObj.objective || "";
+    const hasIntent = !!intentDeclaredObj;
     gates.push({
       gate: "intent",
       status: hasIntent ? "PASS" : "WARN",
       message: hasIntent
-        ? `Intent definido: ${aiCtx.intent.objective?.substring(0, 60)}`
+        ? `Intent definido: ${intentDeclaredObj.substring(0, 60)}`
         : "Intent Contract não definido. Recomendado: gere na Etapa 1.",
     });
 
@@ -139,7 +144,7 @@ serve(async (req: Request) => {
       const sv = (selection as any).selection_version || 1;
       const feats = (selection as any).selected_features as string[] || [];
       const targetCol = (selection as any).target_column as string;
-      const isLabelBuilder = targetCol === "_label_";
+      const isLabelBuilder = targetCol === "_label_" || targetCol === "label";
 
       // If _label_, verify label builder exists and is ready
       let labelBuilderOk = true;
