@@ -21,10 +21,40 @@ import {
 import {
   Sparkles, Loader2, CheckCircle, AlertTriangle, XCircle,
   ChevronDown, ChevronUp, Eye, Save, Wand2, Info, ArrowRightLeft,
+  Star, RefreshCw,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { LABEL_TEMPLATES, type LabelTemplate } from "@/config/labelTemplates";
+
+// ═══ TDE Recommendation Types ══════════════════════════════════
+interface TDERecommendation {
+  template_id: string;
+  confidence: number;
+  business_name: string;
+  why_this: string[];
+  params_suggestion: Record<string, unknown>;
+  required_signals: string[];
+  expected_problem_type: string;
+  is_fallback: boolean;
+}
+
+interface TDERecommendResponse {
+  success: boolean;
+  recommendations: TDERecommendation[];
+  fallback_used: boolean;
+  notes: string[];
+  signals: {
+    entity_ok: boolean;
+    time_ok: boolean;
+    value_ok: boolean;
+    status_ok: boolean;
+    shape: string;
+  };
+  compliance_restrictions?: {
+    disable_free_text_feedback?: boolean;
+  };
+}
 
 // ═══ Quality Gate Types ═══════════════════════════════════════
 interface TemplateQualityInfo {
@@ -101,6 +131,77 @@ const UNIVERSAL_TEMPLATE_IDS = [
   "churn_generic",
 ];
 
+// ═══ TDE Recommendation Card ══════════════════════════════════
+
+function RecommendationCard({
+  rec,
+  onSelect,
+  isActive,
+}: {
+  rec: TDERecommendation;
+  onSelect: () => void;
+  isActive: boolean;
+}) {
+  return (
+    <div
+      className={`relative p-3 rounded-lg border transition-all cursor-pointer hover:shadow-md ${
+        isActive
+          ? "border-primary bg-primary/10 shadow-sm"
+          : rec.is_fallback
+            ? "border-amber-500/30 bg-amber-500/5 hover:border-amber-500/50"
+            : "border-accent/30 bg-accent/5 hover:border-accent/50"
+      }`}
+      onClick={onSelect}
+    >
+      <div className="flex items-start justify-between gap-2 mb-1.5">
+        <p className="text-xs font-semibold leading-tight">{rec.business_name}</p>
+        <Badge
+          variant="outline"
+          className={`text-[10px] shrink-0 ${
+            rec.confidence >= 0.7 ? "border-accent/50 text-accent" :
+            rec.confidence >= 0.5 ? "border-primary/50 text-primary" :
+            "border-muted-foreground/50 text-muted-foreground"
+          }`}
+        >
+          {(rec.confidence * 100).toFixed(0)}%
+        </Badge>
+      </div>
+
+      {rec.is_fallback && (
+        <Badge variant="secondary" className="text-[9px] mb-1.5">universal</Badge>
+      )}
+
+      <ul className="space-y-0.5 mb-2">
+        {rec.why_this.slice(0, 3).map((reason, i) => (
+          <li key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
+            <span className="text-primary mt-0.5">•</span>
+            <span>{reason}</span>
+          </li>
+        ))}
+      </ul>
+
+      <Button
+        variant={isActive ? "default" : "outline"}
+        size="sm"
+        className="w-full text-[11px] h-7"
+        onClick={(e) => { e.stopPropagation(); onSelect(); }}
+      >
+        {isActive ? (
+          <>
+            <CheckCircle className="w-3 h-3 mr-1" />
+            Selecionado
+          </>
+        ) : (
+          <>
+            <Wand2 className="w-3 h-3 mr-1" />
+            Usar este template
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
+
 // ═══ Component ═════════════════════════════════════════════════
 
 export default function TargetBuilderPanel({
@@ -123,11 +224,42 @@ export default function TargetBuilderPanel({
   const [topAlternative, setTopAlternative] = useState<RecommendedAlternative | null>(null);
   const [qualityLoading, setQualityLoading] = useState(false);
 
+  // TDE Recommendations state
+  const [tdeRecs, setTdeRecs] = useState<TDERecommendation[]>([]);
+  const [tdeFallbackUsed, setTdeFallbackUsed] = useState(false);
+  const [tdeLoading, setTdeLoading] = useState(false);
+  const [tdeLoaded, setTdeLoaded] = useState(false);
+  const [complianceRestrictions, setComplianceRestrictions] = useState<{ disable_free_text_feedback?: boolean }>({});
+
   // Intent contract state (fetched from AI context)
   const [resolvedIndustry, setResolvedIndustry] = useState<string>(industry || "");
   const [declaredObjective, setDeclaredObjective] = useState<string>("");
   const [adapterTemplates, setAdapterTemplates] = useState<{ template_id: string; display_name: string; problem_type: string }[]>([]);
   const [contextLoaded, setContextLoaded] = useState(false);
+
+  // ─── Fetch TDE recommendations ────────────────────────────
+  const fetchTDERecommendations = useCallback(async () => {
+    setTdeLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("tde-recommend-targets", {
+        body: { project_id: projectId },
+      });
+      if (error) throw error;
+      const resp = data as TDERecommendResponse;
+      if (resp.success && resp.recommendations?.length > 0) {
+        setTdeRecs(resp.recommendations);
+        setTdeFallbackUsed(resp.fallback_used);
+        if (resp.compliance_restrictions) {
+          setComplianceRestrictions(resp.compliance_restrictions);
+        }
+      }
+    } catch (err) {
+      console.error("[TargetBuilderPanel] TDE recommendations error:", err);
+    } finally {
+      setTdeLoading(false);
+      setTdeLoaded(true);
+    }
+  }, [projectId]);
 
   // Fetch intent contract from project_ai_context
   useEffect(() => {
@@ -157,25 +289,38 @@ export default function TargetBuilderPanel({
       }
     };
     fetchContext();
-  }, [projectId]);
+    fetchTDERecommendations();
+  }, [projectId, fetchTDERecommendations]);
 
   // Build available templates: adapter first, then universal fallback
   const effectiveIndustry = resolvedIndustry || industry || "";
   const mergedRecommended = adapterTemplates.length > 0 ? adapterTemplates : (recommendedTemplates || []);
 
+  // Build set of TDE-recommended template IDs
+  const tdeRecIds = new Set(tdeRecs.map(r => r.template_id));
+
   const availableTemplates: LabelTemplate[] = [];
   let templateSource: "adapter" | "fallback" = "fallback";
 
-  // 1) Adapter recommended templates (highest priority)
+  // 1) TDE recommended templates first (highest priority)
+  for (const rec of tdeRecs) {
+    const t = LABEL_TEMPLATES[rec.template_id];
+    if (t && !availableTemplates.find(a => a.template_id === t.template_id)) {
+      availableTemplates.push(t);
+      if (!rec.is_fallback) templateSource = "adapter";
+    }
+  }
+
+  // 2) Adapter recommended templates
   for (const rt of mergedRecommended) {
     const t = LABEL_TEMPLATES[rt.template_id];
-    if (t) {
+    if (t && !availableTemplates.find(a => a.template_id === t.template_id)) {
       availableTemplates.push(t);
       templateSource = "adapter";
     }
   }
 
-  // 2) Industry-matching templates
+  // 3) Industry-matching templates
   if (effectiveIndustry) {
     for (const t of Object.values(LABEL_TEMPLATES)) {
       if (t.industry === effectiveIndustry && !availableTemplates.find(a => a.template_id === t.template_id)) {
@@ -185,8 +330,8 @@ export default function TargetBuilderPanel({
     }
   }
 
-  // 3) Always add universal templates
-  const hadAdapterTemplates = availableTemplates.length > 0;
+  // 4) Always add universal templates
+  const hadAdapterTemplates = availableTemplates.some(t => !UNIVERSAL_TEMPLATE_IDS.includes(t.template_id));
   for (const uid of UNIVERSAL_TEMPLATE_IDS) {
     const t = LABEL_TEMPLATES[uid];
     if (t && !availableTemplates.find(a => a.template_id === t.template_id)) {
@@ -194,7 +339,7 @@ export default function TargetBuilderPanel({
     }
   }
 
-  // 4) If still empty (shouldn't happen), add ALL
+  // 5) If still empty, add ALL
   if (availableTemplates.length === 0) {
     for (const t of Object.values(LABEL_TEMPLATES)) {
       if (!availableTemplates.find(a => a.template_id === t.template_id)) {
@@ -205,16 +350,19 @@ export default function TargetBuilderPanel({
 
   if (!hadAdapterTemplates) templateSource = "fallback";
 
-  // Auto-select first recommended template
+  // Auto-select first TDE recommendation or first template
   useEffect(() => {
-    if (autoSelected || !contextLoaded || selectedTemplate) return;
+    if (autoSelected || !contextLoaded || !tdeLoaded || selectedTemplate) return;
     if (!labelBuilderRequired) return;
 
-    if (availableTemplates.length > 0) {
+    if (tdeRecs.length > 0) {
+      setSelectedTemplate(tdeRecs[0].template_id);
+      setAutoSelected(true);
+    } else if (availableTemplates.length > 0) {
       setSelectedTemplate(availableTemplates[0].template_id);
       setAutoSelected(true);
     }
-  }, [contextLoaded, labelBuilderRequired, availableTemplates.length, autoSelected, selectedTemplate]);
+  }, [contextLoaded, tdeLoaded, labelBuilderRequired, tdeRecs.length, availableTemplates.length, autoSelected, selectedTemplate]);
 
   // Fetch quality gate when template changes
   useEffect(() => {
@@ -232,7 +380,6 @@ export default function TargetBuilderPanel({
     setParams(defaults);
     setResult(null);
 
-    // Fetch recommendations to get quality info for selected + top alternative
     const fetchQuality = async () => {
       setQualityLoading(true);
       try {
@@ -253,7 +400,6 @@ export default function TargetBuilderPanel({
         } else {
           setQualityInfo(null);
         }
-        // Find top alternative (not the current one, not blocked)
         const alt = recs.find((r: any) => r.template_id !== selectedTemplate && !r.is_hard_stop);
         if (alt && current && alt.confidence > current.confidence) {
           setTopAlternative({
@@ -307,7 +453,23 @@ export default function TargetBuilderPanel({
 
   const updateParam = (key: string, value: any) => {
     setParams(prev => ({ ...prev, [key]: value }));
-    setResult(null); // Invalidate preview when params change
+    setResult(null);
+  };
+
+  const handleSelectRecommendation = (rec: TDERecommendation) => {
+    setSelectedTemplate(rec.template_id);
+    // Apply suggested params if available
+    if (rec.params_suggestion && Object.keys(rec.params_suggestion).length > 0) {
+      const template = LABEL_TEMPLATES[rec.template_id];
+      if (template) {
+        const merged: Record<string, any> = {};
+        for (const p of template.params) {
+          merged[p.key] = (rec.params_suggestion as Record<string, any>)[p.key] ?? p.default_value;
+        }
+        setParams(merged);
+      }
+    }
+    setResult(null);
   };
 
   const template = selectedTemplate ? LABEL_TEMPLATES[selectedTemplate] : null;
@@ -315,7 +477,7 @@ export default function TargetBuilderPanel({
   const isReady = result?.builder_status === "ready";
 
   if (availableTemplates.length === 0 && !labelBuilderRequired) {
-    return null; // Nothing to show
+    return null;
   }
 
   return (
@@ -370,8 +532,57 @@ export default function TargetBuilderPanel({
             Industry: {effectiveIndustry || "—"} | Objective: {declaredObjective || "—"} | Source: {templateSource}
           </p>
 
+          {/* ═══ TDE Recommendations — Top 3 ═══ */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-1.5">
+                <Star className="w-3.5 h-3.5 text-primary" />
+                <span className="text-xs font-semibold">Recomendado para você</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-6 text-[10px] text-muted-foreground"
+                onClick={fetchTDERecommendations}
+                disabled={tdeLoading}
+              >
+                {tdeLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              </Button>
+            </div>
+
+            {tdeLoading && !tdeLoaded && (
+              <div className="flex items-center gap-2 p-3 text-xs text-muted-foreground">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                Analisando seu dataset para recomendar targets...
+              </div>
+            )}
+
+            {tdeLoaded && tdeRecs.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                {tdeRecs.map((rec) => (
+                  <RecommendationCard
+                    key={rec.template_id}
+                    rec={rec}
+                    isActive={selectedTemplate === rec.template_id}
+                    onSelect={() => handleSelectRecommendation(rec)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Fallback alert */}
+            {tdeLoaded && tdeFallbackUsed && (
+              <div className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+                <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  Template genérico recomendado — revise os parâmetros para melhor adequação ao seu caso de uso.
+                </p>
+              </div>
+            )}
+          </div>
+
           {/* Adapter / Fallback badge */}
-          {templateSource === "adapter" && effectiveIndustry && (
+          {templateSource === "adapter" && effectiveIndustry && !tdeFallbackUsed && (
             <div className="flex items-start gap-2 p-2.5 bg-accent/10 border border-accent/20 rounded-lg">
               <CheckCircle className="w-3.5 h-3.5 text-accent mt-0.5 flex-shrink-0" />
               <p className="text-xs text-accent">
@@ -379,7 +590,7 @@ export default function TargetBuilderPanel({
               </p>
             </div>
           )}
-          {templateSource === "fallback" && (
+          {templateSource === "fallback" && !tdeFallbackUsed && (
             <div className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
               <p className="text-xs text-amber-600 dark:text-amber-400">
@@ -401,7 +612,10 @@ export default function TargetBuilderPanel({
                     <div className="flex items-center gap-2">
                       <span>{t.display_name}</span>
                       <Badge variant="outline" className="text-[10px]">{t.problem_type}</Badge>
-                      {UNIVERSAL_TEMPLATE_IDS.includes(t.template_id) && (
+                      {tdeRecIds.has(t.template_id) && (
+                        <Badge className="bg-primary/20 text-primary border-primary/30 text-[9px]">recomendado</Badge>
+                      )}
+                      {UNIVERSAL_TEMPLATE_IDS.includes(t.template_id) && !tdeRecIds.has(t.template_id) && (
                         <Badge variant="secondary" className="text-[9px]">universal</Badge>
                       )}
                     </div>
@@ -637,6 +851,7 @@ export default function TargetBuilderPanel({
                 projectId={projectId}
                 templateId={selectedTemplate}
                 context="target_builder"
+                industry={complianceRestrictions.disable_free_text_feedback ? "health" : undefined}
               />
             </div>
           )}
