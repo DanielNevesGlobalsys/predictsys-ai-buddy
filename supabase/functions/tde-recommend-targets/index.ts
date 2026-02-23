@@ -143,6 +143,65 @@ const TEMPLATE_REGISTRY: Record<string, TemplateSpec> = {
   },
 };
 
+// ═══ Business metadata for each template ══════════════════════
+const BUSINESS_META: Record<string, { title: string; summary: string; examples: string[] }> = {
+  churn_retail: {
+    title: "Risco de perda de cliente (Varejo)",
+    summary: "Identifica clientes que podem parar de comprar, com base na data da última compra.",
+    examples: ["Cliente não comprou nos últimos 90 dias", "Frequência de compra caiu drasticamente"],
+  },
+  no_show_health: {
+    title: "Risco de falta em consulta",
+    summary: "Marca pacientes que têm alta probabilidade de faltar à próxima consulta.",
+    examples: ["Paciente faltou às duas últimas consultas", "Horário de consulta coincide com padrão de faltas"],
+  },
+  adesao_tratamento_health: {
+    title: "Abandono de tratamento (Saúde)",
+    summary: "Detecta pacientes que abandonaram o tratamento por ficarem muito tempo sem retorno.",
+    examples: ["Paciente sem consulta há mais de 60 dias", "Gap entre retornos maior que o esperado"],
+  },
+  churn_generic: {
+    title: "Risco de Inatividade (sem atividade por N dias)",
+    summary: "Marca como 1 quem ficou sem comprar ou interagir por N dias após a última atividade.",
+    examples: ["Cliente não comprou nos últimos 90 dias", "Usuário sem login há 60 dias"],
+  },
+  generic_event_no_activity: {
+    title: "Inatividade geral (Universal)",
+    summary: "Detecta entidades que pararam de gerar eventos nos últimos N dias.",
+    examples: ["Sem compras no período", "Sem interações registradas há mais de 90 dias"],
+  },
+  generic_threshold_binary: {
+    title: "Limiar numérico (Universal)",
+    summary: "Define como positivo (1) qualquer linha onde o valor de uma coluna ultrapasse o limite escolhido.",
+    examples: ["Atraso maior que 30 dias = inadimplente", "Score acima de 700 = aprovado"],
+  },
+  generic_future_sum_regression: {
+    title: "Previsão de receita/volume futuro (Regressão)",
+    summary: "Calcula a soma de um valor nos próximos N dias para prever receita ou volume.",
+    examples: ["Receita esperada nos próximos 90 dias", "Volume de vendas no próximo trimestre"],
+  },
+  inadimplencia_por_atraso: {
+    title: "Inadimplência por dias de atraso (Finanças)",
+    summary: "Marca parcelas como inadimplentes quando o pagamento atrasa mais que N dias.",
+    examples: ["Parcela sem pagamento há 30+ dias", "Data de pagamento nula = não pago"],
+  },
+  inadimplencia_por_status: {
+    title: "Inadimplência por status (Finanças)",
+    summary: "Usa a coluna de status para identificar parcelas ou contratos inadimplentes.",
+    examples: ["Status = 'em_aberto' ou 'atrasado'", "Status diferente de 'pago'"],
+  },
+  weak_supervision_assisted: {
+    title: "Modo assistido (múltiplas regras)",
+    summary: "Combina regras fracas para gerar o alvo quando não há rótulo direto nos dados.",
+    examples: ["Combinação de 3+ regras de negócio", "Votação ponderada entre sinais"],
+  },
+  human_labeling_assisted: {
+    title: "Rotulagem rápida (especialista define)",
+    summary: "Permite que um especialista rotule 30-200 exemplos para treinar um modelo inicial.",
+    examples: ["Especialista classifica amostra manual", "Modelo seed treinado com rótulos humanos"],
+  },
+};
+
 const UNIVERSAL_IDS = [
   "generic_event_no_activity",
   "generic_threshold_binary",
@@ -197,6 +256,14 @@ interface Recommendation {
   template_id: string;
   confidence: number;
   business_name: string;
+  business_title: string;
+  business_summary: string;
+  business_examples: string[];
+  technical_details: {
+    target_type: string;
+    requires_time: boolean;
+    requires_entity: boolean;
+  };
   why_this: string[];
   params_suggestion: Record<string, unknown>;
   required_signals: string[];
@@ -428,10 +495,19 @@ serve(async (req) => {
       const rankReason = item.reasons.length > 0 ? item.reasons[0] : (isFallback ? "Template universal de fallback" : "Compatível com o dataset");
       const expectedQuality: "high" | "medium" | "low" | "unknown" = item.score >= 0.75 ? "high" : item.score >= 0.5 ? "medium" : item.score >= 0.3 ? "low" : "unknown";
 
+      const meta = BUSINESS_META[item.tid];
       recommendations.push({
         template_id: item.tid,
         confidence: Math.round(item.score * 100) / 100,
         business_name: spec.display_name,
+        business_title: meta?.title || spec.display_name,
+        business_summary: meta?.summary || "",
+        business_examples: meta?.examples || [],
+        technical_details: {
+          target_type: spec.problem_type,
+          requires_time: spec.requires_time_anchor,
+          requires_entity: spec.requires_entity_key,
+        },
         why_this: item.reasons.slice(0, 4),
         params_suggestion: spec.default_params,
         required_signals: spec.required_signals,
@@ -450,10 +526,15 @@ serve(async (req) => {
       const fallbackId = UNIVERSAL_IDS.find(u => !usedIds.has(u)) || UNIVERSAL_IDS[0];
       const fbSpec = TEMPLATE_REGISTRY[fallbackId];
       if (fbSpec && recommendations.length >= 3) {
+        const fbMeta = BUSINESS_META[fallbackId];
         recommendations[2] = {
           template_id: fallbackId,
           confidence: 0.40,
           business_name: fbSpec.display_name,
+          business_title: fbMeta?.title || fbSpec.display_name,
+          business_summary: fbMeta?.summary || "",
+          business_examples: fbMeta?.examples || [],
+          technical_details: { target_type: fbSpec.problem_type, requires_time: fbSpec.requires_time_anchor, requires_entity: fbSpec.requires_entity_key },
           why_this: ["Fallback universal — funciona com qualquer dataset"],
           params_suggestion: fbSpec.default_params,
           required_signals: fbSpec.required_signals,
@@ -472,10 +553,15 @@ serve(async (req) => {
       if (!filler) break;
       const spec = TEMPLATE_REGISTRY[filler];
       if (!spec) break;
+      const fillerMeta = BUSINESS_META[filler];
       recommendations.push({
         template_id: filler,
         confidence: 0.35,
         business_name: spec.display_name,
+        business_title: fillerMeta?.title || spec.display_name,
+        business_summary: fillerMeta?.summary || "",
+        business_examples: fillerMeta?.examples || [],
+        technical_details: { target_type: spec.problem_type, requires_time: spec.requires_time_anchor, requires_entity: spec.requires_entity_key },
         why_this: ["Fallback universal — funciona com qualquer dataset"],
         params_suggestion: spec.default_params,
         required_signals: spec.required_signals,

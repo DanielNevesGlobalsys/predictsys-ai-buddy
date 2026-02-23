@@ -142,6 +142,10 @@ function RecommendationCard({
   onSelect: () => void;
   isActive: boolean;
 }) {
+  const [showTechnical, setShowTechnical] = useState(false);
+  const title = (rec as any).business_title || rec.business_name;
+  const summary = (rec as any).business_summary || "";
+
   return (
     <div
       className={`relative p-3 rounded-lg border transition-all cursor-pointer hover:shadow-md ${
@@ -154,7 +158,7 @@ function RecommendationCard({
       onClick={onSelect}
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
-        <p className="text-xs font-semibold leading-tight">{rec.business_name}</p>
+        <p className="text-xs font-semibold leading-tight">{title}</p>
         <Badge
           variant="outline"
           className={`text-[10px] shrink-0 ${
@@ -171,14 +175,37 @@ function RecommendationCard({
         <Badge variant="secondary" className="text-[9px] mb-1.5">universal</Badge>
       )}
 
-      <ul className="space-y-0.5 mb-2">
-        {rec.why_this.slice(0, 3).map((reason, i) => (
-          <li key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
-            <span className="text-primary mt-0.5">•</span>
-            <span>{reason}</span>
-          </li>
-        ))}
-      </ul>
+      {summary && (
+        <p className="text-[10px] text-muted-foreground mb-2 leading-relaxed">{summary}</p>
+      )}
+
+      {!summary && (
+        <ul className="space-y-0.5 mb-2">
+          {rec.why_this.slice(0, 3).map((reason, i) => (
+            <li key={i} className="text-[10px] text-muted-foreground flex items-start gap-1">
+              <span className="text-primary mt-0.5">•</span>
+              <span>{reason}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {/* Technical details toggle */}
+      <button
+        className="text-[10px] text-muted-foreground hover:text-foreground mb-2 flex items-center gap-1"
+        onClick={(e) => { e.stopPropagation(); setShowTechnical(!showTechnical); }}
+      >
+        {showTechnical ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
+        {showTechnical ? "Ocultar detalhes técnicos" : "Ver detalhes técnicos"}
+      </button>
+      {showTechnical && (
+        <div className="text-[10px] text-muted-foreground space-y-0.5 mb-2 p-2 bg-muted/30 rounded">
+          <p><span className="font-medium">ID:</span> {rec.template_id}</p>
+          <p><span className="font-medium">Tipo:</span> {rec.expected_problem_type}</p>
+          {(rec as any).rank_reason && <p><span className="font-medium">Razão:</span> {(rec as any).rank_reason}</p>}
+          {(rec as any).expected_quality && <p><span className="font-medium">Qualidade esperada:</span> {(rec as any).expected_quality}</p>}
+        </div>
+      )}
 
       <Button
         variant={isActive ? "default" : "outline"}
@@ -189,12 +216,12 @@ function RecommendationCard({
         {isActive ? (
           <>
             <CheckCircle className="w-3 h-3 mr-1" />
-            Selecionado
+            Forma selecionada
           </>
         ) : (
           <>
             <Wand2 className="w-3 h-3 mr-1" />
-            Usar este template
+            Usar esta forma
           </>
         )}
       </Button>
@@ -523,8 +550,8 @@ export default function TargetBuilderPanel({
           <Wand2 className="w-4 h-4 text-primary" />
           <span className="text-sm font-semibold">
             {labelBuilderRequired
-              ? "Gerar Target automaticamente (recomendado)"
-              : "Target Builder (opcional)"}
+              ? "Forma de construir o alvo (recomendado)"
+              : "Forma de construir o alvo (opcional)"}
           </span>
           {isReady && (
             <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
@@ -602,8 +629,8 @@ export default function TargetBuilderPanel({
             {tdeLoaded && tdeFallbackUsed && (
               <div className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
                 <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
-                <p className="text-[11px] text-amber-600 dark:text-amber-400">
-                  Template genérico recomendado — revise os parâmetros para melhor adequação ao seu caso de uso.
+              <p className="text-[11px] text-amber-600 dark:text-amber-400">
+                  Forma genérica recomendada — revise os parâmetros para melhor adequação ao seu caso de uso.
                 </p>
               </div>
             )}
@@ -614,7 +641,7 @@ export default function TargetBuilderPanel({
             <div className="flex items-start gap-2 p-2.5 bg-accent/10 border border-accent/20 rounded-lg">
               <CheckCircle className="w-3.5 h-3.5 text-accent mt-0.5 flex-shrink-0" />
               <p className="text-xs text-accent">
-                Template do setor: <strong>{effectiveIndustry.charAt(0).toUpperCase() + effectiveIndustry.slice(1)}</strong>
+                Forma específica do setor: <strong>{effectiveIndustry.charAt(0).toUpperCase() + effectiveIndustry.slice(1)}</strong>
               </p>
             </div>
           )}
@@ -622,17 +649,17 @@ export default function TargetBuilderPanel({
             <div className="flex items-start gap-2 p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-lg">
               <AlertTriangle className="w-3.5 h-3.5 text-amber-500 mt-0.5 flex-shrink-0" />
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Fallback genérico (sem template específico para o objetivo/indústria). Os templates universais funcionam com qualquer dataset.
+                Fallback genérico (sem forma específica para o objetivo/indústria). As formas universais funcionam com qualquer dataset.
               </p>
             </div>
           )}
 
           {/* Template selector */}
           <div className="space-y-2">
-            <Label className="text-sm font-medium">Template de Target</Label>
+            <Label className="text-sm font-medium">Forma de construir o alvo</Label>
             <Select value={selectedTemplate} onValueChange={setSelectedTemplate}>
               <SelectTrigger className="bg-background">
-                <SelectValue placeholder="Selecione um template..." />
+                <SelectValue placeholder="Selecione a forma de construir o alvo..." />
               </SelectTrigger>
               <SelectContent className="bg-popover border border-border shadow-lg z-50">
                 {availableTemplates.map((t) => (
@@ -677,7 +704,7 @@ export default function TargetBuilderPanel({
                       qualityInfo.is_hard_stop ? "text-destructive" : "text-amber-600 dark:text-amber-400"
                     }`}>
                       {qualityInfo.is_hard_stop
-                        ? "Template bloqueado — alta taxa de falha de sanidade"
+                        ? "Forma bloqueada — alta taxa de falha de sanidade"
                         : qualityInfo.stats.success_rate < 0.5
                           ? "Baixa taxa de sucesso histórica"
                           : "Taxa de falha de sanidade elevada"}

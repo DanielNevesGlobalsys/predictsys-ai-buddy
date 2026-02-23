@@ -1,40 +1,35 @@
 import { useTranslation } from "react-i18next";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card } from "@/components/ui/card";
 import {
   Bot,
   Sparkles,
   Loader2,
   AlertTriangle,
-  Check,
-  Target,
-  TrendingUp,
   Brain,
   ChevronDown,
   ChevronUp,
   Lightbulb,
-  BarChart3,
   RefreshCw,
-  Building2,
+  Target,
+  Eye,
 } from "lucide-react";
 import { useState } from "react";
-import type {
-  ProblemInference,
-  SuggestedTarget,
-  SuggestedPredictor,
-} from "@/hooks/useProblemInference";
+import type { ProblemInference } from "@/hooks/useProblemInference";
 import IndustryBadge from "./IndustryBadge";
-import TargetCard from "./TargetCard";
 
 interface ProblemInferencePanelProps {
   inference: ProblemInference | null;
   loading: boolean;
   error: string | null;
   onGenerate: () => void;
-  onApplyTarget: (target: SuggestedTarget, predictors: SuggestedPredictor[]) => void;
-  appliedTargetColumn?: string | null;
   hasEDA: boolean;
+  /** If target is already configured, render compact mode */
+  targetSource?: string | null;
+  /** Scroll/focus callback to target builder */
+  onScrollToBuilder?: () => void;
+  /** Scroll/focus callback to active target cards */
+  onScrollToActiveTarget?: () => void;
 }
 
 const ProblemInferencePanel = ({
@@ -42,13 +37,15 @@ const ProblemInferencePanel = ({
   loading,
   error,
   onGenerate,
-  onApplyTarget,
-  appliedTargetColumn,
   hasEDA,
+  targetSource,
+  onScrollToBuilder,
+  onScrollToActiveTarget,
 }: ProblemInferencePanelProps) => {
   const { t } = useTranslation();
-  const [expandedTarget, setExpandedTarget] = useState<string | null>(null);
   const [showNarrative, setShowNarrative] = useState(false);
+
+  const isCompact = !!targetSource;
 
   if (!hasEDA) {
     return (
@@ -78,6 +75,9 @@ const ProblemInferencePanel = ({
           <h3 className="font-semibold text-sm">
             {t("inference.title", "Inferência de Problema — Lys")}
           </h3>
+          {isCompact && (
+            <Badge variant="outline" className="text-[10px]">compacto</Badge>
+          )}
         </div>
         <Button
           variant="outline"
@@ -104,12 +104,12 @@ const ProblemInferencePanel = ({
         </Button>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        {t(
-          "inference.description",
-          "A Lys analisa o EDA, identifica o segmento de negócio e infere problemas previsíveis — tudo por heurística, sem custo de IA."
-        )}
-      </p>
+      {!inference && !loading && (
+        <p className="text-xs text-muted-foreground">
+          A Lys ajuda a entender o objetivo do projeto.
+          Para escolher ou gerar a variável alvo, utilize a seção "Forma de construir o alvo" abaixo.
+        </p>
+      )}
 
       {/* Error */}
       {error && (
@@ -153,87 +153,48 @@ const ProblemInferencePanel = ({
             </div>
           )}
 
-          {/* Didactic summary */}
-          {inference.industry && inference.suggested_targets.length > 0 && (
-            <div className="p-3 bg-primary/5 border border-primary/15 rounded-lg">
-              <p className="text-xs text-foreground leading-relaxed">
-                {getDidacticText(
-                  inference.industry.label,
-                  inference.suggested_targets[0],
-                  t
-                )}
-              </p>
+          {/* Detected problem type */}
+          {inference.problem_type && (
+            <div className="flex items-center gap-2">
+              <Badge variant="outline" className="text-xs">
+                Tipo detectado: {inference.problem_type === "classification" ? "Classificação" : "Regressão"}
+              </Badge>
             </div>
           )}
 
-          {/* Target suggestions */}
-          {inference.suggested_targets.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <Target className="w-4 h-4 text-primary" />
-                <span className="text-sm font-medium">
-                  {t("inference.suggestedTargets", "Targets sugeridos")}
-                </span>
-                <Badge variant="outline" className="text-xs">
-                  {inference.suggested_targets.length}
-                </Badge>
-              </div>
+          {/* Didactic guidance (compact vs full) */}
+          <div className="p-3 bg-primary/5 border border-primary/15 rounded-lg">
+            <p className="text-xs text-foreground leading-relaxed">
+              A Lys ajuda a entender o objetivo do projeto.
+              Para escolher ou gerar a variável alvo, utilize a seção <strong>"Forma de construir o alvo"</strong> abaixo.
+            </p>
+          </div>
 
-              <div className="grid gap-2">
-                {inference.suggested_targets.map((target) => (
-                  <TargetCard
-                    key={target.column}
-                    target={target}
-                    isApplied={appliedTargetColumn === target.column}
-                    isExpanded={expandedTarget === target.column}
-                    onToggleExpand={() =>
-                      setExpandedTarget(
-                        expandedTarget === target.column ? null : target.column
-                      )
-                    }
-                    onApply={() =>
-                      onApplyTarget(target, inference.suggested_predictors)
-                    }
-                  />
-                ))}
-              </div>
-            </div>
+          {/* CTA Button */}
+          {isCompact ? (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onScrollToActiveTarget}
+            >
+              <Eye className="w-3.5 h-3.5 mr-1.5" />
+              Ver alvo ativo
+            </Button>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full"
+              onClick={onScrollToBuilder}
+            >
+              <Target className="w-3.5 h-3.5 mr-1.5" />
+              Configurar alvo
+            </Button>
           )}
 
-          {/* Top predictors summary */}
-          {inference.suggested_predictors.length > 0 && (
-            <div className="space-y-2">
-              <div className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-secondary" />
-                <span className="text-sm font-medium">
-                  {t("inference.topPredictors", "Melhores preditoras")}
-                </span>
-                <Badge variant="outline" className="text-xs">
-                  {inference.suggested_predictors.length}{" "}
-                  {t("inference.columns", "colunas")}
-                </Badge>
-              </div>
-              <div className="flex flex-wrap gap-1">
-                {inference.suggested_predictors.slice(0, 8).map((p) => (
-                  <Badge
-                    key={p.column}
-                    variant="outline"
-                    className="text-xs font-mono"
-                  >
-                    {p.column}
-                  </Badge>
-                ))}
-                {inference.suggested_predictors.length > 8 && (
-                  <Badge variant="outline" className="text-xs">
-                    +{inference.suggested_predictors.length - 8}
-                  </Badge>
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Narrative toggle */}
-          {inference.narrative && (
+          {/* Narrative toggle (only in full mode) */}
+          {!isCompact && inference.narrative && (
             <div className="space-y-2">
               <Button
                 variant="ghost"
@@ -263,30 +224,5 @@ const ProblemInferencePanel = ({
     </div>
   );
 };
-
-function getDidacticText(
-  industryLabel: string,
-  bestTarget: SuggestedTarget,
-  t: any
-): string {
-  const targetType = bestTarget.type === "regression" ? "regressão" : "classificação";
-
-  const industryTexts: Record<string, string> = {
-    education:
-      "Com base nos dados importados, identificamos um padrão típico do setor educacional. O modelo sugere prever eventos que impactam a jornada do aluno, permitindo ações preventivas pela instituição.",
-    retail_shopping:
-      "Os dados apresentam características de varejo/shopping. O modelo pode antecipar comportamentos de lojistas e clientes, viabilizando estratégias comerciais mais assertivas.",
-    healthcare:
-      "O perfil dos dados é compatível com o setor de saúde. Modelos preditivos aqui podem reduzir custos, melhorar a alocação de recursos e antecipar eventos clínicos.",
-    logistics:
-      "O dataset tem perfil logístico. Predições podem melhorar pontualidade, reduzir custos com devoluções e otimizar a cadeia de suprimentos.",
-    financial:
-      "Os dados apresentam perfil financeiro. Modelos preditivos auxiliam na gestão de risco, aprovação de crédito e prevenção de inadimplência.",
-    generic:
-      `Com base nos padrões estatísticos, o modelo sugere um problema de ${targetType} que pode ser usado para antecipar eventos e apoiar decisões de negócio.`,
-  };
-
-  return industryTexts[industryLabel] || industryTexts.generic;
-}
 
 export default ProblemInferencePanel;
