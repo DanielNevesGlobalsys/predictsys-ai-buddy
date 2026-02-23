@@ -52,9 +52,10 @@ interface AnchorInfo {
 interface TargetPresenceScanProps {
   projectId: string;
   targetColumn: string | null;
+  targetSource?: "manual" | "label_builder";
 }
 
-const TargetPresenceScan = ({ projectId, targetColumn }: TargetPresenceScanProps) => {
+const TargetPresenceScan = ({ projectId, targetColumn, targetSource }: TargetPresenceScanProps) => {
   const [fileInfos, setFileInfos] = useState<FileTargetInfo[]>([]);
   const [entityKeys, setEntityKeys] = useState<EntityKeyInfo[]>([]);
   const [anchorInfo, setAnchorInfo] = useState<AnchorInfo | null>(null);
@@ -175,6 +176,25 @@ const TargetPresenceScan = ({ projectId, targetColumn }: TargetPresenceScanProps
   };
 
   if (!targetColumn || !scanDone) return null;
+
+  // Virtual label from label_builder — show green "generated" status, don't scan files
+  if (targetSource === "label_builder" && targetColumn === "label") {
+    return (
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <Search className="w-4 h-4 text-primary" />
+          <h4 className="text-sm font-semibold">Verificação do Target nos Arquivos</h4>
+        </div>
+        <Alert className="border-accent/30 bg-accent/5">
+          <CheckCircle className="h-4 w-4 text-accent" />
+          <AlertDescription className="text-xs">
+            <strong>Target "label" — Gerado no builder</strong> — A coluna será materializada automaticamente ao construir o dataset modelável. Não é necessária presença física nos arquivos.
+          </AlertDescription>
+        </Alert>
+      </Card>
+    );
+  }
+
   if (fileInfos.length <= 1 && fileInfos[0]?.hasTarget) return null;
 
   const filesWithTarget = fileInfos.filter(f => f.hasTarget);

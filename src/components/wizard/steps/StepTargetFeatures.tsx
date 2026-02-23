@@ -176,22 +176,47 @@ const StepTargetFeatures = ({
 
   const loadIntentInfo = async () => {
     if (!projectData.id) return;
-    const { data } = await supabase
-      .from("project_ai_context")
-      .select("context")
-      .eq("project_id", projectData.id)
-      .maybeSingle();
+    const [{ data: settingsData }, { data }] = await Promise.all([
+      supabase
+        .from("project_settings")
+        .select("industry, industry_source")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+      supabase
+        .from("project_ai_context")
+        .select("context")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+    ]);
+
+    // Read industry from SSOT (project_settings) first, fallback to AI context
+    let resolvedIndustry = "generic";
+    if (settingsData) {
+      const ind = (settingsData as any).industry;
+      if (ind) resolvedIndustry = ind;
+    }
+
+    let labelBuilderRequired = false;
+    let recommendedTemplates: { template_id: string; display_name: string; problem_type: string }[] = [];
+
     if (data?.context) {
       const ctx = data.context as Record<string, any>;
       const ic = ctx.intent_contract || ctx.intent || {};
       const ib = ic.intent_base || ic;
       const da = ic.domain_adapter || {};
-      setIntentInfo({
-        labelBuilderRequired: ib.label_builder_required || false,
-        recommendedTemplates: da.recommended_templates || [],
-        industry: da.industry || ib.industry_hint || "generic",
-      });
+      labelBuilderRequired = ib.label_builder_required || false;
+      recommendedTemplates = da.recommended_templates || [];
+      // Only use AI context industry as fallback if SSOT has generic/default
+      if (resolvedIndustry === "generic" && (da.industry || ib.industry_hint)) {
+        resolvedIndustry = da.industry || ib.industry_hint || "generic";
+      }
     }
+
+    setIntentInfo({
+      labelBuilderRequired,
+      recommendedTemplates,
+      industry: resolvedIndustry,
+    });
   };
 
   const loadContractHints = async () => {
@@ -885,7 +910,7 @@ const StepTargetFeatures = ({
 
         {/* Target Presence Scan */}
         {projectData.id && targetColumn && (
-          <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} />
+          <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} targetSource={targetSource} />
         )}
 
         {/* Features selection */}

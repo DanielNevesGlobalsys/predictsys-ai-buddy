@@ -3075,9 +3075,13 @@ export type Database = {
         Row: {
           excluded_columns: Json | null
           feature_columns: Json | null
+          industry: string
+          industry_source: string
           org_id: string | null
           problem_type: string | null
           project_id: string
+          segment: string | null
+          segment_source: string | null
           selected_template_id: string | null
           selected_template_params: Json | null
           target_column: string | null
@@ -3088,9 +3092,13 @@ export type Database = {
         Insert: {
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          industry?: string
+          industry_source?: string
           org_id?: string | null
           problem_type?: string | null
           project_id: string
+          segment?: string | null
+          segment_source?: string | null
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
@@ -3101,9 +3109,13 @@ export type Database = {
         Update: {
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          industry?: string
+          industry_source?: string
           org_id?: string | null
           problem_type?: string | null
           project_id?: string
+          segment?: string | null
+          segment_source?: string | null
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
