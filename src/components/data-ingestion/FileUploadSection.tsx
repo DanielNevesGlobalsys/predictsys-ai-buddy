@@ -54,7 +54,7 @@ interface ColumnInfo {
 }
 
 // ─── Constants ─────────────────────────────────────────────
-const SYNC_THRESHOLD = 50 * 1024 * 1024; // 50 MB — files above this use async import (edge functions have ~150MB body limit)
+const SYNC_THRESHOLD = 500 * 1024 * 1024; // 500 MB — internal fast-path, NOT a UX gate
 const MAX_FILE_SIZE = 10 * 1024 * 1024 * 1024; // 10 GB per file
 const SAMPLE_SIZE = 100000;
 
