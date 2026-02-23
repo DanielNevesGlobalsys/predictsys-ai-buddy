@@ -126,13 +126,23 @@ export default function TDEProfileCard({ projectId }: TDEProfileCardProps) {
         onClick={() => setExpanded(!expanded)}
         className="w-full flex items-center justify-between p-4 hover:bg-secondary/10 transition-colors"
       >
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <Layers className="w-4 h-4 text-secondary" />
           <span className="text-sm font-semibold">Target Discovery — Perfil do Dataset</span>
           {profile && (
-            <Badge variant="outline" className="text-[10px]">
-              {SHAPE_ICONS[profile.dataset_shape] || "📊"} {profile.dataset_shape_label}
-            </Badge>
+            <>
+              <Badge variant="outline" className="text-[10px]">
+                {SHAPE_ICONS[profile.dataset_shape] || "📊"} {profile.dataset_shape_label}
+              </Badge>
+              <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-[10px]">
+                Baseado no EDA
+              </Badge>
+            </>
+          )}
+          {profile?.profiled_at && (
+            <span className="text-[10px] text-muted-foreground ml-auto hidden sm:inline">
+              Última atualização: {new Date(profile.profiled_at).toLocaleString("pt-BR", { dateStyle: "short", timeStyle: "short" })}
+            </span>
           )}
         </div>
         {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}

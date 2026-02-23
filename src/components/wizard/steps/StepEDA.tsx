@@ -7,8 +7,8 @@ import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle } from "
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { useDatasetState } from "@/hooks/useDatasetState";
-import ContractHintsSuggestions from "./ContractHintsSuggestions";
 import TDEProfileCard from "./TDEProfileCard";
+import { supabase } from "@/integrations/supabase/client";
 
 interface StepEDAProps {
   projectData: ProjectData;
@@ -34,12 +34,29 @@ const STRATEGY_MESSAGES_OK: Record<string, string> = {
 const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const { t } = useTranslation();
   const ds = useDatasetState(projectData.id);
+  const [tdeAutoTriggered, setTdeAutoTriggered] = useState(false);
+  const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
 
   useEffect(() => {
     if (projectData.id) ds.load();
   }, [projectData.id]);
 
-  const handleEDAComplete = () => {};
+  // Auto-trigger TDE profile after EDA completes (idempotent, best-effort)
+  const handleEDAComplete = useCallback(async () => {
+    if (!projectData.id || tdeAutoTriggered) return;
+    setTdeAutoTriggered(true);
+    try {
+      await supabase.functions.invoke("tde-profile-dataset", {
+        body: { project_id: projectData.id },
+      });
+      // Refresh the TDE card to show updated data
+      setTdeRefreshKey((k) => k + 1);
+      console.log("[StepEDA] TDE profile auto-triggered after EDA");
+    } catch (err) {
+      // Best-effort: don't block the flow, user can manually refresh via TDE card
+      console.warn("[StepEDA] TDE auto-trigger failed (non-blocking):", err);
+    }
+  }, [projectData.id, tdeAutoTriggered]);
 
   const edaBlocked = ds.loaded ? !ds.edaReady : false;
   const edaStrategy = ds.fallback?.edaStrategy || "UNION_BY_NAME";
@@ -62,6 +79,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const blockedReasonEda = ds.fallback?.blockedReasonEda || null;
   const blockedReasonModel = ds.fallback?.blockedReasonModel || null;
   const sourceLabel = ds.sourceType !== "upload" ? `Fonte: ${ds.sourceType.toUpperCase()}` : undefined;
+
   return (
     <Card className="bg-gradient-card shadow-card p-8">
       <div className="space-y-6">
@@ -180,15 +198,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             )}
           </div>
         )}
-        {/* Contract Hints - Auto-detection */}
-        {projectData.id && !edaBlocked && (
-          <ContractHintsSuggestions projectId={projectData.id} />
-        )}
-
-        {/* TDE Profile - Dataset Structure */}
-        {projectData.id && !edaBlocked && (
-          <TDEProfileCard projectId={projectData.id} />
-        )}
 
         {/* Info message */}
         <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
@@ -219,6 +228,11 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           <div className="text-center py-8 text-muted-foreground">
             {t("stepEDA.saveProjectFirst")}
           </div>
+        )}
+
+        {/* TDE Profile - Dataset Structure (rendered after EDA) */}
+        {projectData.id && !edaBlocked && (
+          <TDEProfileCard key={tdeRefreshKey} projectId={projectData.id} />
         )}
 
         {/* Actions */}
