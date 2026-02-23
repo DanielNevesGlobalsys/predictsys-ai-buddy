@@ -173,3 +173,6 @@ verify_jwt = false
 
 [functions.tde-train-human-seed-model]
 verify_jwt = false
+
+[functions.tde-check-target-lifecycle]
+verify_jwt = false

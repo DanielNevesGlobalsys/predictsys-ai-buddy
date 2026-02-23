@@ -3138,6 +3138,8 @@ export type Database = {
           selected_template_id: string | null
           selected_template_params: Json | null
           target_column: string | null
+          target_last_validated_at: string | null
+          target_lifecycle_state: Json | null
           target_quality_report: Json | null
           target_source: string
           target_suggestion_meta: Json | null
@@ -3161,6 +3163,8 @@ export type Database = {
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
+          target_last_validated_at?: string | null
+          target_lifecycle_state?: Json | null
           target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null
@@ -3184,6 +3188,8 @@ export type Database = {
           selected_template_id?: string | null
           selected_template_params?: Json | null
           target_column?: string | null
+          target_last_validated_at?: string | null
+          target_lifecycle_state?: Json | null
           target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null

@@ -37,6 +37,7 @@ import AuditContractPanel from "./AuditContractPanel";
 import TargetQualityCard from "./TargetQualityCard";
 import WeakLabelBuilderCard from "./WeakLabelBuilderCard";
 import HumanLabelingCard from "./HumanLabelingCard";
+import TargetLifecycleCard from "./TargetLifecycleCard";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference, type SuggestedTarget, type SuggestedPredictor } from "@/hooks/useProblemInference";
@@ -963,6 +964,14 @@ const StepTargetFeatures = ({
         {/* Target Quality Card */}
         {projectData.id && targetColumn && appliedTargetColumn && (
           <TargetQualityCard
+            projectId={projectData.id}
+            refreshKey={preflightRefreshKey}
+          />
+        )}
+
+        {/* Target Lifecycle Card (Etapa G) */}
+        {projectData.id && targetColumn && appliedTargetColumn && (
+          <TargetLifecycleCard
             projectId={projectData.id}
             refreshKey={preflightRefreshKey}
           />
