@@ -357,9 +357,9 @@ serve(async (req: Request) => {
 
     // ===== 4.6 SPLIT SANITY GATE =====
     const splitPolicy = splitPolicyRes.data;
-    const intentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
-    const intentBase = intentContract.intent_base || intentContract;
-    const requiresTime = intentBase.requires_time_column ?? false;
+    const splitIntentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
+    const splitIntentBase = splitIntentContract.intent_base || splitIntentContract;
+    const requiresTime = splitIntentBase.requires_time_column ?? false;
     const contractHints = aiCtx?.contract_hints || {};
     const timeAnchorHint = contractHints.time_anchor_column || null;
 
