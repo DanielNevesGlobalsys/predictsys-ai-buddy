@@ -2339,14 +2339,16 @@ serve(async (req) => {
                     fileColumnMap = fileHeaders.map((_, idx) => idx);
                   }
                   
-                  // Check if this file has the target
-                  const targetIdx = findHeaderIndex(fileHeaders, target_column);
-                  if (targetIdx === -1) {
-                    filesSkipped++;
-                    console.log(`  SKIP: File does not contain target "${target_column}"`);
-                    isFirstLineOfFile = false;
-                    shouldStopReading = true;
-                    continue;
+                  // Check if this file has the target (skip check for virtual _label_)
+                  if (target_column !== "_label_") {
+                    const targetIdx = findHeaderIndex(fileHeaders, target_column);
+                    if (targetIdx === -1) {
+                      filesSkipped++;
+                      console.log(`  SKIP: File does not contain target "${target_column}"`);
+                      isFirstLineOfFile = false;
+                      shouldStopReading = true;
+                      continue;
+                    }
                   }
                   filesWithTarget++;
                 }
@@ -2443,6 +2445,77 @@ serve(async (req) => {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
+      }
+
+      // ── Materialize _label_ for CSV path (virtual target from label builder) ──
+      if (target_column === "_label_" && !headers.includes("_label_")) {
+        const labelPlan = modelingDataset?.label_plan as Record<string, any> | null;
+        const labelStrategy = labelPlan?.strategy || "unknown";
+        console.log(`[AutoML-CSV] Materializing _label_ target (strategy: ${labelStrategy})`);
+
+        // Add _label_ as last column in headers
+        headers.push("_label_");
+        const labelColIdx = headers.length - 1;
+
+        // For CSV, finalSampledLines are raw CSV strings. We need to append the label value.
+        // We'll do a simple approach: append ",0" or ",1" based on strategy.
+        // For proper materialization, we parse needed columns from each line.
+
+        if (labelStrategy === "state_change") {
+          const timeAnchorCol = labelPlan?.time_anchor || null;
+          const entityKeyCol = labelPlan?.entity_key || null;
+          const windowDays = labelPlan?.window_days || 90;
+          const timeIdx = timeAnchorCol ? findHeaderIndex(headers, timeAnchorCol) : -1;
+          const entityIdx = entityKeyCol ? findHeaderIndex(headers, entityKeyCol) : -1;
+
+          if (timeIdx !== -1 && entityIdx !== -1) {
+            // Two-pass: find max date per entity, then assign labels
+            const entityMaxDate = new Map<string, number>();
+            for (const line of finalSampledLines) {
+              const cols = line.split(delimiter);
+              const eid = (cols[entityIdx] || "").trim();
+              const dateVal = Date.parse(cols[timeIdx] || "");
+              if (!isNaN(dateVal) && eid) {
+                const prev = entityMaxDate.get(eid) || 0;
+                if (dateVal > prev) entityMaxDate.set(eid, dateVal);
+              }
+            }
+            const allDates = [...entityMaxDate.values()];
+            const refDate = allDates.length > 0 ? Math.max(...allDates) : Date.now();
+            const cutoffMs = windowDays * 86400000;
+
+            finalSampledLines = finalSampledLines.map(line => {
+              const cols = line.split(delimiter);
+              const eid = (cols[entityIdx] || "").trim();
+              const lastActivity = entityMaxDate.get(eid) || 0;
+              const label = (refDate - lastActivity) > cutoffMs ? 1 : 0;
+              return line + delimiter + String(label);
+            });
+            console.log(`[AutoML-CSV] _label_ materialized: state_change, window=${windowDays}d`);
+          } else {
+            finalSampledLines = finalSampledLines.map(line => line + delimiter + "0");
+            trainingWarningsGlobal.push("_label_ materialized with CSV fallback (time/entity columns not resolved).");
+          }
+        } else if (labelStrategy === "direct") {
+          const statusCol = labelPlan?.status_column || null;
+          const positiveValues = labelPlan?.positive_values || ["1", "sim", "yes", "true", "ativo", "active"];
+          const statusIdx = statusCol ? findHeaderIndex(headers, statusCol) : -1;
+          if (statusIdx !== -1) {
+            finalSampledLines = finalSampledLines.map(line => {
+              const cols = line.split(delimiter);
+              const val = (cols[statusIdx] || "").trim().toLowerCase();
+              const label = positiveValues.some((pv: string) => val.includes(pv.toLowerCase())) ? 1 : 0;
+              return line + delimiter + String(label);
+            });
+            console.log(`[AutoML-CSV] _label_ materialized: direct from "${statusCol}"`);
+          } else {
+            finalSampledLines = finalSampledLines.map(line => line + delimiter + "0");
+            trainingWarningsGlobal.push("_label_ materialized with CSV fallback (status column not resolved).");
+          }
+        } else {
+          finalSampledLines = finalSampledLines.map(line => line + delimiter + "0");
+          trainingWarningsGlobal.push(`_label_ strategy "${labelStrategy}" not fully supported for CSV. Using fallback.`);
+        }
       }
 
       // Find target column index (case-insensitive fallback)
