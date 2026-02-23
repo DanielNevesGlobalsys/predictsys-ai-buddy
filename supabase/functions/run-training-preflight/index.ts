@@ -519,28 +519,31 @@ serve(async (req: Request) => {
       const leakSuspected = tqr.leakage_suspected || false;
       const hasBlock = (tqr.gates as any[] || []).some((g: any) => g.status === "BLOCK");
       const hasWarn = (tqr.gates as any[] || []).some((g: any) => g.status === "WARN");
+      const stabilityNA = tqr.stability_na || false;
+      const naDims = (tqr.na_dimensions as string[] || []);
+      const naNote = naDims.length > 0 ? ` (${naDims.join(", ")} = N/A, pesos renormalizados)` : "";
 
       if (hasBlock || (leakSuspected && qs < 30)) {
         gates.push({
           gate: "target_quality",
           status: "BLOCK",
-          message: `Qualidade do target insuficiente (${qs}/100). ${leakSuspected ? "Vazamento de dados detectado. " : ""}Corrija antes de treinar.`,
-          details: { quality_score: qs, leakage_suspected: leakSuspected, quality_label: tqr.quality_label },
+          message: `Qualidade do target insuficiente (${qs}/95). ${leakSuspected ? "Vazamento de dados detectado. " : ""}Corrija antes de treinar.${naNote}`,
+          details: { quality_score: qs, leakage_suspected: leakSuspected, quality_label: tqr.quality_label, na_dimensions: naDims },
         });
         canTrain = false;
       } else if (hasWarn || qs < 60) {
         gates.push({
           gate: "target_quality",
           status: "WARN",
-          message: `Qualidade do target ${tqr.quality_label || "regular"} (${qs}/100). Resultados podem ser limitados.`,
-          details: { quality_score: qs, quality_label: tqr.quality_label },
+          message: `Qualidade do target ${tqr.quality_label || "regular"} (${qs}/95). Resultados podem ser limitados.${naNote}`,
+          details: { quality_score: qs, quality_label: tqr.quality_label, stability_na: stabilityNA, na_dimensions: naDims },
         });
       } else {
         gates.push({
           gate: "target_quality",
           status: "PASS",
-          message: `Qualidade do target ${tqr.quality_label || "boa"} (${qs}/100).`,
-          details: { quality_score: qs },
+          message: `Qualidade do target ${tqr.quality_label || "boa"} (${qs}/95).${naNote}`,
+          details: { quality_score: qs, na_dimensions: naDims },
         });
       }
     }
