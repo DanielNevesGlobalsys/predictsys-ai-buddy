@@ -38,6 +38,7 @@ const GATE_ICONS: Record<string, React.ReactNode> = {
   selection: <Target className="w-3.5 h-3.5" />,
   builder: <Package className="w-3.5 h-3.5" />,
   training_gate: <Cpu className="w-3.5 h-3.5" />,
+  target_quality: <Shield className="w-3.5 h-3.5" />,
 };
 
 const GATE_LABELS: Record<string, string> = {
@@ -46,6 +47,7 @@ const GATE_LABELS: Record<string, string> = {
   selection: "Seleção",
   builder: "Builder",
   training_gate: "Gates",
+  target_quality: "Qualidade",
 };
 
 interface Props {

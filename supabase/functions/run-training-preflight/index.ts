@@ -67,7 +67,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -512,7 +512,40 @@ serve(async (req: Request) => {
       }
     }
 
-    // ===== 4.9 AUDIT CONTRACT GATE =====
+    // ===== 4.9 TARGET QUALITY GATE (TDE Etapa D) =====
+    if (projectSettings?.target_quality_report) {
+      const tqr = projectSettings.target_quality_report as Record<string, any>;
+      const qs = tqr.quality_score || 0;
+      const leakSuspected = tqr.leakage_suspected || false;
+      const hasBlock = (tqr.gates as any[] || []).some((g: any) => g.status === "BLOCK");
+      const hasWarn = (tqr.gates as any[] || []).some((g: any) => g.status === "WARN");
+
+      if (hasBlock || (leakSuspected && qs < 30)) {
+        gates.push({
+          gate: "target_quality",
+          status: "BLOCK",
+          message: `Qualidade do target insuficiente (${qs}/100). ${leakSuspected ? "Vazamento de dados detectado. " : ""}Corrija antes de treinar.`,
+          details: { quality_score: qs, leakage_suspected: leakSuspected, quality_label: tqr.quality_label },
+        });
+        canTrain = false;
+      } else if (hasWarn || qs < 60) {
+        gates.push({
+          gate: "target_quality",
+          status: "WARN",
+          message: `Qualidade do target ${tqr.quality_label || "regular"} (${qs}/100). Resultados podem ser limitados.`,
+          details: { quality_score: qs, quality_label: tqr.quality_label },
+        });
+      } else {
+        gates.push({
+          gate: "target_quality",
+          status: "PASS",
+          message: `Qualidade do target ${tqr.quality_label || "boa"} (${qs}/100).`,
+          details: { quality_score: qs },
+        });
+      }
+    }
+
+    // ===== 4.9b AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
       .select("status, predictability_score, gates, summary")
@@ -559,6 +592,7 @@ serve(async (req: Request) => {
       leakage_guard: "Revisar colunas removidas por leakage",
       class_balance: "Configurar balanceamento de classes",
       audit_contract: "Rodar Auditoria do Contrato",
+      target_quality: "Avaliar e corrigir qualidade do target na Etapa 3",
     };
 
     const result = {
