@@ -111,6 +111,19 @@ const TEMPLATE_CONFIGS: Record<string, TemplateConfig> = {
     requires_event_column: false,
     problem_type: "classification",
   },
+  // Special TDE modes — not real templates but can be selected via recommender
+  human_labeling_assisted: {
+    requires_entity_key: false,
+    requires_time_anchor: false,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
+  weak_supervision: {
+    requires_entity_key: false,
+    requires_time_anchor: false,
+    requires_event_column: false,
+    problem_type: "classification",
+  },
 };
 
 // ═══ Temporal distribution generator ═══════════════════════════
@@ -766,6 +779,41 @@ serve(async (req) => {
         const result = simulateAdesaoHealth(catStats, numStats, totalRows, entityKey, timeAnchor, numStats, effectiveParams);
         preview = result.preview;
         extraNotes = result.notes;
+        break;
+      }
+      case "human_labeling_assisted": {
+        const entityStat = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+        const entityCount = entityStat?.distinct_count || totalRows;
+        preview = {
+          total_rows_sampled: totalRows,
+          entity_count: entityCount,
+          positive_rate: 0,
+          distinct_target_values: 2,
+          top_class_pct: 0,
+          per_period_distribution: [],
+          notes: [
+            "🏷️ Modo rotulagem humana: o target será gerado a partir de micro-rotulagem + modelo seed.",
+            "Use o card 'Rotulagem Humana' abaixo para iniciar a rotulagem de exemplos.",
+            "Mínimo recomendado: 30 exemplos rotulados (15 por classe).",
+          ],
+        };
+        break;
+      }
+      case "weak_supervision": {
+        const entityStatW = entityKey ? catStats.find(c => c.column_name === entityKey) : null;
+        const entityCountW = entityStatW?.distinct_count || totalRows;
+        preview = {
+          total_rows_sampled: totalRows,
+          entity_count: entityCountW,
+          positive_rate: 0,
+          distinct_target_values: 2,
+          top_class_pct: 0,
+          per_period_distribution: [],
+          notes: [
+            "🔀 Modo weak supervision: o target será gerado combinando múltiplas regras fracas (Label Functions).",
+            "Use o card 'Weak Label Builder' para configurar as regras de rotulagem.",
+          ],
+        };
         break;
       }
       default: {
