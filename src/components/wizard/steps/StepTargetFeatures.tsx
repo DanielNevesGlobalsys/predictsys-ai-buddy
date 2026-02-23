@@ -261,6 +261,13 @@ const StepTargetFeatures = ({
         const tdeStatusCandidates = ((tdeCandidates.status_candidates || []) as any[]).map(normalizeCandidate);
         const tdeValueCandidates = ((tdeCandidates.value_candidates || []) as any[]).map(normalizeCandidate);
         
+        console.log("[StepTargetFeatures] TDE candidates found:", { 
+          statusCount: tdeStatusCandidates.length, 
+          valueCount: tdeValueCandidates.length,
+          refMatch, manifestMatch,
+          hintsRef, currentRef, hintsManifest, currentManifest
+        });
+
         if (refMatch && manifestMatch) {
           setContractHints({
             ...hints,
@@ -769,10 +776,10 @@ const StepTargetFeatures = ({
         )}
 
         {/* TDE Status/Event Candidate Suggestions */}
-        {contractHints && (
+        {contractHints != null &&
+          targetSource !== "label_builder" &&
           ((contractHints.tde_status_candidates?.length ?? 0) > 0 ||
-          (contractHints.tde_value_candidates?.length ?? 0) > 0)
-        ) && targetSource !== "label_builder" && (
+           (contractHints.tde_value_candidates?.length ?? 0) > 0) && (
           <div className="p-4 rounded-lg border border-secondary/30 bg-secondary/5 space-y-3">
             <div className="flex items-center gap-2">
               <Sparkles className="w-4 h-4 text-secondary" />
@@ -785,7 +792,7 @@ const StepTargetFeatures = ({
               {(contractHints.tde_status_candidates || []).map((c) => (
                 <button
                   key={`status-${c.column}`}
-                  onClick={() => {
+                  onClick={async () => {
                     if (columns.some(col => col.name === c.column)) {
                       setTargetColumn(c.column);
                       setTargetSource("manual");
@@ -796,6 +803,11 @@ const StepTargetFeatures = ({
                       if (colInfo && (colInfo.type === "categórico" || colInfo.type === "booleano")) {
                         setInferredProblemType("classification");
                       }
+                      // Persist target_source change to DB
+                      await supabase
+                        .from("project_settings")
+                        .update({ target_source: "manual", target_column: c.column, selected_template_id: null } as any)
+                        .eq("project_id", projectData.id);
                       toast({
                         title: "Target aplicado",
                         description: `"${c.column}" definido como target manual.`,
@@ -827,13 +839,18 @@ const StepTargetFeatures = ({
               {(contractHints.tde_value_candidates || []).map((c) => (
                 <button
                   key={`value-${c.column}`}
-                  onClick={() => {
+                  onClick={async () => {
                     if (columns.some(col => col.name === c.column)) {
                       setTargetColumn(c.column);
                       setTargetSource("manual");
                       setAppliedTargetColumn(c.column);
                       setInferredProblemType("regression");
                       setSelectedFeatures((prev) => prev.filter((f) => f !== c.column));
+                      // Persist target_source change to DB
+                      await supabase
+                        .from("project_settings")
+                        .update({ target_source: "manual", target_column: c.column, selected_template_id: null } as any)
+                        .eq("project_id", projectData.id);
                       toast({
                         title: "Target aplicado",
                         description: `"${c.column}" definido como target (regressão).`,
