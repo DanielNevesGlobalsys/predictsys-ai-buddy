@@ -17,11 +17,14 @@ interface QualityGate {
 }
 
 interface TargetQualityReport {
-  quality_score: number; // 0-100
+  quality_score: number; // 0-95
   balance_score: number;
   coverage_score: number;
-  stability_score: number;
+  stability_score: number | null; // null = N/A
   leakage_score: number;
+  weights_used: { balance: number; coverage: number; stability: number; leakage: number };
+  na_dimensions: string[];
+  stability_na: boolean;
   gates: QualityGate[];
   reasons: string[];
   recommended_actions: string[];
@@ -38,7 +41,7 @@ interface TargetQualityReport {
   params_hash: string | null;
   dataset_version: number | null;
   created_at: string;
-  quality_label: string; // Excelente / Boa / Regular / Ruim
+  quality_label: string;
 }
 
 // ── Leakage keywords (heuristic D1) ──────────────────────────
@@ -184,31 +187,37 @@ serve(async (req: Request) => {
     }
 
     // ── 3. Stability Score ────────────────────────────────────
-    let stabilityScore = 80; // default if no time data
+    let stabilityScore: number | null = null;
+    let stabilityNA = false;
     const stabilityByPeriod = (labelBuildResult?.stability_by_period || []) as { period: string; positive_rate: number; total: number }[];
 
-    if (stabilityByPeriod.length >= 2) {
+    // Check if we have a reliable time key via TDE profile
+    const tdeProfile = aiCtx?.tde_profile as Record<string, any> | null;
+    const timeCandidate = tdeProfile?.candidates?.time_candidates?.[0];
+    const hasReliableTime = timeCandidate && (timeCandidate.score >= 30 || stabilityByPeriod.length >= 2);
+
+    if (stabilityByPeriod.length >= 2 && hasReliableTime) {
       const rates = stabilityByPeriod.map(s => s.positive_rate);
       const meanRate = rates.reduce((a, b) => a + b, 0) / rates.length;
       const maxDev = Math.max(...rates.map(r => Math.abs(r - meanRate)));
       const relativeVar = meanRate > 0 ? maxDev / meanRate : 0;
 
-      // Simple PSI-like: variation relative to mean
       if (relativeVar > 0.5) {
         stabilityScore = 20;
-        gates.push({ gate: "stability", status: "BLOCK", message: `Drift extremo no target: taxa positiva varia ${(relativeVar * 100).toFixed(0)}% entre períodos. Target não é estável o suficiente.` });
-        reasons.push("O target muda drasticamente ao longo do tempo — o modelo treinado pode não generalizar.");
-        actions.push("Verifique se a definição do target faz sentido para todos os períodos. Considere filtrar períodos atípicos.");
+        gates.push({ gate: "stability", status: "BLOCK", message: `Drift extremo no target: taxa positiva varia ${(relativeVar * 100).toFixed(0)}% entre períodos.` });
+        reasons.push("O target muda drasticamente ao longo do tempo.");
+        actions.push("Verifique se a definição do target faz sentido para todos os períodos.");
       } else if (relativeVar > 0.25) {
         stabilityScore = 50;
-        gates.push({ gate: "stability", status: "WARN", message: `Drift moderado no target: variação de ${(relativeVar * 100).toFixed(0)}% entre períodos. Monitore após deploy.` });
+        gates.push({ gate: "stability", status: "WARN", message: `Drift moderado no target: variação de ${(relativeVar * 100).toFixed(0)}% entre períodos.` });
       } else {
         stabilityScore = 90;
-        gates.push({ gate: "stability", status: "OK", message: `Target estável ao longo do tempo (variação: ${(relativeVar * 100).toFixed(0)}%).` });
+        gates.push({ gate: "stability", status: "OK", message: `Target estável (variação: ${(relativeVar * 100).toFixed(0)}%).` });
       }
     } else {
-      gates.push({ gate: "stability", status: "WARN", message: "Sem dados temporais suficientes para avaliar estabilidade. Recomendado: adicionar coluna de data." });
-      stabilityScore = 60;
+      stabilityNA = true;
+      stabilityScore = null;
+      gates.push({ gate: "stability", status: "OK", message: "Estabilidade temporal: N/A (sem coluna de data confiável). Pesos renormalizados." });
     }
 
     // ── 4. Leakage Score (D1: Heuristic + D2: Empirical proxy) ──
@@ -326,26 +335,43 @@ serve(async (req: Request) => {
       gates.push({ gate: "leakage", status: "OK", message: "Nenhum vazamento de dados detectado nas features." });
     }
 
-    // ── 5. Compute overall quality_score ──────────────────────
-    const qualityScore = Math.round(
-      balanceScore * 0.30 +
-      coverageScore * 0.20 +
-      stabilityScore * 0.25 +
-      leakageScore * 0.25
-    );
+    // ── 5. Compute overall quality_score with weight renormalization ──
+    let wBalance = 0.30, wCoverage = 0.20, wStability = 0.25, wLeakage = 0.25;
+    const naDimensions: string[] = [];
+
+    if (stabilityNA) {
+      naDimensions.push("stability");
+      const redistrib = wStability / 3;
+      wBalance += redistrib;
+      wCoverage += redistrib;
+      wLeakage += redistrib;
+      wStability = 0;
+    }
+
+    const qualityScore = Math.min(95, Math.round(
+      balanceScore * wBalance +
+      coverageScore * wCoverage +
+      (stabilityScore ?? 0) * wStability +
+      leakageScore * wLeakage
+    ));
+
+    const weightsUsed = {
+      balance: Math.round(wBalance * 100) / 100,
+      coverage: Math.round(wCoverage * 100) / 100,
+      stability: Math.round(wStability * 100) / 100,
+      leakage: Math.round(wLeakage * 100) / 100,
+    };
 
     const qualityLabel = qualityScore >= 80 ? "Excelente" : qualityScore >= 60 ? "Boa" : qualityScore >= 40 ? "Regular" : "Ruim";
 
-    // Add overall gate
     if (qualityScore < 30) {
-      gates.push({ gate: "quality_overall", status: "BLOCK", message: `Qualidade do target muito baixa (${qualityScore}/100). Revise a configuração antes de treinar.` });
+      gates.push({ gate: "quality_overall", status: "BLOCK", message: `Qualidade do target muito baixa (${qualityScore}/100).` });
     } else if (qualityScore < 60) {
-      gates.push({ gate: "quality_overall", status: "WARN", message: `Qualidade do target regular (${qualityScore}/100). O modelo pode ter desempenho limitado.` });
+      gates.push({ gate: "quality_overall", status: "WARN", message: `Qualidade do target regular (${qualityScore}/100).` });
     } else {
       gates.push({ gate: "quality_overall", status: "OK", message: `Qualidade do target ${qualityLabel.toLowerCase()} (${qualityScore}/100).` });
     }
 
-    // Selection version from SSOT
     const selectionVersion = settings?.selection_version || null;
 
     const report: TargetQualityReport = {
@@ -354,6 +380,9 @@ serve(async (req: Request) => {
       coverage_score: coverageScore,
       stability_score: stabilityScore,
       leakage_score: leakageScore,
+      weights_used: weightsUsed,
+      na_dimensions: naDimensions,
+      stability_na: stabilityNA,
       gates,
       reasons,
       recommended_actions: actions,
