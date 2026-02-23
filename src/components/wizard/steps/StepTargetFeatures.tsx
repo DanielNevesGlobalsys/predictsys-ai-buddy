@@ -31,7 +31,6 @@ import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import ProblemInferencePanel from "./ProblemInferencePanel";
-import TargetBuilderPanel from "./TargetBuilderPanel";
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
@@ -760,6 +759,22 @@ const StepTargetFeatures = ({
             )}
           </div>
         )}
+        {/* Lys — orientação apenas (sem sugestões de target/features) */}
+        <ProblemInferencePanel
+          inference={inference}
+          loading={inferenceLoading}
+          error={inferenceError}
+          onGenerate={() => loadInference(true)}
+          hasEDA={hasEDA}
+          targetSource={targetSource !== "manual" ? targetSource : null}
+          onScrollToBuilder={() => {
+            document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+          }}
+          onScrollToActiveTarget={() => {
+            document.getElementById("target-quality-card")?.scrollIntoView({ behavior: "smooth" });
+          }}
+        />
+
         {/* ═══ Unified Strategy Panel ═══ */}
         {projectData.id && (
           <div id="target-builder-panel">
@@ -810,22 +825,6 @@ const StepTargetFeatures = ({
             }}
           />
         )}
-
-        {/* Problem Inference Panel (replaces old Lys suggestions) */}
-        <ProblemInferencePanel
-          inference={inference}
-          loading={inferenceLoading}
-          error={inferenceError}
-          onGenerate={() => loadInference(true)}
-          hasEDA={hasEDA}
-          targetSource={targetSource !== "manual" ? targetSource : null}
-          onScrollToBuilder={() => {
-            document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
-          }}
-          onScrollToActiveTarget={() => {
-            document.getElementById("target-quality-card")?.scrollIntoView({ behavior: "smooth" });
-          }}
-        />
 
         {/* Column Inference Matrix (collapsible) */}
         {projectData.id && (
