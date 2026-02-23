@@ -26,6 +26,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import type { FeatureExpression } from "@/lib/featureEngineering";
+import { LABEL_TEMPLATES } from "@/config/labelTemplates";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
@@ -131,6 +132,10 @@ const StepTargetFeatures = ({
   const [labelBuilderId, setLabelBuilderId] = useState<string | null>(null);
   const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
 
+  // Track target source (manual vs label_builder)
+  const [targetSource, setTargetSource] = useState<"manual" | "label_builder">("manual");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
@@ -140,6 +145,7 @@ const StepTargetFeatures = ({
       loadBuilderVersion();
       loadContractHints();
       loadIntentInfo();
+      loadTargetSource();
       loadSettings().then((loaded) => {
         if (loaded) {
           setSettingsLoaded(true);
@@ -147,6 +153,26 @@ const StepTargetFeatures = ({
       });
     }
   }, [projectData.id]);
+
+  // Load target source from project_settings
+  const loadTargetSource = async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_settings")
+      .select("target_source, selected_template_id, target_column")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data) {
+      const src = (data as any).target_source || "manual";
+      const tmplId = (data as any).selected_template_id || null;
+      setTargetSource(src);
+      setSelectedTemplateId(tmplId);
+      if (src === "label_builder" && data.target_column === "label") {
+        setTargetColumn("label");
+        setAppliedTargetColumn("label");
+      }
+    }
+  };
 
   const loadIntentInfo = async () => {
     if (!projectData.id) return;
@@ -241,9 +267,14 @@ const StepTargetFeatures = ({
   // Restore from persisted settings
   useEffect(() => {
     if (settings && settingsLoaded && columns.length > 0) {
-      if (settings.target_column && columns.some((c) => c.name === settings.target_column)) {
-        setTargetColumn(settings.target_column);
-        setAppliedTargetColumn(settings.target_column);
+      if (settings.target_column) {
+        // Accept "label" even if not in physical columns (it's a synthetic target)
+        const isPhysical = columns.some((c) => c.name === settings.target_column);
+        const isLabel = settings.target_column === "label";
+        if (isPhysical || isLabel) {
+          setTargetColumn(settings.target_column);
+          setAppliedTargetColumn(settings.target_column);
+        }
       }
       if (settings.feature_columns && settings.feature_columns.length > 0) {
         setSelectedFeatures(settings.feature_columns);
@@ -368,6 +399,10 @@ const StepTargetFeatures = ({
       onConfigChange?.();
     }
     setTargetColumn(value);
+    // If switching away from label, mark as manual
+    if (value !== "label") {
+      setTargetSource("manual");
+    }
     setSelectedFeatures((prev) => {
       const newFeatures = prev.filter((f) => f !== value);
       if (newFeatures.length === 0) {
@@ -667,12 +702,16 @@ const StepTargetFeatures = ({
             labelBuilderRequired={intentInfo.labelBuilderRequired}
             recommendedTemplates={intentInfo.recommendedTemplates}
             industry={intentInfo.industry}
-            onBuilderReady={(builderId, templateId) => {
+            onBuilderReady={(builderId, templateId, templateParams) => {
               setLabelBuilderId(builderId);
               setLabelTemplateId(templateId);
-              // Set virtual target column for label builder
-              setTargetColumn("_label_");
-              setInferredProblemType("classification");
+              // Set target to "label" (what build-modeling-dataset expects)
+              setTargetColumn("label");
+              setTargetSource("label_builder");
+              setSelectedTemplateId(templateId);
+              setAppliedTargetColumn("label");
+              const tmpl = LABEL_TEMPLATES[templateId];
+              setInferredProblemType(tmpl?.problem_type || "classification");
             }}
           />
         )}
@@ -721,6 +760,35 @@ const StepTargetFeatures = ({
           </div>
         )}
 
+        {/* Label builder badge */}
+        {targetSource === "label_builder" && targetColumn === "label" && (
+          <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
+            <Sparkles className="w-4 h-4 text-accent" />
+            <div className="flex-1">
+              <p className="text-sm font-medium">
+                Target gerado automaticamente: <strong>label</strong>
+              </p>
+              {selectedTemplateId && LABEL_TEMPLATES[selectedTemplateId] && (
+                <p className="text-xs text-muted-foreground">
+                  Template: {LABEL_TEMPLATES[selectedTemplateId].display_name}
+                </p>
+              )}
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => {
+                setTargetSource("manual");
+                setTargetColumn("");
+                setAppliedTargetColumn(null);
+              }}
+            >
+              Trocar para manual
+            </Button>
+          </div>
+        )}
+
         {/* Target selection */}
         <div className="space-y-4">
           <div className="flex items-start gap-3 p-4 bg-primary/5 border border-primary/20 rounded-lg">
@@ -743,6 +811,17 @@ const StepTargetFeatures = ({
                 <SelectValue placeholder={t("stepVariables.selectTarget")} />
               </SelectTrigger>
               <SelectContent className="bg-popover border border-border shadow-lg z-50">
+                {/* Virtual "label" option for label builder */}
+                {(targetSource === "label_builder" || labelBuilderId) && (
+                  <SelectItem value="label">
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">label</span>
+                      <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">
+                        Target gerado automaticamente
+                      </Badge>
+                    </div>
+                  </SelectItem>
+                )}
                 {columns.map((col) => {
                   const inf = columnInferenceMap.current.get(col.name);
                   const isBlocked = inf && !inf.can_be_target && inf.block_reasons.length > 0;
