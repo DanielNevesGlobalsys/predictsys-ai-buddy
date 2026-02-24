@@ -3161,6 +3161,7 @@ export type Database = {
           target_source: string
           target_state: string
           target_suggestion_meta: Json | null
+          target_trainability_report: Json | null
           time_anchor_column: string | null
           training_state: string
           training_version: number
@@ -3208,6 +3209,7 @@ export type Database = {
           target_source?: string
           target_state?: string
           target_suggestion_meta?: Json | null
+          target_trainability_report?: Json | null
           time_anchor_column?: string | null
           training_state?: string
           training_version?: number
@@ -3255,6 +3257,7 @@ export type Database = {
           target_source?: string
           target_state?: string
           target_suggestion_meta?: Json | null
+          target_trainability_report?: Json | null
           time_anchor_column?: string | null
           training_state?: string
           training_version?: number
