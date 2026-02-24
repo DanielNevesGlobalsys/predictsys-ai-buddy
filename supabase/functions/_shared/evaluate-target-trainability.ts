@@ -38,11 +38,13 @@ interface TrainabilityInput {
   human_label_result?: Record<string, unknown> | null;
 }
 
-// ── Thresholds (v1) ──
-const MIN_NON_NULL = 200;
+// ── Thresholds (v2) ──
+const MIN_NON_NULL_DEFAULT = 200;
+const MIN_NON_NULL_HUMAN = 100; // relaxed for human labeling (small curated samples)
 const MIN_UNIQUE = 2;
 const MAX_TOP_CLASS_PCT_BLOCK = 0.95;
 const MIN_MINOR_CLASS_COUNT_BLOCK = 50;
+const MIN_MINOR_CLASS_COUNT_HUMAN = 30; // stricter naming, relaxed from 50 to 30 for human labeling
 const MIN_POSITIVE_RATE = 0.005;
 const MAX_POSITIVE_RATE = 0.995;
 const MAX_CONFLICT_RATE_BLOCK = 0.60;
@@ -107,6 +109,11 @@ export function evaluateTargetTrainability(input: TrainabilityInput): Trainabili
     target_type: targetType,
   };
 
+  // Resolve thresholds based on target_source
+  const isHumanLabeling = target_source === "human_labeling";
+  const effectiveMinNonNull = isHumanLabeling ? MIN_NON_NULL_HUMAN : MIN_NON_NULL_DEFAULT;
+  const effectiveMinMinorClass = isHumanLabeling ? MIN_MINOR_CLASS_COUNT_HUMAN : MIN_MINOR_CLASS_COUNT_BLOCK;
+
   // ── BLOCK checks ──
   // 1. TARGET_NOT_FOUND
   if (!target_column) {
@@ -116,10 +123,33 @@ export function evaluateTargetTrainability(input: TrainabilityInput): Trainabili
   }
 
   // 2. TARGET_SAMPLE_TOO_SMALL
-  if (nNonNull < MIN_NON_NULL) {
-    return block("TARGET_SAMPLE_TOO_SMALL", details, warnings, [
-      { label: "Importar mais dados", action: "go_to_step_2" },
-      { label: "Ajustar janela do alvo", action: "open_target_strategy", hint: { param: "window_days", suggest: [30, 60, 90] } },
+  if (nNonNull < effectiveMinNonNull) {
+    const suggestions: FixSuggestion[] = isHumanLabeling
+      ? [
+          { label: "Gerar mais amostras", action: "open_human_labeling" },
+          { label: `Mínimo: ${effectiveMinNonNull} rótulos`, action: "open_human_labeling" },
+        ]
+      : [
+          { label: "Importar mais dados", action: "go_to_step_2" },
+          { label: "Ajustar janela do alvo", action: "open_target_strategy", hint: { param: "window_days", suggest: [30, 60, 90] } },
+        ];
+    return block("TARGET_SAMPLE_TOO_SMALL", details, warnings, suggestions);
+  }
+
+  // 2b. ONLY_ONE_CLASS (human labeling specific)
+  if (isHumanLabeling && nUnique === 1) {
+    return block("ONLY_ONE_CLASS", details, warnings, [
+      { label: "Buscar classe faltante", action: "open_human_labeling" },
+      { label: "Ativar supervisão fraca", action: "enable_weak_supervision" },
+    ]);
+  }
+
+  // 2c. MINORITY_CLASS_TOO_SMALL (human labeling specific)
+  if (isHumanLabeling && nUnique >= 2 && minorClassCount < effectiveMinMinorClass) {
+    const minorityLabel = positiveRate < 0.5 ? "positivos" : "negativos";
+    return block("MINORITY_CLASS_TOO_SMALL", details, warnings, [
+      { label: `Buscar ${minorityLabel}`, action: "open_human_labeling" },
+      { label: "Gerar mais amostras", action: "open_human_labeling" },
     ]);
   }
 
@@ -157,8 +187,8 @@ export function evaluateTargetTrainability(input: TrainabilityInput): Trainabili
     ]);
   }
 
-  // 7. TARGET_TOO_SPARSE (dominant class)
-  if (problem_type === "classification" && topClassPct > MAX_TOP_CLASS_PCT_BLOCK && minorClassCount < MIN_MINOR_CLASS_COUNT_BLOCK) {
+  // 7. TARGET_TOO_SPARSE (dominant class) — skip for human_labeling (already handled above)
+  if (!isHumanLabeling && problem_type === "classification" && topClassPct > MAX_TOP_CLASS_PCT_BLOCK && minorClassCount < effectiveMinMinorClass) {
     return block("TARGET_TOO_SPARSE", details, warnings, [
       { label: "Ajustar janela do alvo", action: "open_target_strategy", hint: { param: "window_days", suggest: [30, 60, 90] } },
       { label: "Usar proxy 'queda de atividade'", action: "open_target_strategy" },
@@ -244,8 +274,8 @@ export function trainabilityHumanMessage(result: TrainabilityResult): string {
     TARGET_NOT_FOUND: "Nenhum target selecionado.",
     TARGET_CONSTANT: `Target constante (apenas 1 valor único em ${d.n_non_null} registros).`,
     TARGET_SINGLE_CLASS: `Target com apenas ${d.n_unique} valor(es) único(s).`,
-    TARGET_SAMPLE_TOO_SMALL: `Amostra muito pequena: apenas ${d.n_non_null} valores não-nulos (mínimo: ${MIN_NON_NULL}).`,
-    TARGET_TOO_SPARSE: `Target não treinável: classe dominante ${(d.top_class_pct * 100).toFixed(1)}% com apenas ${d.minor_class_count} exemplos da classe rara (mínimo: ${MIN_MINOR_CLASS_COUNT_BLOCK}).`,
+    TARGET_SAMPLE_TOO_SMALL: `Amostra muito pequena: apenas ${d.n_non_null} valores não-nulos (mínimo requerido não atingido).`,
+    TARGET_TOO_SPARSE: `Target não treinável: classe dominante ${(d.top_class_pct * 100).toFixed(1)}% com apenas ${d.minor_class_count} exemplos da classe rara.`,
     TARGET_NOT_FOUND_IN_DATA: "Coluna target não encontrada no dataset.",
     TARGET_EMPTY_AFTER_FILTER: "Target vazio após aplicar filtros — nenhum valor válido.",
     TARGET_TEXT: `Target textual com ${d.n_unique} valores distintos — alta cardinalidade sem encoding aplicável.`,
@@ -254,6 +284,8 @@ export function trainabilityHumanMessage(result: TrainabilityResult): string {
     TARGET_NO_NEGATIVES: `Taxa de positivos ${(d.positive_rate * 100).toFixed(2)}% — quase todos são positivos.`,
     TARGET_CONFLICTS_HIGH: `Target assistido com ${(d.conflict_rate * 100).toFixed(0)}% de conflito e ${(d.coverage * 100).toFixed(0)}% de cobertura.`,
     TARGET_INVALID_TYPE: `Target textual incompatível com regressão.`,
+    ONLY_ONE_CLASS: `Apenas uma classe rotulada (${d.n_unique} valor único). Rotule exemplos da classe oposta.`,
+    MINORITY_CLASS_TOO_SMALL: `Classe minoritária com apenas ${d.minor_class_count} exemplos. Mínimo: 30. Rotule mais casos da classe sub-representada.`,
   };
 
   return messages[result.reason_code || ""] || `Target não treinável (${result.reason_code}).`;

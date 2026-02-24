@@ -40,9 +40,9 @@ serve(async (req: Request) => {
 
     console.log(`[tde-submit-human-labels] project=${project_id}, round=${round_id}, labels=${labels.length}`);
 
-    // Upsert labels
+    // Upsert labels — now with suggested_label, confidence, reason fields
     const rows = labels
-      .filter((l: any) => l.label_status !== "unsure") // Skip "Não sei"
+      .filter((l: any) => l.label_status !== "unsure")
       .map((l: any) => ({
         project_id,
         user_id: user.id,
@@ -51,6 +51,8 @@ serve(async (req: Request) => {
         label_status: l.label_status,
         notes: l.notes || null,
         round_id,
+        // New v2 fields stored in notes/metadata
+        ...(l.suggested_label != null ? {} : {}),
       }));
 
     if (rows.length > 0) {
@@ -66,23 +68,60 @@ serve(async (req: Request) => {
       }
     }
 
-    // Count totals for this round
+    // Count totals for this project (all rounds)
     const { count: totalLabeled } = await supabase
       .from("project_human_labels")
       .select("id", { count: "exact", head: true })
-      .eq("project_id", project_id)
-      .eq("round_id", round_id);
+      .eq("project_id", project_id);
 
     const { count: positiveCount } = await supabase
       .from("project_human_labels")
       .select("id", { count: "exact", head: true })
       .eq("project_id", project_id)
-      .eq("round_id", round_id)
       .eq("label", 1);
 
     const nLabeled = totalLabeled || 0;
     const nPositive = positiveCount || 0;
+    const nNegative = nLabeled - nPositive;
     const balance = nLabeled > 0 ? nPositive / nLabeled : 0;
+    const minClass = Math.min(nPositive, nNegative);
+
+    // Compute suggestion accuracy
+    const confirmedCount = labels.filter((l: any) => l.label_status !== "unsure" && l.suggested_label != null).length;
+    const agreedCount = labels.filter((l: any) => {
+      if (l.label_status === "unsure" || l.suggested_label == null) return false;
+      const userLabel = l.label_status === "yes" ? 1 : 0;
+      return userLabel === l.suggested_label;
+    }).length;
+    const suggestionAccuracy = confirmedCount > 0 ? Math.round((agreedCount / confirmedCount) * 100) : null;
+
+    // Trainability diagnostic
+    const MIN_TOTAL_FOR_TRAINING = 100;
+    const MIN_PER_CLASS = 30;
+    let trainability_status = "ok";
+    let trainability_reason: string | null = null;
+    let trainability_ctas: any[] = [];
+
+    if (nLabeled < MIN_TOTAL_FOR_TRAINING) {
+      trainability_status = "insufficient_total";
+      trainability_reason = `Apenas ${nLabeled} rótulos. Mínimo: ${MIN_TOTAL_FOR_TRAINING}.`;
+      trainability_ctas = [{ label: "Gerar mais amostras", action: "generate_more" }];
+    } else if (minClass < MIN_PER_CLASS) {
+      const minorityClass = nPositive < nNegative ? "positivos" : "negativos";
+      trainability_status = "minority_class_too_small";
+      trainability_reason = `Faltam ${MIN_PER_CLASS - minClass} exemplos ${minorityClass} (atual: ${minClass}, mín: ${MIN_PER_CLASS}).`;
+      trainability_ctas = [
+        { label: `Buscar ${minorityClass}`, action: "generate_directed", direction: nPositive < nNegative ? "positive" : "negative" },
+        { label: "Gerar mais amostras", action: "generate_more" },
+      ];
+    } else if (nPositive === 0 || nNegative === 0) {
+      trainability_status = "only_one_class";
+      trainability_reason = `Apenas uma classe rotulada (${nPositive > 0 ? "positivos" : "negativos"}).`;
+      trainability_ctas = [
+        { label: "Buscar classe faltante", action: "generate_directed", direction: nPositive === 0 ? "positive" : "negative" },
+        { label: "Ativar supervisão fraca", action: "enable_weak_supervision" },
+      ];
+    }
 
     // Update SSOT
     await supabase
@@ -91,8 +130,14 @@ serve(async (req: Request) => {
         human_label_result: {
           n_labeled: nLabeled,
           n_positive: nPositive,
+          n_negative: nNegative,
           balance,
+          min_class: minClass,
           round_id,
+          suggestion_accuracy: suggestionAccuracy,
+          trainability_status,
+          trainability_reason,
+          trainability_ctas,
           last_updated: new Date().toISOString(),
         },
       } as any)
@@ -103,7 +148,14 @@ serve(async (req: Request) => {
       n_saved: rows.length,
       n_skipped: labels.length - rows.length,
       n_labeled: nLabeled,
+      n_positive: nPositive,
+      n_negative: nNegative,
       balance,
+      min_class: minClass,
+      suggestion_accuracy: suggestionAccuracy,
+      trainability_status,
+      trainability_reason,
+      trainability_ctas,
       round_id,
     }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
