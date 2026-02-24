@@ -27,6 +27,28 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
   const isBlocked = manifestStatus === "blocked" || manifestStatus === "fail";
 
+  // Check ingestion state from SSOT (project_settings)
+  const checkIngestionSSOT = useCallback(async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_settings")
+      .select("ingestion_state, ingestion_error_code, ingestion_error_message, ingestion_rows_detected, ingestion_cols_detected")
+      .eq("project_id", projectData.id)
+      .single();
+    if (data) {
+      if (data.ingestion_state === "done") setIsDataReady(true);
+      if (data.ingestion_state === "failed" && data.ingestion_error_code) {
+        setManifestStatus("fail");
+        setManifestReason(`[${data.ingestion_error_code}] ${data.ingestion_error_message || "Erro na ingestão"}`);
+        setShowManifest(true);
+      }
+      // Auto-recover stale ingestion
+      if (data.ingestion_state === "running") {
+        try { await supabase.rpc("rpc_recover_stale_ingestion", { p_project_id: projectData.id }); } catch {}
+      }
+    }
+  }, [projectData.id]);
+
   // Check manifest status
   const checkManifestStatus = useCallback(async () => {
     if (!projectData.id) return;
@@ -66,12 +88,13 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
   useEffect(() => {
     const initialCheck = async () => {
+      await checkIngestionSSOT();
       const ready = await checkDataReady();
       setIsDataReady(ready);
       if (ready) await checkManifestStatus();
     };
     initialCheck();
-  }, [checkDataReady, checkManifestStatus]);
+  }, [checkDataReady, checkManifestStatus, checkIngestionSSOT]);
 
   // Poll for import completion
   useEffect(() => {
