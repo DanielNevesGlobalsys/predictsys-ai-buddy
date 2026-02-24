@@ -296,17 +296,20 @@ serve(async (req) => {
     const file = formData.get('file') as File;
     projectId = formData.get('project_id') as string;
     const maxSampleRows = parseInt(formData.get('max_sample_rows') as string || '100000');
+    const originalSize = parseInt(formData.get('original_size') as string || '0');
 
     if (!file || !projectId) {
       throw new Error("File and project_id are required");
     }
 
+    const isSliced = originalSize > 0 && originalSize > file.size;
+
     // ── SSOT: Start ingestion ──
-    const configHash = `upload_${file.name}_${file.size}`;
+    const configHash = `upload_${file.name}_${originalSize || file.size}`;
     const { canProceed, status: startStatus, response: earlyResponse } = await startIngestionSafe(supabase, projectId, "upload", configHash);
     if (!canProceed && earlyResponse) return earlyResponse;
 
-    console.log(`[parse-file] Processing file: ${file.name}, size: ${file.size}, type: ${file.type}`);
+    console.log(`[parse-file] Processing file: ${file.name}, size: ${file.size}, original: ${originalSize || file.size}, type: ${file.type}`);
 
     const fileName = file.name.toLowerCase();
     let parsedData: ParsedData;
@@ -317,6 +320,11 @@ serve(async (req) => {
     } else if (fileName.endsWith('.csv')) {
       const text = await file.text();
       parsedData = parseCSV(text, maxSampleRows);
+      // If we received a slice, estimate total rows from original file size
+      if (isSliced && originalSize > 0) {
+        const bytesPerRow = file.size / Math.max(parsedData.totalRows, 1);
+        parsedData.totalRows = Math.round(originalSize / bytesPerRow);
+      }
     } else if (fileName.endsWith('.json')) {
       const text = await file.text();
       parsedData = parseJSON(text, maxSampleRows);
@@ -368,7 +376,7 @@ serve(async (req) => {
       rowsDetected: parsedData.totalRows,
       colsDetected: parsedData.columns.length,
       fileCount: 1,
-      totalBytes: file.size,
+      totalBytes: originalSize || file.size,
     });
 
     console.log(`[parse-file] File processing complete for project ${projectId}`);
