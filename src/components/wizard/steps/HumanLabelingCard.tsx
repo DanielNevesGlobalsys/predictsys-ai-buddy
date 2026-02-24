@@ -279,6 +279,15 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
           target_source: "human_labeling",
           target_column: "label",
           selected_template_id: "human_labeling_assisted",
+          // ── Active Target SSOT ──
+          active_target_mode: "human",
+          active_target_column: null,
+          active_target_ref: {
+            human_label_result_id: roundId || "initial",
+            sample_size: nLabeled,
+            seed_metrics: { pos: nPositive, neg: nNegative, balance },
+          },
+          active_target_updated_at: new Date().toISOString(),
         } as any)
         .eq("project_id", projectId);
       toast({ title: "Target por rotulagem ativado", description: "O target será baseado nos rótulos humanos + modelo seed." });
@@ -288,7 +297,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
     } finally {
       setActivating(false);
     }
-  }, [projectId, toast, onActivated]);
+  }, [projectId, toast, onActivated, roundId, nLabeled, nPositive, nNegative, balance]);
 
   const labeledCount = Object.keys(labelMap).length;
   const yesCount = Object.values(labelMap).filter(v => v === "yes").length;

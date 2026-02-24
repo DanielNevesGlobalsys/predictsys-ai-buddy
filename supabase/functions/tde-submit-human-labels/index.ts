@@ -123,7 +123,7 @@ serve(async (req: Request) => {
       ];
     }
 
-    // Update SSOT
+    // Update SSOT — including active_target fields for structural correctness
     await supabase
       .from("project_settings")
       .update({
@@ -140,6 +140,16 @@ serve(async (req: Request) => {
           trainability_ctas,
           last_updated: new Date().toISOString(),
         },
+        // ── Active Target SSOT ──
+        active_target_mode: "human",
+        active_target_column: null,
+        active_target_ref: {
+          human_label_result_id: round_id,
+          sample_size: nLabeled,
+          seed_metrics: { pos: nPositive, neg: nNegative, balance },
+        },
+        active_target_updated_at: new Date().toISOString(),
+        target_source: "human_labeling",
       } as any)
       .eq("project_id", project_id);
 

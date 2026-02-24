@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { evaluateTargetTrainability, trainabilityHumanMessage } from "../_shared/evaluate-target-trainability.ts";
+import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -68,7 +69,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result, active_target_mode, active_target_column, active_target_ref").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -703,127 +704,170 @@ serve(async (req: Request) => {
       }
     }
 
-    // ===== 4.9c TARGET_TRAINABLE GATE =====
+    // ===== 4.9c TARGET_TRAINABLE GATE (uses shared resolve-active-target) =====
     {
-      // Attempt lightweight trainability evaluation using SSOT metadata
-      // (We don't read the full dataset here — use cached label_build_result + target_quality_report)
-      const targetSource = (projectSettings?.target_source as string) || "manual";
+      const activeTarget = resolveActiveTarget(projectSettings || {});
+      const targetSource = activeTarget.target_source;
       const targetCol = (selection as any)?.target_column || null;
       const totalRows = (datasetState as any)?.row_count || 0;
 
-      // Build synthetic target_values from available metadata
-      let syntheticValues: (string | number | null)[] = [];
-      let canEvaluate = false;
+      // ── For HUMAN mode: use shared utility for exact parity with train-models ──
+      if (activeTarget.mode === "human") {
+        const humanStats = await buildHumanTargetStats(supabase, project_id);
+        const trainReport = buildTrainabilityReport(activeTarget, humanStats);
+        
+        // Persist report to SSOT
+        await supabase.from("project_settings")
+          .update({ target_trainability_report: trainReport })
+          .eq("project_id", project_id);
 
-      // Source 1: label_build_result has class distribution
-      if (targetSource === "label_builder" && projectSettings?.label_build_result) {
-        const lbr = projectSettings.label_build_result as Record<string, any>;
-        const pr = lbr.positive_rate ?? null;
-        const eligibleEntities = lbr.eligible_entities ?? totalRows;
-        if (pr !== null && eligibleEntities > 0) {
-          const nPositive = Math.round(eligibleEntities * pr);
-          const nNegative = eligibleEntities - nPositive;
-          syntheticValues = [
-            ...Array(nPositive).fill(1),
-            ...Array(nNegative).fill(0),
-          ];
-          canEvaluate = true;
-        }
-      }
-
-      // Source 2: target_quality_report from TDE
-      if (!canEvaluate && projectSettings?.target_quality_report) {
-        const tqr = projectSettings.target_quality_report as Record<string, any>;
-        const nClasses = tqr.n_classes || 0;
-        const positiveRate = tqr.positive_rate ?? null;
-        if (nClasses > 0 && positiveRate !== null && totalRows > 0) {
-          const nPositive = Math.round(totalRows * positiveRate);
-          const nNegative = totalRows - nPositive;
-          syntheticValues = [
-            ...Array(nPositive).fill(1),
-            ...Array(nNegative).fill(0),
-          ];
-          canEvaluate = true;
-        }
-      }
-
-      // Source 3: weak_label_result
-      if (!canEvaluate && targetSource === "weak_supervision" && projectSettings?.weak_label_result) {
-        const wlr = projectSettings.weak_label_result as Record<string, any>;
-        const prevalence = wlr.prevalence ?? 0;
-        const coveredRows = Math.round(totalRows * (wlr.coverage ?? 0));
-        if (coveredRows > 0) {
-          const nPositive = Math.round(coveredRows * prevalence);
-          const nNegative = coveredRows - nPositive;
-          syntheticValues = [
-            ...Array(nPositive).fill(1),
-            ...Array(nNegative).fill(0),
-            ...Array(totalRows - coveredRows).fill(null),
-          ];
-          canEvaluate = true;
-        }
-      }
-
-      // Source 4: human_label_result
-      if (!canEvaluate && targetSource === "human_labeling" && projectSettings?.human_label_result) {
-        const hlr = projectSettings.human_label_result as Record<string, any>;
-        const nLabeled = hlr.n_labeled || 0;
-        const nPositive = hlr.n_positive || 0;
-        if (nLabeled > 0) {
-          syntheticValues = [
-            ...Array(nPositive).fill(1),
-            ...Array(nLabeled - nPositive).fill(0),
-          ];
-          canEvaluate = true;
-        }
-      }
-
-      if (canEvaluate && targetCol) {
-        // Use problem_type from selection first, then fallback to project_settings (consistency with train-models)
-        const problemType = (selection as any)?.problem_type || (projectSettings as any)?.problem_type || "classification";
-        const trainabilityResult = evaluateTargetTrainability({
-          target_values: syntheticValues,
-          target_column: targetCol,
-          problem_type: problemType,
-          target_source: targetSource,
-          weak_label_result: projectSettings?.weak_label_result as Record<string, unknown> | null,
-          human_label_result: projectSettings?.human_label_result as Record<string, unknown> | null,
-        });
-
-        const humanMsg = trainabilityHumanMessage(trainabilityResult);
-
-        if (!trainabilityResult.trainable) {
+        if (humanStats.reason_code) {
           gates.push({
             gate: "target_trainable",
             status: "BLOCK",
-            message: humanMsg,
+            message: humanStats.error_message || `Target humano bloqueado: ${humanStats.reason_code}`,
             details: {
-              reason_code: trainabilityResult.reason_code,
-              ...trainabilityResult.details,
-              fix_suggestions: trainabilityResult.fix_suggestions,
+              reason_code: humanStats.reason_code,
+              active_target_mode: "human",
+              join_rows: humanStats.join_rows,
+              distinct_y: humanStats.distinct_y,
+              pos: humanStats.pos,
+              neg: humanStats.neg,
+              fix_suggestions: [
+                { label: "Gerar nova amostra estratificada", action: "open_human_labeling" },
+                { label: "Buscar classe faltante", action: "open_human_labeling" },
+              ],
             },
           });
           canTrain = false;
-        } else if (trainabilityResult.warnings.length > 0) {
-          gates.push({
-            gate: "target_trainable",
-            status: "WARN",
-            message: trainabilityResult.warnings[0],
-            details: { ...trainabilityResult.details },
-          });
         } else {
-          gates.push({
-            gate: "target_trainable",
-            status: "PASS",
-            message: `Target treinável (${trainabilityResult.details.n_non_null} valores, ${trainabilityResult.details.n_unique} classes).`,
-            details: { ...trainabilityResult.details },
-          });
+          // Check min per class
+          const MIN_PER_CLASS_HUMAN = 30;
+          const minClassCount = Math.min(humanStats.pos, humanStats.neg);
+          if (minClassCount < MIN_PER_CLASS_HUMAN) {
+            const minorityLabel = humanStats.pos < humanStats.neg ? "positivos" : "negativos";
+            gates.push({
+              gate: "target_trainable",
+              status: "BLOCK",
+              message: `Classe minoritária (${minorityLabel}) com apenas ${minClassCount} exemplos. Mínimo: ${MIN_PER_CLASS_HUMAN}. Faltam ${MIN_PER_CLASS_HUMAN - minClassCount}.`,
+              details: {
+                reason_code: "MINORITY_CLASS_TOO_SMALL",
+                active_target_mode: "human",
+                pos: humanStats.pos,
+                neg: humanStats.neg,
+                min_per_class: MIN_PER_CLASS_HUMAN,
+                fix_suggestions: [
+                  { label: `Buscar ${minorityLabel}`, action: "open_human_labeling" },
+                  { label: "Gerar mais amostras", action: "open_human_labeling" },
+                ],
+              },
+            });
+            canTrain = false;
+          } else {
+            gates.push({
+              gate: "target_trainable",
+              status: "PASS",
+              message: `Target humano treinável (${humanStats.join_rows} rótulos, ${humanStats.pos}+ / ${humanStats.neg}−).`,
+              details: { active_target_mode: "human", pos: humanStats.pos, neg: humanStats.neg, join_rows: humanStats.join_rows },
+            });
+          }
+        }
+      } else {
+        // ── Non-human modes: use synthetic values from metadata (existing logic) ──
+        let syntheticValues: (string | number | null)[] = [];
+        let canEvaluate = false;
+
+        if (targetSource === "label_builder" && projectSettings?.label_build_result) {
+          const lbr = projectSettings.label_build_result as Record<string, any>;
+          const pr = lbr.positive_rate ?? null;
+          const eligibleEntities = lbr.eligible_entities ?? totalRows;
+          if (pr !== null && eligibleEntities > 0) {
+            const nPositive = Math.round(eligibleEntities * pr);
+            const nNegative = eligibleEntities - nPositive;
+            syntheticValues = [...Array(nPositive).fill(1), ...Array(nNegative).fill(0)];
+            canEvaluate = true;
+          }
         }
 
-        // Persist to SSOT
-        await supabase.from("project_settings")
-          .update({ target_trainability_report: trainabilityResult })
-          .eq("project_id", project_id);
+        if (!canEvaluate && projectSettings?.target_quality_report) {
+          const tqr = projectSettings.target_quality_report as Record<string, any>;
+          const nClasses = tqr.n_classes || 0;
+          const positiveRate = tqr.positive_rate ?? null;
+          if (nClasses > 0 && positiveRate !== null && totalRows > 0) {
+            const nPositive = Math.round(totalRows * positiveRate);
+            const nNegative = totalRows - nPositive;
+            syntheticValues = [...Array(nPositive).fill(1), ...Array(nNegative).fill(0)];
+            canEvaluate = true;
+          }
+        }
+
+        if (!canEvaluate && targetSource === "weak_supervision" && projectSettings?.weak_label_result) {
+          const wlr = projectSettings.weak_label_result as Record<string, any>;
+          const prevalence = wlr.prevalence ?? 0;
+          const coveredRows = Math.round(totalRows * (wlr.coverage ?? 0));
+          if (coveredRows > 0) {
+            const nPositive = Math.round(coveredRows * prevalence);
+            const nNegative = coveredRows - nPositive;
+            syntheticValues = [...Array(nPositive).fill(1), ...Array(nNegative).fill(0), ...Array(totalRows - coveredRows).fill(null)];
+            canEvaluate = true;
+          }
+        }
+
+        if (!canEvaluate && targetSource === "human_labeling" && projectSettings?.human_label_result) {
+          const hlr = projectSettings.human_label_result as Record<string, any>;
+          const nLabeled = hlr.n_labeled || 0;
+          const nPositive = hlr.n_positive || 0;
+          if (nLabeled > 0) {
+            syntheticValues = [...Array(nPositive).fill(1), ...Array(nLabeled - nPositive).fill(0)];
+            canEvaluate = true;
+          }
+        }
+
+        if (canEvaluate && targetCol) {
+          const problemType = (selection as any)?.problem_type || (projectSettings as any)?.problem_type || "classification";
+          const trainabilityResult = evaluateTargetTrainability({
+            target_values: syntheticValues,
+            target_column: targetCol,
+            problem_type: problemType,
+            target_source: targetSource,
+            weak_label_result: projectSettings?.weak_label_result as Record<string, unknown> | null,
+            human_label_result: projectSettings?.human_label_result as Record<string, unknown> | null,
+          });
+
+          const humanMsg = trainabilityHumanMessage(trainabilityResult);
+
+          if (!trainabilityResult.trainable) {
+            gates.push({
+              gate: "target_trainable",
+              status: "BLOCK",
+              message: humanMsg,
+              details: {
+                reason_code: trainabilityResult.reason_code,
+                ...trainabilityResult.details,
+                fix_suggestions: trainabilityResult.fix_suggestions,
+              },
+            });
+            canTrain = false;
+          } else if (trainabilityResult.warnings.length > 0) {
+            gates.push({
+              gate: "target_trainable",
+              status: "WARN",
+              message: trainabilityResult.warnings[0],
+              details: { ...trainabilityResult.details },
+            });
+          } else {
+            gates.push({
+              gate: "target_trainable",
+              status: "PASS",
+              message: `Target treinável (${trainabilityResult.details.n_non_null} valores, ${trainabilityResult.details.n_unique} classes).`,
+              details: { ...trainabilityResult.details },
+            });
+          }
+
+          await supabase.from("project_settings")
+            .update({ target_trainability_report: trainabilityResult })
+            .eq("project_id", project_id);
+        }
       }
     }
 
