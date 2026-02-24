@@ -71,20 +71,20 @@ const Admin = () => {
   const handleDownloadAudit = useCallback(async () => {
     setIsDownloadingAudit(true);
     try {
-      const { data, error } = await supabase.functions.invoke('audit-platform', {
-        body: { scope: 'global' },
+      const { data, error } = await supabase.functions.invoke('platform-audit-az', {
+        body: { sample_size: 12, days: 7 },
       });
       if (error) throw error;
       const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = 'platform_audit.json';
+      a.download = 'platform_audit_az.json';
       document.body.appendChild(a);
       a.click();
       a.remove();
       URL.revokeObjectURL(url);
-      toast({ title: 'Download concluído', description: 'platform_audit.json salvo.' });
+      toast({ title: 'Download concluído', description: 'platform_audit_az.json (A→Z v4) salvo.' });
     } catch (err) {
       console.error('[audit-platform]', err);
       const msg = err instanceof Error ? err.message
@@ -364,7 +364,7 @@ const Admin = () => {
           <ExportTechnicalReportButton variant="outline" />
           <Button variant="outline" className="gap-2" onClick={handleDownloadAudit} disabled={isDownloadingAudit}>
             {isDownloadingAudit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
-            Baixar Auditoria Global (JSON)
+            Platform Audit A→Z (JSON)
           </Button>
         </div>
 
