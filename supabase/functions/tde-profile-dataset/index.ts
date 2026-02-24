@@ -348,17 +348,26 @@ serve(async (req) => {
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
+    // If manifest/dataset IDs are missing, check if columns exist as fallback
     if (settingsGate && !settingsGate.ingestion_manifest_id && !settingsGate.ingestion_dataset_id) {
-      console.log(`[tde-profile-dataset] Blocked: manifest/dataset missing`);
-      return new Response(JSON.stringify({
-        success: false,
-        error_code: "MANIFEST_MISSING",
-        error_friendly: "O manifest de ingestão está ausente. Reimporte os dados para gerar o manifest.",
-        ctas: [
-          { label: "Voltar para Upload", action: "goto_step", step: 2 },
-          { label: "Atualizar status", action: "refresh" },
-        ],
-      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      const { count: colCount } = await supabase
+        .from("project_columns")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", project_id);
+
+      if (!colCount || colCount === 0) {
+        console.log(`[tde-profile-dataset] Blocked: manifest/dataset missing and no columns`);
+        return new Response(JSON.stringify({
+          success: false,
+          error_code: "MANIFEST_MISSING",
+          error_friendly: "O manifest de ingestão está ausente. Reimporte os dados para gerar o manifest.",
+          ctas: [
+            { label: "Voltar para Upload", action: "goto_step", step: 2 },
+            { label: "Atualizar status", action: "refresh" },
+          ],
+        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      console.log(`[tde-profile-dataset] Manifest missing but ${colCount} columns found — proceeding with fallback`);
     }
 
     console.log(`[tde-profile-dataset] Starting for project=${project_id}`);
