@@ -2712,9 +2712,18 @@ serve(async (req) => {
 
     console.log(`\nDados válidos: ${X.length.toLocaleString()} amostras, ${allFeatureNames.length} features`);
 
-    if (X.length < 100) {
+    // Early fetch of target_source to determine minimum sample threshold
+    const { data: earlySettings } = await supabase
+      .from("project_settings")
+      .select("target_source")
+      .eq("project_id", project_id)
+      .maybeSingle();
+    const earlyTargetSource = (earlySettings as any)?.target_source || "manual";
+    const minSamplesRequired = earlyTargetSource === "human_labeling" ? 30 : 100;
+
+    if (X.length < minSamplesRequired) {
       return new Response(JSON.stringify({ 
-        error: `Dados insuficientes após parsing (${X.length} amostras válidas). Verifique a qualidade dos dados.` 
+        error: `Dados insuficientes após parsing (${X.length} amostras válidas, mínimo: ${minSamplesRequired}). Verifique a qualidade dos dados.` 
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
