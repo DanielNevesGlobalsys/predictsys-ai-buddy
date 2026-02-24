@@ -2048,8 +2048,9 @@ serve(async (req) => {
       }
 
       // Find target column index (case-insensitive fallback)
-      const targetIndex = findHeaderIndex(headers, target_column);
-      if (targetIndex === -1) {
+      // When using human labels, target column may not exist in dataset — skip validation
+      const targetIndex = useHumanLabelsAsTarget ? -1 : findHeaderIndex(headers, target_column);
+      if (!useHumanLabelsAsTarget && targetIndex === -1) {
         console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.join(", ")}`);
         return new Response(JSON.stringify({ 
           error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
@@ -2059,8 +2060,8 @@ serve(async (req) => {
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }
-      // Use the actual header name from the file for row access
-      const actualTargetName = headers[targetIndex];
+      // Use the actual header name from the file for row access (null for human mode)
+      const actualTargetName = targetIndex !== -1 ? headers[targetIndex] : null;
 
       // Get numeric feature columns (case-insensitive matching)
       const numericColumns = columns.filter(c => 
@@ -2095,7 +2096,10 @@ serve(async (req) => {
       let rowsToProcess = parquetResult.rows;
       if (!useFullDataset && rowsToProcess.length > effectiveTargetSampleSize) {
         console.log(`[resource_guard] Amostragem ${sampleStrategy}: ${rowsToProcess.length.toLocaleString()} → ${effectiveTargetSampleSize.toLocaleString()} linhas`);
-        if (sampleStrategy === "stratified_quantile" && !isTargetCategorical) {
+        if (useHumanLabelsAsTarget) {
+          // Human mode: no target column in dataset, just random sample
+          rowsToProcess = shuffle(rowsToProcess).slice(0, effectiveTargetSampleSize);
+        } else if (sampleStrategy === "stratified_quantile" && !isTargetCategorical) {
           // Stratify by target quantile bins (10 bins)
           const nBins = 10;
           const targetValues = rowsToProcess.map(r => {
@@ -2144,9 +2148,10 @@ serve(async (req) => {
 
       // Parse rows into X and y
       for (const row of rowsToProcess) {
-        const targetVal = row[target_column];
+        // When using human labels, skip target extraction from dataset
+        const targetVal = useHumanLabelsAsTarget ? null : (actualTargetName ? row[actualTargetName] : row[target_column]);
         
-        if (isTargetCategorical) {
+        if (!useHumanLabelsAsTarget && isTargetCategorical) {
           const tv = String(targetVal ?? "").trim();
           if (tv && !labelMap.has(tv)) {
             labelMap.set(tv, labelMap.size);
@@ -2178,23 +2183,31 @@ serve(async (req) => {
 
         const allFeatures = [...baseFeatures, ...engineeredFeatures];
 
-        let targetNumeric: number;
-        if (isTargetCategorical) {
-          const tv = String(targetVal ?? "").trim();
-          targetNumeric = labelMap.get(tv) ?? -1;
-        } else {
-          if (typeof targetVal === "number") {
-            targetNumeric = targetVal;
-          } else if (typeof targetVal === "bigint") {
-            targetNumeric = Number(targetVal);
-          } else {
-            targetNumeric = parseFloat(String(targetVal ?? "").replace(",", "."));
+        if (useHumanLabelsAsTarget) {
+          // For human mode, just load features — y will be overridden later
+          if (allFeatures.every(f => !isNaN(f))) {
+            X.push(allFeatures);
+            y.push(0); // placeholder, will be replaced by human labels
           }
-        }
+        } else {
+          let targetNumeric: number;
+          if (isTargetCategorical) {
+            const tv = String(targetVal ?? "").trim();
+            targetNumeric = labelMap.get(tv) ?? -1;
+          } else {
+            if (typeof targetVal === "number") {
+              targetNumeric = targetVal;
+            } else if (typeof targetVal === "bigint") {
+              targetNumeric = Number(targetVal);
+            } else {
+              targetNumeric = parseFloat(String(targetVal ?? "").replace(",", "."));
+            }
+          }
 
-        if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
-          X.push(allFeatures);
-          y.push(targetNumeric);
+          if (allFeatures.every(f => !isNaN(f)) && targetNumeric !== -1 && !isNaN(targetNumeric)) {
+            X.push(allFeatures);
+            y.push(targetNumeric);
+          }
         }
       }
 
@@ -2664,8 +2677,9 @@ serve(async (req) => {
       }
 
       // Find target column index (case-insensitive fallback)
-      const targetIndex = findHeaderIndex(headers, target_column);
-      if (targetIndex === -1) {
+      // When using human labels, target column may not exist in dataset — skip validation
+      const targetIndex = useHumanLabelsAsTarget ? -1 : findHeaderIndex(headers, target_column);
+      if (!useHumanLabelsAsTarget && targetIndex === -1) {
         console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.slice(0, 20).join(", ")}`);
         return new Response(JSON.stringify({ 
           error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
@@ -2708,7 +2722,7 @@ serve(async (req) => {
       for (let i = 0; i < finalSampledLines.length; i++) {
         const values = parseCSVLine(finalSampledLines[i], delimiter);
         
-        if (isTargetCategorical) {
+        if (!useHumanLabelsAsTarget && isTargetCategorical) {
           const targetVal = values[targetIndex]?.trim() || "";
           if (targetVal && !labelMap.has(targetVal)) {
             labelMap.set(targetVal, labelMap.size);
@@ -2737,19 +2751,25 @@ serve(async (req) => {
         
         const allFeatures = [...baseFeatures, ...engineeredFeatures];
         
-        let targetNumeric: number;
-        if (isTargetCategorical) {
-          const targetVal = values[targetIndex]?.trim() || "";
-          targetNumeric = labelMap.get(targetVal) ?? -1;
-        } else {
-          targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
-        }
-        
-        // Only require valid target; missing features are imputed to 0
-        const hasValidTarget = isTargetCategorical ? targetNumeric !== -1 : !isNaN(targetNumeric);
-        if (hasValidTarget) {
+        if (useHumanLabelsAsTarget) {
+          // For human mode, just load features — y will be overridden later
           X.push(allFeatures);
-          y.push(targetNumeric);
+          y.push(0); // placeholder
+        } else {
+          let targetNumeric: number;
+          if (isTargetCategorical) {
+            const targetVal = values[targetIndex]?.trim() || "";
+            targetNumeric = labelMap.get(targetVal) ?? -1;
+          } else {
+            targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+          }
+          
+          // Only require valid target; missing features are imputed to 0
+          const hasValidTarget = isTargetCategorical ? targetNumeric !== -1 : !isNaN(targetNumeric);
+          if (hasValidTarget) {
+            X.push(allFeatures);
+            y.push(targetNumeric);
+          }
         }
         
         finalSampledLines[i] = "";
