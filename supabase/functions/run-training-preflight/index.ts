@@ -89,8 +89,76 @@ serve(async (req: Request) => {
     let canSchedule = true;
     let dashboardAllowed = true;
 
-    // ===== 4.1 DATASET GATE =====
-    if (datasetState && (datasetState as any).row_count > 0 && (datasetState as any).col_count > 0) {
+    // ===== 4.1 DATASET GATE (SSOT-first: ingestion_state > dataset_state > manifest) =====
+    // Read ingestion_state from project_settings (SSOT primary)
+    const { data: ingestionCheck } = await supabase
+      .from("project_settings")
+      .select("ingestion_state, ingestion_dataset_id, ingestion_manifest_id")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    const ingestionState = (ingestionCheck as any)?.ingestion_state;
+    const hasIngestionData = (ingestionCheck as any)?.ingestion_dataset_id || (ingestionCheck as any)?.ingestion_manifest_id;
+
+    // Primary: check ingestion_state from SSOT
+    if (ingestionState === "done" && hasIngestionData) {
+      // Ingestion done — use dataset_state for details
+      if (datasetState && (datasetState as any).row_count > 0) {
+        const isVirtual = (datasetState as any).virtual_manifest;
+        gates.push({
+          gate: "dataset",
+          status: isVirtual ? "WARN" : "PASS",
+          message: isVirtual
+            ? `Dataset ativo (${(datasetState as any).row_count} linhas, virtual manifest)`
+            : `Dataset ativo (${(datasetState as any).row_count} linhas, ${(datasetState as any).col_count} colunas)`,
+          details: { row_count: (datasetState as any).row_count, col_count: (datasetState as any).col_count, virtual: isVirtual, ingestion_state: ingestionState },
+        });
+      } else {
+        // Ingestion done but dataset_state not populated — check manifest fallback
+        const { data: manifest } = await supabase
+          .from("import_manifests")
+          .select("rows_consolidated, columns_final")
+          .eq("project_id", project_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (manifest && manifest.rows_consolidated > 0) {
+          gates.push({
+            gate: "dataset",
+            status: "WARN",
+            message: `Dataset via manifest (${manifest.rows_consolidated} linhas). SSOT parcial.`,
+            details: { row_count: manifest.rows_consolidated, col_count: manifest.columns_final, ingestion_state: ingestionState },
+          });
+        } else {
+          gates.push({
+            gate: "dataset",
+            status: "WARN",
+            message: `Ingestão concluída mas dataset_state não encontrado. Regere a EDA ou reimporte.`,
+            details: { ingestion_state: ingestionState, has_dataset_id: !!hasIngestionData },
+          });
+        }
+      }
+    } else if (ingestionState === "running") {
+      gates.push({
+        gate: "dataset",
+        status: "BLOCK",
+        message: "Ingestão em andamento. Aguarde a conclusão.",
+        details: { ingestion_state: ingestionState },
+      });
+      canBuild = false;
+      canTrain = false;
+    } else if (ingestionState === "failed") {
+      gates.push({
+        gate: "dataset",
+        status: "BLOCK",
+        message: "Última ingestão falhou. Reimporte os dados.",
+        details: { ingestion_state: ingestionState },
+      });
+      canBuild = false;
+      canTrain = false;
+    } else if (datasetState && (datasetState as any).row_count > 0 && (datasetState as any).col_count > 0) {
+      // Legacy fallback: ingestion_state not set but dataset_state exists (older projects)
       const isVirtual = (datasetState as any).virtual_manifest;
       gates.push({
         gate: "dataset",
@@ -98,7 +166,7 @@ serve(async (req: Request) => {
         message: isVirtual
           ? `Dataset ativo (${(datasetState as any).row_count} linhas, virtual manifest)`
           : `Dataset ativo (${(datasetState as any).row_count} linhas, ${(datasetState as any).col_count} colunas)`,
-        details: { row_count: (datasetState as any).row_count, col_count: (datasetState as any).col_count, virtual: isVirtual },
+        details: { row_count: (datasetState as any).row_count, col_count: (datasetState as any).col_count, virtual: isVirtual, ingestion_state: ingestionState || "unknown" },
       });
     } else {
       // Fallback: check import_manifests
@@ -122,6 +190,7 @@ serve(async (req: Request) => {
           gate: "dataset",
           status: "BLOCK",
           message: "Nenhum dataset ativo. Importe dados ou conecte uma fonte.",
+          details: { ingestion_state: ingestionState || "none" },
         });
         canBuild = false;
         canTrain = false;
