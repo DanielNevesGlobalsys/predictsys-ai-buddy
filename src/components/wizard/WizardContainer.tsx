@@ -128,8 +128,6 @@ const WizardContainer = () => {
       else if (data.status === "training") setCurrentStep(5);
       else if (data.status === "evaluated") setCurrentStep(6);
       else if (data.status === "deployed") setCurrentStep(9);
-      // Simple mode: if stuck on eda but dataset has data, allow proceeding
-      else if (data.status === "eda_blocked" || data.status === "data_ready") setCurrentStep(4);
     }
     setLoading(false);
   };

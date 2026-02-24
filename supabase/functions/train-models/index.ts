@@ -2846,9 +2846,7 @@ serve(async (req) => {
     }
 
     // Determine minimum samples based on active target mode
-    // Lowered from 100→50 for non-human: evaluateTargetTrainability already guards quality.
-    // Small materialized datasets (template/weak) often produce 50-100 valid rows.
-    const minSamplesRequired = useHumanLabelsAsTarget ? 30 : 50;
+    const minSamplesRequired = useHumanLabelsAsTarget ? 30 : 100;
 
     if (X.length < minSamplesRequired) {
       return new Response(JSON.stringify({ 

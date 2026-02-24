@@ -235,8 +235,7 @@ const StepTraining = ({
       blockedReasonModel = manifest?.blocked_reason_model as string | null;
     }
 
-    // EDA is now optional (simple mode) — do not block training when EDA is not ready
-    // if (!edaReady) blockReasons.push("Dataset não está pronto para análise (EDA bloqueado).");
+    if (!edaReady) blockReasons.push("Dataset não está pronto para análise (EDA bloqueado).");
 
     // Check modeling contract
     const { data: contract } = await supabase
@@ -265,7 +264,7 @@ const StepTraining = ({
 
     if (totalRows === 0) blockReasons.push("Dataset sem linhas válidas.");
 
-    const canTrain = hasTarget && blockReasons.length === 0;
+    const canTrain = edaReady && hasTarget && blockReasons.length === 0;
 
     setTrainReadiness({
       edaReady,
@@ -572,16 +571,6 @@ const StepTraining = ({
             {t("stepTraining.subtitle")}
           </p>
         </div>
-
-        {/* Simple Mode Banner — shown when EDA is not ready */}
-        {trainReadiness && !trainReadiness.edaReady && (
-          <Alert className="bg-amber-500/10 border-amber-500/30">
-            <Info className="w-4 h-4 text-amber-600" />
-            <AlertDescription className="text-sm text-amber-700">
-              <strong>Modo Simples:</strong> Treino executado com amostra do dataset. EDA completo será disponibilizado depois.
-            </AlertDescription>
-          </Alert>
-        )}
 
         {/* Problem Type Warning */}
         {showTypeWarning && detectedProblemType && (

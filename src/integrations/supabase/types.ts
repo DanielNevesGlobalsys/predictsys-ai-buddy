@@ -71,39 +71,6 @@ export type Database = {
           },
         ]
       }
-      audit_project_mismatch: {
-        Row: {
-          body_project_id: string | null
-          created_at: string
-          endpoint: string | null
-          id: string
-          metadata: Json | null
-          resolved_project_id: string | null
-          route_project_id: string | null
-          user_id: string | null
-        }
-        Insert: {
-          body_project_id?: string | null
-          created_at?: string
-          endpoint?: string | null
-          id?: string
-          metadata?: Json | null
-          resolved_project_id?: string | null
-          route_project_id?: string | null
-          user_id?: string | null
-        }
-        Update: {
-          body_project_id?: string | null
-          created_at?: string
-          endpoint?: string | null
-          id?: string
-          metadata?: Json | null
-          resolved_project_id?: string | null
-          route_project_id?: string | null
-          user_id?: string | null
-        }
-        Relationships: []
-      }
       data_sources: {
         Row: {
           connection_config: Json
@@ -1535,35 +1502,6 @@ export type Database = {
           },
         ]
       }
-      project_dataset_sample: {
-        Row: {
-          created_at: string
-          project_id: string
-          sample_json: Json
-          sample_rows: number
-        }
-        Insert: {
-          created_at?: string
-          project_id: string
-          sample_json?: Json
-          sample_rows?: number
-        }
-        Update: {
-          created_at?: string
-          project_id?: string
-          sample_json?: Json
-          sample_rows?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "project_dataset_sample_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: true
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       project_dataset_state: {
         Row: {
           active_dataset_ref: string | null
@@ -1981,59 +1919,6 @@ export type Database = {
         Relationships: [
           {
             foreignKeyName: "project_human_labels_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      project_ingestion_manifests: {
-        Row: {
-          col_count: number
-          config_hash: string | null
-          created_at: string
-          dataset_id: string | null
-          id: string
-          project_id: string
-          row_count: number
-          sample_strategy: Json
-          schema_json: Json
-          source_pointer: Json
-          source_type: string
-          total_bytes: number
-        }
-        Insert: {
-          col_count?: number
-          config_hash?: string | null
-          created_at?: string
-          dataset_id?: string | null
-          id?: string
-          project_id: string
-          row_count?: number
-          sample_strategy?: Json
-          schema_json?: Json
-          source_pointer?: Json
-          source_type?: string
-          total_bytes?: number
-        }
-        Update: {
-          col_count?: number
-          config_hash?: string | null
-          created_at?: string
-          dataset_id?: string | null
-          id?: string
-          project_id?: string
-          row_count?: number
-          sample_strategy?: Json
-          schema_json?: Json
-          source_pointer?: Json
-          source_type?: string
-          total_bytes?: number
-        }
-        Relationships: [
-          {
-            foreignKeyName: "project_ingestion_manifests_project_id_fkey"
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
@@ -3257,7 +3142,6 @@ export type Database = {
           human_label_result: Json | null
           industry: string
           industry_source: string
-          ingestion_activation_log: Json | null
           ingestion_attempt_count: number | null
           ingestion_cols_detected: number | null
           ingestion_dataset_id: string | null
@@ -3325,7 +3209,6 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
-          ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
           ingestion_cols_detected?: number | null
           ingestion_dataset_id?: string | null
@@ -3393,7 +3276,6 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
-          ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
           ingestion_cols_detected?: number | null
           ingestion_dataset_id?: string | null
@@ -3756,17 +3638,6 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
-      rpc_activate_ingestion: {
-        Args: {
-          p_config_hash?: string
-          p_dataset_id?: string
-          p_manifest_id?: string
-          p_project_id: string
-          p_source_type: string
-          p_stats?: Json
-        }
-        Returns: Json
-      }
       rpc_complete_ingestion: {
         Args: {
           p_cols_detected?: number
@@ -3778,22 +3649,6 @@ export type Database = {
           p_project_id: string
           p_rows_detected?: number
           p_success: boolean
-          p_total_bytes?: number
-        }
-        Returns: Json
-      }
-      rpc_finalize_ingestion: {
-        Args: {
-          p_col_count?: number
-          p_config_hash?: string
-          p_dataset_id?: string
-          p_file_count?: number
-          p_project_id: string
-          p_row_count?: number
-          p_sample_strategy?: Json
-          p_schema_json?: Json
-          p_source_pointer?: Json
-          p_source_type: string
           p_total_bytes?: number
         }
         Returns: Json
@@ -3851,10 +3706,6 @@ export type Database = {
       }
       user_belongs_to_org: {
         Args: { _org_id: string; _user_id: string }
-        Returns: boolean
-      }
-      user_can_access_project: {
-        Args: { _project_id: string; _user_id: string }
         Returns: boolean
       }
       user_has_active_org: { Args: { _user_id: string }; Returns: boolean }

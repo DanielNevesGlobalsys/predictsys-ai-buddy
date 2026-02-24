@@ -93,7 +93,7 @@ serve(async (req: Request) => {
     // Read ingestion_state from project_settings (SSOT primary)
     const { data: ingestionCheck } = await supabase
       .from("project_settings")
-      .select("ingestion_state, ingestion_dataset_id, ingestion_manifest_id, ingestion_rows_detected, ingestion_cols_detected")
+      .select("ingestion_state, ingestion_dataset_id, ingestion_manifest_id")
       .eq("project_id", project_id)
       .maybeSingle();
 
@@ -114,81 +114,29 @@ serve(async (req: Request) => {
           details: { row_count: (datasetState as any).row_count, col_count: (datasetState as any).col_count, virtual: isVirtual, ingestion_state: ingestionState },
         });
       } else {
-        // Ingestion done but dataset_state not populated — auto-repair from projects/SSOT
-        const ingRows = (ingestionCheck as any)?.ingestion_rows_detected || 0;
-        const ingCols = (ingestionCheck as any)?.ingestion_cols_detected || 0;
-        if (ingRows > 0) {
-          gates.push({
-            gate: "dataset",
-            status: "PASS",
-            message: `Dataset ativo via SSOT (${ingRows} linhas, ${ingCols} colunas)`,
-            details: { row_count: ingRows, col_count: ingCols, ingestion_state: ingestionState, source: "ssot_fallback" },
-          });
-        } else {
-          // Check manifest fallback
-          const { data: manifest } = await supabase
-            .from("import_manifests")
-            .select("rows_consolidated, columns_final")
-            .eq("project_id", project_id)
-            .order("created_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
-
-          if (manifest && manifest.rows_consolidated > 0) {
-            gates.push({
-              gate: "dataset",
-              status: "WARN",
-              message: `Dataset via manifest (${manifest.rows_consolidated} linhas). SSOT parcial.`,
-              details: { row_count: manifest.rows_consolidated, col_count: manifest.columns_final, ingestion_state: ingestionState },
-            });
-          } else {
-            gates.push({
-              gate: "dataset",
-              status: "WARN",
-              message: `Ingestão concluída mas dataset_state não encontrado. Regere a EDA ou reimporte.`,
-              details: { ingestion_state: ingestionState, has_dataset_id: !!hasIngestionData },
-            });
-          }
-        }
-      }
-    } else if (ingestionState === "done") {
-      // ingestion_state=done but dataset_id/manifest_id null — check ingestion_rows from SSOT
-      const ingRows = (ingestionCheck as any)?.ingestion_rows_detected || 0;
-      const ingCols = (ingestionCheck as any)?.ingestion_cols_detected || 0;
-      
-      if (ingRows > 0 || (datasetState && (datasetState as any).row_count > 0)) {
-        const rows = ingRows || (datasetState as any)?.row_count || 0;
-        const cols = ingCols || (datasetState as any)?.col_count || 0;
-        gates.push({
-          gate: "dataset",
-          status: "PASS",
-          message: `Dataset ativo (${rows} linhas, ${cols} colunas)`,
-          details: { row_count: rows, col_count: cols, ingestion_state: ingestionState, source: "ssot_rows" },
-        });
-      } else {
-        // Check projects table as last resort
-        const { data: projectRow } = await supabase
-          .from("projects")
-          .select("total_rows, dataset_columns, dataset_filename")
-          .eq("id", project_id)
+        // Ingestion done but dataset_state not populated — check manifest fallback
+        const { data: manifest } = await supabase
+          .from("import_manifests")
+          .select("rows_consolidated, columns_final")
+          .eq("project_id", project_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
           .maybeSingle();
-        
-        if (projectRow && (projectRow as any).total_rows > 0) {
+
+        if (manifest && manifest.rows_consolidated > 0) {
           gates.push({
             gate: "dataset",
-            status: "PASS",
-            message: `Dataset ativo (${(projectRow as any).total_rows} linhas, ${(projectRow as any).dataset_columns || 0} colunas)`,
-            details: { row_count: (projectRow as any).total_rows, col_count: (projectRow as any).dataset_columns, ingestion_state: ingestionState, source: "projects_fallback" },
+            status: "WARN",
+            message: `Dataset via manifest (${manifest.rows_consolidated} linhas). SSOT parcial.`,
+            details: { row_count: manifest.rows_consolidated, col_count: manifest.columns_final, ingestion_state: ingestionState },
           });
         } else {
           gates.push({
             gate: "dataset",
-            status: "BLOCK",
-            message: "Ingestão marcada como concluída mas sem dados detectados. Reimporte.",
-            details: { ingestion_state: ingestionState },
+            status: "WARN",
+            message: `Ingestão concluída mas dataset_state não encontrado. Regere a EDA ou reimporte.`,
+            details: { ingestion_state: ingestionState, has_dataset_id: !!hasIngestionData },
           });
-          canBuild = false;
-          canTrain = false;
         }
       }
     } else if (ingestionState === "running") {

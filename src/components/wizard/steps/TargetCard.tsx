@@ -21,14 +21,7 @@ interface TargetCardProps {
   onApply: () => void;
 }
 
-function ConfidenceBadge({ confidence }: { confidence: number | null | undefined }) {
-  if (confidence == null) {
-    return (
-      <Badge variant="outline" className="text-xs text-muted-foreground">
-        —
-      </Badge>
-    );
-  }
+function ConfidenceBadge({ confidence }: { confidence: number }) {
   if (confidence >= 0.8) {
     return (
       <Badge className="bg-accent/20 text-accent border-accent/30 text-xs">

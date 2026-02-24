@@ -56,7 +56,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     ingestion_dataset_id: null,
   });
   const [ingestionLoading, setIngestionLoading] = useState(true);
-  const [repairLoading, setRepairLoading] = useState(false);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const loadIngestionState = useCallback(async () => {
@@ -107,32 +106,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const ingestionFailed = ingestion.ingestion_state === "failed";
   const ingestionIdle = ingestion.ingestion_state === "idle" || ingestion.ingestion_state === null;
   const manifestMissing = ingestionReady && !ingestion.ingestion_manifest_id;
-
-  // Auto-repair handler
-  const handleRepairManifest = useCallback(async () => {
-    if (!projectData.id || repairLoading) return;
-    setRepairLoading(true);
-    try {
-      const { data, error } = await supabase.functions.invoke("repair-ingestion-manifest", {
-        body: { project_id: projectData.id },
-      });
-      if (error) throw error;
-      const result = data as Record<string, unknown>;
-      if (result?.success) {
-        console.log("[StepEDA] Manifest repaired:", result);
-        await loadIngestionState();
-        ds.load();
-      } else {
-        console.error("[StepEDA] Manifest repair failed:", result);
-        // If repair failed and state is now 'failed', the UI will show the failed state
-        await loadIngestionState();
-      }
-    } catch (err) {
-      console.error("[StepEDA] Manifest repair error:", err);
-    } finally {
-      setRepairLoading(false);
-    }
-  }, [projectData.id, repairLoading, loadIngestionState, ds]);
 
   // Auto-trigger TDE profile after EDA completes (idempotent, best-effort)
   const handleEDAComplete = useCallback(async () => {
@@ -254,41 +227,15 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </div>
         )}
 
-        {/* Manifest missing — blocking with auto-repair CTA */}
+        {/* Manifest missing warning */}
         {!ingestionLoading && manifestMissing && (
-          <div className="p-5 rounded-lg border space-y-3 bg-amber-500/5 border-amber-500/20">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="w-5 h-5 text-amber-600" />
-              <div>
-                <p className="text-sm font-semibold text-amber-700">Importação incompleta: manifest ausente</p>
-                <p className="text-xs text-amber-600/80 mt-0.5">
-                  O dataset foi importado, mas sem registro de manifest estruturado. A análise exploratória requer um manifest válido.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRepairManifest}
-                disabled={repairLoading}
-              >
-                {repairLoading ? (
-                  <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-3.5 h-3.5 mr-1" />
-                )}
-                {repairLoading ? "Reconstruindo…" : "Reconstruir manifest"}
-              </Button>
-              <Button variant="ghost" size="sm" onClick={onBack}>
-                <ArrowLeft className="w-3.5 h-3.5 mr-1" />
-                Reimportar dados
-              </Button>
-            </div>
+          <div className="flex items-start gap-2 text-xs p-3 rounded border bg-amber-500/5 border-amber-500/20 text-amber-700">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>Manifest de ingestão ausente. O dataset foi importado, mas sem registro de manifest. Se houver problemas, reimporte os dados.</span>
           </div>
         )}
         {/* ── Content only when ingestion is done ──────── */}
-        {ingestionReady && !manifestMissing && (
+        {ingestionReady && (
           <>
             {/* Consolidated Dataset Banner */}
             {ds.loaded && ds.rowCount > 0 && (
@@ -401,12 +348,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             {/* EDA Display */}
             {edaBlocked ? (
               <div className="text-center py-12 space-y-3">
-                <AlertTriangle className="w-12 h-12 text-amber-500/50 mx-auto" />
+                <XCircle className="w-12 h-12 text-destructive/50 mx-auto" />
                 <p className="text-muted-foreground font-medium">
-                  Análise exploratória não disponível (modo simples ativo)
+                  Não é possível executar a análise exploratória.
                 </p>
                 <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                  {blockedReasonEda || "O EDA completo não pôde ser gerado, mas você pode prosseguir para configurar o target e treinar um modelo baseline com a amostra disponível."}
+                  {blockedReasonEda || "O dataset não contém dados válidos (0 linhas ou 0 colunas). Volte à etapa anterior e corrija a importação."}
                 </p>
               </div>
             ) : projectData.id ? (
@@ -436,10 +383,10 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </Button>
           <Button
             onClick={() => onNext({ status: "eda_complete" })}
-            disabled={loading || !ingestionReady || manifestMissing}
+            disabled={loading || edaBlocked || !ingestionReady}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {!ingestionReady ? "Aguardando ingestão" : manifestMissing ? "Manifest ausente" : edaBlocked ? "Prosseguir sem EDA" : t("common.next")}
+            {!ingestionReady ? "Aguardando ingestão" : edaBlocked ? "Corrigir importação" : t("common.next")}
           </Button>
         </div>
       </div>

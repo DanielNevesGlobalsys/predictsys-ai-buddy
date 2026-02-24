@@ -182,6 +182,3 @@ verify_jwt = false
 
 [functions.platform-audit-az]
 verify_jwt = false
-
-[functions.repair-ingestion-manifest]
-verify_jwt = false

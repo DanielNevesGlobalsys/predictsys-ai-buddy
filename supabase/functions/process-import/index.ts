@@ -2181,48 +2181,21 @@ async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs:
     finished_at: new Date().toISOString(),
   }).eq("id", primaryJob.id);
 
-  // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
-  const schemaForManifest = canonical.columns.map((name, index) => ({
-    name, type: canonical.columnTypes[name] || "texto", index,
-  }));
-  const importConfigHash = `import_${primaryJob.file_name}_${primaryJob.file_size_bytes}_${primaryJob.batch_id || "single"}`;
+  // ── SSOT: Complete ingestion (success) ──
   try {
-    await supabase.rpc("rpc_finalize_ingestion", {
+    await supabase.rpc("rpc_complete_ingestion", {
       p_project_id: primaryJob.project_id,
-      p_source_type: "upload",
-      p_config_hash: importConfigHash,
-      p_dataset_id: datasetId || null,
-      p_source_pointer: {
-        batch_id: primaryJob.batch_id,
-        files: fileNames,
-        file_count: completedFiles.length,
-        legacy_manifest_id: manifestId,
-      },
-      p_schema_json: schemaForManifest,
-      p_row_count: totalRowsConsolidated,
-      p_col_count: canonical.columns.length,
-      p_total_bytes: totalFileSizeBytes,
-      p_sample_strategy: { method: "head", max_rows: 10000 },
+      p_success: true,
+      p_rows_detected: totalRowsConsolidated,
+      p_cols_detected: canonical.columns.length,
       p_file_count: completedFiles.length,
+      p_total_bytes: totalFileSizeBytes,
+      p_dataset_id: datasetId || null,
+      p_manifest_id: manifestId || null,
+      p_error_code: null,
+      p_error_message: null,
     });
-  } catch (e) {
-    console.warn("[process-import] rpc_finalize_ingestion fallback, using legacy:", e);
-    // Legacy fallback
-    try {
-      await supabase.rpc("rpc_complete_ingestion", {
-        p_project_id: primaryJob.project_id, p_success: true,
-        p_rows_detected: totalRowsConsolidated, p_cols_detected: canonical.columns.length,
-        p_file_count: completedFiles.length, p_total_bytes: totalFileSizeBytes,
-        p_dataset_id: datasetId || null, p_manifest_id: manifestId || null,
-        p_error_code: null, p_error_message: null,
-      });
-      await supabase.rpc("rpc_activate_ingestion", {
-        p_project_id: primaryJob.project_id, p_source_type: "upload",
-        p_config_hash: importConfigHash, p_dataset_id: datasetId || null, p_manifest_id: manifestId || null,
-        p_stats: { rows_detected: totalRowsConsolidated, cols_detected: canonical.columns.length, file_count: completedFiles.length, total_bytes: totalFileSizeBytes },
-      });
-    } catch (e2) { console.warn("[process-import] legacy fallback error:", e2); }
-  }
+  } catch (e) { console.warn("[process-import] rpc_complete_ingestion error:", e); }
 
   const responseMessage = failedFiles.length > 0
     ? `Importação parcial: ${completedFiles.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas`
@@ -2280,25 +2253,6 @@ serve(async (req) => {
       return new Response(JSON.stringify({ success: false, message: "Import job not found" }), {
         status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
-    }
-
-    // ── ENTERPRISE: Validate project access via JWT ──
-    const authHeader = req.headers.get("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
-      if (user) {
-        const { data: canAccess } = await supabase.rpc("user_can_access_project", {
-          _user_id: user.id,
-          _project_id: job.project_id,
-        });
-        if (canAccess === false) {
-          console.warn(`[process-import] ACCESS_DENIED: user=${user.id} project=${job.project_id}`);
-          return new Response(
-            JSON.stringify({ success: false, error: "Access denied to this project", code: "ACCESS_DENIED" }),
-            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
-      }
     }
 
     // For batch jobs: allow re-entry when status is "processing" (self-invocation pattern)

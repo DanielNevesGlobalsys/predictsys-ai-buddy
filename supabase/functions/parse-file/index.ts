@@ -304,24 +304,6 @@ serve(async (req) => {
       throw new Error("File and project_id are required");
     }
 
-    // ── ENTERPRISE: Validate project access ──
-    const authHeader = req.headers.get("Authorization");
-    if (authHeader?.startsWith("Bearer ")) {
-      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
-      if (user) {
-        const { data: canAccess } = await supabase.rpc("user_can_access_project", {
-          _user_id: user.id,
-          _project_id: projectId,
-        });
-        if (canAccess === false) {
-          return new Response(
-            JSON.stringify({ error: "Access denied to this project", code: "ACCESS_DENIED" }),
-            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-          );
-        }
-      }
-    }
-
     const isSliced = originalSize > 0 && originalSize > file.size;
 
     // ── SSOT: Start ingestion ──
@@ -391,53 +373,15 @@ serve(async (req) => {
       })
       .eq('id', projectId);
 
-    // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
-    const schemaForManifest = parsedData.columns.map(col => ({
-      name: col.name, type: col.type, index: col.index,
-    }));
-
-    try {
-      const { data: finalizeResult, error: finalizeError } = await supabase.rpc("rpc_finalize_ingestion", {
-        p_project_id: projectId,
-        p_source_type: "upload",
-        p_config_hash: configHash,
-        p_dataset_id: null,
-        p_source_pointer: { file_name: file.name, file_size: originalSize || file.size, sliced: isSliced },
-        p_schema_json: schemaForManifest,
-        p_row_count: parsedData.totalRows,
-        p_col_count: parsedData.columns.length,
-        p_total_bytes: originalSize || file.size,
-        p_sample_strategy: { method: "head", max_rows: maxSampleRows },
-        p_file_count: 1,
-      });
-
-      if (finalizeError) {
-        console.error("[parse-file] rpc_finalize_ingestion error:", finalizeError);
-        // Fallback: try legacy complete + activate
-        await completeIngestionSafe(supabase, projectId, true, {
-          rowsDetected: parsedData.totalRows, colsDetected: parsedData.columns.length,
-          fileCount: 1, totalBytes: originalSize || file.size,
-        });
-        await ensureDatasetStateConsistency(supabase, projectId, parsedData.totalRows, parsedData.columns.length);
-        try {
-          await supabase.rpc("rpc_activate_ingestion", {
-            p_project_id: projectId, p_source_type: "upload", p_config_hash: configHash,
-            p_dataset_id: null, p_manifest_id: null,
-            p_stats: { rows_detected: parsedData.totalRows, cols_detected: parsedData.columns.length, file_count: 1, total_bytes: originalSize || file.size },
-          });
-        } catch (e2) { console.warn("[parse-file] fallback rpc_activate_ingestion:", e2); }
-      } else {
-        const fr = finalizeResult as Record<string, unknown>;
-        console.log(`[parse-file] Finalized: manifest=${fr.manifest_id}, v${fr.dataset_version}`);
-      }
-    } catch (e) {
-      console.warn("[parse-file] rpc_finalize_ingestion fallback:", e);
-    }
+    // ── SSOT: Complete ingestion (success) ──
+    await completeIngestionSafe(supabase, projectId, true, {
+      rowsDetected: parsedData.totalRows,
+      colsDetected: parsedData.columns.length,
+      fileCount: 1,
+      totalBytes: originalSize || file.size,
+    });
 
     console.log(`[parse-file] File processing complete for project ${projectId}`);
-
-    // Persist sample for simple-mode training (max 2000 rows, best-effort)
-    await persistDatasetSample(supabase, projectId, parsedData.rows, parsedData.sampleRows);
 
     return new Response(
       JSON.stringify({
@@ -598,84 +542,4 @@ function classifyIngestionError(error: unknown): string {
   if (msg.includes("too large") || msg.includes("excede")) return "FILE_TOO_LARGE";
   if (msg.includes("parse") || msg.includes("csv") || msg.includes("excel")) return "UPLOAD_PARSE_ERROR";
   return "UNKNOWN";
-}
-
-async function ensureDatasetStateConsistency(
-  supabase: any,
-  projectId: string,
-  rowCount: number,
-  colCount: number
-) {
-  try {
-    const { data: existing } = await supabase
-      .from("project_dataset_state")
-      .select("project_id")
-      .eq("project_id", projectId)
-      .maybeSingle();
-
-    const payload = {
-      project_id: projectId,
-      row_count: rowCount || 0,
-      col_count: colCount || 0,
-      eda_ready: rowCount > 0 && colCount > 0,
-      model_ready: false,
-      updated_at: new Date().toISOString(),
-    };
-
-    if (existing) {
-      await supabase
-        .from("project_dataset_state")
-        .update(payload)
-        .eq("project_id", projectId);
-    } else {
-      await supabase
-        .from("project_dataset_state")
-        .insert(payload);
-    }
-
-    console.log("[parse-file] Dataset state synchronized successfully");
-  } catch (err) {
-    console.error("[parse-file] Failed to sync dataset state:", err);
-  }
-}
-
-async function persistDatasetSample(
-  supabase: any,
-  projectId: string,
-  rows: any[],
-  sampleRows: number
-) {
-  try {
-    const maxRows = 2000;
-    const sample = Array.isArray(rows) ? rows.slice(0, maxRows) : [];
-    const count = Math.min(sampleRows || sample.length, maxRows);
-
-    const { data: existing } = await supabase
-      .from("project_dataset_sample")
-      .select("project_id")
-      .eq("project_id", projectId)
-      .maybeSingle();
-
-    const payload = {
-      project_id: projectId,
-      sample_json: sample,
-      sample_rows: count,
-      created_at: new Date().toISOString(),
-    };
-
-    if (existing) {
-      await supabase
-        .from("project_dataset_sample")
-        .update({ sample_json: sample, sample_rows: count })
-        .eq("project_id", projectId);
-    } else {
-      await supabase
-        .from("project_dataset_sample")
-        .insert(payload);
-    }
-
-    console.log(`[parse-file] Dataset sample persisted: ${count} rows`);
-  } catch (err) {
-    console.error("[parse-file] Failed to persist dataset sample:", err);
-  }
 }

@@ -65,8 +65,7 @@ const EDAMissingSection = ({ numericStats, categoricalStats, totalRows }: EDAMis
 
     // Add categorical columns - estimate missing from (vazio) category
     categoricalStats.forEach((stat) => {
-      const safeCats = Array.isArray(stat.top_categories) ? stat.top_categories : [];
-      const emptyCategory = safeCats.find(
+      const emptyCategory = stat.top_categories.find(
         (c) => c.category === "(vazio)" || c.category === "(empty)" || c.category === ""
       );
       const nullCount = emptyCategory?.count || 0;

@@ -159,20 +159,16 @@ function RecommendationCard({
     >
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <p className="text-xs font-semibold leading-tight">{title}</p>
-        {rec.confidence != null ? (
-          <Badge
-            variant="outline"
-            className={`text-[10px] shrink-0 ${
-              rec.confidence >= 0.7 ? "border-accent/50 text-accent" :
-              rec.confidence >= 0.5 ? "border-primary/50 text-primary" :
-              "border-muted-foreground/50 text-muted-foreground"
-            }`}
-          >
-            {(rec.confidence * 100).toFixed(0)}%
-          </Badge>
-        ) : (
-          <Badge variant="outline" className="text-[10px] shrink-0 text-muted-foreground">—</Badge>
-        )}
+        <Badge
+          variant="outline"
+          className={`text-[10px] shrink-0 ${
+            rec.confidence >= 0.7 ? "border-accent/50 text-accent" :
+            rec.confidence >= 0.5 ? "border-primary/50 text-primary" :
+            "border-muted-foreground/50 text-muted-foreground"
+          }`}
+        >
+          {(rec.confidence * 100).toFixed(0)}%
+        </Badge>
       </div>
 
       {rec.is_fallback && (
@@ -422,7 +418,7 @@ export default function TargetBuilderPanel({
         const current = recs.find((r: any) => r.template_id === selectedTemplate);
         if (current) {
           setQualityInfo({
-            confidence: current.confidence ?? null,
+            confidence: current.confidence,
             expected_fit: current.expected_fit,
             is_hard_stop: current.is_hard_stop,
             is_cold_start: current.is_cold_start,
@@ -432,7 +428,7 @@ export default function TargetBuilderPanel({
           setQualityInfo(null);
         }
         const alt = recs.find((r: any) => r.template_id !== selectedTemplate && !r.is_hard_stop);
-        if (alt && current && (alt.confidence ?? 0) > (current.confidence ?? 0)) {
+        if (alt && current && alt.confidence > current.confidence) {
           setTopAlternative({
             template_id: alt.template_id,
             confidence: alt.confidence,

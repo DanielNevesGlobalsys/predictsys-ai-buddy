@@ -540,30 +540,10 @@ serve(async (req) => {
       .update(projectUpdate)
       .eq("id", project_id);
 
-    // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
-    const schemaForManifest = columns.map(col => ({
-      name: col.column_name, type: col.inferred_type, index: col.column_index,
-    }));
-    try {
-      await supabase.rpc("rpc_finalize_ingestion", {
-        p_project_id: project_id,
-        p_source_type: connectorType || "cloud",
-        p_config_hash: configHash,
-        p_dataset_id: null,
-        p_source_pointer: { connector_type: connectorType, data_source_id, storage_path: storagePath },
-        p_schema_json: schemaForManifest,
-        p_row_count: totalRows,
-        p_col_count: columnsCount,
-        p_total_bytes: 0,
-        p_sample_strategy: { method: "head", max_rows: 100000 },
-        p_file_count: 1,
-      });
-    } catch (e) {
-      console.warn("[ingest-cloud-data] rpc_finalize_ingestion fallback:", e);
-      await rpcCompleteIngestionCloud(supabase, project_id, true, {
-        rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1,
-      });
-    }
+    // ── SSOT: Complete ingestion (success) ──
+    await rpcCompleteIngestionCloud(supabase, project_id, true, {
+      rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1,
+    });
 
     console.log(`[ingest-cloud-data] Cloud ingestion completed: ${totalRows} rows read, ${sampleRows} sampled, ${columnsCount} columns`);
 
