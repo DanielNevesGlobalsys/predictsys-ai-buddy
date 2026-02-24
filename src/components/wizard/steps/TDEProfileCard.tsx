@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { extractErrorMessage } from "@/lib/extractErrorMessage";
 
 // ═══ Types ═════════════════════════════════════════════════════
 
@@ -98,14 +99,19 @@ export default function TDEProfileCard({ projectId }: TDEProfileCardProps) {
         body: { project_id: projectId },
       });
       if (error) throw error;
-      if (!data?.success) throw new Error(data?.error || "Falha no profiling");
+      if (!data?.success) {
+        const friendlyMessage =
+          data?.error_friendly || data?.message || data?.error || "Falha no profiling";
+        throw new Error(friendlyMessage);
+      }
 
       setProfile(data.tde_profile as TDEProfile);
       setHasRun(true);
       toast({ title: "Perfil do dataset atualizado", description: `Classificado como ${data.tde_profile.dataset_shape_label}.` });
     } catch (err) {
       console.error("[TDEProfileCard] Error:", err);
-      toast({ title: "Erro no profiling", description: err instanceof Error ? err.message : "Tente novamente.", variant: "destructive" });
+      const message = await extractErrorMessage(err);
+      toast({ title: "Erro no profiling", description: message, variant: "destructive" });
     } finally {
       setLoading(false);
     }
