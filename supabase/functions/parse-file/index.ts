@@ -373,30 +373,47 @@ serve(async (req) => {
       })
       .eq('id', projectId);
 
-    // ── SSOT: Complete ingestion (success) ──
-    await completeIngestionSafe(supabase, projectId, true, {
-      rowsDetected: parsedData.totalRows,
-      colsDetected: parsedData.columns.length,
-      fileCount: 1,
-      totalBytes: originalSize || file.size,
-    });
+    // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
+    const schemaForManifest = parsedData.columns.map(col => ({
+      name: col.name, type: col.type, index: col.index,
+    }));
 
-    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
     try {
-      await supabase.rpc("rpc_activate_ingestion", {
+      const { data: finalizeResult, error: finalizeError } = await supabase.rpc("rpc_finalize_ingestion", {
         p_project_id: projectId,
-        p_source_type: "file",
+        p_source_type: "upload",
         p_config_hash: configHash,
         p_dataset_id: null,
-        p_manifest_id: null,
-        p_stats: {
-          rows_detected: parsedData.totalRows,
-          cols_detected: parsedData.columns.length,
-          file_count: 1,
-          total_bytes: originalSize || file.size,
-        },
+        p_source_pointer: { file_name: file.name, file_size: originalSize || file.size, sliced: isSliced },
+        p_schema_json: schemaForManifest,
+        p_row_count: parsedData.totalRows,
+        p_col_count: parsedData.columns.length,
+        p_total_bytes: originalSize || file.size,
+        p_sample_strategy: { method: "head", max_rows: maxSampleRows },
+        p_file_count: 1,
       });
-    } catch (e) { console.warn("[parse-file] rpc_activate_ingestion fallback:", e); }
+
+      if (finalizeError) {
+        console.error("[parse-file] rpc_finalize_ingestion error:", finalizeError);
+        // Fallback: try legacy complete + activate
+        await completeIngestionSafe(supabase, projectId, true, {
+          rowsDetected: parsedData.totalRows, colsDetected: parsedData.columns.length,
+          fileCount: 1, totalBytes: originalSize || file.size,
+        });
+        try {
+          await supabase.rpc("rpc_activate_ingestion", {
+            p_project_id: projectId, p_source_type: "upload", p_config_hash: configHash,
+            p_dataset_id: null, p_manifest_id: null,
+            p_stats: { rows_detected: parsedData.totalRows, cols_detected: parsedData.columns.length, file_count: 1, total_bytes: originalSize || file.size },
+          });
+        } catch (e2) { console.warn("[parse-file] fallback rpc_activate_ingestion:", e2); }
+      } else {
+        const fr = finalizeResult as Record<string, unknown>;
+        console.log(`[parse-file] Finalized: manifest=${fr.manifest_id}, v${fr.dataset_version}`);
+      }
+    } catch (e) {
+      console.warn("[parse-file] rpc_finalize_ingestion fallback:", e);
+    }
 
     console.log(`[parse-file] File processing complete for project ${projectId}`);
 

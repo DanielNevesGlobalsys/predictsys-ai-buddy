@@ -1926,6 +1926,59 @@ export type Database = {
           },
         ]
       }
+      project_ingestion_manifests: {
+        Row: {
+          col_count: number
+          config_hash: string | null
+          created_at: string
+          dataset_id: string | null
+          id: string
+          project_id: string
+          row_count: number
+          sample_strategy: Json
+          schema_json: Json
+          source_pointer: Json
+          source_type: string
+          total_bytes: number
+        }
+        Insert: {
+          col_count?: number
+          config_hash?: string | null
+          created_at?: string
+          dataset_id?: string | null
+          id?: string
+          project_id: string
+          row_count?: number
+          sample_strategy?: Json
+          schema_json?: Json
+          source_pointer?: Json
+          source_type?: string
+          total_bytes?: number
+        }
+        Update: {
+          col_count?: number
+          config_hash?: string | null
+          created_at?: string
+          dataset_id?: string | null
+          id?: string
+          project_id?: string
+          row_count?: number
+          sample_strategy?: Json
+          schema_json?: Json
+          source_pointer?: Json
+          source_type?: string
+          total_bytes?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_ingestion_manifests_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_label_builders: {
         Row: {
           created_at: string
@@ -3663,6 +3716,22 @@ export type Database = {
           p_project_id: string
           p_rows_detected?: number
           p_success: boolean
+          p_total_bytes?: number
+        }
+        Returns: Json
+      }
+      rpc_finalize_ingestion: {
+        Args: {
+          p_col_count?: number
+          p_config_hash?: string
+          p_dataset_id?: string
+          p_file_count?: number
+          p_project_id: string
+          p_row_count?: number
+          p_sample_strategy?: Json
+          p_schema_json?: Json
+          p_source_pointer?: Json
+          p_source_type: string
           p_total_bytes?: number
         }
         Returns: Json

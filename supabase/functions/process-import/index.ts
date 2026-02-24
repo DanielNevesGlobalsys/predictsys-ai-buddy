@@ -2181,38 +2181,48 @@ async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs:
     finished_at: new Date().toISOString(),
   }).eq("id", primaryJob.id);
 
-  // ── SSOT: Complete ingestion (success) ──
+  // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
+  const schemaForManifest = canonical.columns.map((name, index) => ({
+    name, type: canonical.columnTypes[name] || "texto", index,
+  }));
+  const importConfigHash = `import_${primaryJob.file_name}_${primaryJob.file_size_bytes}_${primaryJob.batch_id || "single"}`;
   try {
-    await supabase.rpc("rpc_complete_ingestion", {
-      p_project_id: primaryJob.project_id,
-      p_success: true,
-      p_rows_detected: totalRowsConsolidated,
-      p_cols_detected: canonical.columns.length,
-      p_file_count: completedFiles.length,
-      p_total_bytes: totalFileSizeBytes,
-      p_dataset_id: datasetId || null,
-      p_manifest_id: manifestId || null,
-      p_error_code: null,
-      p_error_message: null,
-    });
-  } catch (e) { console.warn("[process-import] rpc_complete_ingestion error:", e); }
-
-  // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
-  try {
-    await supabase.rpc("rpc_activate_ingestion", {
+    await supabase.rpc("rpc_finalize_ingestion", {
       p_project_id: primaryJob.project_id,
       p_source_type: "upload",
-      p_config_hash: `import_${primaryJob.file_name}_${primaryJob.file_size_bytes}_${primaryJob.batch_id || "single"}`,
+      p_config_hash: importConfigHash,
       p_dataset_id: datasetId || null,
-      p_manifest_id: manifestId || null,
-      p_stats: {
-        rows_detected: totalRowsConsolidated,
-        cols_detected: canonical.columns.length,
+      p_source_pointer: {
+        batch_id: primaryJob.batch_id,
+        files: fileNames,
         file_count: completedFiles.length,
-        total_bytes: totalFileSizeBytes,
+        legacy_manifest_id: manifestId,
       },
+      p_schema_json: schemaForManifest,
+      p_row_count: totalRowsConsolidated,
+      p_col_count: canonical.columns.length,
+      p_total_bytes: totalFileSizeBytes,
+      p_sample_strategy: { method: "head", max_rows: 10000 },
+      p_file_count: completedFiles.length,
     });
-  } catch (e) { console.warn("[process-import] rpc_activate_ingestion fallback:", e); }
+  } catch (e) {
+    console.warn("[process-import] rpc_finalize_ingestion fallback, using legacy:", e);
+    // Legacy fallback
+    try {
+      await supabase.rpc("rpc_complete_ingestion", {
+        p_project_id: primaryJob.project_id, p_success: true,
+        p_rows_detected: totalRowsConsolidated, p_cols_detected: canonical.columns.length,
+        p_file_count: completedFiles.length, p_total_bytes: totalFileSizeBytes,
+        p_dataset_id: datasetId || null, p_manifest_id: manifestId || null,
+        p_error_code: null, p_error_message: null,
+      });
+      await supabase.rpc("rpc_activate_ingestion", {
+        p_project_id: primaryJob.project_id, p_source_type: "upload",
+        p_config_hash: importConfigHash, p_dataset_id: datasetId || null, p_manifest_id: manifestId || null,
+        p_stats: { rows_detected: totalRowsConsolidated, cols_detected: canonical.columns.length, file_count: completedFiles.length, total_bytes: totalFileSizeBytes },
+      });
+    } catch (e2) { console.warn("[process-import] legacy fallback error:", e2); }
+  }
 
   const responseMessage = failedFiles.length > 0
     ? `Importação parcial: ${completedFiles.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas`

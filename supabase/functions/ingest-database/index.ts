@@ -252,24 +252,31 @@ serve(async (req) => {
       })
       .eq("id", project_id);
 
-    // ── SSOT: Complete ingestion (success) ──
-    await rpcCompleteIngestion(supabase, project_id, true, {
-      rowsDetected: result.totalRows,
-      colsDetected: result.columns.length,
-      fileCount: 1,
-    });
-
-    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+    // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
+    const schemaForManifest = result.columns.map(col => ({
+      name: col.name, type: col.type, index: col.index,
+    }));
     try {
-      await supabase.rpc("rpc_activate_ingestion", {
+      await supabase.rpc("rpc_finalize_ingestion", {
         p_project_id: project_id,
         p_source_type: "database",
         p_config_hash: configHash,
         p_dataset_id: null,
-        p_manifest_id: null,
-        p_stats: { rows_detected: result.totalRows, cols_detected: result.columns.length, file_count: 1, total_bytes: 0 },
+        p_source_pointer: { connector_type: dataSource.connector_type, data_source_id, query: custom_query || null },
+        p_schema_json: schemaForManifest,
+        p_row_count: result.totalRows,
+        p_col_count: result.columns.length,
+        p_total_bytes: 0,
+        p_sample_strategy: { method: "head", max_rows: 100000 },
+        p_file_count: 1,
       });
-    } catch (e) { console.warn("[ingest-database] rpc_activate_ingestion fallback:", e); }
+    } catch (e) {
+      console.warn("[ingest-database] rpc_finalize_ingestion fallback:", e);
+      // Legacy fallback
+      await rpcCompleteIngestion(supabase, project_id, true, {
+        rowsDetected: result.totalRows, colsDetected: result.columns.length, fileCount: 1,
+      });
+    }
 
     console.log(`[ingest-database] Ingestion completed: ${result.totalRows} rows read, ${result.rows.length} sampled`);
 

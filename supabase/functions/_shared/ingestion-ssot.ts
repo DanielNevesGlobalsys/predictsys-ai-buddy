@@ -1,6 +1,9 @@
 /**
  * Shared ingestion SSOT helpers for all ingestion edge functions.
  * Provides consistent state management, error codes, and response format.
+ * 
+ * v2: All connectors MUST call finalizeIngestion() instead of completeIngestion() + rpc_activate_ingestion.
+ * This ensures manifest is always created atomically with state=done.
  */
 
 // ═══════════════════════════════════════════════════════════
@@ -21,6 +24,8 @@ export const INGESTION_ERROR_CODES = {
   CONNECTOR_NOT_FOUND: "CONNECTOR_NOT_FOUND",
   TABLE_NOT_FOUND: "TABLE_NOT_FOUND",
   SQL_VALIDATION_ERROR: "SQL_VALIDATION_ERROR",
+  MANIFEST_MISSING: "MANIFEST_MISSING",
+  SAMPLE_FAIL: "SAMPLE_FAIL",
   UNKNOWN: "UNKNOWN",
 } as const;
 
@@ -44,6 +49,8 @@ const ERROR_FRIENDLY: Record<string, string> = {
   CONNECTOR_NOT_FOUND: "Conector de dados não encontrado.",
   TABLE_NOT_FOUND: "Tabela não encontrada na fonte de dados.",
   SQL_VALIDATION_ERROR: "A query SQL não é válida ou contém comandos proibidos.",
+  MANIFEST_MISSING: "Manifest de ingestão ausente. Reimporte os dados.",
+  SAMPLE_FAIL: "Falha ao extrair amostra do dataset.",
   UNKNOWN: "Erro desconhecido durante a ingestão.",
 };
 
@@ -63,6 +70,9 @@ function getCTAsForError(errorCode: string): CTA[] {
 
   if (errorCode === "CONNECTOR_AUTH_ERROR") {
     ctas.push({ label: "Revalidar credenciais", action: "revalidate_credentials" });
+  }
+  if (errorCode === "MANIFEST_MISSING") {
+    ctas.push({ label: "Reconstruir manifest", action: "repair_manifest" });
   }
   if (errorCode !== "STALE_INGESTION") {
     ctas.push({ label: "Ver manifest", action: "view_manifest" });
@@ -182,7 +192,7 @@ export async function startIngestion(
 }
 
 // ═══════════════════════════════════════════════════════════
-// Complete ingestion via RPC
+// Complete ingestion via RPC (FAILURE ONLY — for success, use finalizeIngestion)
 // ═══════════════════════════════════════════════════════════
 export async function completeIngestion(
   supabase: any,
@@ -215,26 +225,67 @@ export async function completeIngestion(
   } catch (e) {
     console.error(`[ingestion-ssot] rpc_complete_ingestion error:`, e);
   }
+}
 
-  // On success, also activate (creates dataset_state + cascade)
-  if (success) {
-    try {
-      await supabase.rpc("rpc_activate_ingestion", {
-        p_project_id: projectId,
-        p_source_type: "upload",
-        p_config_hash: null,
-        p_dataset_id: stats.datasetId || null,
-        p_manifest_id: stats.manifestId || null,
-        p_stats: {
-          rows_detected: stats.rowsDetected || 0,
-          cols_detected: stats.colsDetected || 0,
-          file_count: stats.fileCount || 0,
-          total_bytes: stats.totalBytes || 0,
-        },
-      });
-    } catch (e) {
-      console.error(`[ingestion-ssot] rpc_activate_ingestion error:`, e);
+// ═══════════════════════════════════════════════════════════
+// Finalize ingestion (SUCCESS ONLY) — creates manifest atomically
+// This is the ONLY correct way to set ingestion_state='done'
+// ═══════════════════════════════════════════════════════════
+export interface FinalizeIngestionParams {
+  sourceType: string;
+  configHash?: string;
+  datasetId?: string;
+  sourcePointer: Record<string, unknown>;
+  schema: { name: string; type: string; index: number }[];
+  rowCount: number;
+  colCount: number;
+  totalBytes?: number;
+  fileCount?: number;
+  sampleStrategy?: Record<string, unknown>;
+}
+
+export async function finalizeIngestion(
+  supabase: any,
+  projectId: string,
+  params: FinalizeIngestionParams,
+): Promise<{ success: boolean; manifestId?: string; error?: string }> {
+  try {
+    const schemaJson = params.schema.map(c => ({
+      name: c.name,
+      type: c.type,
+      index: c.index,
+    }));
+
+    const { data, error } = await supabase.rpc("rpc_finalize_ingestion", {
+      p_project_id: projectId,
+      p_source_type: params.sourceType,
+      p_config_hash: params.configHash || null,
+      p_dataset_id: params.datasetId || null,
+      p_source_pointer: params.sourcePointer,
+      p_schema_json: schemaJson,
+      p_row_count: params.rowCount,
+      p_col_count: params.colCount,
+      p_total_bytes: params.totalBytes || 0,
+      p_sample_strategy: params.sampleStrategy || { method: "head", max_rows: 10000 },
+      p_file_count: params.fileCount || 1,
+    });
+
+    if (error) {
+      console.error(`[ingestion-ssot] rpc_finalize_ingestion error:`, error);
+      return { success: false, error: error.message };
     }
+
+    const result = data as Record<string, unknown>;
+    if (!result?.success) {
+      console.error(`[ingestion-ssot] rpc_finalize_ingestion failed:`, result);
+      return { success: false, error: String(result?.error || "UNKNOWN") };
+    }
+
+    console.log(`[ingestion-ssot] Finalized: manifest=${result.manifest_id}, v${result.dataset_version}`);
+    return { success: true, manifestId: String(result.manifest_id) };
+  } catch (e) {
+    console.error(`[ingestion-ssot] finalizeIngestion error:`, e);
+    return { success: false, error: e instanceof Error ? e.message : "UNKNOWN" };
   }
 }
 
