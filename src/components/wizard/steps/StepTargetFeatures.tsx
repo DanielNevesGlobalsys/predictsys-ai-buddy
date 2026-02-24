@@ -43,6 +43,7 @@ import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference } from "@/hooks/useProblemInference";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useDatasetState } from "@/hooks/useDatasetState";
+import { useTargetFeaturesSSOT } from "@/hooks/useTargetFeaturesSSOT";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -51,6 +52,7 @@ interface StepTargetFeaturesProps {
   loading: boolean;
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
   onConfigChange?: () => void;
+  onSSOTChanged?: () => void;
 }
 
 interface ColumnInfo {
@@ -75,16 +77,25 @@ const StepTargetFeatures = ({
   loading,
   saveProject,
   onConfigChange,
+  onSSOTChanged,
 }: StepTargetFeaturesProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loadingColumns, setLoadingColumns] = useState(true);
-  const [targetColumn, setTargetColumn] = useState(projectData.target_column || "");
-  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
-  const [excludedColumns, setExcludedColumns] = useState<string[]>([]);
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
+
+  // ═══ SSOT: Single Source of Truth from project_settings ═══
+  const { ssot, loaded: ssotLoaded, load: loadSSOT, activeMode, isBuilderReady, isBuilderStale } = useTargetFeaturesSSOT(projectData.id);
+
+  // ── Editable state derived from SSOT (user can modify, then persists back) ──
+  const [targetColumn, setTargetColumn] = useState("");
+  const [selectedFeatures, setSelectedFeatures] = useState<string[]>([]);
+  const [excludedColumns, setExcludedColumns] = useState<string[]>([]);
+  const [inferredProblemType, setInferredProblemType] = useState<string | null>(null);
+  const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision" | "human_labeling">("manual");
+  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
 
   // SSOT dataset state
   const ds = useDatasetState(projectData.id);
@@ -109,13 +120,9 @@ const StepTargetFeatures = ({
   // Problem inference hook
   const { inference, loading: inferenceLoading, error: inferenceError, loadInference } = useProblemInference(projectData.id);
 
-  // Derived problem type from inference
-  const [inferredProblemType, setInferredProblemType] = useState<string | null>(null);
-
-  // Project settings persistence
+  // Project settings persistence (for saveSettings)
   const { settings, loadSettings, saveSettings } = useProjectSettings(projectData.id);
   const { appendContext, loadContext } = useProjectAIContext(projectData.id);
-  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   // Contract hints from Etapa 2 auto-detection
   const [contractHints, setContractHints] = useState<{
@@ -139,47 +146,19 @@ const StepTargetFeatures = ({
   const [labelBuilderId, setLabelBuilderId] = useState<string | null>(null);
   const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
 
-  // Track target source (manual vs label_builder vs weak_supervision)
-  const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision" | "human_labeling">("manual");
-  const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
       checkEDA();
       ds.load();
+      loadSSOT();
       loadSelectionVersion();
       loadBuilderVersion();
       loadContractHints();
       loadIntentInfo();
-      loadTargetSource();
-      loadSettings().then((loaded) => {
-        if (loaded) {
-          setSettingsLoaded(true);
-        }
-      });
+      loadSettings();
     }
   }, [projectData.id]);
-
-  // Load target source from project_settings
-  const loadTargetSource = async () => {
-    if (!projectData.id) return;
-    const { data } = await supabase
-      .from("project_settings")
-      .select("target_source, selected_template_id, target_column")
-      .eq("project_id", projectData.id)
-      .maybeSingle();
-    if (data) {
-      const src = (data as any).target_source || "manual";
-      const tmplId = (data as any).selected_template_id || null;
-      setTargetSource(src);
-      setSelectedTemplateId(tmplId);
-      if (src === "label_builder" && data.target_column === "label") {
-        setTargetColumn("label");
-        setAppliedTargetColumn("label");
-      }
-    }
-  };
 
   const loadIntentInfo = async () => {
     if (!projectData.id) return;
@@ -332,11 +311,50 @@ const StepTargetFeatures = ({
     }
   }, [hasEDA, inference, loadInference]);
 
-  // Restore from persisted settings
+  // ═══ SSOT-driven rehydration: derive local editable state from SSOT ═══
   useEffect(() => {
-    if (settings && settingsLoaded && columns.length > 0) {
+    if (ssotLoaded && columns.length > 0) {
+      // Hydrate target
+      if (ssot.target_column) {
+        const isPhysical = columns.some((c) => c.name === ssot.target_column);
+        const isLabel = ssot.target_column === "label";
+        if (isPhysical || isLabel) {
+          setTargetColumn(ssot.target_column);
+          setAppliedTargetColumn(ssot.target_column);
+        }
+      }
+      // Hydrate features
+      if (ssot.feature_columns.length > 0) {
+        setSelectedFeatures(ssot.feature_columns);
+      }
+      // Hydrate excluded
+      if (ssot.excluded_columns.length > 0) {
+        setExcludedColumns(ssot.excluded_columns);
+      }
+      // Hydrate problem type
+      if (ssot.problem_type) {
+        setInferredProblemType(ssot.problem_type);
+      }
+      // Hydrate target source & template
+      if (ssot.target_source && ssot.target_source !== "manual") {
+        setTargetSource(ssot.target_source as any);
+      }
+      if (ssot.selected_template_id) {
+        setSelectedTemplateId(ssot.selected_template_id);
+      }
+      // Hydrate selection version
+      setSelectionVersion(ssot.selection_version || null);
+      // Hydrate industry into intentInfo
+      if (ssot.industry) {
+        setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
+      }
+    }
+  }, [ssotLoaded, ssot, columns]);
+
+  // Fallback: Also restore from useProjectSettings (for backward compat)
+  useEffect(() => {
+    if (settings && ssotLoaded && columns.length > 0 && !ssot.target_column) {
       if (settings.target_column) {
-        // Accept "label" even if not in physical columns (it's a synthetic target)
         const isPhysical = columns.some((c) => c.name === settings.target_column);
         const isLabel = settings.target_column === "label";
         if (isPhysical || isLabel) {
@@ -354,7 +372,7 @@ const StepTargetFeatures = ({
         setInferredProblemType(settings.problem_type);
       }
     }
-  }, [settings, settingsLoaded, columns]);
+  }, [settings, ssotLoaded, ssot, columns]);
 
   // NOTE: We intentionally do NOT pre-fill target from event_candidates.
   // event_candidate ≠ target. Target is often derived (e.g. "no purchase in 90 days").
@@ -367,14 +385,15 @@ const StepTargetFeatures = ({
     }
   }, [projectData.target_column]);
 
+  // Auto-select all features when columns load and no SSOT features exist
   useEffect(() => {
-    if (columns.length > 0 && selectedFeatures.length === 0 && !settingsLoaded) {
+    if (columns.length > 0 && selectedFeatures.length === 0 && ssotLoaded && ssot.feature_columns.length === 0) {
       const features = columns
         .filter((c) => c.name !== targetColumn && !c.featureHasError)
         .map((c) => c.name);
       setSelectedFeatures(features);
     }
-  }, [columns, targetColumn, settingsLoaded]);
+  }, [columns, targetColumn, ssotLoaded, ssot.feature_columns]);
 
   const checkEDA = async () => {
     if (!projectData.id) return;
@@ -490,6 +509,48 @@ const StepTargetFeatures = ({
     );
   };
 
+  /**
+   * Auto-populate features: preserves existing selection if any,
+   * otherwise selects all valid columns except target + structural keys.
+   */
+  const autoPopulateFeatures = (newTarget: string) => {
+    setSelectedFeatures(prev => {
+      if (prev.length > 0) {
+        return prev.filter(f => f !== newTarget);
+      }
+      const structuralCols = new Set<string>();
+      if (ssot.entity_key) structuralCols.add(ssot.entity_key);
+      if (ssot.time_anchor_column) structuralCols.add(ssot.time_anchor_column);
+      if (contractHints?.entity_key) structuralCols.add(contractHints.entity_key);
+      if (contractHints?.time_anchor_column) structuralCols.add(contractHints.time_anchor_column);
+      structuralCols.add(newTarget);
+      return columns
+        .filter(c => !structuralCols.has(c.name) && !c.featureHasError)
+        .map(c => c.name);
+    });
+  };
+
+  /**
+   * Persist target_source and selected_template_id to project_settings (SSOT).
+   */
+  const persistTargetSourceToSSOT = async (source: string, templateId: string | null) => {
+    if (!projectData.id) return;
+    try {
+      await supabase
+        .from("project_settings")
+        .update({
+          target_source: source,
+          selected_template_id: templateId,
+          active_target_mode: source,
+        } as any)
+        .eq("project_id", projectData.id);
+      await loadSSOT();
+      onSSOTChanged?.();
+    } catch (err) {
+      console.error("[StepTargetFeatures] Failed to persist target_source:", err);
+    }
+  };
+
   const handleSaveSettings = async (): Promise<boolean> => {
     if (!projectData.id || !targetColumn) return false;
 
@@ -530,8 +591,9 @@ const StepTargetFeatures = ({
         description: t("lysSuggestions.settingsSavedDesc", "Target, features e configurações foram persistidos."),
       });
 
-      // Reload selection version after save
-      await loadSelectionVersion();
+      // Reload SSOT + selection version after save
+      await Promise.all([loadSelectionVersion(), loadSSOT()]);
+      onSSOTChanged?.();
 
       return true;
     }
@@ -734,7 +796,11 @@ const StepTargetFeatures = ({
                 setAppliedTargetColumn("label");
                 const tmpl = LABEL_TEMPLATES[templateId];
                 setInferredProblemType(tmpl?.problem_type || "classification");
+                // Auto-populate features: all valid columns except label + structural
+                autoPopulateFeatures("label");
                 setPreflightRefreshKey(k => k + 1);
+                // Persist target_source to SSOT
+                persistTargetSourceToSSOT("label_builder", templateId);
               }}
             />
           </div>
@@ -750,24 +816,11 @@ const StepTargetFeatures = ({
               setSelectedTemplateId("weak_supervision_assisted");
               setAppliedTargetColumn("label");
               setInferredProblemType("classification");
-
-              // BUG 3 fix: preserve features, only remove leakage source columns
-              setSelectedFeatures(prev => {
-                if (prev.length === 0) {
-                  // No previous selection: auto-select all valid columns except structural/leakage
-                  const structuralCols = new Set<string>();
-                  if (contractHints?.entity_key) structuralCols.add(contractHints.entity_key);
-                  if (contractHints?.time_anchor_column) structuralCols.add(contractHints.time_anchor_column);
-                  structuralCols.add("label");
-                  return columns
-                    .filter(c => !structuralCols.has(c.name) && !c.featureHasError)
-                    .map(c => c.name);
-                }
-                // Keep existing selection (leakage columns will be handled by build-modeling-dataset)
-                return prev.filter(f => f !== "label");
-              });
-
+              // Auto-populate features
+              autoPopulateFeatures("label");
               setPreflightRefreshKey(k => k + 1);
+              // Persist target_source to SSOT
+              persistTargetSourceToSSOT("weak_supervision", "weak_supervision_assisted");
             }}
           />
         )}
@@ -782,7 +835,11 @@ const StepTargetFeatures = ({
               setSelectedTemplateId("human_labeling_assisted");
               setAppliedTargetColumn("label");
               setInferredProblemType("classification");
+              // Auto-populate features
+              autoPopulateFeatures("label");
               setPreflightRefreshKey(k => k + 1);
+              // Persist target_source to SSOT
+              persistTargetSourceToSSOT("human_labeling", "human_labeling_assisted");
             }}
           />
         )}
@@ -1188,7 +1245,9 @@ const StepTargetFeatures = ({
               ds.load(),
               loadSelectionVersion(),
               loadBuilderVersion(),
+              loadSSOT(),
             ]);
+            onSSOTChanged?.();
             // Bump preflight AFTER fresh data is loaded
             setPreflightRefreshKey(k => k + 1);
           }}
