@@ -568,22 +568,30 @@ serve(async (req) => {
       })
       .eq("id", project_id);
 
-    // ── SSOT: Complete ingestion (success) ──
-    await rpcCompleteIngestionDatabricks(supabase, project_id, true, {
-      rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1, totalBytes: fileSizeBytes,
-    });
-
-    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+    // ── SSOT: Finalize ingestion (atomic manifest + state=done) ──
+    const schemaForManifest = columnInfos.map(col => ({
+      name: col.column_name, type: col.inferred_type, index: col.column_index,
+    }));
     try {
-      await supabase.rpc("rpc_activate_ingestion", {
+      await supabase.rpc("rpc_finalize_ingestion", {
         p_project_id: project_id,
         p_source_type: "databricks",
         p_config_hash: configHash,
         p_dataset_id: null,
-        p_manifest_id: null,
-        p_stats: { rows_detected: totalRows, cols_detected: columnsCount, file_count: 1, total_bytes: fileSizeBytes },
+        p_source_pointer: { host: cleanHost, source_mode: sourceMode, source_definition: sourceDefinition, data_source_id, storage_path: storagePath },
+        p_schema_json: schemaForManifest,
+        p_row_count: totalRows,
+        p_col_count: columnsCount,
+        p_total_bytes: fileSizeBytes,
+        p_sample_strategy: { method: "head", max_rows: 100000 },
+        p_file_count: 1,
       });
-    } catch (e) { console.warn("[ingest-databricks] rpc_activate_ingestion fallback:", e); }
+    } catch (e) {
+      console.warn("[ingest-databricks] rpc_finalize_ingestion fallback:", e);
+      await rpcCompleteIngestionDatabricks(supabase, project_id, true, {
+        rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1, totalBytes: fileSizeBytes,
+      });
+    }
 
     console.log(`[ingest-databricks] Ingestion complete: ${totalRows} rows, ${columnsCount} columns`);
 
