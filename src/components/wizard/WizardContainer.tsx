@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { supabase } from "@/integrations/supabase/client";
@@ -46,6 +46,8 @@ const WizardContainer = () => {
   const [currentStep, setCurrentStep] = useState(1);
   const [loading, setLoading] = useState(false);
   const [needsRetrain, setNeedsRetrain] = useState(false);
+  // SSOT version keys for deterministic rehydration of StepTargetFeatures
+  const [ssotVersionKey, setSsotVersionKey] = useState("");
   const [projectData, setProjectData] = useState<ProjectData>({
     name: "",
     description: "",
@@ -66,9 +68,25 @@ const WizardContainer = () => {
     { id: 9, title: "Agendamento", description: "Configurar execuções recorrentes" },
   ];
 
+  // Load SSOT version key for rehydration
+  const loadSSOTVersionKey = useCallback(async (id: string) => {
+    const { data } = await supabase
+      .from("project_settings")
+      .select("dataset_version, selection_version")
+      .eq("project_id", id)
+      .maybeSingle();
+    if (data) {
+      const d = data as Record<string, any>;
+      setSsotVersionKey(`${id}-dv${d.dataset_version || 0}-sv${d.selection_version || 0}`);
+    } else {
+      setSsotVersionKey(`${id}-dv0-sv0`);
+    }
+  }, []);
+
   useEffect(() => {
     if (projectId) {
       loadProject(projectId);
+      loadSSOTVersionKey(projectId);
     }
   }, [projectId]);
 
@@ -347,7 +365,7 @@ const WizardContainer = () => {
       case 3:
         return <StepEDA {...stepProps} />;
       case 4:
-        return <StepTargetFeatures {...stepProps} onConfigChange={handleConfigChange} />;
+        return <StepTargetFeatures key={ssotVersionKey || projectData.id} {...stepProps} onConfigChange={handleConfigChange} onSSOTChanged={() => projectData.id && loadSSOTVersionKey(projectData.id)} />;
       case 5:
         return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} onGoToStep={setCurrentStep} />;
       case 6:
