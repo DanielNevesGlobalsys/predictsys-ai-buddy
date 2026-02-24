@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 import { evaluateTargetTrainability, trainabilityHumanMessage } from "../_shared/evaluate-target-trainability.ts";
+import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1473,8 +1474,103 @@ serve(async (req) => {
       return blockResponse("NO_TARGET_SELECTED", "Nenhum target selecionado. Volte à Etapa 3.", { label: "Selecionar target", go_to_step: 3 });
     }
 
+    // ── ACTIVE TARGET RESOLUTION (SSOT) ──
+    // Load active_target fields from project_settings
+    const { data: activeTargetSettings } = await supabase
+      .from("project_settings")
+      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type")
+      .eq("project_id", project_id)
+      .maybeSingle();
+    
+    const activeTarget = resolveActiveTarget((activeTargetSettings as any) || {});
+    let useHumanLabelsAsTarget = false;
+    let humanTargetStats: Awaited<ReturnType<typeof buildHumanTargetStats>> | null = null;
+    
+    if (activeTarget.mode === "human") {
+      console.log(`[Gating] ⚡ Active target mode = HUMAN. Ignoring target_column="${target_column}" and template.`);
+      
+      // Validate human labels BEFORE proceeding
+      humanTargetStats = await buildHumanTargetStats(supabase, project_id);
+      
+      // Persist trainability report
+      const trainReport = buildTrainabilityReport(activeTarget, humanTargetStats);
+      await supabase.from("project_settings")
+        .update({ target_trainability_report: trainReport })
+        .eq("project_id", project_id);
+      
+      if (humanTargetStats.reason_code) {
+        console.error(`[Gating] ⛔ Human target blocked: ${humanTargetStats.reason_code}`);
+        
+        // Cascade pipeline state
+        await supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id, p_stage: "training", p_new_state: "failed",
+        });
+        await Promise.all([
+          supabase.rpc("rpc_update_pipeline_state", { p_project_id: project_id, p_stage: "scoring", p_new_state: "idle" }),
+          supabase.rpc("rpc_update_pipeline_state", { p_project_id: project_id, p_stage: "dashboard", p_new_state: "idle" }),
+        ]);
+        
+        return new Response(JSON.stringify({
+          success: false,
+          error: humanTargetStats.error_message,
+          error_code: "TARGET_NOT_TRAINABLE",
+          reason_code: humanTargetStats.reason_code,
+          details: {
+            active_target_mode: "human",
+            join_rows: humanTargetStats.join_rows,
+            distinct_y: humanTargetStats.distinct_y,
+            pos: humanTargetStats.pos,
+            neg: humanTargetStats.neg,
+          },
+          fix_suggestions: [
+            { label: "Gerar nova amostra estratificada", action: "open_human_labeling" },
+            { label: "Buscar classe faltante", action: "open_human_labeling" },
+            { label: "Voltar para Variável Alvo", action: "go_to_step_3" },
+          ],
+          action: "review_target",
+        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      
+      // Check minimum per class (30)
+      const MIN_PER_CLASS_HUMAN = 30;
+      const minClass = Math.min(humanTargetStats.pos, humanTargetStats.neg);
+      if (minClass < MIN_PER_CLASS_HUMAN) {
+        const minorityLabel = humanTargetStats.pos < humanTargetStats.neg ? "positivos" : "negativos";
+        console.error(`[Gating] ⛔ Minority class too small: ${minClass} < ${MIN_PER_CLASS_HUMAN}`);
+        
+        await supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id, p_stage: "training", p_new_state: "failed",
+        });
+        
+        return new Response(JSON.stringify({
+          success: false,
+          error: `Classe minoritária (${minorityLabel}) com apenas ${minClass} exemplos. Mínimo: ${MIN_PER_CLASS_HUMAN}.`,
+          error_code: "TARGET_NOT_TRAINABLE",
+          reason_code: "MINORITY_CLASS_TOO_SMALL",
+          details: {
+            active_target_mode: "human",
+            join_rows: humanTargetStats.join_rows,
+            distinct_y: humanTargetStats.distinct_y,
+            pos: humanTargetStats.pos,
+            neg: humanTargetStats.neg,
+            min_per_class: MIN_PER_CLASS_HUMAN,
+          },
+          fix_suggestions: [
+            { label: `Buscar ${minorityLabel}`, action: "open_human_labeling" },
+            { label: "Gerar mais amostras", action: "open_human_labeling" },
+          ],
+          action: "review_target",
+        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      
+      useHumanLabelsAsTarget = true;
+      // For human mode, we still need a "target_column" reference for the CSV/Parquet path
+      // but the actual y values will be overridden from human labels after data load
+      console.log(`[Gating] Human target OK: ${humanTargetStats.join_rows} labels, ${humanTargetStats.pos}+ / ${humanTargetStats.neg}−`);
+    }
+
     // ── Normalize virtual target: "label" → "_label_" when label builder is active ──
-    if (target_column === "label" && modelingDataset?.label_plan) {
+    if (!useHumanLabelsAsTarget && target_column === "label" && modelingDataset?.label_plan) {
       console.log(`[Gating] Normalizing target_column "label" → "_label_" (label builder active)`);
       target_column = "_label_";
     }
@@ -2712,14 +2808,25 @@ serve(async (req) => {
 
     console.log(`\nDados válidos: ${X.length.toLocaleString()} amostras, ${allFeatureNames.length} features`);
 
-    // Early fetch of target_source to determine minimum sample threshold
-    const { data: earlySettings } = await supabase
-      .from("project_settings")
-      .select("target_source")
-      .eq("project_id", project_id)
-      .maybeSingle();
-    const earlyTargetSource = (earlySettings as any)?.target_source || "manual";
-    const minSamplesRequired = earlyTargetSource === "human_labeling" ? 30 : 100;
+    // ── HUMAN TARGET OVERRIDE ──
+    // When active_target_mode='human', replace y with human labels.
+    // The human labels were already validated in Gate 2 (active target resolution).
+    if (useHumanLabelsAsTarget && humanTargetStats && humanTargetStats.values.length > 0) {
+      console.log(`\n[HUMAN-TARGET] Overriding y vector from human labels (${humanTargetStats.values.length} labels)`);
+      // Use human labels as y. X was loaded from dataset (features only).
+      // Since human labels may be fewer than dataset rows, truncate X to match.
+      const humanY = humanTargetStats.values;
+      if (humanY.length < X.length) {
+        // Use only as many X rows as we have labels (take from beginning, shuffled)
+        X.length = humanY.length;
+      }
+      y.length = 0;
+      y.push(...humanY.slice(0, X.length));
+      console.log(`[HUMAN-TARGET] Final: X=${X.length}, y=${y.length}, pos=${humanTargetStats.pos}, neg=${humanTargetStats.neg}`);
+    }
+
+    // Determine minimum samples based on active target mode
+    const minSamplesRequired = useHumanLabelsAsTarget ? 30 : 100;
 
     if (X.length < minSamplesRequired) {
       return new Response(JSON.stringify({ 

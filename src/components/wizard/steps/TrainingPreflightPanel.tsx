@@ -129,6 +129,15 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
 
       {result && (
         <>
+          {/* Active target mode indicator */}
+          {result.gates.some(g => g.details && (g.details as any).active_target_mode === "human") && (
+            <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/10 border border-primary/20 text-xs">
+              <Target className="w-3.5 h-3.5 text-primary" />
+              <span className="font-medium">Target ativo: Human (rotulagem)</span>
+              <Badge className="bg-primary/20 text-primary text-[10px]">ATIVO</Badge>
+            </div>
+          )}
+
           {/* Gate badges row */}
           <div className="flex flex-wrap gap-2">
             {result.gates.map((g) => (
@@ -145,7 +154,27 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
             {result.gates.map((g) => (
               <div key={g.gate} className="flex items-start gap-2 text-xs py-1">
                 <StatusIcon status={g.status} />
-                <span className={statusColor(g.status)}>{g.message}</span>
+                <div className="flex-1">
+                  <span className={statusColor(g.status)}>{g.message}</span>
+                  {/* Show fix suggestions for blocked human target */}
+                  {g.status === "BLOCK" && g.details?.fix_suggestions && (
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {(g.details.fix_suggestions as any[]).map((s: any, i: number) => (
+                        <Badge key={i} variant="outline" className="text-[10px] cursor-pointer hover:bg-muted">
+                          {s.label}
+                        </Badge>
+                      ))}
+                    </div>
+                  )}
+                  {/* Show class distribution for human target */}
+                  {(g.details as any)?.active_target_mode === "human" && g.details?.pos != null && (
+                    <div className="flex gap-2 mt-1 text-[10px] text-muted-foreground">
+                      <span>+{(g.details as any).pos}</span>
+                      <span>−{(g.details as any).neg}</span>
+                      <span>Total: {(g.details as any).join_rows}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             ))}
           </div>

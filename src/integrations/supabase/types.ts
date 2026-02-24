@@ -3124,6 +3124,10 @@ export type Database = {
       project_settings: {
         Row: {
           active_intent_contract_id: string | null
+          active_target_column: string | null
+          active_target_mode: string | null
+          active_target_ref: Json | null
+          active_target_updated_at: string | null
           builder_state: string
           contract_generated_at: string | null
           contract_version: number | null
@@ -3187,6 +3191,10 @@ export type Database = {
         }
         Insert: {
           active_intent_contract_id?: string | null
+          active_target_column?: string | null
+          active_target_mode?: string | null
+          active_target_ref?: Json | null
+          active_target_updated_at?: string | null
           builder_state?: string
           contract_generated_at?: string | null
           contract_version?: number | null
@@ -3250,6 +3258,10 @@ export type Database = {
         }
         Update: {
           active_intent_contract_id?: string | null
+          active_target_column?: string | null
+          active_target_mode?: string | null
+          active_target_ref?: Json | null
+          active_target_updated_at?: string | null
           builder_state?: string
           contract_generated_at?: string | null
           contract_version?: number | null
