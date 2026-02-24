@@ -2282,6 +2282,25 @@ serve(async (req) => {
       });
     }
 
+    // ── ENTERPRISE: Validate project access via JWT ──
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+      if (user) {
+        const { data: canAccess } = await supabase.rpc("user_can_access_project", {
+          _user_id: user.id,
+          _project_id: job.project_id,
+        });
+        if (canAccess === false) {
+          console.warn(`[process-import] ACCESS_DENIED: user=${user.id} project=${job.project_id}`);
+          return new Response(
+            JSON.stringify({ success: false, error: "Access denied to this project", code: "ACCESS_DENIED" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
+    }
+
     // For batch jobs: allow re-entry when status is "processing" (self-invocation pattern)
     if (!job.batch_id && job.status !== "pending") {
       return new Response(JSON.stringify({ success: true, message: `Job is already ${job.status}` }), {

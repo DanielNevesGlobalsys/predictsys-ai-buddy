@@ -71,6 +71,39 @@ export type Database = {
           },
         ]
       }
+      audit_project_mismatch: {
+        Row: {
+          body_project_id: string | null
+          created_at: string
+          endpoint: string | null
+          id: string
+          metadata: Json | null
+          resolved_project_id: string | null
+          route_project_id: string | null
+          user_id: string | null
+        }
+        Insert: {
+          body_project_id?: string | null
+          created_at?: string
+          endpoint?: string | null
+          id?: string
+          metadata?: Json | null
+          resolved_project_id?: string | null
+          route_project_id?: string | null
+          user_id?: string | null
+        }
+        Update: {
+          body_project_id?: string | null
+          created_at?: string
+          endpoint?: string | null
+          id?: string
+          metadata?: Json | null
+          resolved_project_id?: string | null
+          route_project_id?: string | null
+          user_id?: string | null
+        }
+        Relationships: []
+      }
       data_sources: {
         Row: {
           connection_config: Json
@@ -3789,6 +3822,10 @@ export type Database = {
       }
       user_belongs_to_org: {
         Args: { _org_id: string; _user_id: string }
+        Returns: boolean
+      }
+      user_can_access_project: {
+        Args: { _project_id: string; _user_id: string }
         Returns: boolean
       }
       user_has_active_org: { Args: { _user_id: string }; Returns: boolean }

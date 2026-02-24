@@ -30,6 +30,24 @@ serve(async (req) => {
       });
     }
 
+    // ── ENTERPRISE: Validate project access ──
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+      if (user) {
+        const { data: canAccess } = await supabase.rpc("user_can_access_project", {
+          _user_id: user.id,
+          _project_id: project_id,
+        });
+        if (canAccess === false) {
+          return new Response(
+            JSON.stringify({ success: false, error: "Access denied", code: "ACCESS_DENIED" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
+    }
+
     console.log(`[repair-manifest] Starting repair for project ${project_id}`);
 
     // 1) Check current state

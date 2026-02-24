@@ -304,6 +304,24 @@ serve(async (req) => {
       throw new Error("File and project_id are required");
     }
 
+    // ── ENTERPRISE: Validate project access ──
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader?.startsWith("Bearer ")) {
+      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+      if (user) {
+        const { data: canAccess } = await supabase.rpc("user_can_access_project", {
+          _user_id: user.id,
+          _project_id: projectId,
+        });
+        if (canAccess === false) {
+          return new Response(
+            JSON.stringify({ error: "Access denied to this project", code: "ACCESS_DENIED" }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+          );
+        }
+      }
+    }
+
     const isSliced = originalSize > 0 && originalSize > file.size;
 
     // ── SSOT: Start ingestion ──
