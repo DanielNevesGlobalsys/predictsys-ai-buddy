@@ -15,6 +15,8 @@ interface ParsedData {
   sampleRows: number;
 }
 
+const STALE_INGESTION_MS = 2 * 60 * 1000; // 2 minutes
+
 function inferColumnType(values: unknown[]): string {
   const nonNullValues = values.filter(v => v !== null && v !== undefined && v !== '');
   if (nonNullValues.length === 0) return 'texto';
@@ -431,26 +433,88 @@ async function startIngestionSafe(
   supabase: any, projectId: string, sourceType: string, configHash: string,
 ): Promise<{ canProceed: boolean; status: string; response?: Response }> {
   try {
-    const { data, error } = await supabase.rpc("rpc_start_ingestion", {
-      p_project_id: projectId, p_source_type: sourceType, p_source_config_hash: configHash,
-    });
-    if (error) { console.warn("[parse-file] rpc_start_ingestion error:", error); return { canProceed: true, status: "rpc_error" }; }
+    const startArgs = {
+      p_project_id: projectId,
+      p_source_type: sourceType,
+      p_source_config_hash: configHash,
+    };
+
+    const { data, error } = await supabase.rpc("rpc_start_ingestion", startArgs);
+    if (error) {
+      console.warn("[parse-file] rpc_start_ingestion error:", error);
+      return { canProceed: true, status: "rpc_error" };
+    }
+
     const r = data as Record<string, unknown>;
+
     if (r.status === "ALREADY_DONE") {
-      return { canProceed: false, status: "ALREADY_DONE", response: new Response(JSON.stringify({
-        success: true, status: "ALREADY_DONE", ingestion_state: "done",
-        message: r.message || "Dados já importados com esta configuração.",
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+      return {
+        canProceed: false,
+        status: "ALREADY_DONE",
+        response: new Response(
+          JSON.stringify({
+            success: true,
+            status: "ALREADY_DONE",
+            ingestion_state: "done",
+            message: r.message || "Dados já importados com esta configuração.",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        ),
+      };
     }
+
     if (r.error === "INGESTION_ALREADY_RUNNING") {
-      return { canProceed: false, status: "ALREADY_RUNNING", response: new Response(JSON.stringify({
-        success: false, status: "ALREADY_RUNNING", ingestion_state: "running",
-        error_code: "INGESTION_ALREADY_RUNNING",
-        error_friendly: "Já existe uma ingestão em andamento para este projeto.",
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+      // Recovery path for orphan "running" state caused by abrupt worker shutdown (e.g., WORKER_LIMIT)
+      const { data: stateRow } = await supabase
+        .from("project_settings")
+        .select("ingestion_state, ingestion_started_at")
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      const startedAt = stateRow?.ingestion_started_at ? new Date(String(stateRow.ingestion_started_at)).getTime() : 0;
+      const isRunning = stateRow?.ingestion_state === "running";
+      const isStale = Boolean(startedAt) && Date.now() - startedAt > STALE_INGESTION_MS;
+
+      if (isRunning && isStale) {
+        console.warn("[parse-file] Detected stale ingestion lock. Releasing and retrying start...");
+
+        await completeIngestionSafe(supabase, projectId, false, {
+          errorCode: "INGESTION_STALE_LOCK",
+          errorMessage: "Ingestão anterior interrompida por falta de recursos.",
+        });
+
+        const { data: retryData, error: retryError } = await supabase.rpc("rpc_start_ingestion", startArgs);
+        if (!retryError) {
+          const retry = retryData as Record<string, unknown>;
+          if (retry.status !== "ALREADY_DONE" && retry.error !== "INGESTION_ALREADY_RUNNING") {
+            return { canProceed: true, status: String(retry.status || "STARTED") };
+          }
+        } else {
+          console.warn("[parse-file] rpc_start_ingestion retry error:", retryError);
+        }
+      }
+
+      return {
+        canProceed: false,
+        status: "ALREADY_RUNNING",
+        response: new Response(
+          JSON.stringify({
+            success: false,
+            status: "ALREADY_RUNNING",
+            ingestion_state: "running",
+            error_code: "INGESTION_ALREADY_RUNNING",
+            error_friendly: "Já existe uma ingestão em andamento para este projeto.",
+          }),
+          { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
+        ),
+      };
     }
+
     return { canProceed: true, status: String(r.status || "STARTED") };
-  } catch (e) { console.warn("[parse-file] startIngestion fallback:", e); return { canProceed: true, status: "fallback" }; }
+  } catch (e) {
+    console.warn("[parse-file] startIngestion fallback:", e);
+    return { canProceed: true, status: "fallback" };
+  }
 }
 
 async function completeIngestionSafe(
@@ -471,6 +535,7 @@ async function completeIngestionSafe(
 
 function classifyIngestionError(error: unknown): string {
   const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (msg.includes("worker_limit") || msg.includes("memory limit exceeded") || msg.includes("not having enough compute resources")) return "WORKER_LIMIT";
   if (msg.includes("parquet")) return "PARQUET_READ_FAIL";
   if (msg.includes("empty") || msg.includes("0 linhas")) return "EMPTY_DATASET";
   if (msg.includes("unsupported file")) return "UPLOAD_PARSE_ERROR";
