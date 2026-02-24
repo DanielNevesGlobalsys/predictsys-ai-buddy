@@ -1,12 +1,19 @@
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useMemo } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Users, Loader2, CheckCircle, XCircle, AlertTriangle,
   ChevronDown, ChevronUp, ThumbsUp, ThumbsDown, HelpCircle,
-  BarChart3, Cpu, Zap,
+  BarChart3, Cpu, Zap, RotateCcw, CheckCheck, ArrowUpDown,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
@@ -14,6 +21,20 @@ import { useToast } from "@/hooks/use-toast";
 interface EntitySample {
   entity_id: string;
   mini_features: Record<string, any>;
+  suggested_label: number;
+  confidence: number;
+  reason: string;
+  group: string;
+}
+
+interface SamplingReport {
+  total_sampled: number;
+  default_sample_size: number;
+  groups: { UNCERTAIN: number; HIGH_POS_PROB: number; HIGH_NEG_PROB: number };
+  suggested_labels: { positive: number; negative: number };
+  avg_confidence: number;
+  has_weak_supervision: boolean;
+  leakage_cols_excluded: string[];
 }
 
 interface ModelMetrics {
@@ -23,6 +44,12 @@ interface ModelMetrics {
   train_size: number;
   holdout_size: number;
   calibration: string;
+}
+
+interface TrainabilityCTA {
+  label: string;
+  action: string;
+  direction?: string;
 }
 
 interface Props {
@@ -43,11 +70,29 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
   const [labelMap, setLabelMap] = useState<Record<string, "yes" | "no" | "unsure">>({});
   const [error, setError] = useState<string | null>(null);
 
+  // Sample size
+  const [sampleSizeOptions, setSampleSizeOptions] = useState<number[]>([50, 100, 200, 400, 800]);
+  const [defaultSampleSize, setDefaultSampleSize] = useState(200);
+  const [selectedSampleSize, setSelectedSampleSize] = useState<number>(200);
+  const [samplingReport, setSamplingReport] = useState<SamplingReport | null>(null);
+
   // Result state
   const [nLabeled, setNLabeled] = useState(0);
+  const [nPositive, setNPositive] = useState(0);
+  const [nNegative, setNNegative] = useState(0);
   const [balance, setBalance] = useState(0);
+  const [minClass, setMinClass] = useState(0);
   const [modelMetrics, setModelMetrics] = useState<ModelMetrics | null>(null);
   const [seedReady, setSeedReady] = useState(false);
+  const [suggestionAccuracy, setSuggestionAccuracy] = useState<number | null>(null);
+
+  // Trainability
+  const [trainabilityStatus, setTrainabilityStatus] = useState<string>("ok");
+  const [trainabilityReason, setTrainabilityReason] = useState<string | null>(null);
+  const [trainabilityCTAs, setTrainabilityCTAs] = useState<TrainabilityCTA[]>([]);
+
+  // Batch selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Load existing state
   useEffect(() => {
@@ -61,25 +106,44 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
       if (data) {
         const d = data as any;
         if (d.target_source === "human_labeling") setExpanded(true);
+        if (d.human_label_config?.human_label_sample_size) {
+          setSelectedSampleSize(d.human_label_config.human_label_sample_size);
+        }
+        if (d.human_label_config?.default_sample_size) {
+          setDefaultSampleSize(d.human_label_config.default_sample_size);
+        }
         if (d.human_label_result) {
           setNLabeled(d.human_label_result.n_labeled || 0);
+          setNPositive(d.human_label_result.n_positive || 0);
+          setNNegative(d.human_label_result.n_negative || 0);
           setBalance(d.human_label_result.balance || 0);
+          setMinClass(d.human_label_result.min_class || 0);
           if (d.human_label_result.model_metrics) {
             setModelMetrics(d.human_label_result.model_metrics);
             setSeedReady(d.human_label_result.seed_model_ready || false);
           }
           if (d.human_label_result.round_id) setRoundId(d.human_label_result.round_id);
+          if (d.human_label_result.suggestion_accuracy != null) setSuggestionAccuracy(d.human_label_result.suggestion_accuracy);
+          if (d.human_label_result.trainability_status) {
+            setTrainabilityStatus(d.human_label_result.trainability_status);
+            setTrainabilityReason(d.human_label_result.trainability_reason || null);
+            setTrainabilityCTAs(d.human_label_result.trainability_ctas || []);
+          }
         }
       }
     })();
   }, [projectId]);
 
-  const generateSample = useCallback(async () => {
+  const generateSample = useCallback(async (directedStrategy?: string) => {
     setLoading(true);
     setError(null);
     try {
       const response = await supabase.functions.invoke("tde-sample-entities-for-labeling", {
-        body: { project_id: projectId, n: 50, strategy: "diversity" },
+        body: {
+          project_id: projectId,
+          n: selectedSampleSize,
+          strategy: directedStrategy || "stratified",
+        },
       });
       if (response.error) throw new Error(response.error.message);
       const data = response.data as any;
@@ -88,7 +152,17 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
         setSummaryCols(data.summary_columns || []);
         setRoundId(data.round_id);
         setLabelMap({});
-        toast({ title: "Amostra gerada", description: `${data.total_sampled} entidades prontas para rotulagem.` });
+        setSelectedIds(new Set());
+        if (data.default_sample_size) setDefaultSampleSize(data.default_sample_size);
+        if (data.sample_size_options) setSampleSizeOptions(data.sample_size_options);
+        if (data.sampling_report) setSamplingReport(data.sampling_report);
+        // Pre-fill labels from suggestions
+        const prefilled: Record<string, "yes" | "no" | "unsure"> = {};
+        for (const e of (data.entities || []) as EntitySample[]) {
+          prefilled[e.entity_id] = e.suggested_label === 1 ? "yes" : "no";
+        }
+        setLabelMap(prefilled);
+        toast({ title: "Amostra gerada", description: `${data.total_sampled} entidades com pré-rotulagem automática.` });
       } else {
         setError(data.error || "Erro desconhecido");
       }
@@ -97,7 +171,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [projectId, toast]);
+  }, [projectId, selectedSampleSize, toast]);
 
   const setLabel = (entityId: string, status: "yes" | "no" | "unsure") => {
     setLabelMap(prev => {
@@ -110,14 +184,43 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
     });
   };
 
+  const toggleSelect = (entityId: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(entityId)) next.delete(entityId);
+      else next.add(entityId);
+      return next;
+    });
+  };
+
+  const selectAll = () => {
+    setSelectedIds(new Set(entities.map(e => e.entity_id)));
+  };
+
+  const applyBatch = (status: "yes" | "no" | "unsure") => {
+    setLabelMap(prev => {
+      const next = { ...prev };
+      for (const id of selectedIds) {
+        next[id] = status;
+      }
+      return next;
+    });
+    setSelectedIds(new Set());
+  };
+
   const saveLabels = useCallback(async () => {
     if (!roundId) return;
     setSaving(true);
     try {
-      const labels = Object.entries(labelMap).map(([entity_id, label_status]) => ({
-        entity_id,
-        label_status,
-      }));
+      const labels = Object.entries(labelMap).map(([entity_id, label_status]) => {
+        const entity = entities.find(e => e.entity_id === entity_id);
+        return {
+          entity_id,
+          label_status,
+          suggested_label: entity?.suggested_label,
+          confidence: entity?.confidence,
+        };
+      });
       const response = await supabase.functions.invoke("tde-submit-human-labels", {
         body: { project_id: projectId, round_id: roundId, labels },
       });
@@ -125,15 +228,22 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
       const data = response.data as any;
       if (data.success) {
         setNLabeled(data.n_labeled);
+        setNPositive(data.n_positive);
+        setNNegative(data.n_negative);
         setBalance(data.balance);
-        toast({ title: "Rótulos salvos", description: `${data.n_saved} rótulos salvos, ${data.n_skipped} "Não sei" ignorados.` });
+        setMinClass(data.min_class);
+        if (data.suggestion_accuracy != null) setSuggestionAccuracy(data.suggestion_accuracy);
+        setTrainabilityStatus(data.trainability_status || "ok");
+        setTrainabilityReason(data.trainability_reason || null);
+        setTrainabilityCTAs(data.trainability_ctas || []);
+        toast({ title: "Rótulos salvos", description: `${data.n_saved} salvos, ${data.n_skipped} "Não sei" ignorados.` });
       }
     } catch (err) {
       toast({ title: "Erro", description: err instanceof Error ? err.message : "Erro ao salvar", variant: "destructive" });
     } finally {
       setSaving(false);
     }
-  }, [projectId, roundId, labelMap, toast]);
+  }, [projectId, roundId, labelMap, entities, toast]);
 
   const trainSeedModel = useCallback(async () => {
     if (!roundId) return;
@@ -183,8 +293,25 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
   const labeledCount = Object.keys(labelMap).length;
   const yesCount = Object.values(labelMap).filter(v => v === "yes").length;
   const noCount = Object.values(labelMap).filter(v => v === "no").length;
+  const unsureCount = Object.values(labelMap).filter(v => v === "unsure").length;
   const canTrain = nLabeled >= 30;
   const canActivate = seedReady && nLabeled >= 30;
+
+  // Count inversions from suggestion
+  const inversionCount = useMemo(() => {
+    let count = 0;
+    for (const e of entities) {
+      const userLabel = labelMap[e.entity_id];
+      if (!userLabel || userLabel === "unsure") continue;
+      const userBinary = userLabel === "yes" ? 1 : 0;
+      if (userBinary !== e.suggested_label) count++;
+    }
+    return count;
+  }, [entities, labelMap]);
+
+  const hasTrainabilityIssue = trainabilityStatus !== "ok" && nLabeled > 0;
+  const MIN_TOTAL = 100;
+  const MIN_PER_CLASS = 30;
 
   return (
     <Card className="border border-primary/30 overflow-hidden">
@@ -206,6 +333,12 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
               SEED PRONTO
             </Badge>
           )}
+          {hasTrainabilityIssue && (
+            <Badge variant="outline" className="text-[10px] text-destructive border-destructive/30">
+              <AlertTriangle className="w-3 h-3 mr-1" />
+              AÇÃO NECESSÁRIA
+            </Badge>
+          )}
         </div>
         {expanded ? <ChevronUp className="w-4 h-4 text-muted-foreground" /> : <ChevronDown className="w-4 h-4 text-muted-foreground" />}
       </button>
@@ -216,29 +349,69 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
           <div className="flex items-start gap-2 p-3 bg-primary/10 border border-primary/20 rounded-lg">
             <Users className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
             <p className="text-xs text-muted-foreground">
-              Para datasets sem resultado claro, rotule manualmente <strong>30–200 casos</strong> (Sim/Não).
-              O sistema treina um modelo simples para generalizar para todo o dataset.
-              Recomendado quando o Modo Assistido não consegue gerar confiança suficiente.
+              Rotule manualmente <strong>{defaultSampleSize}–800 casos</strong> (Sim/Não).
+              A amostra é estratificada (40% incertos, 30% prováveis positivos, 30% prováveis negativos)
+              com <strong>pré-rotulagem automática</strong> — confirme ou corrija rapidamente.
             </p>
           </div>
 
-          {/* Stats if already labeled */}
+          {/* Stats */}
           {nLabeled > 0 && (
-            <div className="grid grid-cols-3 gap-2">
+            <div className="grid grid-cols-4 gap-2">
               <div className="p-2 rounded border border-border bg-background text-center">
                 <p className="text-lg font-bold">{nLabeled}</p>
                 <p className="text-[10px] text-muted-foreground">Rotulados</p>
               </div>
-              <div className="p-2 rounded border border-border bg-background text-center">
-                <p className="text-lg font-bold">{(balance * 100).toFixed(0)}%</p>
-                <p className="text-[10px] text-muted-foreground">% Sim</p>
+              <div className="p-2 rounded border border-accent/30 bg-accent/5 text-center">
+                <p className="text-lg font-bold text-accent">{nPositive}</p>
+                <p className="text-[10px] text-muted-foreground">Sim</p>
+              </div>
+              <div className="p-2 rounded border border-destructive/30 bg-destructive/5 text-center">
+                <p className="text-lg font-bold text-destructive">{nNegative}</p>
+                <p className="text-[10px] text-muted-foreground">Não</p>
               </div>
               <div className={`p-2 rounded border text-center ${
-                nLabeled >= 30 ? "border-accent/30 bg-accent/5" : "border-amber-500/30 bg-amber-500/5"
+                minClass >= MIN_PER_CLASS ? "border-accent/30 bg-accent/5" : "border-amber-500/30 bg-amber-500/5"
               }`}>
-                <p className="text-lg font-bold">{nLabeled >= 30 ? "✓" : `${30 - nLabeled}`}</p>
-                <p className="text-[10px] text-muted-foreground">{nLabeled >= 30 ? "Mín. OK" : "Faltam"}</p>
+                <p className="text-lg font-bold">{minClass >= MIN_PER_CLASS ? "✓" : minClass}</p>
+                <p className="text-[10px] text-muted-foreground">{minClass >= MIN_PER_CLASS ? "Mín. OK" : `Mín classe (${MIN_PER_CLASS})`}</p>
               </div>
+            </div>
+          )}
+
+          {/* Trainability diagnostic */}
+          {hasTrainabilityIssue && (
+            <Alert className="bg-amber-500/5 border-amber-500/20">
+              <AlertTriangle className="w-4 h-4 text-amber-500" />
+              <AlertDescription className="text-xs space-y-2">
+                <p>{trainabilityReason}</p>
+                <div className="flex flex-wrap gap-2">
+                  {trainabilityCTAs.map((cta, i) => (
+                    <Button
+                      key={i}
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        if (cta.action === "generate_more" || cta.action === "generate_directed") {
+                          generateSample(cta.direction === "positive" ? "bias_positive" : cta.direction === "negative" ? "bias_negative" : undefined);
+                        }
+                      }}
+                    >
+                      {cta.label}
+                    </Button>
+                  ))}
+                </div>
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {/* Suggestion accuracy */}
+          {suggestionAccuracy != null && nLabeled > 0 && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground">
+              <BarChart3 className="w-3.5 h-3.5" />
+              <span>Acurácia da pré-rotulagem: <strong>{suggestionAccuracy}%</strong></span>
+              {inversionCount > 0 && <span className="text-amber-600">({inversionCount} corrigidos)</span>}
             </div>
           )}
 
@@ -273,11 +446,46 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
             </div>
           )}
 
-          {/* Generate sample */}
-          <Button onClick={generateSample} disabled={loading} className="w-full" variant="outline">
-            {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Zap className="w-4 h-4 mr-2" />}
-            Gerar amostra ({entities.length > 0 ? "nova" : "50 entidades"})
-          </Button>
+          {/* Sample size selector + generate */}
+          <div className="flex gap-2 items-center">
+            <Select
+              value={String(selectedSampleSize)}
+              onValueChange={(v) => setSelectedSampleSize(Number(v))}
+            >
+              <SelectTrigger className="w-32 h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {sampleSizeOptions.map(size => (
+                  <SelectItem key={size} value={String(size)}>
+                    {size} entidades{size === defaultSampleSize ? " (rec.)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button onClick={() => generateSample()} disabled={loading} className="flex-1" variant="outline">
+              {loading ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Zap className="w-4 h-4 mr-2" />}
+              Gerar amostra estratificada
+            </Button>
+          </div>
+
+          {/* Sampling report */}
+          {samplingReport && (
+            <div className="grid grid-cols-3 gap-2 text-center text-[10px]">
+              <div className="p-1.5 rounded border border-amber-500/20 bg-amber-500/5">
+                <p className="font-bold text-amber-600">{samplingReport.groups.UNCERTAIN}</p>
+                <p className="text-muted-foreground">Incertos</p>
+              </div>
+              <div className="p-1.5 rounded border border-accent/20 bg-accent/5">
+                <p className="font-bold text-accent">{samplingReport.groups.HIGH_POS_PROB}</p>
+                <p className="text-muted-foreground">Prov. Sim</p>
+              </div>
+              <div className="p-1.5 rounded border border-destructive/20 bg-destructive/5">
+                <p className="font-bold text-destructive">{samplingReport.groups.HIGH_NEG_PROB}</p>
+                <p className="text-muted-foreground">Prov. Não</p>
+              </div>
+            </div>
+          )}
 
           {error && (
             <Alert className="bg-destructive/5 border-destructive/20">
@@ -296,24 +504,86 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
                 <div className="flex items-center gap-2 text-xs text-muted-foreground">
                   <span className="text-accent">Sim: {yesCount}</span>
                   <span className="text-destructive">Não: {noCount}</span>
+                  {unsureCount > 0 && <span className="text-amber-500">Dúvida: {unsureCount}</span>}
                 </div>
+              </div>
+
+              {/* Batch actions */}
+              {selectedIds.size > 0 && (
+                <div className="flex items-center gap-2 p-2 bg-muted/30 border border-border rounded-lg">
+                  <span className="text-xs font-medium">{selectedIds.size} selecionados:</span>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => applyBatch("yes")}>
+                    <ThumbsUp className="w-3 h-3 mr-1" /> Sim
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => applyBatch("no")}>
+                    <ThumbsDown className="w-3 h-3 mr-1" /> Não
+                  </Button>
+                  <Button size="sm" variant="outline" className="h-6 text-[10px] px-2" onClick={() => applyBatch("unsure")}>
+                    <HelpCircle className="w-3 h-3 mr-1" /> Dúvida
+                  </Button>
+                  <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2 ml-auto" onClick={() => setSelectedIds(new Set())}>
+                    Limpar
+                  </Button>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 mb-1">
+                <Button size="sm" variant="ghost" className="h-6 text-[10px] px-2" onClick={selectAll}>
+                  <CheckCheck className="w-3 h-3 mr-1" /> Selecionar todos
+                </Button>
+                <Button
+                  size="sm" variant="ghost" className="h-6 text-[10px] px-2"
+                  onClick={() => {
+                    // Accept all suggestions as-is
+                    const prefilled: Record<string, "yes" | "no" | "unsure"> = {};
+                    for (const e of entities) {
+                      prefilled[e.entity_id] = e.suggested_label === 1 ? "yes" : "no";
+                    }
+                    setLabelMap(prefilled);
+                  }}
+                >
+                  <CheckCircle className="w-3 h-3 mr-1" /> Aceitar todas sugestões
+                </Button>
               </div>
 
               <div className="max-h-[400px] overflow-y-auto space-y-1.5 border border-border rounded-lg p-2">
                 {entities.map((entity) => {
                   const currentLabel = labelMap[entity.entity_id];
+                  const isSelected = selectedIds.has(entity.entity_id);
+                  const isInverted = currentLabel && currentLabel !== "unsure" && (currentLabel === "yes" ? 1 : 0) !== entity.suggested_label;
                   return (
                     <div
                       key={entity.entity_id}
-                      className={`flex items-center gap-2 p-2 rounded border transition-colors ${
+                      className={`flex items-center gap-2 p-2 rounded border transition-colors cursor-pointer ${
+                        isSelected ? "ring-1 ring-primary" : ""
+                      } ${
                         currentLabel === "yes" ? "border-accent/40 bg-accent/5" :
                         currentLabel === "no" ? "border-destructive/40 bg-destructive/5" :
                         currentLabel === "unsure" ? "border-amber-500/40 bg-amber-500/5" :
                         "border-border/50 bg-background"
                       }`}
+                      onClick={(e) => {
+                        if ((e.target as HTMLElement).closest("button")) return;
+                        toggleSelect(entity.entity_id);
+                      }}
                     >
                       <div className="flex-1 min-w-0">
-                        <p className="text-xs font-mono font-medium truncate">{entity.entity_id}</p>
+                        <div className="flex items-center gap-1.5">
+                          <p className="text-xs font-mono font-medium truncate">{entity.entity_id}</p>
+                          {/* Suggestion badge */}
+                          <Badge variant="outline" className={`text-[8px] py-0 px-1 ${
+                            entity.group === "UNCERTAIN" ? "border-amber-500/40 text-amber-600" :
+                            entity.group === "HIGH_POS_PROB" ? "border-accent/40 text-accent" :
+                            "border-destructive/40 text-destructive"
+                          }`}>
+                            {entity.group === "UNCERTAIN" ? "?" : entity.group === "HIGH_POS_PROB" ? "+" : "−"} {entity.confidence}%
+                          </Badge>
+                          {isInverted && (
+                            <Badge variant="outline" className="text-[8px] py-0 px-1 border-amber-500/40 text-amber-600">
+                              <ArrowUpDown className="w-2.5 h-2.5 mr-0.5" /> corrigido
+                            </Badge>
+                          )}
+                        </div>
                         <div className="flex flex-wrap gap-1 mt-0.5">
                           {Object.entries(entity.mini_features)
                             .filter(([k]) => !k.startsWith("_"))
@@ -324,6 +594,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
                               </Badge>
                             ))}
                         </div>
+                        <p className="text-[9px] text-muted-foreground mt-0.5 italic">{entity.reason}</p>
                       </div>
                       <div className="flex items-center gap-1 flex-shrink-0">
                         <button
@@ -331,7 +602,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
                           className={`p-1.5 rounded transition-colors ${
                             currentLabel === "yes" ? "bg-accent text-accent-foreground" : "hover:bg-accent/20 text-muted-foreground"
                           }`}
-                          title="Sim"
+                          title="Sim (Confirmar)"
                         >
                           <ThumbsUp className="w-3.5 h-3.5" />
                         </button>
@@ -340,7 +611,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
                           className={`p-1.5 rounded transition-colors ${
                             currentLabel === "no" ? "bg-destructive text-destructive-foreground" : "hover:bg-destructive/20 text-muted-foreground"
                           }`}
-                          title="Não"
+                          title="Não (Inverter)"
                         >
                           <ThumbsDown className="w-3.5 h-3.5" />
                         </button>
@@ -349,7 +620,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
                           className={`p-1.5 rounded transition-colors ${
                             currentLabel === "unsure" ? "bg-amber-500 text-white" : "hover:bg-amber-500/20 text-muted-foreground"
                           }`}
-                          title="Não sei"
+                          title="Dúvida"
                         >
                           <HelpCircle className="w-3.5 h-3.5" />
                         </button>
@@ -374,7 +645,7 @@ export default function HumanLabelingCard({ projectId, onActivated }: Props) {
               {!canTrain && nLabeled < 30 && (
                 <p className="text-xs text-amber-600 flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3" />
-                  Recomendado rotular pelo menos 50 casos (mínimo: 30)
+                  Mínimo: 30 rótulos para treinar ({30 - nLabeled} restantes)
                 </p>
               )}
             </div>

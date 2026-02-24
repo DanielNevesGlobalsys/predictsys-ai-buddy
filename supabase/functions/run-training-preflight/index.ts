@@ -599,30 +599,46 @@ serve(async (req: Request) => {
       }
     }
 
-    // ===== 4.9.2 HUMAN LABEL HEALTH GATE (TDE Etapa F) =====
+    // ===== 4.9.2 HUMAN LABEL HEALTH GATE (TDE Etapa F v2) =====
     if (projectSettings?.target_source === "human_labeling" && projectSettings?.human_label_result) {
       const hlr = projectSettings.human_label_result as Record<string, any>;
       const nLabeled = hlr.n_labeled || 0;
       const nPositive = hlr.n_positive || 0;
-      const nNegative = nLabeled - nPositive;
+      const nNegative = hlr.n_negative || (nLabeled - nPositive);
       const minClass = Math.min(nPositive, nNegative);
       const seedMetrics = hlr.model_metrics as Record<string, any> | null;
       const seedAUC = seedMetrics?.auc || 0;
 
-      if (nLabeled < 30) {
+      // v2 thresholds: min_total = max(100, human_label_sample_size), min_per_class = 30
+      const humanLabelConfig = projectSettings.human_label_config as Record<string, any> | null;
+      const configuredSampleSize = humanLabelConfig?.human_label_sample_size || 200;
+      const minTotalRequired = Math.max(100, configuredSampleSize);
+      const MIN_PER_CLASS = 30;
+
+      if (nLabeled < minTotalRequired) {
         gates.push({
           gate: "human_label_health",
           status: "BLOCK",
-          message: `Apenas ${nLabeled} rótulos humanos. Mínimo: 30. Rotule mais entidades na Etapa 3.`,
-          details: { n_labeled: nLabeled },
+          message: `Apenas ${nLabeled} rótulos humanos. Mínimo: ${minTotalRequired}. Rotule mais entidades na Etapa 3.`,
+          details: { n_labeled: nLabeled, min_required: minTotalRequired, n_positive: nPositive, n_negative: nNegative },
         });
         canTrain = false;
-      } else if (minClass < 10) {
+      } else if (nPositive === 0 || nNegative === 0) {
+        const missingClass = nPositive === 0 ? "positivos" : "negativos";
         gates.push({
           gate: "human_label_health",
           status: "BLOCK",
-          message: `Classe minoritária com apenas ${minClass} exemplos. Mínimo: 10. Rotule mais casos da classe sub-representada.`,
-          details: { n_positive: nPositive, n_negative: nNegative },
+          message: `Apenas uma classe rotulada (faltam ${missingClass}). Gere amostras direcionadas para encontrar exemplos.`,
+          details: { n_positive: nPositive, n_negative: nNegative, reason_code: "ONLY_ONE_CLASS" },
+        });
+        canTrain = false;
+      } else if (minClass < MIN_PER_CLASS) {
+        const minorityClass = nPositive < nNegative ? "positivos" : "negativos";
+        gates.push({
+          gate: "human_label_health",
+          status: "BLOCK",
+          message: `Classe minoritária (${minorityClass}) com apenas ${minClass} exemplos. Mínimo: ${MIN_PER_CLASS}. Faltam ${MIN_PER_CLASS - minClass}.`,
+          details: { n_positive: nPositive, n_negative: nNegative, min_class: minClass, reason_code: "MINORITY_CLASS_TOO_SMALL" },
         });
         canTrain = false;
       } else if (seedAUC < 0.6) {
@@ -636,8 +652,8 @@ serve(async (req: Request) => {
         gates.push({
           gate: "human_label_health",
           status: "PASS",
-          message: `Rotulagem OK: ${nLabeled} rótulos, AUC seed ${(seedAUC * 100).toFixed(0)}%, balance ${(hlr.balance * 100).toFixed(0)}%.`,
-          details: { n_labeled: nLabeled, auc: seedAUC, balance: hlr.balance },
+          message: `Rotulagem OK: ${nLabeled} rótulos (${nPositive}+ / ${nNegative}−), AUC seed ${(seedAUC * 100).toFixed(0)}%.`,
+          details: { n_labeled: nLabeled, n_positive: nPositive, n_negative: nNegative, auc: seedAUC, balance: hlr.balance },
         });
       }
     }
