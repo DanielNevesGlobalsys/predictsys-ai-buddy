@@ -3125,6 +3125,8 @@ export type Database = {
         Row: {
           active_intent_contract_id: string | null
           builder_state: string
+          contract_generated_at: string | null
+          contract_version: number | null
           dashboard_state: string
           dashboard_version: number
           dataset_version: number
@@ -3173,6 +3175,8 @@ export type Database = {
         Insert: {
           active_intent_contract_id?: string | null
           builder_state?: string
+          contract_generated_at?: string | null
+          contract_version?: number | null
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number
@@ -3221,6 +3225,8 @@ export type Database = {
         Update: {
           active_intent_contract_id?: string | null
           builder_state?: string
+          contract_generated_at?: string | null
+          contract_version?: number | null
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number
