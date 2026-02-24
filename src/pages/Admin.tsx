@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3, FileText } from 'lucide-react';
+import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3, FileText, Download, Loader2 } from 'lucide-react';
 import { ExportTechnicalReportButton } from '@/components/admin-analytics/ExportTechnicalReportButton';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -66,6 +66,35 @@ const Admin = () => {
   const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
   const [selectedOrg, setSelectedOrg] = useState<Organization | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [isDownloadingAudit, setIsDownloadingAudit] = useState(false);
+
+  const handleDownloadAudit = useCallback(async () => {
+    setIsDownloadingAudit(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('audit-platform', {
+        body: { scope: 'global' },
+      });
+      if (error) throw error;
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'platform_audit.json';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+      toast({ title: 'Download concluído', description: 'platform_audit.json salvo.' });
+    } catch (err) {
+      console.error('[audit-platform]', err);
+      const msg = err instanceof Error ? err.message
+        : typeof err === 'string' ? err
+        : 'Falha ao baixar auditoria.';
+      toast({ title: 'Erro', description: msg, variant: 'destructive' });
+    } finally {
+      setIsDownloadingAudit(false);
+    }
+  }, [toast]);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -333,6 +362,10 @@ const Admin = () => {
             </Button>
           </Link>
           <ExportTechnicalReportButton variant="outline" />
+          <Button variant="outline" className="gap-2" onClick={handleDownloadAudit} disabled={isDownloadingAudit}>
+            {isDownloadingAudit ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+            Baixar Auditoria Global (JSON)
+          </Button>
         </div>
 
         {/* Stats Cards */}
