@@ -40,6 +40,7 @@ import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useImportPreview } from "@/hooks/useImportPreview";
 import { useAsyncImport } from "@/hooks/useAsyncImport";
 import { detectCSVDelimiter } from "@/lib/csvDelimiterDetector";
+import { extractErrorMessage } from "@/lib/extractErrorMessage";
 
 interface FileUploadSectionProps {
   projectData: ProjectData;
@@ -606,7 +607,11 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
       });
 
       if (error) throw error;
-      if (!data.success) throw new Error(data.message || "Failed to parse file");
+      if (!data?.success) {
+        const backendMessage =
+          data?.error_friendly || data?.message || t("dataIngestion.file.errors.processingFailed");
+        throw new Error(backendMessage);
+      }
 
       const columnInfos: ColumnInfo[] = data.columns.map((col: any) => ({
         name: col.name,
@@ -695,11 +700,13 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
       );
 
       onDataReady();
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Processing error:", error);
-      setErrorMessage(
-        error.message || t("dataIngestion.file.errors.processingFailed")
-      );
+      const friendlyError =
+        (await extractErrorMessage(error)) ||
+        t("dataIngestion.file.errors.processingFailed");
+
+      setErrorMessage(friendlyError);
       setUploadStatus("error");
 
       trackEventWithTiming(
@@ -707,7 +714,7 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
           event_type: "job_error",
           project_id: projectData.id,
           status: "error",
-          metadata: { stage: "dataset_upload", error_message: error.message },
+          metadata: { stage: "dataset_upload", error_message: friendlyError },
           source: "app",
         },
         Date.now()
