@@ -179,3 +179,6 @@ verify_jwt = false
 
 [functions.audit-platform]
 verify_jwt = false
+
+[functions.platform-audit-az]
+verify_jwt = false
