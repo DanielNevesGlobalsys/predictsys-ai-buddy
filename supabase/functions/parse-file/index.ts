@@ -418,6 +418,7 @@ serve(async (req) => {
           rowsDetected: parsedData.totalRows, colsDetected: parsedData.columns.length,
           fileCount: 1, totalBytes: originalSize || file.size,
         });
+        await ensureDatasetStateConsistency(supabase, projectId, parsedData.totalRows, parsedData.columns.length);
         try {
           await supabase.rpc("rpc_activate_ingestion", {
             p_project_id: projectId, p_source_type: "upload", p_config_hash: configHash,
@@ -594,4 +595,43 @@ function classifyIngestionError(error: unknown): string {
   if (msg.includes("too large") || msg.includes("excede")) return "FILE_TOO_LARGE";
   if (msg.includes("parse") || msg.includes("csv") || msg.includes("excel")) return "UPLOAD_PARSE_ERROR";
   return "UNKNOWN";
+}
+
+async function ensureDatasetStateConsistency(
+  supabase: any,
+  projectId: string,
+  rowCount: number,
+  colCount: number
+) {
+  try {
+    const { data: existing } = await supabase
+      .from("project_dataset_state")
+      .select("project_id")
+      .eq("project_id", projectId)
+      .maybeSingle();
+
+    const payload = {
+      project_id: projectId,
+      row_count: rowCount || 0,
+      col_count: colCount || 0,
+      eda_ready: rowCount > 0 && colCount > 0,
+      model_ready: false,
+      updated_at: new Date().toISOString(),
+    };
+
+    if (existing) {
+      await supabase
+        .from("project_dataset_state")
+        .update(payload)
+        .eq("project_id", projectId);
+    } else {
+      await supabase
+        .from("project_dataset_state")
+        .insert(payload);
+    }
+
+    console.log("[parse-file] Dataset state synchronized successfully");
+  } catch (err) {
+    console.error("[parse-file] Failed to sync dataset state:", err);
+  }
 }
