@@ -618,7 +618,7 @@ function runTrainingGate(
     }
   }
 
-  // ========== SPLIT GATE ==========
+  // ========== SPLIT PLAN (read from SSOT — no duplicate validation) ==========
 
   let splitPlan = {
     strategy: splitStrategy,
@@ -627,21 +627,8 @@ function runTrainingGate(
     val_frac: 0.15,
     test_frac: 0.15,
   };
-
-  if (anchorTimeCol) {
-    if (splitStrategy !== "temporal") {
-      splitPlan.strategy = "temporal";
-      sanityWarnings.push("Split corrigido para temporal (anchor_time_col presente).");
-    }
-  } else {
-    if (splitStrategy === "temporal") {
-      // Temporal split requested but no time column
-      if (can_train) {
-        sanityWarnings.push("Split temporal solicitado mas sem coluna de tempo. Usando stratified.");
-        splitPlan.strategy = problemType === "regression" ? "random" : "stratified";
-      }
-    }
-  }
+  // Split validation is handled exclusively by preview-split-policy.
+  // Here we just use whatever strategy was persisted in the split policy.
 
   // ========== SANITY GATE ==========
 
