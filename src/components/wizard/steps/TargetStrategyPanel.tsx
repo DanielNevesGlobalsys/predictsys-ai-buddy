@@ -245,13 +245,17 @@ function RecCard({ rec, isTop, isActive, onSelect }: {
       )}
       <div className="flex items-start justify-between gap-2 mb-1.5">
         <p className="text-xs font-semibold leading-tight">{title}</p>
-        <Badge variant="outline" className={`text-[10px] shrink-0 ${
-          rec.confidence >= 0.7 ? "border-accent/50 text-accent" :
-          rec.confidence >= 0.5 ? "border-primary/50 text-primary" :
-          "border-muted-foreground/50 text-muted-foreground"
-        }`}>
-          {(rec.confidence * 100).toFixed(0)}%
-        </Badge>
+        {rec.confidence != null ? (
+          <Badge variant="outline" className={`text-[10px] shrink-0 ${
+            rec.confidence >= 0.7 ? "border-accent/50 text-accent" :
+            rec.confidence >= 0.5 ? "border-primary/50 text-primary" :
+            "border-muted-foreground/50 text-muted-foreground"
+          }`}>
+            {(rec.confidence * 100).toFixed(0)}%
+          </Badge>
+        ) : (
+          <Badge variant="outline" className="text-[10px] shrink-0 text-muted-foreground">—</Badge>
+        )}
       </div>
       {summary ? (
         <p className="text-[10px] text-muted-foreground mb-2 leading-relaxed">{summary}</p>
