@@ -23,6 +23,7 @@ import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
+import TrainabilityDiagnosticCard from "./TrainabilityDiagnosticCard";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { useDatasetState } from "@/hooks/useDatasetState";
 
@@ -56,9 +57,14 @@ interface PreflightReport {
 interface TrainingErrorDetails {
   error: string;
   preflight_report?: PreflightReport;
-  details?: string;
+  details?: string | Record<string, unknown>;
   action?: string;
   blocked_reason_code?: string;
+  error_code?: string;
+  reason_code?: string;
+  fix_suggestions?: { label: string; action: string; hint?: Record<string, unknown> }[];
+  success?: boolean;
+  warnings?: string[];
 }
 
 interface TrainDiagnostics {
@@ -123,6 +129,7 @@ const StepTraining = ({
   const [detectedProblemType, setDetectedProblemType] = useState<string | null>(null);
   const [showTypeWarning, setShowTypeWarning] = useState(false);
   const [qualityResult, setQualityResult] = useState<TrainingQualityResult | null>(null);
+  const [trainabilityError, setTrainabilityError] = useState<TrainingErrorDetails | null>(null);
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
 
@@ -375,6 +382,7 @@ const StepTraining = ({
     setError(null);
     setPreflightReport(null);
     setErrorAction(null);
+    setTrainabilityError(null);
     setModels([]);
 
     try {
@@ -405,12 +413,19 @@ const StepTraining = ({
         throw fnError;
       }
 
-      if ((data as any)?.error) {
-        if ((data as any)?.preflight_report) {
-          setPreflightReport((data as any).preflight_report);
-          setErrorAction((data as any).action || null);
+      if ((data as any)?.success === false || (data as any)?.error) {
+        const d = data as any;
+        // Handle TARGET_NOT_TRAINABLE specifically
+        if (d.error_code === "TARGET_NOT_TRAINABLE") {
+          setTrainabilityError(d);
+          setError(d.error || "Target não treinável");
+          throw new Error(d.error || "Target não treinável");
         }
-        throw new Error(String((data as any).error));
+        if (d.preflight_report) {
+          setPreflightReport(d.preflight_report);
+          setErrorAction(d.action || null);
+        }
+        throw new Error(String(d.error));
       }
 
       // Capture quality result from backend
@@ -721,6 +736,24 @@ const StepTraining = ({
 
           {error && !isTraining && (
             <div className="space-y-4">
+              {/* Trainability Diagnostic Card */}
+              {trainabilityError && trainabilityError.error_code === "TARGET_NOT_TRAINABLE" && (
+                <TrainabilityDiagnosticCard
+                  reasonCode={trainabilityError.reason_code || "UNKNOWN"}
+                  details={trainabilityError.details as any || { n_rows: 0, n_non_null: 0, n_unique: 0, positive_rate: 0, top_class_pct: 0, minor_class_count: 0, conflict_rate: 0, coverage: 0 }}
+                  fixSuggestions={trainabilityError.fix_suggestions || []}
+                  warnings={trainabilityError.warnings as string[] || []}
+                  humanMessage={trainabilityError.error || error}
+                  onGoToStep={(step) => {
+                    // Navigate back enough steps
+                    onBack();
+                  }}
+                  onBack={onBack}
+                />
+              )}
+
+              {!trainabilityError && (
+              <>
               <div className="w-20 h-20 bg-destructive/10 rounded-2xl flex items-center justify-center mx-auto">
                 <AlertCircle className="w-10 h-10 text-destructive" />
               </div>
@@ -807,6 +840,8 @@ const StepTraining = ({
                 <Play className="w-5 h-5 mr-2" />
                 {t("stepTraining.tryAgain")}
               </Button>
+              </>
+              )}
             </div>
           )}
 

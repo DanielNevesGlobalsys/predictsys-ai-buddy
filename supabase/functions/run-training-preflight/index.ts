@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { evaluateTargetTrainability, trainabilityHumanMessage } from "../_shared/evaluate-target-trainability.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -686,6 +687,129 @@ serve(async (req: Request) => {
       }
     }
 
+    // ===== 4.9c TARGET_TRAINABLE GATE =====
+    {
+      // Attempt lightweight trainability evaluation using SSOT metadata
+      // (We don't read the full dataset here — use cached label_build_result + target_quality_report)
+      const targetSource = (projectSettings?.target_source as string) || "manual";
+      const targetCol = (selection as any)?.target_column || null;
+      const totalRows = (datasetState as any)?.row_count || 0;
+
+      // Build synthetic target_values from available metadata
+      let syntheticValues: (string | number | null)[] = [];
+      let canEvaluate = false;
+
+      // Source 1: label_build_result has class distribution
+      if (targetSource === "label_builder" && projectSettings?.label_build_result) {
+        const lbr = projectSettings.label_build_result as Record<string, any>;
+        const pr = lbr.positive_rate ?? null;
+        const eligibleEntities = lbr.eligible_entities ?? totalRows;
+        if (pr !== null && eligibleEntities > 0) {
+          const nPositive = Math.round(eligibleEntities * pr);
+          const nNegative = eligibleEntities - nPositive;
+          syntheticValues = [
+            ...Array(nPositive).fill(1),
+            ...Array(nNegative).fill(0),
+          ];
+          canEvaluate = true;
+        }
+      }
+
+      // Source 2: target_quality_report from TDE
+      if (!canEvaluate && projectSettings?.target_quality_report) {
+        const tqr = projectSettings.target_quality_report as Record<string, any>;
+        const nClasses = tqr.n_classes || 0;
+        const positiveRate = tqr.positive_rate ?? null;
+        if (nClasses > 0 && positiveRate !== null && totalRows > 0) {
+          const nPositive = Math.round(totalRows * positiveRate);
+          const nNegative = totalRows - nPositive;
+          syntheticValues = [
+            ...Array(nPositive).fill(1),
+            ...Array(nNegative).fill(0),
+          ];
+          canEvaluate = true;
+        }
+      }
+
+      // Source 3: weak_label_result
+      if (!canEvaluate && targetSource === "weak_supervision" && projectSettings?.weak_label_result) {
+        const wlr = projectSettings.weak_label_result as Record<string, any>;
+        const prevalence = wlr.prevalence ?? 0;
+        const coveredRows = Math.round(totalRows * (wlr.coverage ?? 0));
+        if (coveredRows > 0) {
+          const nPositive = Math.round(coveredRows * prevalence);
+          const nNegative = coveredRows - nPositive;
+          syntheticValues = [
+            ...Array(nPositive).fill(1),
+            ...Array(nNegative).fill(0),
+            ...Array(totalRows - coveredRows).fill(null),
+          ];
+          canEvaluate = true;
+        }
+      }
+
+      // Source 4: human_label_result
+      if (!canEvaluate && targetSource === "human_labeling" && projectSettings?.human_label_result) {
+        const hlr = projectSettings.human_label_result as Record<string, any>;
+        const nLabeled = hlr.n_labeled || 0;
+        const nPositive = hlr.n_positive || 0;
+        if (nLabeled > 0) {
+          syntheticValues = [
+            ...Array(nPositive).fill(1),
+            ...Array(nLabeled - nPositive).fill(0),
+          ];
+          canEvaluate = true;
+        }
+      }
+
+      if (canEvaluate && targetCol) {
+        const problemType = (selection as any)?.problem_type || "classification";
+        const trainabilityResult = evaluateTargetTrainability({
+          target_values: syntheticValues,
+          target_column: targetCol,
+          problem_type: problemType,
+          target_source: targetSource,
+          weak_label_result: projectSettings?.weak_label_result as Record<string, unknown> | null,
+          human_label_result: projectSettings?.human_label_result as Record<string, unknown> | null,
+        });
+
+        const humanMsg = trainabilityHumanMessage(trainabilityResult);
+
+        if (!trainabilityResult.trainable) {
+          gates.push({
+            gate: "target_trainable",
+            status: "BLOCK",
+            message: humanMsg,
+            details: {
+              reason_code: trainabilityResult.reason_code,
+              ...trainabilityResult.details,
+              fix_suggestions: trainabilityResult.fix_suggestions,
+            },
+          });
+          canTrain = false;
+        } else if (trainabilityResult.warnings.length > 0) {
+          gates.push({
+            gate: "target_trainable",
+            status: "WARN",
+            message: trainabilityResult.warnings[0],
+            details: { ...trainabilityResult.details },
+          });
+        } else {
+          gates.push({
+            gate: "target_trainable",
+            status: "PASS",
+            message: `Target treinável (${trainabilityResult.details.n_non_null} valores, ${trainabilityResult.details.n_unique} classes).`,
+            details: { ...trainabilityResult.details },
+          });
+        }
+
+        // Persist to SSOT
+        await supabase.from("project_settings")
+          .update({ target_trainability_report: trainabilityResult })
+          .eq("project_id", project_id);
+      }
+    }
+
     // ===== 4.9b AUDIT CONTRACT GATE =====
     const { data: latestAudit } = await supabase
       .from("project_contract_audits")
@@ -734,6 +858,7 @@ serve(async (req: Request) => {
       class_balance: "Configurar balanceamento de classes",
       audit_contract: "Rodar Auditoria do Contrato",
       target_quality: "Avaliar e corrigir qualidade do target na Etapa 3",
+      target_trainable: "Voltar para Variável Alvo e Ajustar (Etapa 3)",
       weak_label_health: "Ajustar regras do Modo Assistido na Etapa 3",
       human_label_health: "Rotular mais entidades na Etapa 3",
       target_lifecycle: "Verificar Ciclo de Vida do Target na Etapa 3",

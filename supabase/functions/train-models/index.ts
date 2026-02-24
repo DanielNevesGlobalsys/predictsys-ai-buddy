@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
+import { evaluateTargetTrainability, trainabilityHumanMessage } from "../_shared/evaluate-target-trainability.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2723,7 +2724,88 @@ serve(async (req) => {
     // ==================== PREFLIGHT VALIDATION ====================
     console.log(`\n=== Preflight Validation ===`);
 
-    // A1: Validate target
+    // ── A0: Canonical Target Trainability Check ──
+    {
+      // Collect raw target values for trainability evaluation
+      const rawTargetValues: (string | number | null)[] = [];
+      // Use y (already parsed) but also reconstruct raw values for analysis
+      if (y.length > 0) {
+        // For trainability, we use the numeric y mapped back to labels
+        if (isTargetCategorical && labelMap.size > 0) {
+          const reverseLabelMap = new Map<number, string>();
+          for (const [k, v] of labelMap.entries()) reverseLabelMap.set(v, k);
+          for (const val of y) {
+            rawTargetValues.push(reverseLabelMap.get(val) ?? String(val));
+          }
+        } else {
+          for (const val of y) rawTargetValues.push(val);
+        }
+      }
+
+      // Determine target_source from settings
+      const { data: trainSettingsForSource } = await supabase
+        .from("project_settings")
+        .select("target_source, weak_label_result, human_label_result")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      const targetSourceVal = (trainSettingsForSource as any)?.target_source || "manual";
+
+      const trainabilityResult = evaluateTargetTrainability({
+        target_values: rawTargetValues,
+        target_column,
+        problem_type,
+        target_source: targetSourceVal,
+        weak_label_result: (trainSettingsForSource as any)?.weak_label_result || null,
+        human_label_result: (trainSettingsForSource as any)?.human_label_result || null,
+      });
+
+      console.log(`[Trainability] trainable=${trainabilityResult.trainable}, reason=${trainabilityResult.reason_code}`);
+
+      if (!trainabilityResult.trainable) {
+        const humanMsg = trainabilityHumanMessage(trainabilityResult);
+        console.error(`[Trainability] ⛔ ${humanMsg}`);
+
+        // Persist to SSOT
+        await supabase.from("project_settings")
+          .update({ target_trainability_report: trainabilityResult })
+          .eq("project_id", project_id);
+
+        // Update pipeline state
+        await supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "training",
+          p_new_state: "failed",
+        });
+
+        await supabase.from("projects").update({ status: "target_invalid" }).eq("id", project_id);
+
+        return new Response(JSON.stringify({
+          success: false,
+          error: humanMsg,
+          error_code: "TARGET_NOT_TRAINABLE",
+          reason_code: trainabilityResult.reason_code,
+          details: trainabilityResult.details,
+          fix_suggestions: trainabilityResult.fix_suggestions,
+          warnings: trainabilityResult.warnings,
+          action: "review_target",
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      } else {
+        // Persist passing result too
+        await supabase.from("project_settings")
+          .update({ target_trainability_report: trainabilityResult })
+          .eq("project_id", project_id);
+
+        if (trainabilityResult.warnings.length > 0) {
+          trainingWarningsGlobal.push(...trainabilityResult.warnings);
+        }
+      }
+    }
+
+    // A1: Validate target (legacy check — kept for backward compat)
     const targetValidation = validateTarget(y, target_column, problem_type, isTargetCategorical, labelMap);
     
     if (targetValidation.issues.length > 0) {
@@ -2734,7 +2816,7 @@ serve(async (req) => {
       targetValidation.suggestions.forEach(s => console.log(`  💡 ${s}`));
     }
 
-    // Block training if target is critically invalid
+    // Block training if target is critically invalid (legacy fallback)
     const criticalTargetIssues = targetValidation.issues.filter(i => 
       i.includes("variância zero") || 
       i.includes("cardinalidade 1") ||
@@ -2747,7 +2829,9 @@ serve(async (req) => {
       await supabase.from("projects").update({ status: "target_invalid" }).eq("id", project_id);
       
       return new Response(JSON.stringify({
+        success: false,
         error: "Target inválido para treinamento",
+        error_code: "TARGET_NOT_TRAINABLE",
         preflight_report: {
           target_valid: false,
           target_issues: targetValidation.issues,
@@ -2759,7 +2843,7 @@ serve(async (req) => {
         details: criticalTargetIssues.join("; "),
         action: "review_target"
       }), {
-        status: 400,
+        status: 200,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
