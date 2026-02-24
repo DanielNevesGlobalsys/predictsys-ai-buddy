@@ -60,18 +60,45 @@ serve(async (req: Request) => {
       });
     }
 
-    // Idempotency check: if already set to same template, skip
-    const { data: existingSettings } = await supabase
+    // ═══ GUARD: NO_ACTIVE_DATASET — refuse to persist target if no dataset ═══
+    const { data: settingsCheck } = await supabase
       .from("project_settings")
-      .select("target_source, selected_template_id, target_column")
+      .select("ingestion_state, ingestion_dataset_id, ingestion_manifest_id, feature_columns, excluded_columns, active_target_mode, target_source, selected_template_id, target_column")
       .eq("project_id", project_id)
       .maybeSingle();
 
+    const ingestionState = (settingsCheck as any)?.ingestion_state;
+    const hasDataset = (settingsCheck as any)?.ingestion_dataset_id || (settingsCheck as any)?.ingestion_manifest_id;
+
+    if (ingestionState !== "done" && !hasDataset) {
+      // Fallback: check project_columns existence
+      const { count: colCount } = await supabase
+        .from("project_columns")
+        .select("id", { count: "exact", head: true })
+        .eq("project_id", project_id);
+
+      if (!colCount || colCount === 0) {
+        console.log(`[activate-target-template] BLOCKED: NO_ACTIVE_DATASET (ingestion_state=${ingestionState})`);
+        return new Response(JSON.stringify({
+          success: false,
+          error_code: "NO_ACTIVE_DATASET",
+          error: "Nenhum dataset ativo encontrado. Importe dados antes de ativar o target.",
+          ctas: [
+            { label: "Voltar e importar dados", action: "goto_step", step: 2 },
+          ],
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Idempotency check: if already set to same template, skip
     if (
-      existingSettings &&
-      existingSettings.target_source === "label_builder" &&
-      existingSettings.selected_template_id === template_id &&
-      existingSettings.target_column === "label"
+      settingsCheck &&
+      (settingsCheck as any).target_source === "label_builder" &&
+      (settingsCheck as any).selected_template_id === template_id &&
+      (settingsCheck as any).target_column === "label"
     ) {
       console.log(`[activate-target-template] Idempotent: already set for ${template_id}`);
 
@@ -144,7 +171,16 @@ serve(async (req: Request) => {
 
     gates.push({ gate: "BUILDER_READY", status: "PASS", message: "Label builder pronto." });
 
-    // Persist target_column="label" via upsert on project_settings
+    // ═══ PRESERVE EXISTING FEATURES ═══
+    // Read current feature_columns so we don't wipe them
+    const existingFeatures = Array.isArray((settingsCheck as any)?.feature_columns)
+      ? ((settingsCheck as any).feature_columns as string[])
+      : [];
+    const existingExcluded = Array.isArray((settingsCheck as any)?.excluded_columns)
+      ? ((settingsCheck as any).excluded_columns as string[])
+      : [];
+
+    // ═══ CANONICAL SSOT COMMIT: persist all target fields atomically ═══
     const { error: settingsErr } = await supabase
       .from("project_settings")
       .upsert(
@@ -154,6 +190,9 @@ serve(async (req: Request) => {
           target_column: "label",
           problem_type: params?.problem_type || "classification",
           target_source: "label_builder",
+          active_target_mode: "template",
+          active_target_ref: { builder_id: builder.id, template_id },
+          active_target_column: "label",
           selected_template_id: template_id,
           selected_template_params: params || {},
           updated_at: new Date().toISOString(),
@@ -173,7 +212,7 @@ serve(async (req: Request) => {
       });
     }
 
-    // Also call upsert-model-selection RPC to keep model_selection in sync
+    // Also call upsert-model-selection RPC — PRESERVE existing features
     const { data: rpcData, error: rpcErr } = await supabase.rpc(
       "rpc_upsert_model_selection",
       {
@@ -182,8 +221,8 @@ serve(async (req: Request) => {
         p_user_id: user.id,
         p_target_column: "label",
         p_problem_type: params?.problem_type || "classification",
-        p_selected_features: [],
-        p_excluded_features: [],
+        p_selected_features: existingFeatures,
+        p_excluded_features: existingExcluded,
       },
     );
 
@@ -197,15 +236,17 @@ serve(async (req: Request) => {
 
     gates.push({ gate: "SETTINGS_PERSISTED", status: "PASS", message: "Target persistido como 'label'." });
 
-    console.log(`[activate-target-template] Activated: project=${project_id}, template=${template_id}, v=${selectionVersion}`);
+    console.log(`[activate-target-template] Activated: project=${project_id}, template=${template_id}, v=${selectionVersion}, features_preserved=${existingFeatures.length}`);
 
     return new Response(JSON.stringify({
       success: true,
       target_column: "label",
       target_source: "label_builder",
+      active_target_mode: "template",
       builder_status: "ready",
       selection: { template_id, params: params || {} },
       selection_version: selectionVersion,
+      features_preserved: existingFeatures.length,
       gates,
     }), {
       status: 200,
