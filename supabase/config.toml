@@ -176,3 +176,6 @@ verify_jwt = false
 
 [functions.tde-check-target-lifecycle]
 verify_jwt = false
+
+[functions.audit-platform]
+verify_jwt = false

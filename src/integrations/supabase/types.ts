@@ -3123,6 +3123,7 @@ export type Database = {
       }
       project_settings: {
         Row: {
+          entity_key: string | null
           excluded_columns: Json | null
           feature_columns: Json | null
           human_label_config: Json | null
@@ -3131,6 +3132,8 @@ export type Database = {
           industry_source: string
           label_build_result: Json | null
           org_id: string | null
+          prerequisites_resolved_at: string | null
+          prerequisites_source: string | null
           problem_type: string | null
           project_id: string
           segment: string | null
@@ -3143,11 +3146,14 @@ export type Database = {
           target_quality_report: Json | null
           target_source: string
           target_suggestion_meta: Json | null
+          time_anchor_column: string | null
           updated_at: string
+          value_column: string | null
           weak_label_config: Json | null
           weak_label_result: Json | null
         }
         Insert: {
+          entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
           human_label_config?: Json | null
@@ -3156,6 +3162,8 @@ export type Database = {
           industry_source?: string
           label_build_result?: Json | null
           org_id?: string | null
+          prerequisites_resolved_at?: string | null
+          prerequisites_source?: string | null
           problem_type?: string | null
           project_id: string
           segment?: string | null
@@ -3168,11 +3176,14 @@ export type Database = {
           target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null
+          time_anchor_column?: string | null
           updated_at?: string
+          value_column?: string | null
           weak_label_config?: Json | null
           weak_label_result?: Json | null
         }
         Update: {
+          entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
           human_label_config?: Json | null
@@ -3181,6 +3192,8 @@ export type Database = {
           industry_source?: string
           label_build_result?: Json | null
           org_id?: string | null
+          prerequisites_resolved_at?: string | null
+          prerequisites_source?: string | null
           problem_type?: string | null
           project_id?: string
           segment?: string | null
@@ -3193,7 +3206,9 @@ export type Database = {
           target_quality_report?: Json | null
           target_source?: string
           target_suggestion_meta?: Json | null
+          time_anchor_column?: string | null
           updated_at?: string
+          value_column?: string | null
           weak_label_config?: Json | null
           weak_label_result?: Json | null
         }
