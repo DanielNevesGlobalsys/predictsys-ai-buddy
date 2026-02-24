@@ -157,6 +157,17 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // ── SSOT: Mark scoring as running on first pass ──
+    if (isFirstPass) {
+      try {
+        await supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "scoring",
+          p_new_state: "running",
+        });
+      } catch (_) { /* best-effort */ }
+    }
+
     // ===== LOAD SSOT + SELECTION + MODEL IN PARALLEL =====
     const [projectRes, dsStateRes, selectionRes] = await Promise.all([
       supabase.from("projects").select("*").eq("id", project_id).single(),
@@ -1187,6 +1198,15 @@ serve(async (req) => {
           last_error_message: error instanceof Error ? error.message : "Erro desconhecido",
           updated_at: new Date().toISOString(),
         }, { onConflict: "project_id" });
+
+        // ── SSOT: Mark scoring as failed ──
+        try {
+          await sb.rpc("rpc_update_pipeline_state", {
+            p_project_id: body.project_id,
+            p_stage: "scoring",
+            p_new_state: "failed",
+          });
+        } catch (_) { /* best-effort */ }
       }
     } catch (_) {}
 

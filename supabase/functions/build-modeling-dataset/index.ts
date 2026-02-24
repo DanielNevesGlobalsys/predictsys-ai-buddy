@@ -932,6 +932,17 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Starting for project ${project_id}`);
 
+    // ── SSOT: Mark builder as building ──
+    try {
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "builder",
+        p_new_state: "building",
+      });
+    } catch (stateErr) {
+      console.warn("[build-modeling-dataset] Failed to set builder_state=building (non-blocking):", stateErr);
+    }
+
     // ── FRESH READ: Always read target from project_settings (SSOT for target) ──
     // The builder NEVER accepts target from the client request body. It reads from the DB.
     const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes, selectionRes] = await Promise.all([
@@ -1628,6 +1639,20 @@ serve(async (req: Request) => {
       .eq("project_id", project_id);
 
     console.log(`[build-modeling-dataset] Synced project_dataset_state: model_ready=${modelingDatasetReady}, builder_dataset_id=${saved.id}`);
+
+    // ── SSOT State Machine: Update builder_state + dataset_version ──
+    try {
+      const builderFinalState = modelingDatasetReady ? "ready" : (status === "blocked" ? "blocked" : "draft");
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "builder",
+        p_new_state: builderFinalState,
+        p_version_increment: modelingDatasetReady,
+      });
+      console.log(`[build-modeling-dataset] SSOT: builder_state=${builderFinalState}, version_incremented=${modelingDatasetReady}`);
+    } catch (stateErr) {
+      console.warn("[build-modeling-dataset] Failed to update pipeline state (non-blocking):", stateErr);
+    }
 
     // ── POST-BUILD: Persist label_build_result to project_settings SSOT ──
     if (labelBuildResult) {

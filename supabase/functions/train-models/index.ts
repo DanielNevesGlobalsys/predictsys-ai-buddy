@@ -1380,6 +1380,15 @@ serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+    // ── SSOT: Mark training as running ──
+    try {
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "training",
+        p_new_state: "running",
+      });
+    } catch (_) { /* best-effort */ }
+
     // Helper to return structured block response
     const blockResponse = (code: string, message: string, cta: { label: string; go_to_step?: number } | null, details?: Record<string, unknown>) => {
       console.error(`[Gating] BLOCKED: ${code} — ${message}`);
@@ -3354,6 +3363,18 @@ serve(async (req) => {
     console.log(`[AutoML] selection_version=${currentSelectionVersion}, dataset_id=${builderDatasetId}, seed=${trainingSeed}`);
     console.log(`========================================\n`);
 
+    // ── SSOT State Machine: Mark training as done + increment version ──
+    try {
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "training",
+        p_new_state: "done",
+        p_version_increment: true,
+      });
+    } catch (stateErr) {
+      console.warn("[train-models] Failed to update pipeline state (non-blocking):", stateErr);
+    }
+
     // Build CTAs for UI
     const ctas: { label: string; go_to_step?: number }[] = [];
     if (!dashboardAllowed) {
@@ -3470,6 +3491,20 @@ serve(async (req) => {
 
   } catch (error) {
     console.error("Erro no treinamento:", error);
+
+    // ── SSOT: Mark training as failed (best-effort) ──
+    try {
+      const body = await req.clone().json().catch(() => ({}));
+      if (body.project_id) {
+        const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+        await sb.rpc("rpc_update_pipeline_state", {
+          p_project_id: body.project_id,
+          p_stage: "training",
+          p_new_state: "failed",
+        });
+      }
+    } catch (_) { /* best-effort */ }
+
     return new Response(JSON.stringify({ 
       error: error instanceof Error ? error.message : "Erro desconhecido" 
     }), {
