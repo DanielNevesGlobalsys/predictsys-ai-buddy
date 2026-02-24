@@ -917,6 +917,40 @@ serve(async (req: Request) => {
       });
     }
 
+    // ── Ingestion gate ──────────────────────────────────
+    const { data: settingsGate } = await supabase
+      .from("project_settings")
+      .select("ingestion_state, ingestion_manifest_id, ingestion_dataset_id")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    if (settingsGate && settingsGate.ingestion_state !== "done") {
+      console.log(`[build-modeling-dataset] Blocked: ingestion_state=${settingsGate.ingestion_state}`);
+      return new Response(JSON.stringify({
+        success: false,
+        error_code: "INGESTION_NOT_READY",
+        error_friendly: "A ingestão de dados ainda não foi concluída. Finalize a importação antes de montar o dataset de modelagem.",
+        ingestion_state: settingsGate.ingestion_state,
+        ctas: [
+          { label: "Voltar para Upload", action: "goto_step", step: 2 },
+          { label: "Atualizar status", action: "refresh" },
+        ],
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    if (settingsGate && !settingsGate.ingestion_manifest_id && !settingsGate.ingestion_dataset_id) {
+      console.log(`[build-modeling-dataset] Blocked: manifest/dataset missing`);
+      return new Response(JSON.stringify({
+        success: false,
+        error_code: "MANIFEST_MISSING",
+        error_friendly: "O manifest de ingestão está ausente. Reimporte os dados para gerar o manifest.",
+        ctas: [
+          { label: "Voltar para Upload", action: "goto_step", step: 2 },
+          { label: "Atualizar status", action: "refresh" },
+        ],
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
     console.log(`[build-modeling-dataset] Starting for project ${project_id}`);
 
     // ── SSOT: Mark builder as building ──
