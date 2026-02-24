@@ -590,10 +590,16 @@ const FileUploadSection = ({ projectData, saveProject, onDataReady }: FileUpload
 
       setUploadStatus("processing");
 
+      // Send only a 2 MB slice to parse-file to avoid memory limits
+      const SLICE_SIZE = 2 * 1024 * 1024; // 2 MB
+      const fileSlice = file.slice(0, SLICE_SIZE);
+      const sliceBlob = new File([fileSlice], file.name, { type: file.type });
+
       const formData = new FormData();
-      formData.append("file", file);
+      formData.append("file", sliceBlob);
       formData.append("project_id", projectData.id);
       formData.append("max_sample_rows", String(SAMPLE_SIZE));
+      formData.append("original_size", String(file.size));
 
       const { data, error } = await supabase.functions.invoke("parse-file", {
         body: formData,
