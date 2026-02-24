@@ -401,12 +401,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             {/* EDA Display */}
             {edaBlocked ? (
               <div className="text-center py-12 space-y-3">
-                <XCircle className="w-12 h-12 text-destructive/50 mx-auto" />
+                <AlertTriangle className="w-12 h-12 text-amber-500/50 mx-auto" />
                 <p className="text-muted-foreground font-medium">
-                  Não é possível executar a análise exploratória.
+                  Análise exploratória não disponível (modo simples ativo)
                 </p>
                 <p className="text-sm text-muted-foreground max-w-md mx-auto">
-                  {blockedReasonEda || "O dataset não contém dados válidos (0 linhas ou 0 colunas). Volte à etapa anterior e corrija a importação."}
+                  {blockedReasonEda || "O EDA completo não pôde ser gerado, mas você pode prosseguir para configurar o target e treinar um modelo baseline com a amostra disponível."}
                 </p>
               </div>
             ) : projectData.id ? (
@@ -436,10 +436,10 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </Button>
           <Button
             onClick={() => onNext({ status: "eda_complete" })}
-            disabled={loading || edaBlocked || !ingestionReady || manifestMissing}
+            disabled={loading || !ingestionReady || manifestMissing}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {!ingestionReady ? "Aguardando ingestão" : manifestMissing ? "Manifest ausente" : edaBlocked ? "Corrigir importação" : t("common.next")}
+            {!ingestionReady ? "Aguardando ingestão" : manifestMissing ? "Manifest ausente" : edaBlocked ? "Prosseguir sem EDA" : t("common.next")}
           </Button>
         </div>
       </div>

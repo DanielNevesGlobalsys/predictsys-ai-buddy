@@ -436,6 +436,9 @@ serve(async (req) => {
 
     console.log(`[parse-file] File processing complete for project ${projectId}`);
 
+    // Persist sample for simple-mode training (max 2000 rows, best-effort)
+    await persistDatasetSample(supabase, projectId, parsedData.rows, parsedData.sampleRows);
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -633,5 +636,46 @@ async function ensureDatasetStateConsistency(
     console.log("[parse-file] Dataset state synchronized successfully");
   } catch (err) {
     console.error("[parse-file] Failed to sync dataset state:", err);
+  }
+}
+
+async function persistDatasetSample(
+  supabase: any,
+  projectId: string,
+  rows: any[],
+  sampleRows: number
+) {
+  try {
+    const maxRows = 2000;
+    const sample = Array.isArray(rows) ? rows.slice(0, maxRows) : [];
+    const count = Math.min(sampleRows || sample.length, maxRows);
+
+    const { data: existing } = await supabase
+      .from("project_dataset_sample")
+      .select("project_id")
+      .eq("project_id", projectId)
+      .maybeSingle();
+
+    const payload = {
+      project_id: projectId,
+      sample_json: sample,
+      sample_rows: count,
+      created_at: new Date().toISOString(),
+    };
+
+    if (existing) {
+      await supabase
+        .from("project_dataset_sample")
+        .update({ sample_json: sample, sample_rows: count })
+        .eq("project_id", projectId);
+    } else {
+      await supabase
+        .from("project_dataset_sample")
+        .insert(payload);
+    }
+
+    console.log(`[parse-file] Dataset sample persisted: ${count} rows`);
+  } catch (err) {
+    console.error("[parse-file] Failed to persist dataset sample:", err);
   }
 }

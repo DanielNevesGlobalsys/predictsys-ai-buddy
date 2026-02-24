@@ -1535,6 +1535,35 @@ export type Database = {
           },
         ]
       }
+      project_dataset_sample: {
+        Row: {
+          created_at: string
+          project_id: string
+          sample_json: Json
+          sample_rows: number
+        }
+        Insert: {
+          created_at?: string
+          project_id: string
+          sample_json?: Json
+          sample_rows?: number
+        }
+        Update: {
+          created_at?: string
+          project_id?: string
+          sample_json?: Json
+          sample_rows?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_dataset_sample_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: true
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_dataset_state: {
         Row: {
           active_dataset_ref: string | null
