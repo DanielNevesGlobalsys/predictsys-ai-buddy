@@ -41,9 +41,11 @@ const IndustryBadge = ({ industry }: IndustryBadgeProps) => {
           <Badge className="bg-accent/20 text-accent border-accent/30 text-xs">
             {industry.display_name}
           </Badge>
-          <span className="text-xs text-muted-foreground">
-            {(industry.confidence * 100).toFixed(0)}%
-          </span>
+          {industry.confidence != null && (
+            <span className="text-xs text-muted-foreground">
+              {(industry.confidence * 100).toFixed(0)}%
+            </span>
+          )}
         </div>
         {industry.evidence.length > 0 && (
           <p className="text-xs text-muted-foreground mt-1 truncate">

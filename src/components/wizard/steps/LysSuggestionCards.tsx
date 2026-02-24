@@ -24,7 +24,10 @@ interface LysSuggestionCardsProps {
 const LysSuggestionCards = ({ suggestions, onApply, appliedId }: LysSuggestionCardsProps) => {
   const { t } = useTranslation();
 
-  const getConfidenceBadge = (confidence: number) => {
+  const getConfidenceBadge = (confidence: number | null | undefined) => {
+    if (confidence == null) {
+      return <Badge variant="outline" className="text-muted-foreground">—</Badge>;
+    }
     if (confidence >= 0.8) {
       return <Badge className="bg-accent/20 text-accent border-accent/30">{t("lysSuggestions.highConfidence", "Alta confiança")}</Badge>;
     }
