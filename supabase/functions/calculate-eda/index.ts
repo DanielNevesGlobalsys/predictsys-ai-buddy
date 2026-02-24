@@ -261,14 +261,67 @@ async function resolveDatasetFilePaths(
   if (project.dataset_filename) {
     const filename = project.dataset_filename;
 
-    // Detect Parquet
+    // Detect file type
     if (/\.(parquet|parq|pq)$/i.test(filename)) {
       fileType = "parquet";
-      console.log(`[calculate-eda] Detected Parquet from dataset_filename: ${filename}`);
+    }
+
+    // First try the bare filename as-is
+    const { data: directCheck } = await supabase.storage
+      .from("datasets")
+      .createSignedUrl(filename, 10);
+
+    if (directCheck?.signedUrl) {
+      console.log(`[calculate-eda] Detected ${fileType} from dataset_filename: ${filename}`);
       return { paths: [filename], delimiter, encoding, fileType };
     }
+
+    // Bare filename didn't work — search storage for the actual path
+    // Files are stored as {user_id}/{project_id}/{filename}
+    console.log(`[calculate-eda] Bare filename not found in storage, searching for actual path...`);
+    const { data: storageObjects } = await supabase
+      .rpc("admin_list_storage_objects_by_name", { p_bucket: "datasets", p_name: filename });
+
+    // If RPC doesn't exist, try listing by project owner path
+    if (!storageObjects) {
+      // Try to find the file by listing the user's project folder
+      const userId = project.user_id;
+      if (userId) {
+        const folderPath = `${userId}/${projectId}`;
+        const { data: files } = await supabase.storage
+          .from("datasets")
+          .list(folderPath, { limit: 100 });
+
+        if (files && files.length > 0) {
+          const matchingFile = files.find((f: any) => f.name === filename);
+          if (matchingFile) {
+            const fullPath = `${folderPath}/${filename}`;
+            console.log(`[calculate-eda] Found file at: ${fullPath}`);
+            return { paths: [fullPath], delimiter, encoding, fileType };
+          }
+
+          // Also check for any data files in the folder
+          const dataFiles = files
+            .filter((f: any) => f.name && !f.name.startsWith(".") && 
+              (/\.(csv|parquet|parq|pq)$/i.test(f.name)))
+            .map((f: any) => `${folderPath}/${f.name}`)
+            .sort();
+
+          if (dataFiles.length > 0) {
+            if (/\.(parquet|parq|pq)$/i.test(dataFiles[0])) fileType = "parquet";
+            console.log(`[calculate-eda] Found ${dataFiles.length} data files in user/project folder`);
+            return { paths: dataFiles, delimiter, encoding, fileType };
+          }
+        }
+      }
+    } else if (storageObjects.length > 0) {
+      const fullPath = storageObjects[0].name;
+      console.log(`[calculate-eda] Found file via RPC at: ${fullPath}`);
+      if (/\.(parquet|parq|pq)$/i.test(fullPath)) fileType = "parquet";
+      return { paths: [fullPath], delimiter, encoding, fileType };
+    }
     
-    // Same logic: check if it's a folder
+    // Check if it's a folder
     const isLikelyFolder = !filename.match(/\.[a-zA-Z0-9]{2,5}$/);
     
     if (isLikelyFolder) {
@@ -291,7 +344,7 @@ async function resolveDatasetFilePaths(
       }
     }
 
-    console.log(`[calculate-eda] Using project.dataset_filename as single file: ${filename}`);
+    console.log(`[calculate-eda] Using project.dataset_filename as single file (may fail): ${filename}`);
     return { paths: [filename], delimiter, encoding, fileType };
   }
 
