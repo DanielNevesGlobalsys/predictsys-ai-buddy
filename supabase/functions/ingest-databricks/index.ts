@@ -266,11 +266,13 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+  let projectId = "";
+
+  try {
     const { 
       project_id, 
       data_source_id, 
@@ -278,8 +280,14 @@ serve(async (req) => {
       source_mode: requestSourceMode,
       source_sql: requestSourceSQL
     } = await req.json();
+    projectId = project_id;
 
     console.log(`[ingest-databricks] Starting ingestion for project: ${project_id}, data source: ${data_source_id}`);
+
+    // ── SSOT: Start ingestion ──
+    const configHash = await hashConfigDatabricks({ data_source_id, requestTableName, requestSourceMode, requestSourceSQL });
+    const startResult = await rpcStartIngestionDatabricks(supabase, project_id, "databricks", configHash);
+    if (!startResult.canProceed && startResult.response) return startResult.response;
 
     // Create ingestion log
     const { data: logData, error: logError } = await supabase
@@ -560,11 +568,18 @@ serve(async (req) => {
       })
       .eq("id", project_id);
 
+    // ── SSOT: Complete ingestion (success) ──
+    await rpcCompleteIngestionDatabricks(supabase, project_id, true, {
+      rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1, totalBytes: fileSizeBytes,
+    });
+
     console.log(`[ingest-databricks] Ingestion complete: ${totalRows} rows, ${columnsCount} columns`);
 
     return new Response(
       JSON.stringify({ 
         success: true,
+        status: "DONE",
+        ingestion_state: "done",
         rows_read: totalRows,
         rows_sampled: sampleRows,
         columns_count: columnsCount,
@@ -581,16 +596,81 @@ serve(async (req) => {
   } catch (error: unknown) {
     console.error("[ingest-databricks] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "An error occurred during Databricks ingestion";
+    const errorCode = classifyDatabricksError(error);
+
+    // ── SSOT: Complete ingestion (failure) ──
+    if (projectId) {
+      await rpcCompleteIngestionDatabricks(supabase, projectId, false, { errorCode, errorMessage });
+    }
     
     return new Response(
       JSON.stringify({ 
-        success: false, 
-        message: errorMessage
+        success: false,
+        status: "FAILED",
+        ingestion_state: "failed",
+        error_code: errorCode,
+        error_friendly: errorMessage,
+        ctas: [
+          { label: "Tentar novamente", action: "retry_ingestion" },
+          { label: "Revalidar credenciais", action: "revalidate_credentials" },
+        ],
       }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 500 
+        status: 200 
       }
     );
   }
 });
+
+// ── SSOT helpers ──
+async function hashConfigDatabricks(config: Record<string, unknown>): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(JSON.stringify(config));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function rpcStartIngestionDatabricks(supabase: any, projectId: string, sourceType: string, configHash: string) {
+  try {
+    const { data, error } = await supabase.rpc("rpc_start_ingestion", {
+      p_project_id: projectId, p_source_type: sourceType, p_source_config_hash: configHash,
+    });
+    if (error) return { canProceed: true };
+    const r = data as Record<string, unknown>;
+    if (r.status === "ALREADY_DONE") {
+      return { canProceed: false, response: new Response(JSON.stringify({
+        success: true, status: "ALREADY_DONE", ingestion_state: "done", message: r.message,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    if (r.error === "INGESTION_ALREADY_RUNNING") {
+      return { canProceed: false, response: new Response(JSON.stringify({
+        success: false, status: "ALREADY_RUNNING", ingestion_state: "running",
+        error_code: "INGESTION_ALREADY_RUNNING",
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    return { canProceed: true };
+  } catch { return { canProceed: true }; }
+}
+
+async function rpcCompleteIngestionDatabricks(supabase: any, projectId: string, success: boolean, stats: Record<string, unknown> = {}) {
+  try {
+    await supabase.rpc("rpc_complete_ingestion", {
+      p_project_id: projectId, p_success: success,
+      p_rows_detected: stats.rowsDetected || 0, p_cols_detected: stats.colsDetected || 0,
+      p_file_count: stats.fileCount || 0, p_total_bytes: stats.totalBytes || 0,
+      p_dataset_id: stats.datasetId || null, p_manifest_id: stats.manifestId || null,
+      p_error_code: stats.errorCode || null, p_error_message: stats.errorMessage || null,
+    });
+  } catch (e) { console.warn("[ingest-databricks] rpc_complete_ingestion error:", e); }
+}
+
+function classifyDatabricksError(error: unknown): string {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (msg.includes("auth") || msg.includes("permission") || msg.includes("401") || msg.includes("403")) return "CONNECTOR_AUTH_ERROR";
+  if (msg.includes("timeout") || msg.includes("timed out")) return "CONNECTOR_TIMEOUT";
+  if (msg.includes("not found") && msg.includes("table")) return "TABLE_NOT_FOUND";
+  if (msg.includes("sql") && (msg.includes("invalid") || msg.includes("proibid"))) return "SQL_VALIDATION_ERROR";
+  if (msg.includes("not found")) return "CONNECTOR_NOT_FOUND";
+  return "UNKNOWN";
+}

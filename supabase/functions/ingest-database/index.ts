@@ -129,14 +129,22 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+  let projectId = "";
+
+  try {
     const { project_id, data_source_id, custom_query } = await req.json();
+    projectId = project_id;
 
     console.log(`[ingest-database] Starting database ingestion for project: ${project_id}, data source: ${data_source_id}`);
+
+    // ── SSOT: Start ingestion ──
+    const configHash = await hashConfig({ data_source_id, custom_query });
+    const startResult = await rpcStartIngestion(supabase, project_id, "database", configHash);
+    if (!startResult.canProceed && startResult.response) return startResult.response;
 
     // Create ingestion log
     const { data: logData, error: logError } = await supabase
@@ -244,11 +252,20 @@ serve(async (req) => {
       })
       .eq("id", project_id);
 
+    // ── SSOT: Complete ingestion (success) ──
+    await rpcCompleteIngestion(supabase, project_id, true, {
+      rowsDetected: result.totalRows,
+      colsDetected: result.columns.length,
+      fileCount: 1,
+    });
+
     console.log(`[ingest-database] Ingestion completed: ${result.totalRows} rows read, ${result.rows.length} sampled`);
 
     return new Response(
       JSON.stringify({ 
         success: true,
+        status: "DONE",
+        ingestion_state: "done",
         columns: result.columns,
         rows_read: result.totalRows,
         rows_sampled: result.rows.length,
@@ -263,16 +280,79 @@ serve(async (req) => {
   } catch (error: unknown) {
     console.error("[ingest-database] Error during database ingestion:", error);
     const errorMessage = error instanceof Error ? error.message : "An error occurred during data ingestion";
+    const errorCode = classifyDbError(error);
+
+    // ── SSOT: Complete ingestion (failure) ──
+    if (projectId) {
+      await rpcCompleteIngestion(supabase, projectId, false, { errorCode, errorMessage });
+    }
     
     return new Response(
       JSON.stringify({ 
-        success: false, 
-        message: errorMessage
+        success: false,
+        status: "FAILED",
+        ingestion_state: "failed",
+        error_code: errorCode,
+        error_friendly: errorMessage,
+        ctas: [
+          { label: "Tentar novamente", action: "retry_ingestion" },
+          { label: "Revalidar credenciais", action: "revalidate_credentials" },
+        ],
       }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 500 
+        status: 200 
       }
     );
   }
 });
+
+// ── SSOT helpers ──
+async function hashConfig(config: Record<string, unknown>): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(JSON.stringify(config));
+  const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+  return Array.from(new Uint8Array(hashBuffer)).map(b => b.toString(16).padStart(2, "0")).join("");
+}
+
+async function rpcStartIngestion(supabase: any, projectId: string, sourceType: string, configHash: string) {
+  try {
+    const { data, error } = await supabase.rpc("rpc_start_ingestion", {
+      p_project_id: projectId, p_source_type: sourceType, p_source_config_hash: configHash,
+    });
+    if (error) { console.warn("[ingest-database] rpc_start_ingestion error:", error); return { canProceed: true }; }
+    const r = data as Record<string, unknown>;
+    if (r.status === "ALREADY_DONE") {
+      return { canProceed: false, response: new Response(JSON.stringify({
+        success: true, status: "ALREADY_DONE", ingestion_state: "done", message: r.message,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    if (r.error === "INGESTION_ALREADY_RUNNING") {
+      return { canProceed: false, response: new Response(JSON.stringify({
+        success: false, status: "ALREADY_RUNNING", ingestion_state: "running",
+        error_code: "INGESTION_ALREADY_RUNNING", error_friendly: "Já existe uma ingestão em andamento.",
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    return { canProceed: true };
+  } catch { return { canProceed: true }; }
+}
+
+async function rpcCompleteIngestion(supabase: any, projectId: string, success: boolean, stats: Record<string, unknown> = {}) {
+  try {
+    await supabase.rpc("rpc_complete_ingestion", {
+      p_project_id: projectId, p_success: success,
+      p_rows_detected: stats.rowsDetected || 0, p_cols_detected: stats.colsDetected || 0,
+      p_file_count: stats.fileCount || 0, p_total_bytes: stats.totalBytes || 0,
+      p_dataset_id: stats.datasetId || null, p_manifest_id: stats.manifestId || null,
+      p_error_code: stats.errorCode || null, p_error_message: stats.errorMessage || null,
+    });
+  } catch (e) { console.warn("[ingest-database] rpc_complete_ingestion error:", e); }
+}
+
+function classifyDbError(error: unknown): string {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (msg.includes("auth") || msg.includes("permission") || msg.includes("401") || msg.includes("403")) return "CONNECTOR_AUTH_ERROR";
+  if (msg.includes("timeout") || msg.includes("timed out")) return "CONNECTOR_TIMEOUT";
+  if (msg.includes("not found")) return "CONNECTOR_NOT_FOUND";
+  return "UNKNOWN";
+}

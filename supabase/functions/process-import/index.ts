@@ -2181,6 +2181,22 @@ async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs:
     finished_at: new Date().toISOString(),
   }).eq("id", primaryJob.id);
 
+  // ── SSOT: Complete ingestion (success) ──
+  try {
+    await supabase.rpc("rpc_complete_ingestion", {
+      p_project_id: primaryJob.project_id,
+      p_success: true,
+      p_rows_detected: totalRowsConsolidated,
+      p_cols_detected: canonical.columns.length,
+      p_file_count: completedFiles.length,
+      p_total_bytes: totalFileSizeBytes,
+      p_dataset_id: datasetId || null,
+      p_manifest_id: manifestId || null,
+      p_error_code: null,
+      p_error_message: null,
+    });
+  } catch (e) { console.warn("[process-import] rpc_complete_ingestion error:", e); }
+
   const responseMessage = failedFiles.length > 0
     ? `Importação parcial: ${completedFiles.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas`
     : `Batch consolidado: ${completedFiles.length} arquivos, ~${totalRowsConsolidated.toLocaleString()} linhas, ${canonical.columns.length} colunas`;
@@ -2191,7 +2207,8 @@ async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs:
   console.log(`[process-import] Batch ${primaryJob.batch_id} done. ${responseMessage}`);
 
   return new Response(JSON.stringify({
-    success: true, message: responseMessage,
+    success: true, status: "DONE", ingestion_state: "done",
+    message: responseMessage,
     rows_processed: totalRowsConsolidated, columns: canonical.columns.length,
     files_processed: completedFiles.length, files_failed: failedFiles.length,
     coverage_pct: coveragePct, dataset_id: datasetId,
@@ -2247,9 +2264,39 @@ serve(async (req) => {
 
     if (job.file_size_bytes > MAX_FILE_SIZE_BYTES) {
       await updateJobError(supabase, job_id, `Arquivo excede o limite de ${(MAX_FILE_SIZE_BYTES / 1024 / 1024 / 1024).toFixed(0)} GB.`);
-      return new Response(JSON.stringify({ success: false, message: "File too large" }), {
-        status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      // SSOT: mark failed
+      try { await supabase.rpc("rpc_complete_ingestion", {
+        p_project_id: job.project_id, p_success: false, p_rows_detected: 0, p_cols_detected: 0,
+        p_file_count: 0, p_total_bytes: job.file_size_bytes, p_dataset_id: null, p_manifest_id: null,
+        p_error_code: "FILE_TOO_LARGE", p_error_message: "Arquivo excede o limite de tamanho.",
+      }); } catch {}
+      return new Response(JSON.stringify({ success: false, status: "FAILED", ingestion_state: "failed",
+        error_code: "FILE_TOO_LARGE", message: "File too large" }), {
+        status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
+    }
+
+    // ── SSOT: Start ingestion (only on first call, not self-invocations) ──
+    if (job.status === "pending" && (!job.batch_id || job.is_batch_primary)) {
+      const configHash = `import_${job.file_name}_${job.file_size_bytes}_${job.batch_id || "single"}`;
+      try {
+        const { data: startResult } = await supabase.rpc("rpc_start_ingestion", {
+          p_project_id: job.project_id, p_source_type: "upload", p_source_config_hash: configHash,
+        });
+        const sr = startResult as Record<string, unknown>;
+        if (sr?.status === "ALREADY_DONE") {
+          return new Response(JSON.stringify({
+            success: true, status: "ALREADY_DONE", ingestion_state: "done",
+            message: sr.message || "Dados já importados com esta configuração.",
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+        if (sr?.error === "INGESTION_ALREADY_RUNNING") {
+          return new Response(JSON.stringify({
+            success: false, status: "ALREADY_RUNNING", ingestion_state: "running",
+            error_code: "INGESTION_ALREADY_RUNNING",
+          }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
+      } catch (e) { console.warn("[process-import] rpc_start_ingestion fallback:", e); }
     }
 
     if (job.batch_id) {
@@ -2260,8 +2307,10 @@ serve(async (req) => {
   } catch (error: unknown) {
     console.error("[process-import] Unexpected error:", error);
     const message = error instanceof Error ? error.message : "Internal server error";
-    return new Response(JSON.stringify({ success: false, message }), {
-      status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
+    // Try to mark SSOT as failed if we have any job context
+    return new Response(JSON.stringify({ success: false, status: "FAILED", ingestion_state: "failed",
+      error_code: "UNKNOWN", error_friendly: message, message }), {
+      status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
 });

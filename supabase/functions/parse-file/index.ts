@@ -285,19 +285,26 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
-  try {
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+  const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+  const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+  const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+  let projectId = "";
+
+  try {
     const formData = await req.formData();
     const file = formData.get('file') as File;
-    const projectId = formData.get('project_id') as string;
+    projectId = formData.get('project_id') as string;
     const maxSampleRows = parseInt(formData.get('max_sample_rows') as string || '100000');
 
     if (!file || !projectId) {
       throw new Error("File and project_id are required");
     }
+
+    // ── SSOT: Start ingestion ──
+    const configHash = `upload_${file.name}_${file.size}`;
+    const { canProceed, status: startStatus, response: earlyResponse } = await startIngestionSafe(supabase, projectId, "upload", configHash);
+    if (!canProceed && earlyResponse) return earlyResponse;
 
     console.log(`[parse-file] Processing file: ${file.name}, size: ${file.size}, type: ${file.type}`);
 
@@ -356,11 +363,21 @@ serve(async (req) => {
       })
       .eq('id', projectId);
 
+    // ── SSOT: Complete ingestion (success) ──
+    await completeIngestionSafe(supabase, projectId, true, {
+      rowsDetected: parsedData.totalRows,
+      colsDetected: parsedData.columns.length,
+      fileCount: 1,
+      totalBytes: file.size,
+    });
+
     console.log(`[parse-file] File processing complete for project ${projectId}`);
 
     return new Response(
       JSON.stringify({
         success: true,
+        status: "DONE",
+        ingestion_state: "done",
         columns: parsedData.columns,
         totalRows: parsedData.totalRows,
         sampleRows: parsedData.sampleRows,
@@ -374,16 +391,82 @@ serve(async (req) => {
   } catch (error: unknown) {
     console.error("[parse-file] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "An error occurred while parsing the file";
+    const errorCode = classifyIngestionError(error);
+
+    // ── SSOT: Complete ingestion (failure) ──
+    if (projectId) {
+      await completeIngestionSafe(supabase, projectId, false, {
+        errorCode,
+        errorMessage,
+      });
+    }
     
     return new Response(
       JSON.stringify({ 
-        success: false, 
-        message: errorMessage
+        success: false,
+        status: "FAILED",
+        ingestion_state: "failed",
+        error_code: errorCode,
+        error_friendly: errorMessage,
+        ctas: [{ label: "Tentar novamente", action: "retry_ingestion" }],
       }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },
-        status: 500 
+        status: 200 
       }
     );
   }
 });
+
+// ── Lightweight SSOT wrappers (no import needed) ──
+async function startIngestionSafe(
+  supabase: any, projectId: string, sourceType: string, configHash: string,
+): Promise<{ canProceed: boolean; status: string; response?: Response }> {
+  try {
+    const { data, error } = await supabase.rpc("rpc_start_ingestion", {
+      p_project_id: projectId, p_source_type: sourceType, p_source_config_hash: configHash,
+    });
+    if (error) { console.warn("[parse-file] rpc_start_ingestion error:", error); return { canProceed: true, status: "rpc_error" }; }
+    const r = data as Record<string, unknown>;
+    if (r.status === "ALREADY_DONE") {
+      return { canProceed: false, status: "ALREADY_DONE", response: new Response(JSON.stringify({
+        success: true, status: "ALREADY_DONE", ingestion_state: "done",
+        message: r.message || "Dados já importados com esta configuração.",
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    if (r.error === "INGESTION_ALREADY_RUNNING") {
+      return { canProceed: false, status: "ALREADY_RUNNING", response: new Response(JSON.stringify({
+        success: false, status: "ALREADY_RUNNING", ingestion_state: "running",
+        error_code: "INGESTION_ALREADY_RUNNING",
+        error_friendly: "Já existe uma ingestão em andamento para este projeto.",
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }) };
+    }
+    return { canProceed: true, status: String(r.status || "STARTED") };
+  } catch (e) { console.warn("[parse-file] startIngestion fallback:", e); return { canProceed: true, status: "fallback" }; }
+}
+
+async function completeIngestionSafe(
+  supabase: any, projectId: string, success: boolean,
+  stats: { rowsDetected?: number; colsDetected?: number; fileCount?: number; totalBytes?: number;
+    datasetId?: string; manifestId?: string; errorCode?: string; errorMessage?: string; } = {},
+): Promise<void> {
+  try {
+    await supabase.rpc("rpc_complete_ingestion", {
+      p_project_id: projectId, p_success: success,
+      p_rows_detected: stats.rowsDetected || 0, p_cols_detected: stats.colsDetected || 0,
+      p_file_count: stats.fileCount || 0, p_total_bytes: stats.totalBytes || 0,
+      p_dataset_id: stats.datasetId || null, p_manifest_id: stats.manifestId || null,
+      p_error_code: stats.errorCode || null, p_error_message: stats.errorMessage || null,
+    });
+  } catch (e) { console.warn("[parse-file] completeIngestion fallback:", e); }
+}
+
+function classifyIngestionError(error: unknown): string {
+  const msg = (error instanceof Error ? error.message : String(error)).toLowerCase();
+  if (msg.includes("parquet")) return "PARQUET_READ_FAIL";
+  if (msg.includes("empty") || msg.includes("0 linhas")) return "EMPTY_DATASET";
+  if (msg.includes("unsupported file")) return "UPLOAD_PARSE_ERROR";
+  if (msg.includes("too large") || msg.includes("excede")) return "FILE_TOO_LARGE";
+  if (msg.includes("parse") || msg.includes("csv") || msg.includes("excel")) return "UPLOAD_PARSE_ERROR";
+  return "UNKNOWN";
+}

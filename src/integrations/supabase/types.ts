@@ -3138,7 +3138,20 @@ export type Database = {
           human_label_result: Json | null
           industry: string
           industry_source: string
+          ingestion_attempt_count: number | null
+          ingestion_cols_detected: number | null
+          ingestion_dataset_id: string | null
+          ingestion_error_code: string | null
+          ingestion_error_message: string | null
+          ingestion_file_count: number | null
+          ingestion_finished_at: string | null
+          ingestion_manifest_id: string | null
+          ingestion_rows_detected: number | null
+          ingestion_source_config_hash: string | null
+          ingestion_source_type: string | null
+          ingestion_started_at: string | null
           ingestion_state: string
+          ingestion_total_bytes: number | null
           label_build_result: Json | null
           org_id: string | null
           prerequisites_resolved_at: string | null
@@ -3188,7 +3201,20 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_attempt_count?: number | null
+          ingestion_cols_detected?: number | null
+          ingestion_dataset_id?: string | null
+          ingestion_error_code?: string | null
+          ingestion_error_message?: string | null
+          ingestion_file_count?: number | null
+          ingestion_finished_at?: string | null
+          ingestion_manifest_id?: string | null
+          ingestion_rows_detected?: number | null
+          ingestion_source_config_hash?: string | null
+          ingestion_source_type?: string | null
+          ingestion_started_at?: string | null
           ingestion_state?: string
+          ingestion_total_bytes?: number | null
           label_build_result?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
@@ -3238,7 +3264,20 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_attempt_count?: number | null
+          ingestion_cols_detected?: number | null
+          ingestion_dataset_id?: string | null
+          ingestion_error_code?: string | null
+          ingestion_error_message?: string | null
+          ingestion_file_count?: number | null
+          ingestion_finished_at?: string | null
+          ingestion_manifest_id?: string | null
+          ingestion_rows_detected?: number | null
+          ingestion_source_config_hash?: string | null
+          ingestion_source_type?: string | null
+          ingestion_started_at?: string | null
           ingestion_state?: string
+          ingestion_total_bytes?: number | null
           label_build_result?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
@@ -3587,6 +3626,21 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      rpc_complete_ingestion: {
+        Args: {
+          p_cols_detected?: number
+          p_dataset_id?: string
+          p_error_code?: string
+          p_error_message?: string
+          p_file_count?: number
+          p_manifest_id?: string
+          p_project_id: string
+          p_rows_detected?: number
+          p_success: boolean
+          p_total_bytes?: number
+        }
+        Returns: Json
+      }
       rpc_promote_model_to_production: {
         Args: { p_model_id: string; p_project_id: string; p_reason?: string }
         Returns: Json
@@ -3597,6 +3651,18 @@ export type Database = {
           p_coverage_pct?: number
           p_predictions_count?: number
           p_project_id: string
+        }
+        Returns: Json
+      }
+      rpc_recover_stale_ingestion: {
+        Args: { p_project_id: string }
+        Returns: Json
+      }
+      rpc_start_ingestion: {
+        Args: {
+          p_project_id: string
+          p_source_config_hash?: string
+          p_source_type: string
         }
         Returns: Json
       }
