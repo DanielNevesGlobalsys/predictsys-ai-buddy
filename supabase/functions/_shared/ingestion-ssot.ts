@@ -215,6 +215,27 @@ export async function completeIngestion(
   } catch (e) {
     console.error(`[ingestion-ssot] rpc_complete_ingestion error:`, e);
   }
+
+  // On success, also activate (creates dataset_state + cascade)
+  if (success) {
+    try {
+      await supabase.rpc("rpc_activate_ingestion", {
+        p_project_id: projectId,
+        p_source_type: "upload",
+        p_config_hash: null,
+        p_dataset_id: stats.datasetId || null,
+        p_manifest_id: stats.manifestId || null,
+        p_stats: {
+          rows_detected: stats.rowsDetected || 0,
+          cols_detected: stats.colsDetected || 0,
+          file_count: stats.fileCount || 0,
+          total_bytes: stats.totalBytes || 0,
+        },
+      });
+    } catch (e) {
+      console.error(`[ingestion-ssot] rpc_activate_ingestion error:`, e);
+    }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
