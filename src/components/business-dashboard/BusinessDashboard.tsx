@@ -216,7 +216,10 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
     if (data.kpis.totalEntities === 0) return null;
     const aiCtxData = aiContext as any;
     const intentContract = aiCtxData?.intent_contract;
-    const industry: IndustryKey = intentContract?.domain_adapter?.industry || intentContract?.industry_hint || 'generic';
+    // Read industry — never default to 'generic', keep actual value or null
+    const rawIndustry = intentContract?.domain_adapter?.industry || intentContract?.industry_hint || null;
+    // Use "generic" ONLY for display/translation — never persist this fallback
+    const industry: IndustryKey = (rawIndustry && rawIndustry !== 'generic' ? rawIndustry : 'generic') as IndustryKey;
     const objective = intentContract?.intent_base?.declared_objective || intentContract?.declared_objective || '';
     return translateToBusinessNarrative({
       industry,

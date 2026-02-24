@@ -565,8 +565,22 @@ Deno.serve(async (req) => {
     // ═══ Step 4: Build executive payload ═══
     const aiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
     const intentContract = aiCtx?.intent_contract || {};
-    const industry: string =
-      intentContract?.domain_adapter?.industry || intentContract?.industry_hint || "generic";
+
+    // Read industry from SSOT (project_settings) first, never default to "generic"
+    let industry: string | null = null;
+    {
+      const { data: psInd } = await supabase
+        .from("project_settings")
+        .select("industry")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      industry = (psInd as any)?.industry || null;
+    }
+    // Fallback to AI context only if SSOT is null
+    if (!industry) {
+      industry = intentContract?.domain_adapter?.industry || intentContract?.industry_hint || null;
+    }
+
     const objective: string =
       intentContract?.intent_base?.declared_objective ||
       intentContract?.declared_objective ||

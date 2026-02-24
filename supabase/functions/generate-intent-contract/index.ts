@@ -242,10 +242,25 @@ Gere o IntentContract JSON.`;
       throw new Error("IA retornou formato inválido para o contrato");
     }
 
-    // ─── Resolve industry ────────────────────────────────────
+    // ─── Resolve industry from SSOT (project_settings) first ─
+    // RULE: Never fallback to "generic" if SSOT has a value
 
-    const resolvedIndustry: string = industry || contractJson.industry_hint || "generic";
-    const adapter: DomainAdapter = DOMAIN_ADAPTERS[resolvedIndustry] || DOMAIN_ADAPTERS.generic;
+    let ssotIndustry: string | null = null;
+    {
+      const { data: psData } = await supabase
+        .from("project_settings")
+        .select("industry, industry_source")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      if (psData) {
+        ssotIndustry = (psData as any).industry || null;
+      }
+    }
+
+    // Priority: explicit param > SSOT > AI inference. Never default to "generic".
+    const resolvedIndustry: string | null = industry || ssotIndustry || contractJson.industry_hint || null;
+    const adapterKey = resolvedIndustry && DOMAIN_ADAPTERS[resolvedIndustry] ? resolvedIndustry : "generic";
+    const adapter: DomainAdapter = DOMAIN_ADAPTERS[adapterKey];
 
     // ─── Check existing context for versioning ───────────────
 
@@ -302,7 +317,7 @@ Gere o IntentContract JSON.`;
 
     const intentContractLegacy = {
       declared_objective,
-      industry_hint: resolvedIndustry,
+      industry_hint: resolvedIndustry || adapterKey,
       problem_type: intent_base.problem_type,
       target_expected: intent_base.target_expected,
       requires_time_column: intent_base.requires_time_column,
@@ -384,6 +399,35 @@ Gere o IntentContract JSON.`;
       if (insertErr) throw new Error("Erro ao criar contexto: " + insertErr.message);
     }
 
+    // ─── Persist industry + contract metadata back to SSOT ───
+    // RULE: generate-intent-contract MUST sync to project_settings
+
+    const industryToSync = resolvedIndustry || adapterKey;
+    await supabase
+      .from("project_settings")
+      .upsert(
+        {
+          project_id,
+          org_id: orgId,
+          industry: industryToSync !== "generic" ? industryToSync : null,
+          industry_source: industry ? "user" : (ssotIndustry ? "adapter" : "lys"),
+          active_intent_contract_id: existing?.id || null,
+          contract_version: newVersion,
+          contract_generated_at: intentContractV2.created_at,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "project_id" }
+      );
+
+    // ─── Increment selection_version to trigger pipeline revalidation ───
+    await supabase.rpc("rpc_update_pipeline_state", {
+      p_project_id: project_id,
+      p_stage: "target",
+      p_new_state: "stale",
+    });
+
+    console.log(`[generate-intent-contract] Synced industry=${industryToSync} to project_settings SSOT`);
+
     // ─── Audit log ───────────────────────────────────────────
 
     try {
@@ -398,8 +442,9 @@ Gere o IntentContract JSON.`;
           version: newVersion,
           declared_objective,
           problem_type: intent_base.problem_type,
-          industry: resolvedIndustry,
+          industry: industryToSync,
           adapter_used: adapter.industry,
+          ssot_synced: true,
         },
       });
     } catch (auditErr) {
