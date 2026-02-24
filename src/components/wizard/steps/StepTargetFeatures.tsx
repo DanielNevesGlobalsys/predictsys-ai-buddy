@@ -196,8 +196,8 @@ const StepTargetFeatures = ({
         .maybeSingle(),
     ]);
 
-    // Read industry from SSOT (project_settings) first, fallback to AI context
-    let resolvedIndustry = "generic";
+    // Read industry from SSOT (project_settings) — never default to "generic"
+    let resolvedIndustry: string | null = null;
     if (settingsData) {
       const ind = (settingsData as any).industry;
       if (ind) resolvedIndustry = ind;
@@ -213,9 +213,13 @@ const StepTargetFeatures = ({
       const da = ic.domain_adapter || {};
       labelBuilderRequired = ib.label_builder_required || false;
       recommendedTemplates = da.recommended_templates || [];
-      // Only use AI context industry as fallback if SSOT has generic/default
-      if (resolvedIndustry === "generic" && (da.industry || ib.industry_hint)) {
-        resolvedIndustry = da.industry || ib.industry_hint || "generic";
+      // Only use AI context industry as fallback if SSOT is null
+      if (!resolvedIndustry && (da.industry || ib.industry_hint)) {
+        const candidate = da.industry || ib.industry_hint;
+        // Don't adopt "generic" from AI context — keep null
+        if (candidate && candidate !== "generic") {
+          resolvedIndustry = candidate;
+        }
       }
     }
 
