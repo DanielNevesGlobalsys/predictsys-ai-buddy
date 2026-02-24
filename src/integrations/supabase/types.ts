@@ -3152,6 +3152,7 @@ export type Database = {
           selection_version: number
           split_policy_id: string | null
           split_state: string
+          split_validation_log: Json
           staleness_flags: Json
           target_column: string | null
           target_last_validated_at: string | null
@@ -3198,6 +3199,7 @@ export type Database = {
           selection_version?: number
           split_policy_id?: string | null
           split_state?: string
+          split_validation_log?: Json
           staleness_flags?: Json
           target_column?: string | null
           target_last_validated_at?: string | null
@@ -3244,6 +3246,7 @@ export type Database = {
           selection_version?: number
           split_policy_id?: string | null
           split_state?: string
+          split_validation_log?: Json
           staleness_flags?: Json
           target_column?: string | null
           target_last_validated_at?: string | null
