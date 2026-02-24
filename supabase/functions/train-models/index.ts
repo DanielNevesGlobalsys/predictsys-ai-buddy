@@ -1686,7 +1686,45 @@ serve(async (req) => {
       sourceMetadata = {};
       delimiter = ","; // Default delimiter
       isBatchImport = false;
-      filePaths = [project.dataset_filename];
+
+      // Resolve actual storage path — files are stored as {user_id}/{project_id}/{filename}
+      const bareFilename = project.dataset_filename;
+      let resolvedPath = bareFilename;
+
+      // Check if the bare filename exists in storage
+      const { data: directCheck } = await supabase.storage
+        .from("datasets")
+        .createSignedUrl(bareFilename, 10);
+
+      if (!directCheck?.signedUrl) {
+        // Try user_id/project_id/filename pattern
+        const userId = project.user_id;
+        if (userId) {
+          const folderPath = `${userId}/${project_id}`;
+          const { data: files } = await supabase.storage
+            .from("datasets")
+            .list(folderPath, { limit: 100 });
+
+          if (files && files.length > 0) {
+            const match = files.find((f: any) => f.name === bareFilename);
+            if (match) {
+              resolvedPath = `${folderPath}/${bareFilename}`;
+              console.log(`[AutoML] Resolved storage path: ${resolvedPath}`);
+            } else {
+              // Try to find any data file in the folder
+              const dataFile = files.find((f: any) =>
+                f.name && /\.(csv|parquet|parq|pq|xlsx|xls|json)$/i.test(f.name)
+              );
+              if (dataFile) {
+                resolvedPath = `${folderPath}/${dataFile.name}`;
+                console.log(`[AutoML] Found data file in folder: ${resolvedPath}`);
+              }
+            }
+          }
+        }
+      }
+
+      filePaths = [resolvedPath];
     }
 
     // ==================== VALIDATE MINIMUM ROWS ====================
@@ -1811,7 +1849,8 @@ serve(async (req) => {
       console.log(`Linhas lidas: ${totalLinesRead.toLocaleString()}`);
 
       if (headers.length === 0 || totalLinesRead === 0) {
-        return new Response(JSON.stringify({ error: "Não foi possível ler dados do arquivo Parquet" }), {
+        console.error(`[AutoML] Parquet read failed. Paths tried: ${filePaths.join(", ")}`);
+        return new Response(JSON.stringify({ error: "Não foi possível ler dados do arquivo Parquet. Verifique se o arquivo está acessível e bem formatado." }), {
           status: 400,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
