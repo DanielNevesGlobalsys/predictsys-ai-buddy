@@ -547,14 +547,14 @@ export default function TargetStrategyPanel({
     if (tmpl.requires_entity_key) {
       const selected = candidates.entity_candidates[0];
       if (ssot.entity_key) resolved.entity_key = ssot.entity_key;
-      else if (selected && selected.confidence != null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.entity_key = selected.column;
+      else if (selected?.confidence !== null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.entity_key = selected.column;
       else missing.push("entity_key");
     }
 
     if (tmpl.requires_time_anchor) {
       const selected = candidates.time_candidates[0];
       if (ssot.time_anchor_column) resolved.time_anchor = ssot.time_anchor_column;
-      else if (selected && selected.confidence != null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.time_anchor = selected.column;
+      else if (selected?.confidence !== null && selected.confidence >= AUTO_CONF_THRESHOLD) resolved.time_anchor = selected.column;
       else missing.push("time_anchor");
     }
 
@@ -640,13 +640,6 @@ export default function TargetStrategyPanel({
 
       if (activateErr) {
         console.error("[TargetStrategyPanel] Activate error:", activateErr);
-      } else if (activateData?.error_code === "NO_ACTIVE_DATASET") {
-        toast({
-          title: "Dataset ausente",
-          description: activateData.error || "Importe dados antes de ativar o target.",
-          variant: "destructive",
-        });
-        return { hasBlock: true };
       } else if (activateData?.success) {
         toast({
           title: "Alvo definido com sucesso",
