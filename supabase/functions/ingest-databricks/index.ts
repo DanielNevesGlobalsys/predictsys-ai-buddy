@@ -573,6 +573,18 @@ serve(async (req) => {
       rowsDetected: totalRows, colsDetected: columnsCount, fileCount: 1, totalBytes: fileSizeBytes,
     });
 
+    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+    try {
+      await supabase.rpc("rpc_activate_ingestion", {
+        p_project_id: project_id,
+        p_source_type: "databricks",
+        p_config_hash: configHash,
+        p_dataset_id: null,
+        p_manifest_id: null,
+        p_stats: { rows_detected: totalRows, cols_detected: columnsCount, file_count: 1, total_bytes: fileSizeBytes },
+      });
+    } catch (e) { console.warn("[ingest-databricks] rpc_activate_ingestion fallback:", e); }
+
     console.log(`[ingest-databricks] Ingestion complete: ${totalRows} rows, ${columnsCount} columns`);
 
     return new Response(

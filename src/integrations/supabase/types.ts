@@ -3142,6 +3142,7 @@ export type Database = {
           human_label_result: Json | null
           industry: string
           industry_source: string
+          ingestion_activation_log: Json | null
           ingestion_attempt_count: number | null
           ingestion_cols_detected: number | null
           ingestion_dataset_id: string | null
@@ -3209,6 +3210,7 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
           ingestion_cols_detected?: number | null
           ingestion_dataset_id?: string | null
@@ -3276,6 +3278,7 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
           ingestion_cols_detected?: number | null
           ingestion_dataset_id?: string | null
@@ -3638,6 +3641,17 @@ export type Database = {
         Returns: boolean
       }
       is_super_admin: { Args: { _user_id: string }; Returns: boolean }
+      rpc_activate_ingestion: {
+        Args: {
+          p_config_hash?: string
+          p_dataset_id?: string
+          p_manifest_id?: string
+          p_project_id: string
+          p_source_type: string
+          p_stats?: Json
+        }
+        Returns: Json
+      }
       rpc_complete_ingestion: {
         Args: {
           p_cols_detected?: number
