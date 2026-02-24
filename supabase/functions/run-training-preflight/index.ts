@@ -68,7 +68,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -763,7 +763,8 @@ serve(async (req: Request) => {
       }
 
       if (canEvaluate && targetCol) {
-        const problemType = (selection as any)?.problem_type || "classification";
+        // Use problem_type from selection first, then fallback to project_settings (consistency with train-models)
+        const problemType = (selection as any)?.problem_type || (projectSettings as any)?.problem_type || "classification";
         const trainabilityResult = evaluateTargetTrainability({
           target_values: syntheticValues,
           target_column: targetCol,

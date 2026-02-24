@@ -2771,12 +2771,25 @@ serve(async (req) => {
           .update({ target_trainability_report: trainabilityResult })
           .eq("project_id", project_id);
 
-        // Update pipeline state
+        // Update pipeline state — block training + cascade downstream
         await supabase.rpc("rpc_update_pipeline_state", {
           p_project_id: project_id,
           p_stage: "training",
           p_new_state: "failed",
         });
+        // Cascade: prevent scoring/dashboard from running on stale/invalid training
+        await Promise.all([
+          supabase.rpc("rpc_update_pipeline_state", {
+            p_project_id: project_id,
+            p_stage: "scoring",
+            p_new_state: "idle",
+          }),
+          supabase.rpc("rpc_update_pipeline_state", {
+            p_project_id: project_id,
+            p_stage: "dashboard",
+            p_new_state: "idle",
+          }),
+        ]);
 
         await supabase.from("projects").update({ status: "target_invalid" }).eq("id", project_id);
 
