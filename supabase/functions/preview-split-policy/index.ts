@@ -21,6 +21,281 @@ interface SplitPreview {
   notes: string[];
 }
 
+// ══════ Per-method validation ══════
+
+interface MethodValidation {
+  status: "valid" | "blocked";
+  reason: string;
+}
+
+interface SplitValidationLog {
+  temporal: MethodValidation;
+  grouped: MethodValidation;
+  random: MethodValidation;
+  chosen_method: string | null;
+  fallback_used: boolean;
+}
+
+function validateTemporal(
+  timeAnchor: string | null,
+  detectedMinDate: Date | null,
+  detectedMaxDate: Date | null,
+  totalRows: number,
+): MethodValidation {
+  if (!timeAnchor) {
+    return { status: "blocked", reason: "Nenhuma coluna temporal (time_anchor) detectada." };
+  }
+  if (!detectedMinDate || !detectedMaxDate) {
+    return { status: "blocked", reason: `Coluna "${timeAnchor}" não contém datas parseáveis.` };
+  }
+  if (detectedMaxDate.getTime() === detectedMinDate.getTime()) {
+    return { status: "blocked", reason: `Coluna "${timeAnchor}" possui apenas 1 valor de data distinto.` };
+  }
+  const spanDays = (detectedMaxDate.getTime() - detectedMinDate.getTime()) / (1000 * 60 * 60 * 24);
+  if (spanDays < 7) {
+    return { status: "blocked", reason: `Range temporal de apenas ${Math.round(spanDays)} dias — mínimo necessário: 7 dias.` };
+  }
+  // Minimum rows for temporal: need at least 200 for test split (~13%)
+  if (totalRows < 300) {
+    return { status: "blocked", reason: `Apenas ${totalRows} linhas — mínimo para split temporal: 300.` };
+  }
+  return { status: "valid", reason: "OK" };
+}
+
+function validateGrouped(entityKey: string | null, totalRows: number): MethodValidation {
+  if (!entityKey) {
+    return { status: "blocked", reason: "Nenhuma entity_key detectada para agrupamento." };
+  }
+  // Cardinality check will be done by the fact that entityKey exists and has >1 group
+  // The system already detects entityKey only if it has good cardinality (5%-95% unique ratio)
+  if (totalRows < 100) {
+    return { status: "blocked", reason: `Apenas ${totalRows} linhas — mínimo para split agrupado: 100.` };
+  }
+  return { status: "valid", reason: "OK" };
+}
+
+function validateRandom(totalRows: number): MethodValidation {
+  if (totalRows < 50) {
+    return { status: "blocked", reason: `Apenas ${totalRows} linhas — mínimo para qualquer split: 50.` };
+  }
+  return { status: "valid", reason: "OK" };
+}
+
+// ══════ Date helpers ══════
+
+const formatLocalDate = (d: Date): string => {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+};
+
+const tryParseDate = (val: unknown): Date | null => {
+  if (!val) return null;
+  const s = String(val).trim();
+  const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  if (isoMatch) {
+    const d = new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
+    return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+  }
+  const brMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
+  if (brMatch) {
+    const d = new Date(Number(brMatch[3]), Number(brMatch[2]) - 1, Number(brMatch[1]));
+    return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+  }
+  const num = Number(s);
+  if (!isNaN(num) && num > 946684800000 && num < 4102444800000) return new Date(num);
+  if (!isNaN(num) && num > 946684800 && num < 4102444800) return new Date(num * 1000);
+  const d = new Date(s);
+  return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
+};
+
+// ══════ Date detection from multiple sources ══════
+
+async function detectDateRange(
+  timeAnchor: string | null,
+  edaSnap: any,
+  numStats: any[],
+  supabase: any,
+  projectId: string,
+): Promise<{ min: Date | null; max: Date | null; source: string; parseWarning: boolean }> {
+  if (!timeAnchor) return { min: null, max: null, source: "none", parseWarning: false };
+
+  // Source 1: EDA snapshot
+  if (edaSnap?.eda_json) {
+    const eda = edaSnap.eda_json as Record<string, any>;
+    const colStats = eda.column_stats || eda.columns || {};
+    const anchorStats = colStats[timeAnchor] || {};
+    const edaMin = tryParseDate(anchorStats.min || anchorStats.min_value || anchorStats.earliest);
+    const edaMax = tryParseDate(anchorStats.max || anchorStats.max_value || anchorStats.latest);
+    if (edaMin && edaMax && edaMax > edaMin) {
+      return { min: edaMin, max: edaMax, source: "eda_snapshot", parseWarning: false };
+    }
+    if (eda.temporal_summary) {
+      const ts = eda.temporal_summary;
+      const tsMin = tryParseDate(ts.min_date || ts.start_date);
+      const tsMax = tryParseDate(ts.max_date || ts.end_date);
+      if (tsMin && tsMax && tsMax > tsMin) {
+        return { min: tsMin, max: tsMax, source: "eda_temporal_summary", parseWarning: false };
+      }
+    }
+  }
+
+  // Source 2: Numeric stats
+  const timeStat = (numStats || []).find((n: any) => n.column_name === timeAnchor);
+  if (timeStat?.min_value != null && timeStat?.max_value != null) {
+    const pMin = tryParseDate(timeStat.min_value);
+    const pMax = tryParseDate(timeStat.max_value);
+    if (pMin && pMax && pMax > pMin) {
+      return { min: pMin, max: pMax, source: "numeric_stats", parseWarning: false };
+    }
+  }
+
+  // Source 3: Categorical stats
+  const { data: catStats } = await supabase
+    .from("project_categorical_stats")
+    .select("top_categories")
+    .eq("project_id", projectId)
+    .eq("column_name", timeAnchor)
+    .maybeSingle();
+
+  if (catStats?.top_categories) {
+    const cats = Array.isArray(catStats.top_categories) ? catStats.top_categories : [];
+    const parsed: Date[] = [];
+    let failCount = 0;
+    for (const cat of cats) {
+      const val = typeof cat === "object" ? (cat as any).value || (cat as any).category : cat;
+      const d = tryParseDate(val);
+      if (d) parsed.push(d); else failCount++;
+    }
+    if (parsed.length >= 2) {
+      parsed.sort((a, b) => a.getTime() - b.getTime());
+      return {
+        min: parsed[0],
+        max: parsed[parsed.length - 1],
+        source: "categorical_stats",
+        parseWarning: failCount > parsed.length * 0.3,
+      };
+    }
+  }
+
+  return { min: null, max: null, source: "none", parseWarning: false };
+}
+
+// ══════ Compute preview for each strategy ══════
+
+function computeTemporalPreview(
+  totalRows: number,
+  params: Record<string, any>,
+  detectedMin: Date,
+  detectedMax: Date,
+): { preview: SplitPreview; gates: GateResult[] } {
+  const trainMonths = params.train_months || 12;
+  const validMonths = params.valid_months || 2;
+  const testMonths = params.test_months || 1;
+  const totalMonths = trainMonths + validMonths + testMonths;
+
+  const trainPct = trainMonths / totalMonths;
+  const validPct = validMonths / totalMonths;
+
+  const trainRows = Math.floor(totalRows * trainPct);
+  const validRows = Math.floor(totalRows * validPct);
+  const testRows = totalRows - trainRows - validRows;
+
+  const totalSpanMs = detectedMax.getTime() - detectedMin.getTime();
+  const trainEndMs = detectedMin.getTime() + totalSpanMs * trainPct;
+  const validEndMs = trainEndMs + totalSpanMs * validPct;
+
+  const timeRanges = [
+    { split: "train", from: formatLocalDate(detectedMin), to: formatLocalDate(new Date(trainEndMs)) },
+    { split: "valid", from: formatLocalDate(new Date(trainEndMs)), to: formatLocalDate(new Date(validEndMs)) },
+    { split: "test", from: formatLocalDate(new Date(validEndMs)), to: formatLocalDate(detectedMax) },
+  ];
+
+  const gates: GateResult[] = [];
+  const dataSpanMonths = (detectedMax.getFullYear() - detectedMin.getFullYear()) * 12
+    + (detectedMax.getMonth() - detectedMin.getMonth());
+
+  if (trainMonths < 6) {
+    gates.push({
+      gate: "SPLIT_SANITY",
+      status: "WARN",
+      message: `Período de treino de ${trainMonths} meses é curto. Recomendado: ≥ 6 meses.`,
+      details: { train_months: trainMonths, recommended_min: 6 },
+    });
+  }
+  if (dataSpanMonths > 0 && dataSpanMonths < totalMonths) {
+    gates.push({
+      gate: "SPLIT_SANITY",
+      status: "WARN",
+      message: `Dataset cobre ${dataSpanMonths} meses, split solicita ${totalMonths}. Podem existir buracos temporais.`,
+      details: { data_span_months: dataSpanMonths, requested_months: totalMonths },
+    });
+  }
+  if (testRows < 200) {
+    gates.push({
+      gate: "SPLIT_SANITY",
+      status: "WARN",
+      message: `Split temporal produz ${testRows} linhas de teste (recomendado: ≥200).`,
+      details: { test_rows: testRows, min_recommended: 200 },
+    });
+  }
+
+  return {
+    preview: {
+      train_rows: trainRows,
+      valid_rows: validRows,
+      test_rows: testRows,
+      time_ranges: timeRanges,
+      notes: [`Split temporal: treino=${trainMonths}m, validação=${validMonths}m, teste=${testMonths}m`],
+    },
+    gates,
+  };
+}
+
+function computeGroupedPreview(
+  totalRows: number,
+  entityKey: string,
+  params: Record<string, any>,
+): { preview: SplitPreview; gates: GateResult[] } {
+  const testSize = params.test_size || 0.2;
+  const trainRows = Math.floor(totalRows * (1 - testSize) * 0.875);
+  const validRows = Math.floor(totalRows * (1 - testSize) * 0.125);
+  const testRows = totalRows - trainRows - validRows;
+
+  return {
+    preview: {
+      train_rows: trainRows,
+      valid_rows: validRows,
+      test_rows: testRows,
+      notes: [`Split por grupo (${entityKey}): ${(testSize * 100).toFixed(0)}% teste`],
+    },
+    gates: [],
+  };
+}
+
+function computeRandomPreview(
+  totalRows: number,
+  params: Record<string, any>,
+): { preview: SplitPreview; gates: GateResult[] } {
+  const testSize = params.test_size || 0.2;
+  const trainRows = Math.floor(totalRows * (1 - testSize) * 0.875);
+  const validRows = Math.floor(totalRows * (1 - testSize) * 0.125);
+  const testRows = totalRows - trainRows - validRows;
+
+  return {
+    preview: {
+      train_rows: trainRows,
+      valid_rows: validRows,
+      test_rows: testRows,
+      notes: [`Split aleatório: ${((1 - testSize) * 100).toFixed(0)}% treino, ${(testSize * 100).toFixed(0)}% teste`],
+    },
+    gates: [],
+  };
+}
+
+// ══════ Main handler ══════
+
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -52,9 +327,9 @@ serve(async (req: Request) => {
       });
     }
 
-    console.log(`[preview-split-policy] Starting for project ${project_id}`);
+    console.log(`[preview-split-policy] Starting for project ${project_id}, requested=${requestedStrategy || "auto"}`);
 
-    // Parallel fetch (include EDA snapshot for date column ranges)
+    // ══════ Parallel fetch ══════
     const [aiCtxRes, dsStateRes, selectionRes, numStatsRes, projectRes, edaSnapRes] = await Promise.all([
       supabase.from("project_ai_context").select("id, context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("row_count, col_count").eq("project_id", project_id).maybeSingle(),
@@ -64,7 +339,7 @@ serve(async (req: Request) => {
       supabase.from("project_eda_snapshots").select("eda_json").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
     ]);
 
-    // Fallback chain: dataset_state → projects table → numeric stats estimate
+    // ══════ Row count with fallback chain ══════
     let totalRows = dsStateRes.data?.row_count
       || (projectRes.data as any)?.dataset_rows
       || (projectRes.data as any)?.total_rows
@@ -74,24 +349,17 @@ serve(async (req: Request) => {
       const anyStat = idStat || numStatsRes.data[0];
       if (anyStat?.max_value && Number(anyStat.max_value) > 0) {
         totalRows = Math.round(Number(anyStat.max_value));
-        console.log(`[preview-split-policy] Fallback row estimate from ${anyStat.column_name}: ${totalRows}`);
       }
     }
-    // Last resort: if we have any stats at all, assume minimum viable dataset
     if (totalRows === 0 && numStatsRes.data && numStatsRes.data.length > 0) {
       totalRows = 1000;
-      console.log(`[preview-split-policy] Last-resort fallback: assuming ${totalRows} rows`);
     }
+
     const currentSelVersion = selection_version || (selectionRes.data as any)?.selection_version || 1;
     const aiContext = (aiCtxRes.data?.context as Record<string, any>) || {};
     const contractHints = aiContext.contract_hints || {};
-    const intentContract = aiContext.intent_contract || aiContext.intent || {};
-    const intentBase = intentContract.intent_base || intentContract;
-    const domainAdapter = intentContract.domain_adapter || {};
-
     const entityKey: string | null = contractHints.entity_key || null;
     const timeAnchor: string | null = contractHints.time_anchor_column || null;
-    const requiresTime: boolean = intentBase.requires_time_column ?? false;
 
     if (totalRows === 0) {
       return new Response(JSON.stringify({ error: "Nenhum dado encontrado." }), {
@@ -99,335 +367,164 @@ serve(async (req: Request) => {
       });
     }
 
-    // Determine strategy
-    let strategy = requestedStrategy || "random";
-    const params = requestedParams || {};
-    const gates: GateResult[] = [];
-    const notes: string[] = [];
-    let recommendedPolicy: Record<string, any> | null = null;
+    // ══════ PHASE 1: Per-method validation ══════
+    const dateRange = await detectDateRange(timeAnchor, edaSnapRes.data, numStatsRes.data || [], supabase, project_id);
+    console.log(`[preview-split-policy] Date: source=${dateRange.source}, min=${dateRange.min ? formatLocalDate(dateRange.min) : "null"}, max=${dateRange.max ? formatLocalDate(dateRange.max) : "null"}`);
 
-    // Auto-detect strategy
-    if (!requestedStrategy) {
-      if (requiresTime && timeAnchor) {
-        strategy = "temporal";
-      } else if (entityKey && !timeAnchor) {
-        strategy = "grouped";
-      } else {
-        strategy = "random";
-      }
-    }
+    const temporalValidation = validateTemporal(timeAnchor, dateRange.min, dateRange.max, totalRows);
+    const groupedValidation = validateGrouped(entityKey, totalRows);
+    const randomValidation = validateRandom(totalRows);
 
-    // SPLIT_SANITY gates
-    if (requiresTime && !timeAnchor) {
-      gates.push({
-        gate: "SPLIT_SANITY",
-        status: "BLOCK",
-        message: "Split temporal obrigatório, mas nenhuma coluna de data/hora foi detectada. Selecione a coluna de data na Etapa 2.",
-        details: { requires_time_column: true, time_anchor: null },
-      });
-    }
+    const validationLog: SplitValidationLog = {
+      temporal: temporalValidation,
+      grouped: groupedValidation,
+      random: randomValidation,
+      chosen_method: null,
+      fallback_used: false,
+    };
 
-    if (strategy === "random" && timeAnchor && requiresTime) {
-      // Strong WARN — user chose random but temporal is recommended
-      const objective = (intentBase.declared_objective || intentBase.objective || "").toLowerCase();
-      const isChurnLike = /churn|convers|inadimpl|atrit|evas|cancel|reten/.test(objective);
-      gates.push({
-        gate: "SPLIT_SANITY",
-        status: isChurnLike ? "BLOCK" : "WARN",
-        message: isChurnLike
-          ? `Para objetivos de ${objective.includes("churn") ? "churn" : "conversão"}, split temporal é obrigatório para evitar data leakage. Use split temporal.`
-          : "Coluna temporal detectada, mas split aleatório selecionado. Split temporal é recomendado para problemas com dependência temporal.",
-        details: { recommended_strategy: "temporal", time_anchor: timeAnchor },
-      });
-      recommendedPolicy = { strategy: "temporal", params: { train_months: 12, valid_months: 2, test_months: 1, time_grain: "month" } };
-    }
+    console.log(`[preview-split-policy] Validation: temporal=${temporalValidation.status}, grouped=${groupedValidation.status}, random=${randomValidation.status}`);
 
-    // Compute split preview
+    // ══════ PHASE 2: Strategy selection with fallback ══════
     const defaultParams: Record<string, any> = {
       temporal: { train_months: 12, valid_months: 2, test_months: 1, time_grain: "month" },
       random: { test_size: 0.2, seed: 42 },
       grouped: { group_key: entityKey || "", test_size: 0.2, seed: 42 },
     };
+    const userParams = requestedParams || {};
 
-    const effectiveParams = { ...defaultParams[strategy] || {}, ...params };
+    let chosenStrategy: string;
+    let fallbackUsed = false;
+    const gates: GateResult[] = [];
 
-    let preview: SplitPreview;
-
-    if (strategy === "temporal") {
-      const trainMonths = effectiveParams.train_months || 12;
-      const validMonths = effectiveParams.valid_months || 2;
-      const testMonths = effectiveParams.test_months || 1;
-      const totalMonths = trainMonths + validMonths + testMonths;
-
-      const trainPct = trainMonths / totalMonths;
-      const validPct = validMonths / totalMonths;
-      const testPct = testMonths / totalMonths;
-
-      const trainRows = Math.floor(totalRows * trainPct);
-      const validRows = Math.floor(totalRows * validPct);
-      const testRows = totalRows - trainRows - validRows;
-
-      // --- Detect actual date range from multiple sources ---
-      const formatLocalDate = (d: Date): string => {
-        const y = d.getFullYear();
-        const m = String(d.getMonth() + 1).padStart(2, "0");
-        const day = String(d.getDate()).padStart(2, "0");
-        return `${y}-${m}-${day}`;
+    if (requestedStrategy) {
+      // User explicitly requested a strategy — try it, fallback if blocked
+      const validations: Record<string, MethodValidation> = {
+        temporal: temporalValidation,
+        grouped: groupedValidation,
+        random: randomValidation,
       };
 
-      // Try parse a date string in multiple formats
-      const tryParseDate = (val: unknown): Date | null => {
-        if (!val) return null;
-        const s = String(val).trim();
-        // ISO / YYYY-MM-DD
-        const isoMatch = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-        if (isoMatch) {
-          const d = new Date(Number(isoMatch[1]), Number(isoMatch[2]) - 1, Number(isoMatch[3]));
-          return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
-        }
-        // dd/MM/yyyy
-        const brMatch = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/);
-        if (brMatch) {
-          const d = new Date(Number(brMatch[3]), Number(brMatch[2]) - 1, Number(brMatch[1]));
-          return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
-        }
-        // Epoch number
-        const num = Number(s);
-        if (!isNaN(num) && num > 946684800000 && num < 4102444800000) {
-          return new Date(num);
-        }
-        if (!isNaN(num) && num > 946684800 && num < 4102444800) {
-          return new Date(num * 1000);
-        }
-        // Fallback: native parse
-        const d = new Date(s);
-        return !isNaN(d.getTime()) && d.getFullYear() > 1900 ? d : null;
-      };
-
-      let detectedMinDate: Date | null = null;
-      let detectedMaxDate: Date | null = null;
-      let dateSourceUsed = "none";
-      let dateParseWarning = false;
-
-      // Source 1: EDA snapshot — look for time anchor column stats
-      if (edaSnapRes.data?.eda_json && timeAnchor) {
-        const eda = edaSnapRes.data.eda_json as Record<string, any>;
-        // EDA JSON may store per-column stats in various structures
-        const colStats = eda.column_stats || eda.columns || {};
-        const anchorStats = colStats[timeAnchor] || {};
-        
-        const edaMin = tryParseDate(anchorStats.min || anchorStats.min_value || anchorStats.earliest);
-        const edaMax = tryParseDate(anchorStats.max || anchorStats.max_value || anchorStats.latest);
-        
-        if (edaMin && edaMax && edaMax > edaMin) {
-          detectedMinDate = edaMin;
-          detectedMaxDate = edaMax;
-          dateSourceUsed = "eda_snapshot";
-        }
-
-        // Also check temporal_summary if available
-        if (!detectedMinDate && eda.temporal_summary) {
-          const ts = eda.temporal_summary;
-          const tsMin = tryParseDate(ts.min_date || ts.start_date);
-          const tsMax = tryParseDate(ts.max_date || ts.end_date);
-          if (tsMin && tsMax && tsMax > tsMin) {
-            detectedMinDate = tsMin;
-            detectedMaxDate = tsMax;
-            dateSourceUsed = "eda_temporal_summary";
-          }
-        }
-      }
-
-      // Source 2: Numeric stats (existing behavior — works if dates stored as epoch)
-      if (!detectedMinDate && timeAnchor) {
-        const timeStat = (numStatsRes.data || []).find((n: any) => n.column_name === timeAnchor);
-        if (timeStat?.min_value != null && timeStat?.max_value != null) {
-          const parsedMin = tryParseDate(timeStat.min_value);
-          const parsedMax = tryParseDate(timeStat.max_value);
-          if (parsedMin && parsedMax && parsedMax > parsedMin) {
-            detectedMinDate = parsedMin;
-            detectedMaxDate = parsedMax;
-            dateSourceUsed = "numeric_stats";
-          }
-        }
-      }
-
-      // Source 3: Categorical stats — top categories might contain date strings
-      if (!detectedMinDate && timeAnchor) {
-        const { data: catStats } = await supabase
-          .from("project_categorical_stats")
-          .select("top_categories")
-          .eq("project_id", project_id)
-          .eq("column_name", timeAnchor)
-          .maybeSingle();
-        
-        if (catStats?.top_categories) {
-          const cats = Array.isArray(catStats.top_categories) ? catStats.top_categories : [];
-          const parsedDates: Date[] = [];
-          let failCount = 0;
-          for (const cat of cats) {
-            const val = typeof cat === "object" ? (cat as any).value || (cat as any).category : cat;
-            const d = tryParseDate(val);
-            if (d) parsedDates.push(d);
-            else failCount++;
-          }
-          if (parsedDates.length >= 2) {
-            parsedDates.sort((a, b) => a.getTime() - b.getTime());
-            detectedMinDate = parsedDates[0];
-            detectedMaxDate = parsedDates[parsedDates.length - 1];
-            dateSourceUsed = "categorical_stats";
-            if (failCount > parsedDates.length * 0.3) {
-              dateParseWarning = true;
-            }
-          }
-        }
-      }
-
-      console.log(`[preview-split-policy] Date detection: source=${dateSourceUsed}, min=${detectedMinDate ? formatLocalDate(detectedMinDate) : "null"}, max=${detectedMaxDate ? formatLocalDate(detectedMaxDate) : "null"}`);
-
-      // Build time ranges from detected dates
-      const timeRanges: { split: string; from: string; to: string }[] = [];
-      let dataSpanMonths = 0;
-
-      if (detectedMinDate && detectedMaxDate && detectedMaxDate > detectedMinDate) {
-        dataSpanMonths = (detectedMaxDate.getFullYear() - detectedMinDate.getFullYear()) * 12 
-          + (detectedMaxDate.getMonth() - detectedMinDate.getMonth());
-
-        // Split points relative to max_date (ref_end), never "today"
-        const totalSpanMs = detectedMaxDate.getTime() - detectedMinDate.getTime();
-        const trainEndMs = detectedMinDate.getTime() + totalSpanMs * trainPct;
-        const validEndMs = trainEndMs + totalSpanMs * validPct;
-
-        const trainEnd = new Date(trainEndMs);
-        const validEnd = new Date(validEndMs);
-
-        timeRanges.push(
-          { split: "train", from: formatLocalDate(detectedMinDate), to: formatLocalDate(trainEnd) },
-          { split: "valid", from: formatLocalDate(trainEnd), to: formatLocalDate(validEnd) },
-          { split: "test", from: formatLocalDate(validEnd), to: formatLocalDate(detectedMaxDate) },
-        );
-      } else if (timeAnchor) {
-        // Could not detect valid dates — add gate
+      if (validations[requestedStrategy]?.status === "valid") {
+        chosenStrategy = requestedStrategy;
+      } else {
+        // Requested strategy blocked — fallback chain
         gates.push({
-          gate: "SPLIT_SANITY",
-          status: "BLOCK",
-          message: `Não foi possível detectar datas válidas na coluna "${timeAnchor}". Verifique se a coluna contém datas no formato YYYY-MM-DD ou dd/MM/yyyy.`,
-          details: { time_anchor: timeAnchor, date_source: dateSourceUsed },
-        });
-      }
-
-      // Add parse quality warning
-      if (dateParseWarning) {
-        gates.push({
-          gate: "SPLIT_SANITY",
+          gate: "SPLIT_FALLBACK",
           status: "WARN",
-          message: `Mais de 30% dos valores da coluna "${timeAnchor}" não puderam ser interpretados como data. As datas detectadas podem ser aproximadas.`,
-          details: { time_anchor: timeAnchor },
+          message: `Estratégia "${requestedStrategy}" indisponível: ${validations[requestedStrategy]?.reason || "requisitos não atendidos"}. Usando fallback automático.`,
+          details: { requested: requestedStrategy, reason: validations[requestedStrategy]?.reason },
         });
-      }
+        fallbackUsed = true;
 
-      preview = {
-        train_rows: trainRows,
-        valid_rows: validRows,
-        test_rows: testRows,
-        time_ranges: timeRanges,
-        detected_min_date: detectedMinDate ? formatLocalDate(detectedMinDate) : null,
-        detected_max_date: detectedMaxDate ? formatLocalDate(detectedMaxDate) : null,
-        notes: [],
-      } as any;
-      notes.push(`Split temporal: treino=${trainMonths}m, validação=${validMonths}m, teste=${testMonths}m`);
-
-      // === TEMPORAL COVERAGE GATES ===
-
-      // 1. Minimum train months
-      if (trainMonths < 6) {
-        const objective = (intentBase.declared_objective || intentBase.objective || "").toLowerCase();
-        const isChurnLike = /churn|convers|inadimpl|atrit|evas|cancel|reten/.test(objective);
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: isChurnLike ? "BLOCK" : "WARN",
-          message: `Período de treino de ${trainMonths} meses é curto${isChurnLike ? " para problemas de churn/conversão" : ""}. Recomendado: ≥ 6 meses.`,
-          details: { train_months: trainMonths, recommended_min: 6 },
-        });
-      }
-
-      // 2. Data span vs requested span (temporal gaps)
-      if (dataSpanMonths > 0 && dataSpanMonths < totalMonths) {
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: "WARN",
-          message: `Dataset cobre apenas ${dataSpanMonths} meses, mas split solicita ${totalMonths} meses. Podem existir buracos temporais.`,
-          details: { data_span_months: dataSpanMonths, requested_months: totalMonths },
-        });
-      }
-
-      // 3. Minimum row counts per split
-      if (testRows < 200) {
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: "BLOCK",
-          message: `Split temporal produz apenas ${testRows} linhas de teste (mínimo: 200). Aumente os dados ou ajuste as proporções.`,
-          details: { test_rows: testRows, min_required: 200 },
-        });
-      }
-      if (validRows < 200) {
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: "WARN",
-          message: `Split temporal produz apenas ${validRows} linhas de validação (mínimo recomendado: 200). Resultados de validação podem ser instáveis.`,
-          details: { valid_rows: validRows, min_recommended: 200 },
-        });
-      }
-      if (trainRows < 500) {
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: "WARN",
-          message: `Split temporal produz apenas ${trainRows} linhas de treino. Resultados podem ser pouco confiáveis.`,
-          details: { train_rows: trainRows },
-        });
-      }
-    } else if (strategy === "grouped") {
-      const testSize = effectiveParams.test_size || 0.2;
-      const trainRows = Math.floor(totalRows * (1 - testSize) * 0.875);
-      const validRows = Math.floor(totalRows * (1 - testSize) * 0.125);
-      const testRows = totalRows - trainRows - validRows;
-
-      preview = { train_rows: trainRows, valid_rows: validRows, test_rows: testRows, notes: [] };
-      notes.push(`Split por grupo (${entityKey || "entity_key"}): ${(testSize * 100).toFixed(0)}% teste`);
-
-      if (!entityKey) {
-        gates.push({
-          gate: "SPLIT_SANITY",
-          status: "WARN",
-          message: "Split agrupado selecionado, mas nenhuma entity_key detectada. O split pode não prevenir vazamento entre treino e teste.",
-        });
+        // Fallback order: temporal → grouped → random
+        if (requestedStrategy !== "temporal" && temporalValidation.status === "valid") {
+          chosenStrategy = "temporal";
+        } else if (requestedStrategy !== "grouped" && groupedValidation.status === "valid") {
+          chosenStrategy = "grouped";
+        } else if (randomValidation.status === "valid") {
+          chosenStrategy = "random";
+        } else {
+          // ALL blocked — structural error
+          chosenStrategy = "random"; // placeholder
+        }
       }
     } else {
-      // random
-      const testSize = effectiveParams.test_size || 0.2;
-      const trainRows = Math.floor(totalRows * (1 - testSize) * 0.875);
-      const validRows = Math.floor(totalRows * (1 - testSize) * 0.125);
-      const testRows = totalRows - trainRows - validRows;
-
-      preview = { train_rows: trainRows, valid_rows: validRows, test_rows: testRows, notes: [] };
-      notes.push(`Split aleatório: ${((1 - testSize) * 100).toFixed(0)}% treino, ${(testSize * 100).toFixed(0)}% teste`);
+      // Auto-detect: temporal → grouped → random
+      if (temporalValidation.status === "valid") {
+        chosenStrategy = "temporal";
+      } else if (groupedValidation.status === "valid") {
+        chosenStrategy = "grouped";
+        if (timeAnchor) {
+          fallbackUsed = true;
+          gates.push({
+            gate: "SPLIT_FALLBACK",
+            status: "WARN",
+            message: `Split temporal preferível, mas ${temporalValidation.reason}. Usando split agrupado.`,
+            details: { preferred: "temporal", fallback_reason: temporalValidation.reason },
+          });
+        }
+      } else if (randomValidation.status === "valid") {
+        chosenStrategy = "random";
+        fallbackUsed = true;
+        const reasons: string[] = [];
+        if (temporalValidation.status === "blocked") reasons.push(`temporal: ${temporalValidation.reason}`);
+        if (groupedValidation.status === "blocked") reasons.push(`agrupado: ${groupedValidation.reason}`);
+        gates.push({
+          gate: "SPLIT_FALLBACK",
+          status: "WARN",
+          message: `Usando split aleatório como fallback. ${reasons.join("; ")}`,
+          details: { reasons },
+        });
+      } else {
+        chosenStrategy = "random"; // will be blocked
+      }
     }
 
-    preview.notes = notes;
+    validationLog.chosen_method = chosenStrategy;
+    validationLog.fallback_used = fallbackUsed;
 
-    // If no blocks or warns, add PASS
-    if (gates.length === 0) {
+    // ══════ Check if ALL methods are blocked ══════
+    const allBlocked = temporalValidation.status === "blocked"
+      && groupedValidation.status === "blocked"
+      && randomValidation.status === "blocked";
+
+    if (allBlocked) {
       gates.push({
-        gate: "SPLIT_SANITY",
-        status: "PASS",
-        message: `Split ${strategy} configurado: treino=${preview.train_rows}, validação=${preview.valid_rows}, teste=${preview.test_rows}.`,
+        gate: "SPLIT_ALL_BLOCKED",
+        status: "BLOCK",
+        message: "Todos os métodos de split falharam. Dataset pode ser muito pequeno ou sem colunas adequadas.",
+        details: {
+          temporal: temporalValidation.reason,
+          grouped: groupedValidation.reason,
+          random: randomValidation.reason,
+        },
       });
     }
 
-    const hasBlock = gates.some(g => g.status === "BLOCK");
-    const policyStatus = hasBlock ? "blocked" : "ready";
+    // ══════ Compute preview for chosen strategy ══════
+    let preview: SplitPreview;
+    let strategyGates: GateResult[] = [];
+    const effectiveParams = { ...defaultParams[chosenStrategy] || {}, ...userParams };
 
-    // Upsert split policy
+    if (chosenStrategy === "temporal" && dateRange.min && dateRange.max) {
+      const result = computeTemporalPreview(totalRows, effectiveParams, dateRange.min, dateRange.max);
+      preview = result.preview;
+      strategyGates = result.gates;
+
+      if (dateRange.parseWarning) {
+        strategyGates.push({
+          gate: "SPLIT_SANITY",
+          status: "WARN",
+          message: `Mais de 30% dos valores da coluna "${timeAnchor}" não puderam ser interpretados como data.`,
+          details: { time_anchor: timeAnchor },
+        });
+      }
+    } else if (chosenStrategy === "grouped" && entityKey) {
+      const result = computeGroupedPreview(totalRows, entityKey, effectiveParams);
+      preview = result.preview;
+      strategyGates = result.gates;
+    } else {
+      const result = computeRandomPreview(totalRows, effectiveParams);
+      preview = result.preview;
+      strategyGates = result.gates;
+    }
+
+    gates.push(...strategyGates);
+
+    // If no issues, add PASS
+    const hasBlock = gates.some(g => g.status === "BLOCK");
+    if (!hasBlock && gates.filter(g => g.status !== "PASS").length === 0) {
+      gates.push({
+        gate: "SPLIT_SANITY",
+        status: "PASS",
+        message: `Split ${chosenStrategy} configurado: treino=${preview.train_rows}, validação=${preview.valid_rows}, teste=${preview.test_rows}.`,
+      });
+    }
+
+    const policyStatus = allBlocked ? "blocked" : "ready";
+
+    // ══════ Persist split policy ══════
     const { data: existing } = await supabase
       .from("project_split_policies")
       .select("id")
@@ -436,42 +533,62 @@ serve(async (req: Request) => {
       .limit(1)
       .maybeSingle();
 
+    const policyPayload = {
+      selection_version: currentSelVersion,
+      strategy: chosenStrategy,
+      time_anchor_column: timeAnchor,
+      entity_key_column: entityKey,
+      params: effectiveParams,
+      status: policyStatus,
+      preview: { ...preview, gates, validation_log: validationLog },
+      updated_at: new Date().toISOString(),
+    };
+
     if (existing) {
-      await supabase.from("project_split_policies").update({
-        selection_version: currentSelVersion,
-        strategy,
-        time_anchor_column: timeAnchor,
-        entity_key_column: entityKey,
-        params: effectiveParams,
-        status: policyStatus,
-        preview: { ...preview, gates },
-        updated_at: new Date().toISOString(),
-      }).eq("id", existing.id);
+      await supabase.from("project_split_policies").update(policyPayload).eq("id", existing.id);
     } else {
       await supabase.from("project_split_policies").insert({
         project_id,
-        selection_version: currentSelVersion,
-        strategy,
-        time_anchor_column: timeAnchor,
-        entity_key_column: entityKey,
-        params: effectiveParams,
-        status: policyStatus,
-        preview: { ...preview, gates },
+        ...policyPayload,
       });
     }
 
-    // Persist summary in AI context
+    // ══════ Update SSOT: split_state ══════
+    await supabase.rpc("rpc_update_pipeline_state", {
+      p_project_id: project_id,
+      p_stage: "split",
+      p_new_state: policyStatus === "ready" ? "ready" : "blocked",
+    }).then(() => {
+      console.log(`[preview-split-policy] SSOT split_state → ${policyStatus}`);
+    }).catch((e: any) => {
+      console.warn(`[preview-split-policy] Failed to update SSOT split_state:`, e.message);
+    });
+
+    // ══════ Persist split_validation_log in project_settings SSOT ══════
+    await supabase
+      .from("project_settings")
+      .update({
+        split_validation_log: validationLog,
+        updated_at: new Date().toISOString(),
+      })
+      .eq("project_id", project_id)
+      .then(() => console.log(`[preview-split-policy] split_validation_log persisted`))
+      .catch((e: any) => console.warn(`[preview-split-policy] Failed to persist validation_log:`, e.message));
+
+    // ══════ AI context update ══════
     if (aiCtxRes.data) {
       const currentCtx = aiCtxRes.data.context as Record<string, any> || {};
       await supabase.from("project_ai_context").update({
         context: {
           ...currentCtx,
           split_policy: {
-            strategy,
+            strategy: chosenStrategy,
             time_anchor_column: timeAnchor,
             entity_key_column: entityKey,
             params: effectiveParams,
             status: policyStatus,
+            fallback_used: fallbackUsed,
+            validation_log: validationLog,
             preview_summary: { train_rows: preview.train_rows, valid_rows: preview.valid_rows, test_rows: preview.test_rows },
             updated_at: new Date().toISOString(),
           },
@@ -480,7 +597,7 @@ serve(async (req: Request) => {
       }).eq("id", aiCtxRes.data.id);
     }
 
-    // === POLICY DRIFT: check if selection_version changed ===
+    // ══════ Policy drift check ══════
     const existingPolicyVersion = (await supabase
       .from("project_split_policies")
       .select("selection_version")
@@ -491,7 +608,6 @@ serve(async (req: Request) => {
       .maybeSingle()).data;
 
     if (existingPolicyVersion && existingPolicyVersion.selection_version < currentSelVersion) {
-      // Mark old policies as outdated
       await supabase.from("project_split_policies")
         .update({ status: "outdated", updated_at: new Date().toISOString() })
         .eq("project_id", project_id)
@@ -500,12 +616,12 @@ serve(async (req: Request) => {
       gates.push({
         gate: "POLICY_DRIFT",
         status: "WARN",
-        message: `Split policy anterior (v${existingPolicyVersion.selection_version}) ficou desatualizada após mudança de seleção (v${currentSelVersion}). Nova policy gerada.`,
+        message: `Split policy anterior (v${existingPolicyVersion.selection_version}) ficou desatualizada após mudança de seleção (v${currentSelVersion}).`,
         details: { old_version: existingPolicyVersion.selection_version, new_version: currentSelVersion },
       });
     }
 
-    // CLASS BALANCE auto-detection
+    // ══════ Class balance auto-detection ══════
     let classBalancePolicy: Record<string, any> | null = null;
     const labelBuilder = aiContext.label_builder;
     if (labelBuilder?.preview_summary?.positive_rate) {
@@ -523,35 +639,28 @@ serve(async (req: Request) => {
       }
     }
 
-    // Persist class_balance in AI context
     if (aiCtxRes.data && classBalancePolicy) {
       const currentCtx2 = (await supabase.from("project_ai_context").select("context").eq("id", aiCtxRes.data.id).single()).data;
       const ctx2 = (currentCtx2?.context as Record<string, any>) || {};
       await supabase.from("project_ai_context").update({
-        context: {
-          ...ctx2,
-          class_balance: {
-            ...classBalancePolicy,
-            updated_at: new Date().toISOString(),
-          },
-        },
+        context: { ...ctx2, class_balance: { ...classBalancePolicy, updated_at: new Date().toISOString() } },
         last_updated_at: new Date().toISOString(),
       }).eq("id", aiCtxRes.data.id);
     }
 
-    console.log(`[preview-split-policy] Done: strategy=${strategy}, status=${policyStatus}`);
+    console.log(`[preview-split-policy] Done: strategy=${chosenStrategy}, status=${policyStatus}, fallback=${fallbackUsed}`);
 
     return new Response(JSON.stringify({
       success: true,
       policy: {
-        strategy,
+        strategy: chosenStrategy,
         time_anchor_column: timeAnchor,
         entity_key_column: entityKey,
         params: effectiveParams,
       },
       preview,
       gates,
-      recommended_policy: recommendedPolicy,
+      split_validation_log: validationLog,
       class_balance: classBalancePolicy,
     }), {
       status: 200,
