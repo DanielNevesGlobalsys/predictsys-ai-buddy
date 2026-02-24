@@ -2197,6 +2197,23 @@ async function runConsolidation(supabase: any, primaryJob: ImportJob, batchJobs:
     });
   } catch (e) { console.warn("[process-import] rpc_complete_ingestion error:", e); }
 
+  // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+  try {
+    await supabase.rpc("rpc_activate_ingestion", {
+      p_project_id: primaryJob.project_id,
+      p_source_type: "upload",
+      p_config_hash: `import_${primaryJob.file_name}_${primaryJob.file_size_bytes}_${primaryJob.batch_id || "single"}`,
+      p_dataset_id: datasetId || null,
+      p_manifest_id: manifestId || null,
+      p_stats: {
+        rows_detected: totalRowsConsolidated,
+        cols_detected: canonical.columns.length,
+        file_count: completedFiles.length,
+        total_bytes: totalFileSizeBytes,
+      },
+    });
+  } catch (e) { console.warn("[process-import] rpc_activate_ingestion fallback:", e); }
+
   const responseMessage = failedFiles.length > 0
     ? `Importação parcial: ${completedFiles.length}/${batchJobs.length} arquivos ok, ~${totalRowsConsolidated.toLocaleString()} linhas`
     : `Batch consolidado: ${completedFiles.length} arquivos, ~${totalRowsConsolidated.toLocaleString()} linhas, ${canonical.columns.length} colunas`;

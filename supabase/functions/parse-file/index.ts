@@ -381,6 +381,23 @@ serve(async (req) => {
       totalBytes: originalSize || file.size,
     });
 
+    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+    try {
+      await supabase.rpc("rpc_activate_ingestion", {
+        p_project_id: projectId,
+        p_source_type: "file",
+        p_config_hash: configHash,
+        p_dataset_id: null,
+        p_manifest_id: null,
+        p_stats: {
+          rows_detected: parsedData.totalRows,
+          cols_detected: parsedData.columns.length,
+          file_count: 1,
+          total_bytes: originalSize || file.size,
+        },
+      });
+    } catch (e) { console.warn("[parse-file] rpc_activate_ingestion fallback:", e); }
+
     console.log(`[parse-file] File processing complete for project ${projectId}`);
 
     return new Response(

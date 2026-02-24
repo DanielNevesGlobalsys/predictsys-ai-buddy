@@ -259,6 +259,18 @@ serve(async (req) => {
       fileCount: 1,
     });
 
+    // ── SSOT: Activate ingestion (creates dataset_state + cascade) ──
+    try {
+      await supabase.rpc("rpc_activate_ingestion", {
+        p_project_id: project_id,
+        p_source_type: "database",
+        p_config_hash: configHash,
+        p_dataset_id: null,
+        p_manifest_id: null,
+        p_stats: { rows_detected: result.totalRows, cols_detected: result.columns.length, file_count: 1, total_bytes: 0 },
+      });
+    } catch (e) { console.warn("[ingest-database] rpc_activate_ingestion fallback:", e); }
+
     console.log(`[ingest-database] Ingestion completed: ${result.totalRows} rows read, ${result.rows.length} sampled`);
 
     return new Response(
