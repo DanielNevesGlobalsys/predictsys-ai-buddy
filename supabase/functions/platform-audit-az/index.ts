@@ -495,6 +495,339 @@ async function buildProjectSample(sb: SB, projectId: string, sinceISO: string, w
   };
 }
 
+// ── BUSINESS RULES CATALOG ──
+async function buildBusinessRulesCatalog(sb: SB, w: string[]) {
+  const detected_rules: {
+    rule_id: string; layer: string; source: string;
+    description: string; dependent_fields: string[];
+    expected_effect: string; risk_level: string;
+  }[] = [];
+
+  // Static map of known edge-function business rules
+  const EDGE_RULES: { id: string; layer: string; fn: string; desc: string; deps: string[]; effect: string; risk: string }[] = [
+    { id: "R_INGEST_SCHEMA_LOCK", layer: "ingestion", fn: "process-import", desc: "Schema locked after first successful import via project_data_contract", deps: ["project_data_contract.locked"], effect: "Rejects imports with incompatible schema", risk: "medium" },
+    { id: "R_INGEST_DB_CONNECTOR", layer: "ingestion", fn: "ingest-database", desc: "Database connector validates connection before sampling rows", deps: ["data_sources.connection_config"], effect: "Blocks ingestion on connection failure", risk: "medium" },
+    { id: "R_TARGET_FALLBACK", layer: "target", fn: "preview-target-template", desc: "Target resolution falls back from intent_contract → settings.target_column", deps: ["project_settings.target_source", "project_settings.target_column", "project_settings.active_intent_contract_id"], effect: "May use stale target if intent not linked", risk: "high" },
+    { id: "R_SPLIT_TEMPORAL_NEEDS_ANCHOR", layer: "split", fn: "preview-split-policy", desc: "Temporal split strategy requires time_anchor_column", deps: ["project_split_policies.strategy", "project_split_policies.time_anchor_column"], effect: "Blocks split preview if missing", risk: "high" },
+    { id: "R_BUILDER_VERSION_GATE", layer: "builder", fn: "build-modeling-dataset", desc: "Builder must match current selection_version", deps: ["project_label_builders.selection_version", "project_model_selection.selection_version"], effect: "Stale builder produces wrong dataset", risk: "high" },
+    { id: "R_TRAIN_PREFLIGHT", layer: "training", fn: "run-training-preflight", desc: "Preflight checks contract audit, dataset readiness, and intent before training", deps: ["project_contract_audits.status", "project_dataset_state.model_ready", "project_settings.active_intent_contract_id"], effect: "Blocks training on BLOCK gates", risk: "high" },
+    { id: "R_TRAIN_MODEL", layer: "training", fn: "train-models", desc: "Trains models using modeling dataset and selection_version", deps: ["project_model_selection.selection_version", "project_modeling_datasets"], effect: "Creates project_models entries", risk: "medium" },
+    { id: "R_DEPLOY_VERSION_CHECK", layer: "deploy", fn: "deploy-model", desc: "Deploy validates model selection_version matches current", deps: ["project_models.deployed_selection_version", "project_model_selection.selection_version"], effect: "Rejects outdated model promotion", risk: "high" },
+    { id: "R_SCORING_BATCH", layer: "scoring", fn: "run-batch-predictions", desc: "Batch scoring reads production_model_id from SSOT", deps: ["project_dataset_state.production_model_id", "project_prediction_state"], effect: "Scores with wrong model if SSOT stale", risk: "high" },
+    { id: "R_SCHEDULE_GATE", layer: "scoring", fn: "run-scheduled-predictions", desc: "Scheduled predictions check for active schedule and production model", deps: ["project_schedules", "project_dataset_state.production_model_id"], effect: "Blocks scheduled run if no production model", risk: "medium" },
+    { id: "R_RETENTION_POLICY", layer: "monitoring", fn: "enforce-data-retention", desc: "Enforces org data retention policy by deleting old records", deps: ["organization_data_policy.data_retention_months"], effect: "Deletes expired data", risk: "low" },
+    { id: "R_AUDIT_LOG", layer: "monitoring", fn: "audit-log", desc: "Records all user actions with org/project context", deps: ["audit_logs"], effect: "Creates audit trail", risk: "low" },
+  ];
+
+  for (const r of EDGE_RULES) {
+    detected_rules.push({
+      rule_id: r.id, layer: r.layer, source: "edge_function",
+      description: `[${r.fn}] ${r.desc}`, dependent_fields: r.deps,
+      expected_effect: r.effect, risk_level: r.risk,
+    });
+  }
+
+  // Detect gate rules from contract audits
+  const audits = await safeSelect(sb, "project_contract_audits", "project_id,gates,status", {}, 100, "created_at", false, w) as Record<string, unknown>[] | null;
+  if (audits) {
+    const gateNames = new Set<string>();
+    for (const a of audits) {
+      const gates = a.gates;
+      if (Array.isArray(gates)) {
+        for (const g of gates as Record<string, unknown>[]) {
+          const name = String(g.gate || g.name || g.check || "");
+          if (name && !gateNames.has(name)) {
+            gateNames.add(name);
+            detected_rules.push({
+              rule_id: `R_GATE_${name}`, layer: "training", source: "gate",
+              description: `Contract audit gate: ${name}`, dependent_fields: ["project_contract_audits.gates"],
+              expected_effect: `Blocks training when gate ${name} fails`, risk_level: "high",
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Detect SSOT defaults from project_settings
+  const allSettings = await safeSelect(sb, "project_settings", "project_id,target_source,prerequisites_source,industry_source", {}, 200, undefined, false, w) as Record<string, unknown>[] | null;
+  const defaultPatterns: Record<string, number> = {};
+  if (allSettings) {
+    for (const s of allSettings) {
+      for (const field of ["target_source", "prerequisites_source", "industry_source"]) {
+        const val = s[field];
+        if (val) {
+          const key = `${field}=${val}`;
+          defaultPatterns[key] = (defaultPatterns[key] || 0) + 1;
+        }
+      }
+    }
+    for (const [pattern, count] of Object.entries(defaultPatterns)) {
+      if (count >= 3) {
+        detected_rules.push({
+          rule_id: `R_DEFAULT_${pattern.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase()}`,
+          layer: "target", source: "ssot",
+          description: `Default pattern: ${pattern} found in ${count} projects`,
+          dependent_fields: [pattern.split("=")[0]],
+          expected_effect: "Implicit default may mask missing user configuration",
+          risk_level: count > 10 ? "low" : "medium",
+        });
+      }
+    }
+  }
+
+  // Redundancy findings
+  const redundancy_findings: { type: string; description: string; evidence: string[] }[] = [];
+
+  // Check for duplicate inference: multiple contract audits with same selection_version per project
+  if (audits) {
+    const byProjVer: Record<string, number> = {};
+    for (const a of audits) {
+      const key = `${a.project_id}:${(a as Record<string, unknown>).selection_version ?? "?"}`;
+      byProjVer[key] = (byProjVer[key] || 0) + 1;
+    }
+    const dups = Object.entries(byProjVer).filter(([, c]) => c > 1);
+    if (dups.length) {
+      redundancy_findings.push({
+        type: "duplicate_inference_call",
+        description: "Multiple contract audits exist for the same project+selection_version",
+        evidence: dups.map(([k, c]) => `${k} (${c}x)`),
+      });
+    }
+  }
+
+  // Check for gate overlap: split_policy + contract_audit both checking time_anchor
+  if (audits) {
+    const splitGateProjects: string[] = [];
+    for (const a of audits) {
+      const gates = a.gates;
+      if (Array.isArray(gates)) {
+        for (const g of gates as Record<string, unknown>[]) {
+          const name = String(g.gate || g.name || "").toLowerCase();
+          if (name.includes("time") || name.includes("temporal") || name.includes("anchor")) {
+            splitGateProjects.push(String(a.project_id));
+          }
+        }
+      }
+    }
+    if (splitGateProjects.length) {
+      redundancy_findings.push({
+        type: "multiple_gate_overlap",
+        description: "Contract audit gates overlap with split_policy temporal validation",
+        evidence: [...new Set(splitGateProjects)],
+      });
+    }
+  }
+
+  return { detected_rules, redundancy_findings };
+}
+
+// ── RULE OUTCOME DIFF ──
+async function buildRuleOutcomeDiff(sb: SB, sinceISO: string, w: string[]) {
+  const diffs: {
+    rule_id: string; expected_behavior: string; observed_behavior: string;
+    mismatch_detected: boolean; affected_projects: string[];
+  }[] = [];
+
+  // Reuse data we know how to query (avoid re-fetching what buildInconsistencies does—
+  // but this is a separate layer so we query independently for isolation)
+
+  // 1) Split temporal without time_anchor
+  const splits = await safeSelect(sb, "project_split_policies", "project_id,strategy,time_anchor_column", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  if (splits) {
+    const bad = splits.filter(r => r.strategy === "temporal" && !r.time_anchor_column).map(r => String(r.project_id));
+    diffs.push({
+      rule_id: "R_SPLIT_TEMPORAL_NEEDS_ANCHOR",
+      expected_behavior: "Temporal split requires time_anchor_column to be set",
+      observed_behavior: bad.length ? `${bad.length} projects have temporal split without time_anchor_column` : "All temporal splits have time_anchor_column",
+      mismatch_detected: bad.length > 0,
+      affected_projects: bad,
+    });
+  }
+
+  // 2) Label builder without result
+  const settings = await safeSelect(sb, "project_settings", "project_id,target_source,label_build_result", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  if (settings) {
+    const bad = settings.filter(r => r.target_source === "label_builder" && (!r.label_build_result || (typeof r.label_build_result === "object" && Object.keys(r.label_build_result as object).length === 0))).map(r => String(r.project_id));
+    diffs.push({
+      rule_id: "R_TARGET_FALLBACK",
+      expected_behavior: "target_source=label_builder implies label_build_result is populated",
+      observed_behavior: bad.length ? `${bad.length} projects missing label_build_result` : "All label_builder projects have results",
+      mismatch_detected: bad.length > 0,
+      affected_projects: bad,
+    });
+  }
+
+  // 3) Builder version mismatch
+  const builders = await safeSelect(sb, "project_label_builders", "project_id,selection_version", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  const selections = await safeSelect(sb, "project_model_selection", "project_id,selection_version", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  if (builders && selections) {
+    const selMap = new Map((selections as Record<string, unknown>[]).map(r => [r.project_id, r.selection_version]));
+    const bad = builders.filter(r => { const c = selMap.get(r.project_id); return c != null && r.selection_version != null && c !== r.selection_version; }).map(r => String(r.project_id));
+    diffs.push({
+      rule_id: "R_BUILDER_VERSION_GATE",
+      expected_behavior: "Builder selection_version must match model_selection.selection_version",
+      observed_behavior: bad.length ? `${bad.length} projects have version mismatch` : "All builder versions aligned",
+      mismatch_detected: bad.length > 0,
+      affected_projects: [...new Set(bad)],
+    });
+  }
+
+  // 4) Deploy gate: production_model_id set but last deploy failed
+  const deploys = await safeSelect(sb, "project_model_deployments", "project_id,model_id,status", {}, 200, "created_at", false, w) as Record<string, unknown>[] | null;
+  const dsStates = await safeSelect(sb, "project_dataset_state", "project_id,production_model_id", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  if (deploys && dsStates) {
+    const prodMap = new Map((dsStates as Record<string, unknown>[]).map(r => [r.project_id, r.production_model_id]));
+    const failedProd = deploys.filter(r => (r.status === "failed" || r.status === "error") && prodMap.get(r.project_id) === r.model_id).map(r => String(r.project_id));
+    diffs.push({
+      rule_id: "R_DEPLOY_VERSION_CHECK",
+      expected_behavior: "production_model_id should only point to successfully deployed models",
+      observed_behavior: failedProd.length ? `${failedProd.length} projects have production model from failed deployment` : "All production models deployed successfully",
+      mismatch_detected: failedProd.length > 0,
+      affected_projects: failedProd,
+    });
+  }
+
+  // 5) Prediction state: batch_id but count=0
+  const predStates = await safeSelect(sb, "project_prediction_state", "project_id,latest_batch_id,predictions_count", {}, 500, undefined, false, w) as Record<string, unknown>[] | null;
+  if (predStates) {
+    const bad = predStates.filter(r => r.latest_batch_id && (r.predictions_count === 0 || r.predictions_count === null)).map(r => String(r.project_id));
+    diffs.push({
+      rule_id: "R_SCORING_BATCH",
+      expected_behavior: "latest_batch_id implies predictions_count > 0",
+      observed_behavior: bad.length ? `${bad.length} projects have batch_id with zero predictions` : "All batches have predictions",
+      mismatch_detected: bad.length > 0,
+      affected_projects: bad,
+    });
+  }
+
+  // 6) Duplicate inference: multiple contract audits same selection_version
+  const audits = await safeSelect(sb, "project_contract_audits", "project_id,selection_version", {}, 300, undefined, false, w) as Record<string, unknown>[] | null;
+  if (audits) {
+    const byPV: Record<string, number> = {};
+    for (const a of audits) byPV[`${a.project_id}:${a.selection_version}`] = (byPV[`${a.project_id}:${a.selection_version}`] || 0) + 1;
+    const bad = Object.entries(byPV).filter(([, c]) => c > 1).map(([k]) => k.split(":")[0]);
+    diffs.push({
+      rule_id: "R_TRAIN_PREFLIGHT",
+      expected_behavior: "One contract audit per selection_version per project",
+      observed_behavior: bad.length ? `${bad.length} projects have duplicate audits for same version` : "No duplicate inference",
+      mismatch_detected: bad.length > 0,
+      affected_projects: [...new Set(bad)],
+    });
+  }
+
+  // 7) Modal loop: rapid project_settings updates
+  const settingsAudits = await safe(async () => {
+    const { data } = await sb.from("audit_logs").select("project_id,timestamp").eq("resource_type", "project_settings").eq("action", "update").gte("timestamp", sinceISO).order("timestamp", { ascending: false }).limit(500);
+    return data || [];
+  }, w, "rod_modal_loop");
+  if (settingsAudits && (settingsAudits as unknown[]).length > 0) {
+    const byProject: Record<string, string[]> = {};
+    for (const r of settingsAudits as Record<string, unknown>[]) {
+      const pid = String(r.project_id || ""); if (!pid) continue;
+      if (!byProject[pid]) byProject[pid] = [];
+      byProject[pid].push(String(r.timestamp));
+    }
+    const loopPids: string[] = [];
+    for (const [pid, ts] of Object.entries(byProject)) {
+      ts.sort();
+      for (let i = 0; i <= ts.length - 5; i++) {
+        if (new Date(ts[i + 4]).getTime() - new Date(ts[i]).getTime() < 600000) { loopPids.push(pid); break; }
+      }
+    }
+    diffs.push({
+      rule_id: "R_AUDIT_LOG",
+      expected_behavior: "Settings updates should be intentional (not rapid-fire loops)",
+      observed_behavior: loopPids.length ? `${loopPids.length} projects show >=5 updates within 10min` : "No modal loop patterns detected",
+      mismatch_detected: loopPids.length > 0,
+      affected_projects: loopPids,
+    });
+  }
+
+  return diffs;
+}
+
+// ── FLOW TRACE RECONSTRUCTION ──
+async function buildFlowTraces(sb: SB, projectIds: string[], sinceISO: string, w: string[]) {
+  const reconstructed_flows: {
+    project_id: string;
+    step_sequence: { step: string; at: string | null }[];
+    anomalies: string[];
+  }[] = [];
+
+  for (const pid of projectIds) {
+    const steps: { step: string; at: string | null }[] = [];
+    const anomalies: string[] = [];
+
+    // Ingestion: earliest import_job
+    const ij = await safeSelect(sb, "import_jobs", "created_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    const ingestionAt = ij?.[0]?.created_at ? String(ij[0].created_at) : null;
+    steps.push({ step: "ingestion", at: ingestionAt });
+
+    // EDA: earliest eda_snapshot
+    const eda = await safeSelect(sb, "project_eda_snapshots", "created_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    steps.push({ step: "eda", at: eda?.[0]?.created_at ? String(eda[0].created_at) : null });
+
+    // Target: project_settings updated_at (proxy)
+    const ps = await safeSelect(sb, "project_settings", "updated_at,target_column", { project_id: pid }, 1, undefined, false, w) as Record<string, unknown>[] | null;
+    const targetAt = ps?.[0]?.target_column ? String(ps[0].updated_at) : null;
+    steps.push({ step: "target", at: targetAt });
+
+    // Split: earliest split_policy
+    const sp = await safeSelect(sb, "project_split_policies", "created_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    steps.push({ step: "split", at: sp?.[0]?.created_at ? String(sp[0].created_at) : null });
+
+    // Builder: earliest label_builder
+    const lb = await safeSelect(sb, "project_label_builders", "created_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    const builderAt = lb?.[0]?.created_at ? String(lb[0].created_at) : null;
+    steps.push({ step: "builder", at: builderAt });
+
+    // Training: earliest model
+    const md = await safeSelect(sb, "project_models", "created_at,trained_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    const trainingAt = md?.[0]?.created_at ? String(md[0].created_at) : null;
+    steps.push({ step: "training", at: trainingAt });
+
+    // Deploy: earliest deployment
+    const dp = await safeSelect(sb, "project_model_deployments", "created_at", { project_id: pid }, 1, "created_at", true, w) as Record<string, unknown>[] | null;
+    const deployAt = dp?.[0]?.created_at ? String(dp[0].created_at) : null;
+    steps.push({ step: "deploy", at: deployAt });
+
+    // Scoring: earliest scoring_job
+    const sj = await safeSelect(sb, "project_scoring_jobs", "started_at", { project_id: pid }, 1, "started_at", true, w) as Record<string, unknown>[] | null;
+    const scoringAt = sj?.[0]?.started_at ? String(sj[0].started_at) : null;
+    steps.push({ step: "scoring", at: scoringAt });
+
+    // ── Anomaly detection ──
+    // Training without builder
+    if (trainingAt && !builderAt) anomalies.push("training_called_without_builder");
+
+    // Scoring before deploy
+    if (scoringAt && deployAt && scoringAt < deployAt) anomalies.push("scoring_before_deploy");
+
+    // Duplicate inference: multiple contract audits same version
+    const ca = await safeSelect(sb, "project_contract_audits", "selection_version", { project_id: pid }, 20, undefined, false, w) as Record<string, unknown>[] | null;
+    if (ca) {
+      const vers = (ca as Record<string, unknown>[]).map(r => r.selection_version);
+      const seen = new Set<unknown>();
+      for (const v of vers) { if (seen.has(v)) { anomalies.push("duplicate_inference"); break; } seen.add(v); }
+    }
+
+    // Loop detection: multiple scoring failures
+    const sjAll = await safeSelect(sb, "project_scoring_jobs", "status", { project_id: pid }, 10, "started_at", false, w) as Record<string, unknown>[] | null;
+    if (sjAll) {
+      let consecutive = 0;
+      for (const r of sjAll as Record<string, unknown>[]) {
+        if (["error", "failed"].includes(String(r.status))) consecutive++; else consecutive = 0;
+        if (consecutive >= 3) { anomalies.push("loop_detected"); break; }
+      }
+    }
+
+    reconstructed_flows.push({ project_id: pid, step_sequence: steps, anomalies });
+  }
+
+  return { reconstructed_flows };
+}
+
 // ── MAIN ──
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
@@ -507,27 +840,32 @@ Deno.serve(async (req) => {
     const sinceISO = new Date(Date.now() - days * 86400000).toISOString();
     const w: string[] = [];
 
-    console.log(`[platform-audit-az] days=${days} sample_size=${sampleSize}`);
+    console.log(`[platform-audit-az] v4.1 days=${days} sample_size=${sampleSize}`);
 
-    // Build sections in parallel where possible
-    const [platformSummary, topErrors, perfHotspots, inconsistencies] = await Promise.all([
+    // Build core sections in parallel
+    const [platformSummary, topErrors, perfHotspots, inconsistencies, businessRules, ruleOutcomeDiff] = await Promise.all([
       buildPlatformSummary(sb, sinceISO, w),
       buildTopErrors(sb, sinceISO, w),
       buildPerformanceHotspots(sb, sinceISO, w),
       buildInconsistencies(sb, w),
+      buildBusinessRulesCatalog(sb, w),
+      buildRuleOutcomeDiff(sb, sinceISO, w),
     ]);
 
     // Select project samples
     const sampleIds = await selectProjectSamples(sb, sinceISO, sampleSize, w);
 
-    // Build project details (sequential to avoid overloading DB)
+    // Build project details + flow traces (sequential to avoid overloading DB)
     const projectSamples: unknown[] = [];
     for (const pid of sampleIds) {
       projectSamples.push(await buildProjectSample(sb, pid, sinceISO, w));
     }
 
+    // Flow trace reconstruction for sampled projects
+    const flowTraces = await buildFlowTraces(sb, sampleIds, sinceISO, w);
+
     const result = stripPII({
-      version: "platform-audit-az-v4",
+      version: "platform-audit-az-v4.1",
       generated_at: new Date().toISOString(),
       params: { days, sample_size: sampleSize },
       warnings: w,
@@ -535,6 +873,9 @@ Deno.serve(async (req) => {
       top_error_signatures: topErrors,
       performance_hotspots: perfHotspots,
       inconsistency_findings: inconsistencies,
+      business_rules_catalog: businessRules,
+      rule_outcome_diff: ruleOutcomeDiff,
+      flow_trace_reconstruction: flowTraces,
       project_samples: projectSamples,
     });
 
