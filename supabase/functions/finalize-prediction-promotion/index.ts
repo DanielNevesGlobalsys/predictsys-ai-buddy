@@ -71,6 +71,24 @@ Deno.serve(async (req) => {
 
     const result = data as Record<string, unknown> | null;
 
+    // ── SSOT State Machine: Update scoring_state + scoring_version ──
+    try {
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "scoring",
+        p_new_state: "done",
+        p_version_increment: true,
+      });
+      // Mark dashboard as stale since new scoring data is available
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "dashboard",
+        p_new_state: "stale",
+      });
+    } catch (stateErr) {
+      console.warn("[finalize-prediction-promotion] Failed to update pipeline state (non-blocking):", stateErr);
+    }
+
     return makeResponse({
       success: result?.success ?? true,
       status: result?.status ?? "PROMOTED",

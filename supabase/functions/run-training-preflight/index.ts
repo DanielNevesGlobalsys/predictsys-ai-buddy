@@ -739,6 +739,33 @@ serve(async (req: Request) => {
       target_lifecycle: "Verificar Ciclo de Vida do Target na Etapa 3",
     };
 
+    // ── Read SSOT staleness flags ──
+    const { data: ssotSettings } = await supabase
+      .from("project_settings")
+      .select("staleness_flags, ingestion_state, eda_state, target_state, split_state, builder_state, training_state, scoring_state, dashboard_state, selection_version, dataset_version, training_version, scoring_version, dashboard_version")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    const ssotFlags = (ssotSettings as any)?.staleness_flags || {};
+    const pipelineStates = ssotSettings ? {
+      ingestion: (ssotSettings as any).ingestion_state,
+      eda: (ssotSettings as any).eda_state,
+      target: (ssotSettings as any).target_state,
+      split: (ssotSettings as any).split_state,
+      builder: (ssotSettings as any).builder_state,
+      training: (ssotSettings as any).training_state,
+      scoring: (ssotSettings as any).scoring_state,
+      dashboard: (ssotSettings as any).dashboard_state,
+    } : null;
+
+    const versionTracking = ssotSettings ? {
+      selection_version: (ssotSettings as any).selection_version,
+      dataset_version: (ssotSettings as any).dataset_version,
+      training_version: (ssotSettings as any).training_version,
+      scoring_version: (ssotSettings as any).scoring_version,
+      dashboard_version: (ssotSettings as any).dashboard_version,
+    } : null;
+
     const result = {
       can_build: canBuild,
       can_train: canTrain,
@@ -754,6 +781,10 @@ serve(async (req: Request) => {
       selection_version_used_by_builder: builderSelVersion,
       builder_is_current: builderIsCurrent,
       builder_version: (modelingDataset as any)?.selection_version_used || 0,
+      // ── SSOT State Machine ──
+      pipeline_states: pipelineStates,
+      staleness_flags: ssotFlags,
+      version_tracking: versionTracking,
     };
 
     console.log(`[run-training-preflight] Result: can_train=${canTrain}, gates=${gates.length}`);

@@ -3123,6 +3123,12 @@ export type Database = {
       }
       project_settings: {
         Row: {
+          active_intent_contract_id: string | null
+          builder_state: string
+          dashboard_state: string
+          dashboard_version: number
+          dataset_version: number
+          eda_state: string
           entity_key: string | null
           excluded_columns: Json | null
           feature_columns: Json | null
@@ -3130,29 +3136,45 @@ export type Database = {
           human_label_result: Json | null
           industry: string
           industry_source: string
+          ingestion_state: string
           label_build_result: Json | null
           org_id: string | null
           prerequisites_resolved_at: string | null
           prerequisites_source: string | null
           problem_type: string | null
           project_id: string
+          scoring_state: string
+          scoring_version: number
           segment: string | null
           segment_source: string | null
           selected_template_id: string | null
           selected_template_params: Json | null
+          selection_version: number
+          split_policy_id: string | null
+          split_state: string
+          staleness_flags: Json
           target_column: string | null
           target_last_validated_at: string | null
           target_lifecycle_state: Json | null
           target_quality_report: Json | null
           target_source: string
+          target_state: string
           target_suggestion_meta: Json | null
           time_anchor_column: string | null
+          training_state: string
+          training_version: number
           updated_at: string
           value_column: string | null
           weak_label_config: Json | null
           weak_label_result: Json | null
         }
         Insert: {
+          active_intent_contract_id?: string | null
+          builder_state?: string
+          dashboard_state?: string
+          dashboard_version?: number
+          dataset_version?: number
+          eda_state?: string
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
@@ -3160,29 +3182,45 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_state?: string
           label_build_result?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
           problem_type?: string | null
           project_id: string
+          scoring_state?: string
+          scoring_version?: number
           segment?: string | null
           segment_source?: string | null
           selected_template_id?: string | null
           selected_template_params?: Json | null
+          selection_version?: number
+          split_policy_id?: string | null
+          split_state?: string
+          staleness_flags?: Json
           target_column?: string | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
           target_quality_report?: Json | null
           target_source?: string
+          target_state?: string
           target_suggestion_meta?: Json | null
           time_anchor_column?: string | null
+          training_state?: string
+          training_version?: number
           updated_at?: string
           value_column?: string | null
           weak_label_config?: Json | null
           weak_label_result?: Json | null
         }
         Update: {
+          active_intent_contract_id?: string | null
+          builder_state?: string
+          dashboard_state?: string
+          dashboard_version?: number
+          dataset_version?: number
+          eda_state?: string
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
@@ -3190,23 +3228,33 @@ export type Database = {
           human_label_result?: Json | null
           industry?: string
           industry_source?: string
+          ingestion_state?: string
           label_build_result?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
           problem_type?: string | null
           project_id?: string
+          scoring_state?: string
+          scoring_version?: number
           segment?: string | null
           segment_source?: string | null
           selected_template_id?: string | null
           selected_template_params?: Json | null
+          selection_version?: number
+          split_policy_id?: string | null
+          split_state?: string
+          staleness_flags?: Json
           target_column?: string | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
           target_quality_report?: Json | null
           target_source?: string
+          target_state?: string
           target_suggestion_meta?: Json | null
           time_anchor_column?: string | null
+          training_state?: string
+          training_version?: number
           updated_at?: string
           value_column?: string | null
           weak_label_config?: Json | null
@@ -3537,6 +3585,15 @@ export type Database = {
           p_coverage_pct?: number
           p_predictions_count?: number
           p_project_id: string
+        }
+        Returns: Json
+      }
+      rpc_update_pipeline_state: {
+        Args: {
+          p_new_state: string
+          p_project_id: string
+          p_stage: string
+          p_version_increment?: boolean
         }
         Returns: Json
       }

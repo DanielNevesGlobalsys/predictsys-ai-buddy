@@ -379,6 +379,18 @@ serve(async (req) => {
 
     console.log(`[Dashboard Metrics v2] Done: entities=${agg.entities_with_prediction}, rows=${totalRows}, confidence=${confidenceScore}, batch=${latestBatchId || 'legacy'}`);
 
+    // ── SSOT State Machine: Mark dashboard as ready + increment version ──
+    try {
+      await supabase.rpc('rpc_update_pipeline_state', {
+        p_project_id: project_id,
+        p_stage: 'dashboard',
+        p_new_state: 'ready',
+        p_version_increment: true,
+      });
+    } catch (stateErr) {
+      console.warn('[Dashboard Metrics v2] Failed to update pipeline state (non-blocking):', stateErr);
+    }
+
     return new Response(JSON.stringify(response), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });

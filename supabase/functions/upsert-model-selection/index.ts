@@ -161,9 +161,21 @@ serve(async (req: Request) => {
           problem_type: problem_type || null,
           feature_columns: selected_features || [],
           excluded_columns: excluded_features || [],
+          // ── SSOT State Machine: sync selection_version + target_state ──
+          selection_version: newVersion,
+          target_state: target_column ? "ready" : "draft",
         },
         { onConflict: "project_id" },
       );
+
+    // ── SSOT: Mark downstream stages as stale when selection changes ──
+    if (didChange) {
+      await supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "builder",
+        p_new_state: "draft",
+      });
+    }
 
     // ── Sync modeling contract problem_type when selection changes ──
     if (didChange && problem_type) {
