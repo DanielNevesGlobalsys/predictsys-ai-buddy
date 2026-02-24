@@ -65,10 +65,11 @@ export default function TrainabilityDiagnosticCard({
       case "open_weak_supervision_config":
       case "open_human_labeling":
       case "change_problem_type":
-        // All go back to step 3 (Target/Features)
-        onGoToStep?.(3);
+        // Step 4 = Target/Features in wizard
+        onGoToStep?.(4);
         break;
       case "go_to_step_2":
+        // Step 2 = Data Upload
         onGoToStep?.(2);
         break;
       default:
@@ -186,7 +187,7 @@ export default function TrainabilityDiagnosticCard({
       <Button
         variant="outline"
         size="sm"
-        onClick={() => { if (onGoToStep) onGoToStep(3); else onBack?.(); }}
+        onClick={() => { if (onGoToStep) onGoToStep(4); else onBack?.(); }}
         className="w-full text-xs border-destructive/30 text-destructive hover:bg-destructive/10"
       >
         <ArrowLeft className="w-3.5 h-3.5 mr-1.5" />

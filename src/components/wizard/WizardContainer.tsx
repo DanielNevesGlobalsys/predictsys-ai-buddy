@@ -349,7 +349,7 @@ const WizardContainer = () => {
       case 4:
         return <StepTargetFeatures {...stepProps} onConfigChange={handleConfigChange} />;
       case 5:
-        return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} />;
+        return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} onGoToStep={setCurrentStep} />;
       case 6:
         return <StepScoring projectData={projectData} onNext={() => setCurrentStep(7)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
       case 7:

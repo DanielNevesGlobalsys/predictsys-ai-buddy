@@ -35,6 +35,7 @@ interface StepTrainingProps {
   saveProject: (data: Partial<ProjectData>, nextStep?: number) => Promise<void>;
   needsRetrain?: boolean;
   onTrainingComplete?: () => void;
+  onGoToStep?: (step: number) => void;
 }
 
 interface ModelResult {
@@ -118,6 +119,7 @@ const StepTraining = ({
   saveProject,
   needsRetrain = false,
   onTrainingComplete,
+  onGoToStep,
 }: StepTrainingProps) => {
   const { t } = useTranslation();
   const [isTraining, setIsTraining] = useState(false);
@@ -745,8 +747,8 @@ const StepTraining = ({
                   warnings={trainabilityError.warnings as string[] || []}
                   humanMessage={trainabilityError.error || error}
                   onGoToStep={(step) => {
-                    // Navigate back enough steps
-                    onBack();
+                    if (onGoToStep) onGoToStep(step);
+                    else onBack();
                   }}
                   onBack={onBack}
                 />
