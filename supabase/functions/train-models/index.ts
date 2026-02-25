@@ -1391,10 +1391,11 @@ serve(async (req) => {
       });
     } catch (_) { /* best-effort */ }
 
-    // Helper to return structured block response
+    // Helper to return structured block response (HTTP 200 per reliability standards)
     const blockResponse = (code: string, message: string, cta: { label: string; go_to_step?: number } | null, details?: Record<string, unknown>) => {
       console.error(`[Gating] BLOCKED: ${code} — ${message}`);
       return new Response(JSON.stringify({
+        success: false,
         status: "blocked",
         code,
         message_user: message,
@@ -1403,7 +1404,7 @@ serve(async (req) => {
         details: details || {},
         error: message,
         action: cta ? "navigate" : "review_target",
-      }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     };
 
     // ==================== SSOT GATING (Etapa 4.2) ====================

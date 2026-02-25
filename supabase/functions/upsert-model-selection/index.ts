@@ -191,11 +191,29 @@ serve(async (req: Request) => {
 
     // ── SSOT: Mark downstream stages as stale when selection changes ──
     if (didChange) {
-      await supabase.rpc("rpc_update_pipeline_state", {
-        p_project_id: project_id,
-        p_stage: "builder",
-        p_new_state: "draft",
-      });
+      // Reset builder + training + scoring + dashboard to prevent stale states
+      await Promise.all([
+        supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "builder",
+          p_new_state: "draft",
+        }),
+        supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "training",
+          p_new_state: "idle",
+        }),
+        supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "scoring",
+          p_new_state: "idle",
+        }),
+        supabase.rpc("rpc_update_pipeline_state", {
+          p_project_id: project_id,
+          p_stage: "dashboard",
+          p_new_state: "idle",
+        }),
+      ]);
     }
 
     // ── Sync modeling contract problem_type when selection changes ──

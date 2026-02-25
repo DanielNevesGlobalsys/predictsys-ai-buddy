@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { resolveActiveTarget } from "../_shared/resolve-active-target.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1094,10 +1095,13 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Intent: ${JSON.stringify(intent)}`);
 
-    // ==================== DETERMINE TARGET (SSOT: project_model_selection > project_settings > contract > auto) ====================
-    // Priority: model_selection.target_column (versioned) > settings.target_column > contract > auto-detect
+    // ==================== DETERMINE TARGET (SSOT: resolveActiveTarget → model_selection → settings → contract → auto) ====================
+    // CRITICAL: Use resolveActiveTarget() for parity with preflight and train-models
+    const activeTarget = resolveActiveTarget((settings as Record<string, any>) || {});
+    console.log(`[build-modeling-dataset] resolveActiveTarget: mode=${activeTarget.mode}, column=${activeTarget.column}, target_source=${activeTarget.target_source}`);
+
     const selectionVersion = modelSelection?.selection_version || 0;
-    let targetColumn = modelSelection?.target_column || settings?.target_column || null;
+    let targetColumn = activeTarget.column || modelSelection?.target_column || settings?.target_column || null;
     let targetType: "binary" | "multiclass" | "regression" = "binary";
     let targetSource: "direct" | "label_builder" = "direct";
     let labelPlan: LabelPlan | null = null;
@@ -1106,12 +1110,11 @@ serve(async (req: Request) => {
     let labelBuildResult: LabelBuildResult | null = null;
     const allBlockedReasons: string[] = [];
 
-    // ── LABEL BUILDER: If target is "label" or "_label_" (virtual target from label builder) ──
-    // Also check target_source from settings to handle "label" set via activate-target-template
-    const settingsTargetSource = (settings as any)?.target_source || "manual";
-    const isLabelBuilderTarget = targetColumn === "_label_" || targetColumn === "label" || settingsTargetSource === "label_builder";
-    const isWeakSupervisionTarget = settingsTargetSource === "weak_supervision";
-    const isHumanLabelingTarget = settingsTargetSource === "human_labeling";
+    // ── Use resolveActiveTarget mode for consistent behavior across all functions ──
+    const isHumanLabelingTarget = activeTarget.mode === "human";
+    const isWeakSupervisionTarget = activeTarget.mode === "weak";
+    const isLabelBuilderTarget = activeTarget.mode === "template" || 
+      (!isHumanLabelingTarget && !isWeakSupervisionTarget && (targetColumn === "_label_" || targetColumn === "label"));
 
     if (isHumanLabelingTarget) {
       // Human labeling mode: use human labels + seed model to generate labels
