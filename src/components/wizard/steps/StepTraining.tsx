@@ -423,6 +423,14 @@ const StepTraining = ({
           setError(d.error || "Target não treinável");
           throw new Error(d.error || "Target não treinável");
         }
+        // Handle TRAINING_CRASH with structured error
+        if (d.code === "TRAINING_CRASH" || d.status === "error") {
+          const requestId = d.error?.request_id || "N/A";
+          const errorCode = d.code || "UNKNOWN";
+          const crashError = new Error(d.message_user || "Erro interno no treinamento");
+          (crashError as any).__trainingCrash = { request_id: requestId, code: errorCode, step: d.error?.step };
+          throw crashError;
+        }
         if (d.preflight_report) {
           setPreflightReport(d.preflight_report);
           setErrorAction(d.action || null);
@@ -465,9 +473,14 @@ const StepTraining = ({
       console.error("Training error:", err);
       const errorMessage = err instanceof Error ? err.message : t("stepTraining.errors.trainingFailed");
       
+      // Check for structured TRAINING_CRASH
+      const crashInfo = (err as any)?.__trainingCrash;
+      
       // Parse different error types
       let userMessage = errorMessage;
-      if (errorMessage.includes("violates check constraint")) {
+      if (crashInfo) {
+        userMessage = `${errorMessage} (Código: ${crashInfo.request_id})`;
+      } else if (errorMessage.includes("violates check constraint")) {
         userMessage = t("stepTraining.errors.statusError");
       } else if (errorMessage.includes("non-2xx")) {
         userMessage = t("stepTraining.errors.serverError");
@@ -476,7 +489,23 @@ const StepTraining = ({
       }
       
       setError(userMessage);
-      toast.error(userMessage);
+      
+      if (crashInfo) {
+        toast.error(errorMessage, {
+          description: `Request ID: ${crashInfo.request_id}`,
+          action: {
+            label: "Copiar código",
+            onClick: () => {
+              navigator.clipboard.writeText(`TRAINING_CRASH | request_id: ${crashInfo.request_id} | step: ${crashInfo.step || "unknown"}`);
+              toast.success("Código copiado!");
+            },
+          },
+          duration: 15000,
+        });
+      } else {
+        toast.error(userMessage);
+      }
+      
       await saveProject({ status: "eda_complete" });
 
       // Track job error event
@@ -484,7 +513,11 @@ const StepTraining = ({
         event_type: "job_error",
         project_id: projectData.id,
         status: "error",
-        metadata: { stage: "training", error_message: userMessage },
+        metadata: { 
+          stage: "training", 
+          error_message: userMessage,
+          ...(crashInfo ? { request_id: crashInfo.request_id, code: crashInfo.code, step: crashInfo.step } : {}),
+        },
         source: "app",
       }, startTime);
     } finally {
