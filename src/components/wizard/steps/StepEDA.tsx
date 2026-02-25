@@ -61,6 +61,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const [logModalOpen, setLogModalOpen] = useState(false);
   const [logModalData, setLogModalData] = useState<any[] | null>(null);
   const [logModalLoading, setLogModalLoading] = useState(false);
+  const [debugResult, setDebugResult] = useState<string | null>(null);
+  const [debugLoading, setDebugLoading] = useState(false);
 
   // ── Ingestion SSOT gate ──────────────────────────────────
   const [ingestion, setIngestion] = useState<IngestionSSOT>({
@@ -475,7 +477,52 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* EDA Display */}
+            {/* DEBUG: Test generate-dataset-sample */}
+            <div className="p-4 rounded-lg border-2 border-dashed border-destructive/40 bg-destructive/5 space-y-3">
+              <p className="text-xs font-mono font-bold text-destructive">🔧 DEBUG — Teste direto da Edge Function</p>
+              <Button
+                size="sm"
+                variant="destructive"
+                disabled={debugLoading}
+                onClick={async () => {
+                  setDebugLoading(true);
+                  setDebugResult(null);
+                  try {
+                    const res = await supabase.functions.invoke("generate-dataset-sample", {
+                      body: { project_id: projectData.id },
+                    });
+                    const payload = {
+                      ok: !res.error,
+                      data: res.data,
+                      error: res.error ? {
+                        message: (res.error as any)?.message,
+                        name: (res.error as any)?.name,
+                        context: (res.error as any)?.context,
+                        raw: String(res.error),
+                      } : null,
+                    };
+                    console.log("[DEBUG generate-dataset-sample]", payload);
+                    setDebugResult(JSON.stringify(payload, null, 2));
+                  } catch (e: any) {
+                    const payload = { ok: false, caught: e.message, name: e.name, stack: e.stack?.slice(0, 500) };
+                    console.log("[DEBUG generate-dataset-sample] CATCH", payload);
+                    setDebugResult(JSON.stringify(payload, null, 2));
+                  } finally {
+                    setDebugLoading(false);
+                  }
+                }}
+              >
+                {debugLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
+                TESTAR generate-dataset-sample
+              </Button>
+              {debugResult && (
+                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] bg-muted/50 p-3 rounded max-h-60 overflow-y-auto border">
+                  Resultado do teste:{"\n"}{debugResult}
+                </pre>
+              )}
+            </div>
+
+
             {edaBlocked ? (
               <div className="text-center py-12 space-y-3">
                 <XCircle className="w-12 h-12 text-destructive/50 mx-auto" />
