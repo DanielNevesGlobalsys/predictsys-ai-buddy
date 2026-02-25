@@ -516,9 +516,37 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                 TESTAR generate-dataset-sample
               </Button>
               {debugResult && (
-                <pre className="whitespace-pre-wrap break-all font-mono text-[11px] bg-muted/50 p-3 rounded max-h-60 overflow-y-auto border">
-                  Resultado do teste:{"\n"}{debugResult}
-                </pre>
+                <div className="space-y-2">
+                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] bg-muted/50 p-3 rounded max-h-60 overflow-y-auto border">
+                    Resultado do teste:{"\n"}{debugResult}
+                  </pre>
+                  {(() => {
+                    try {
+                      const parsed = JSON.parse(debugResult);
+                      const attempts = parsed?.data?.debug?.attempts;
+                      if (Array.isArray(attempts) && attempts.length > 0) {
+                        return (
+                          <div className="space-y-1">
+                            <p className="text-xs font-mono font-bold text-destructive">📦 Tentativas por bucket:</p>
+                            {attempts.map((a: any, i: number) => (
+                              <div key={i} className="text-[10px] font-mono p-2 rounded border bg-background">
+                                <span className={a.download_ok ? "text-green-600" : "text-destructive"}>
+                                  {a.download_ok ? "✅" : "❌"} {a.bucket}
+                                </span>
+                                {" → "}{a.path}
+                                {a.list_count != null && <span className="text-muted-foreground"> | list:{a.list_count}</span>}
+                                {a.list_names && <span className="text-muted-foreground"> [{a.list_names.join(", ")}]</span>}
+                                {a.error_raw && <span className="text-destructive"> | {a.error_raw}</span>}
+                                {a.file_size && <span className="text-green-600"> | {(a.file_size / 1024).toFixed(1)}KB</span>}
+                              </div>
+                            ))}
+                          </div>
+                        );
+                      }
+                      return null;
+                    } catch { return null; }
+                  })()}
+                </div>
               )}
             </div>
 
