@@ -2,7 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
-import { evaluateTargetTrainability, trainabilityHumanMessage } from "../_shared/evaluate-target-trainability.ts";
+import { evaluateTargetTrainability, trainabilityHumanMessage, evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
 
 const corsHeaders = {
@@ -1490,17 +1490,23 @@ serve(async (req) => {
     if (activeTarget.mode === "human") {
       console.log(`[Gating] ⚡ Active target mode = HUMAN. Ignoring target_column="${target_column}" and template.`);
       
-      // Validate human labels BEFORE proceeding
-      humanTargetStats = await buildHumanTargetStats(supabase, project_id);
+      // Use the SAME shared function as preflight for exact parity
+      const ssotReport = await evaluateTargetTrainabilityFromSSOT({
+        supabase,
+        projectId: project_id,
+        activeTargetMode: "human",
+        targetColumn: null,
+        problemType: (activeTargetSettings as any)?.problem_type || "classification",
+        projectSettings: (activeTargetSettings as any) || {},
+      });
       
-      // Persist trainability report
-      const trainReport = buildTrainabilityReport(activeTarget, humanTargetStats);
+      // Persist report to SSOT
       await supabase.from("project_settings")
-        .update({ target_trainability_report: trainReport })
+        .update({ target_trainability_report: ssotReport })
         .eq("project_id", project_id);
-      
-      if (humanTargetStats.reason_code) {
-        console.error(`[Gating] ⛔ Human target blocked: ${humanTargetStats.reason_code}`);
+
+      if (!ssotReport.trainable) {
+        console.error(`[Gating] ⛔ Human target blocked: ${ssotReport.reason_code}`);
         
         // Cascade pipeline state
         await supabase.rpc("rpc_update_pipeline_state", {
@@ -1513,61 +1519,19 @@ serve(async (req) => {
         
         return new Response(JSON.stringify({
           success: false,
-          error: humanTargetStats.error_message,
+          error: ssotReport.message_user,
           error_code: "TARGET_NOT_TRAINABLE",
-          reason_code: humanTargetStats.reason_code,
-          details: {
-            active_target_mode: "human",
-            join_rows: humanTargetStats.join_rows,
-            distinct_y: humanTargetStats.distinct_y,
-            pos: humanTargetStats.pos,
-            neg: humanTargetStats.neg,
-          },
-          fix_suggestions: [
-            { label: "Gerar nova amostra estratificada", action: "open_human_labeling" },
-            { label: "Buscar classe faltante", action: "open_human_labeling" },
-            { label: "Voltar para Variável Alvo", action: "go_to_step_3" },
-          ],
+          reason_code: ssotReport.reason_code,
+          details: ssotReport.details,
+          fix_suggestions: ssotReport.fix_suggestions,
           action: "review_target",
         }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
       
-      // Check minimum per class (30)
-      const MIN_PER_CLASS_HUMAN = 30;
-      const minClass = Math.min(humanTargetStats.pos, humanTargetStats.neg);
-      if (minClass < MIN_PER_CLASS_HUMAN) {
-        const minorityLabel = humanTargetStats.pos < humanTargetStats.neg ? "positivos" : "negativos";
-        console.error(`[Gating] ⛔ Minority class too small: ${minClass} < ${MIN_PER_CLASS_HUMAN}`);
-        
-        await supabase.rpc("rpc_update_pipeline_state", {
-          p_project_id: project_id, p_stage: "training", p_new_state: "failed",
-        });
-        
-        return new Response(JSON.stringify({
-          success: false,
-          error: `Classe minoritária (${minorityLabel}) com apenas ${minClass} exemplos. Mínimo: ${MIN_PER_CLASS_HUMAN}.`,
-          error_code: "TARGET_NOT_TRAINABLE",
-          reason_code: "MINORITY_CLASS_TOO_SMALL",
-          details: {
-            active_target_mode: "human",
-            join_rows: humanTargetStats.join_rows,
-            distinct_y: humanTargetStats.distinct_y,
-            pos: humanTargetStats.pos,
-            neg: humanTargetStats.neg,
-            min_per_class: MIN_PER_CLASS_HUMAN,
-          },
-          fix_suggestions: [
-            { label: `Buscar ${minorityLabel}`, action: "open_human_labeling" },
-            { label: "Gerar mais amostras", action: "open_human_labeling" },
-          ],
-          action: "review_target",
-        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
-      }
-      
+      // Still need humanTargetStats for the actual y vector during training
+      humanTargetStats = await buildHumanTargetStats(supabase, project_id);
       useHumanLabelsAsTarget = true;
-      // For human mode, we still need a "target_column" reference for the CSV/Parquet path
-      // but the actual y values will be overridden from human labels after data load
-      console.log(`[Gating] Human target OK: ${humanTargetStats.join_rows} labels, ${humanTargetStats.pos}+ / ${humanTargetStats.neg}−`);
+      console.log(`[Gating] Human target OK: ${ssotReport.details.join_rows} labels, ${ssotReport.details.pos}+ / ${ssotReport.details.neg}−`);
     }
 
     // ── Normalize virtual target: "label" → "_label_" when label builder is active ──
