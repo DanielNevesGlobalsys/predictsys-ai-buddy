@@ -2985,8 +2985,51 @@ serve(async (req) => {
       console.log(`[Preflight] Features após filtragem: ${filteredFeatureNames.length} (removidas: ${featureValidation.blocked.length})`);
       
       if (filteredFeatureNames.length === 0) {
-        return new Response(JSON.stringify({
-          error: "Todas as features foram bloqueadas pela validação. Revise as colunas do dataset.",
+        // ── NO_VALID_FEATURES diagnostic ──
+        // Build per-column diagnostic from the raw data
+        const featureDiagnostic: Record<string, { n_unique: number; pct_null: number; reason: string }> = {};
+        for (const fName of featureValidation.blocked) {
+          const fIdx = allFeatureNames.indexOf(fName);
+          if (fIdx === -1) {
+            featureDiagnostic[fName] = { n_unique: 0, pct_null: 100, reason: featureValidation.blockReasons[fName] || "unknown" };
+            continue;
+          }
+          const col = X.map(row => row[fIdx]);
+          const nNull = col.filter(v => v === null || v === undefined || isNaN(v as number)).length;
+          const nUnique = new Set(col.filter(v => v !== null && v !== undefined && !isNaN(v as number))).size;
+          featureDiagnostic[fName] = {
+            n_unique: nUnique,
+            pct_null: col.length > 0 ? Math.round((nNull / col.length) * 10000) / 100 : 0,
+            reason: featureValidation.blockReasons[fName] || "unknown",
+          };
+        }
+
+        // Aggregate block reasons
+        const topBlockReasons: Record<string, number> = {};
+        for (const reason of Object.values(featureValidation.blockReasons)) {
+          const bucket = reason.includes("Variância zero") ? "zero_variance"
+            : reason.includes("Correlação") ? "leakage_correlation"
+            : reason.includes("ID") || reason.includes("chave") ? "id_key"
+            : "other";
+          topBlockReasons[bucket] = (topBlockReasons[bucket] || 0) + 1;
+        }
+
+        // Top 20 examples
+        const examples = Object.entries(featureDiagnostic)
+          .slice(0, 20)
+          .map(([col, d]) => ({ col, ...d }));
+
+        const diagnosticPayload = {
+          success: false,
+          status: "blocked",
+          code: "NO_VALID_FEATURES",
+          error: "As features ficaram constantes após o builder/join. Nenhuma feature válida restante.",
+          message_user: "As features ficaram constantes após o builder/join. Revise a configuração de entidade ou re-selecione features.",
+          features_selected_count: allFeatureNames.length,
+          features_blocked_count: featureValidation.blocked.length,
+          top_block_reasons: topBlockReasons,
+          examples,
+          feature_diagnostic: featureDiagnostic,
           preflight_report: {
             target_valid: targetValidation.valid,
             target_issues: targetValidation.issues,
@@ -2995,9 +3038,34 @@ serve(async (req) => {
             features_block_reasons: featureValidation.blockReasons,
             warnings: featureValidation.warnings,
           },
-          action: "review_features"
-        }), {
-          status: 400,
+          action: "review_features",
+        };
+
+        // Log to platform_events
+        try {
+          await supabase.from("platform_events").insert({
+            event_type: "no_valid_features",
+            project_id: project_id,
+            organization_id: settings.org_id || null,
+            source: "train-models",
+            status: "blocked",
+            metadata: {
+              code: "NO_VALID_FEATURES",
+              features_selected_count: allFeatureNames.length,
+              features_blocked_count: featureValidation.blocked.length,
+              top_block_reasons: topBlockReasons,
+              examples,
+              target_column: target_column,
+              dataset_version: settings.dataset_version,
+              selection_version: settings.selection_version,
+            },
+          });
+        } catch (logErr) {
+          console.error("[NO_VALID_FEATURES] Failed to log platform_event:", logErr);
+        }
+
+        return new Response(JSON.stringify(diagnosticPayload), {
+          status: 200,
           headers: { ...corsHeaders, "Content-Type": "application/json" },
         });
       }

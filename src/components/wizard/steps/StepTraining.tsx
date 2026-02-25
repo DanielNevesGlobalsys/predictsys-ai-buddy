@@ -55,6 +55,13 @@ interface PreflightReport {
   warnings: string[];
 }
 
+interface FeatureDiagnosticExample {
+  col: string;
+  n_unique: number;
+  pct_null: number;
+  reason: string;
+}
+
 interface TrainingErrorDetails {
   error: string;
   preflight_report?: PreflightReport;
@@ -63,9 +70,17 @@ interface TrainingErrorDetails {
   blocked_reason_code?: string;
   error_code?: string;
   reason_code?: string;
+  code?: string;
+  status?: string;
+  message_user?: string;
   fix_suggestions?: { label: string; action: string; hint?: Record<string, unknown> }[];
   success?: boolean;
   warnings?: string[];
+  features_selected_count?: number;
+  features_blocked_count?: number;
+  top_block_reasons?: Record<string, number>;
+  examples?: FeatureDiagnosticExample[];
+  feature_diagnostic?: Record<string, { n_unique: number; pct_null: number; reason: string }>;
 }
 
 interface TrainDiagnostics {
@@ -422,6 +437,12 @@ const StepTraining = ({
           setTrainabilityError(d);
           setError(d.error || "Target não treinável");
           throw new Error(d.error || "Target não treinável");
+        }
+        // Handle NO_VALID_FEATURES
+        if (d.code === "NO_VALID_FEATURES" || d.status === "blocked") {
+          setTrainabilityError(d);
+          setError(d.message_user || d.error || "Nenhuma feature válida");
+          throw new Error(d.message_user || d.error || "Nenhuma feature válida");
         }
         // Handle TRAINING_CRASH with structured error
         if (d.code === "TRAINING_CRASH" || d.status === "error") {
@@ -785,6 +806,53 @@ const StepTraining = ({
                   }}
                   onBack={onBack}
                 />
+              )}
+
+              {/* NO_VALID_FEATURES Diagnostic Card */}
+              {trainabilityError && trainabilityError.code === "NO_VALID_FEATURES" && (
+                <div className="space-y-4">
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription>
+                      <p className="font-semibold mb-1">As features ficaram constantes após o builder/join.</p>
+                      <p className="text-sm text-muted-foreground mb-2">
+                        {trainabilityError.features_selected_count || 0} features selecionadas, {trainabilityError.features_blocked_count || 0} bloqueadas.
+                      </p>
+                      {trainabilityError.top_block_reasons && (
+                        <div className="flex flex-wrap gap-1 mb-2">
+                          {Object.entries(trainabilityError.top_block_reasons).map(([reason, count]) => (
+                            <Badge key={reason} variant="outline" className="text-xs">
+                              {reason}: {count as number}
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      {trainabilityError.examples && trainabilityError.examples.length > 0 && (
+                        <details className="mt-2">
+                          <summary className="cursor-pointer text-sm font-medium">Ver colunas constantes ({trainabilityError.examples.length})</summary>
+                          <div className="mt-2 max-h-48 overflow-y-auto text-xs space-y-1">
+                            {trainabilityError.examples.map((ex) => (
+                              <div key={ex.col} className="flex justify-between border-b border-border/30 py-1">
+                                <span className="font-mono">{ex.col}</span>
+                                <span className="text-muted-foreground">
+                                  n_unique={ex.n_unique} | null={ex.pct_null}% | {ex.reason}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </details>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                  <div className="flex gap-2 justify-center">
+                    <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(3); else onBack(); }}>
+                      <ArrowLeft className="w-4 h-4 mr-1" /> Revisar entidade/join
+                    </Button>
+                    <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(4); else onBack(); }}>
+                      Re-selecionar features
+                    </Button>
+                  </div>
+                </div>
               )}
 
               {!trainabilityError && (
