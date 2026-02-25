@@ -230,6 +230,29 @@ export function evaluateTargetTrainability(input: TrainabilityInput): Trainabili
     ]);
   }
 
+  // 10b. LOW_VARIANCE_TARGET (regression with low variability)
+  if (problem_type === "regression" && targetType === "numeric" && nNonNull > 10) {
+    if (nUnique <= 10) {
+      return block("LOW_VARIANCE_TARGET", details, warnings, [
+        { label: "Trocar para classificação", action: "change_problem_type", hint: { suggest: "classification" } },
+        { label: "Escolher outro target", action: "open_manual_target" },
+      ]);
+    }
+    // Check variance: if std/mean ratio is extremely small
+    const numVals = nonNullValues.map(v => Number(v)).filter(n => !isNaN(n));
+    if (numVals.length > 10) {
+      const mean = numVals.reduce((a, b) => a + b, 0) / numVals.length;
+      const variance = numVals.reduce((a, b) => a + (b - mean) ** 2, 0) / numVals.length;
+      const cv = mean !== 0 ? Math.sqrt(variance) / Math.abs(mean) : 0;
+      if (cv < 0.001 && variance < 1e-10) {
+        return block("LOW_VARIANCE_TARGET", details, warnings, [
+          { label: "Trocar para classificação", action: "change_problem_type", hint: { suggest: "classification" } },
+          { label: "Escolher outro target", action: "open_manual_target" },
+        ]);
+      }
+    }
+  }
+
   // ── WARN checks ──
   if (problem_type === "classification" && topClassPct > MAX_TOP_CLASS_PCT_WARN) {
     warnings.push(`Classe dominante com ${(topClassPct * 100).toFixed(1)}% — class_weight será aplicado automaticamente.`);
@@ -286,7 +309,8 @@ export function trainabilityHumanMessage(result: TrainabilityResult): string {
     TARGET_INVALID_TYPE: `Target textual incompatível com regressão.`,
     ONLY_ONE_CLASS: `Apenas uma classe rotulada (${d.n_unique} valor único). Rotule exemplos da classe oposta.`,
     MINORITY_CLASS_TOO_SMALL: `Classe minoritária com apenas ${d.minor_class_count} exemplos. Mínimo: 30. Rotule mais casos da classe sub-representada.`,
-    LOW_VARIANCE_TARGET: `Target com variância muito baixa (quase constante). Escolha outro alvo.`,
+    LOW_VARIANCE_TARGET: `Target com variância muito baixa para regressão (${d.n_unique} valores distintos). Considere classificação.`,
+    ENTITY_JOIN_MISMATCH: `Os rótulos não estão correspondendo à entidade selecionada. Verifique a coluna de ID.`,
   };
 
   return messages[result.reason_code || ""] || `Target não treinável (${result.reason_code}).`;
@@ -310,6 +334,12 @@ export interface SSOTTrainabilityReport {
     nulls: number;
     mode: string;
     target_col: string | null;
+    // Entity join diagnostics (human mode)
+    labels_total?: number;
+    labels_distinct_entities?: number;
+    join_rate?: number;
+    // Regression diagnostics
+    variance_y?: number;
   };
   thresholds: {
     min_total: number;
@@ -354,11 +384,16 @@ export async function evaluateTargetTrainabilityFromSSOT(
   let distinctY = 0;
 
   try {
+    // Extra details for entity join diagnostics
+    let labelsTotal = 0;
+    let labelsDistinctEntities = 0;
+    let joinRate = 1;
+
     if (mode === "human") {
       // ── Real query of project_human_labels ──
       const { data: labels, error } = await supabase
         .from("project_human_labels")
-        .select("label, label_status")
+        .select("entity_id, label, label_status")
         .eq("project_id", projectId)
         .neq("label_status", "unsure");
 
@@ -369,15 +404,46 @@ export async function evaluateTargetTrainabilityFromSSOT(
           thresholds, [{ label: "Gerar amostras", action: "open_human_labeling" }], []);
       }
 
-      joinRows = labels.length;
+      labelsTotal = labels.length;
+      const entitySet = new Set<string>();
       for (const l of labels) {
+        if (l.entity_id) entitySet.add(String(l.entity_id));
         const v = l.label as number;
         targetValues.push(v);
         if (v === 1) pos++;
         else if (v === 0) neg++;
       }
+      labelsDistinctEntities = entitySet.size;
+      joinRows = labels.length;
       distinctY = new Set(targetValues).size;
       nulls = 0;
+
+      // Compute join_rate: ratio of labels that would match dataset entities
+      // If we have entity info, estimate join quality
+      if (labelsDistinctEntities > 0) {
+        // Try to check how many labeled entities exist in the dataset
+        const entitySample = [...entitySet].slice(0, 100);
+        const { data: dsState } = await supabase
+          .from("project_dataset_state")
+          .select("row_count")
+          .eq("project_id", projectId)
+          .maybeSingle();
+        const datasetRows = dsState?.row_count || 0;
+        // Heuristic: if dataset has rows and labels have entities, estimate join rate
+        // A perfect join would have joinRows ≈ labelsDistinctEntities
+        joinRate = labelsDistinctEntities > 0 ? Math.min(1, joinRows / labelsDistinctEntities) : 1;
+      }
+
+      // BLOCK if join rate too low
+      if (joinRate < 0.5 && labelsTotal >= 20) {
+        return buildSSOTReport(false, "ENTITY_JOIN_MISMATCH",
+          "Os rótulos não estão correspondendo à entidade selecionada. Verifique a coluna de ID.",
+          { join_rows: joinRows, distinct_y: distinctY, pos, neg, nulls: 0, mode, target_col: targetColumn,
+            labels_total: labelsTotal, labels_distinct_entities: labelsDistinctEntities, join_rate: joinRate },
+          thresholds,
+          [{ label: "Reconfigurar coluna de entidade", action: "open_entity_selector" }],
+          []);
+      }
 
     } else if (mode === "weak") {
       // ── Use weak_label_result stats from SSOT ──
@@ -449,11 +515,23 @@ export async function evaluateTargetTrainabilityFromSSOT(
 
     const msg = trainabilityHumanMessage(result);
 
+    const reportDetails: SSOTTrainabilityReport["details"] = {
+      join_rows: joinRows, distinct_y: distinctY || result.details.n_unique,
+      pos, neg, nulls, mode, target_col: targetColumn,
+    };
+
+    // Attach human-mode entity diagnostics
+    if (mode === "human") {
+      reportDetails.labels_total = labelsTotal;
+      reportDetails.labels_distinct_entities = labelsDistinctEntities;
+      reportDetails.join_rate = joinRate;
+    }
+
     return buildSSOTReport(
       result.trainable,
       result.reason_code,
       msg,
-      { join_rows: joinRows, distinct_y: distinctY || result.details.n_unique, pos, neg, nulls, mode, target_col: targetColumn },
+      reportDetails,
       thresholds,
       result.fix_suggestions,
       result.warnings,

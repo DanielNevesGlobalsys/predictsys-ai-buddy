@@ -112,9 +112,37 @@ serve(async (req: Request) => {
     const hasWeakSupervision = !!weakResult && (weakResult.coverage || 0) > 0;
     const weakPrevalence = weakResult?.prevalence || 0.5;
 
-    // Generate stratified samples: 40% UNCERTAIN, 30% HIGH_POS, 30% HIGH_NEG
-    const nUncertain = Math.round(actualN * 0.4);
-    const nHighPos = Math.round(actualN * 0.3);
+    // ── Check existing label distribution for targeted sampling ──
+    let samplingMode: "balanced" | "targeted_positive" | "targeted_negative" = "balanced";
+    const humanLabelResult = settings?.human_label_result as Record<string, any> | null;
+    const existingLabelsCount = humanLabelResult?.labeled_count || 0;
+
+    if (existingLabelsCount >= 100) {
+      const existingPos = humanLabelResult?.pos_count || 0;
+      const existingNeg = humanLabelResult?.neg_count || 0;
+      const minClass = Math.min(existingPos, existingNeg);
+      if (minClass < 20) {
+        samplingMode = existingPos < existingNeg ? "targeted_positive" : "targeted_negative";
+      }
+    }
+
+    // Generate stratified samples with possible targeting
+    let pctUncertain = 0.4;
+    let pctHighPos = 0.3;
+    let pctHighNeg = 0.3;
+
+    if (samplingMode === "targeted_positive") {
+      pctUncertain = 0.2;
+      pctHighPos = 0.6;
+      pctHighNeg = 0.2;
+    } else if (samplingMode === "targeted_negative") {
+      pctUncertain = 0.2;
+      pctHighPos = 0.2;
+      pctHighNeg = 0.6;
+    }
+
+    const nUncertain = Math.round(actualN * pctUncertain);
+    const nHighPos = Math.round(actualN * pctHighPos);
     const nHighNeg = actualN - nUncertain - nHighPos;
 
     const actualRoundId = round_id || crypto.randomUUID();
@@ -286,6 +314,7 @@ serve(async (req: Request) => {
       default_sample_size: defaultSampleSize,
       sample_size_options: SAMPLE_SIZE_OPTIONS,
       sampling_report: samplingReport,
+      sampling_mode: samplingMode,
       has_weak_supervision: hasWeakSupervision,
     }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
 
