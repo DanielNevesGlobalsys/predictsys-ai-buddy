@@ -3,13 +3,20 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle, Loader2, RefreshCw, ArrowLeft, FlaskConical } from "lucide-react";
+import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle, Loader2, RefreshCw, ArrowLeft, FlaskConical, FileSearch } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import TDEProfileCard from "./TDEProfileCard";
 import { supabase } from "@/integrations/supabase/client";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 interface StepEDAProps {
   projectData: ProjectData;
@@ -51,6 +58,9 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const [repairAttempted, setRepairAttempted] = useState(false);
   const [hasSample, setHasSample] = useState<boolean | null>(null);
   const [generatingSample, setGeneratingSample] = useState(false);
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [logModalData, setLogModalData] = useState<any[] | null>(null);
+  const [logModalLoading, setLogModalLoading] = useState(false);
 
   // ── Ingestion SSOT gate ──────────────────────────────────
   const [ingestion, setIngestion] = useState<IngestionSSOT>({
@@ -115,7 +125,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   useEffect(() => {
     if (!ingestionReady || !projectData.id || repairAttempted) return;
     if (ds.loaded && ds.rowCount === 0) {
-      // Dataset state missing or empty — attempt repair
       setRepairAttempted(true);
       console.log("[StepEDA] Ingestion done but dataset_state missing — triggering auto-repair");
       supabase.functions.invoke("repair-dataset-activation", {
@@ -140,7 +149,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     if (!projectData.id || !ingestionReady) return;
     supabase
       .from("project_dataset_sample")
-      .select("id")
+      .select("sample_rows")
       .eq("project_id", projectData.id)
       .maybeSingle()
       .then(({ data }) => setHasSample(!!data));
@@ -156,9 +165,16 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (error) throw error;
       if (data?.success) {
         setHasSample(true);
-        toast({ title: "Amostra gerada", description: `${data.sample_rows} linhas • ${data.columns_detected} colunas` });
+        toast({
+          title: "Amostra gerada com sucesso",
+          description: `${data.sample_rows} linhas • ${data.columns_detected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
+        });
       } else {
-        toast({ title: "Erro ao gerar amostra", description: data?.error || "Erro desconhecido", variant: "destructive" });
+        toast({
+          title: "Erro ao gerar amostra",
+          description: `[${data?.code || "UNKNOWN"}] ${data?.message || "Erro desconhecido"}`,
+          variant: "destructive",
+        });
       }
     } catch (err: any) {
       toast({ title: "Erro", description: err.message, variant: "destructive" });
@@ -166,6 +182,28 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       setGeneratingSample(false);
     }
   };
+
+  const handleViewSampleLogs = async () => {
+    if (!projectData.id) return;
+    setLogModalOpen(true);
+    setLogModalLoading(true);
+    setLogModalData(null);
+    try {
+      const { data } = await supabase
+        .from("platform_events")
+        .select("created_at, event_type, status, metadata")
+        .eq("project_id", projectData.id)
+        .or("event_type.eq.dataset_sample_generated,event_type.eq.dataset_sample_failed")
+        .order("created_at", { ascending: false })
+        .limit(10);
+      setLogModalData(data || []);
+    } catch {
+      setLogModalData([]);
+    } finally {
+      setLogModalLoading(false);
+    }
+  };
+
   const handleEDAComplete = useCallback(async () => {
     const triggerId = projectData.id;
     if (!triggerId || tdeAutoTriggered === triggerId) return;
@@ -174,11 +212,9 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       await supabase.functions.invoke("tde-profile-dataset", {
         body: { project_id: projectData.id },
       });
-      // Refresh the TDE card to show updated data
       setTdeRefreshKey((k) => k + 1);
       console.log("[StepEDA] TDE profile auto-triggered after EDA");
     } catch (err) {
-      // Best-effort: don't block the flow, user can manually refresh via TDE card
       console.warn("[StepEDA] TDE auto-trigger failed (non-blocking):", err);
     }
   }, [projectData.id, tdeAutoTriggered]);
@@ -292,6 +328,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             <span>Manifest de ingestão ausente. O dataset foi importado, mas sem registro de manifest. Se houver problemas, reimporte os dados.</span>
           </div>
         )}
+
         {/* ── Content only when ingestion is done ──────── */}
         {ingestionReady && (
           <>
@@ -411,9 +448,29 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                   <p className="text-sm font-medium">Amostra do dataset não encontrada</p>
                   <p className="text-xs text-muted-foreground">Gere uma amostra de até 500 linhas para pré-visualização e diagnósticos.</p>
                 </div>
-                <Button size="sm" onClick={handleGenerateSample} disabled={generatingSample}>
-                  {generatingSample ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <FlaskConical className="w-4 h-4 mr-1" />}
-                  Gerar amostra do dataset
+                <div className="flex items-center gap-2">
+                  <Button size="sm" onClick={handleGenerateSample} disabled={generatingSample}>
+                    {generatingSample ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <FlaskConical className="w-4 h-4 mr-1" />}
+                    Gerar amostra do dataset
+                  </Button>
+                  <Button size="sm" variant="ghost" onClick={handleViewSampleLogs}>
+                    <FileSearch className="w-4 h-4 mr-1" />
+                    Ver último log
+                  </Button>
+                </div>
+              </div>
+            )}
+
+            {/* Sample exists — show log viewer */}
+            {ingestionReady && hasSample === true && (
+              <div className="flex items-center gap-2 justify-end">
+                <Badge variant="outline" className="text-[10px]">
+                  <CheckCircle className="w-3 h-3 mr-1" />
+                  Amostra disponível
+                </Badge>
+                <Button size="sm" variant="ghost" onClick={handleViewSampleLogs}>
+                  <FileSearch className="w-4 h-4 mr-1" />
+                  Ver último log
                 </Button>
               </div>
             )}
@@ -463,6 +520,44 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </Button>
         </div>
       </div>
+
+      {/* Log Modal */}
+      <Dialog open={logModalOpen} onOpenChange={setLogModalOpen}>
+        <DialogContent className="max-w-2xl max-h-[70vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Logs de amostragem do dataset</DialogTitle>
+            <DialogDescription>
+              Últimos eventos de geração de amostra registrados em platform_events.
+            </DialogDescription>
+          </DialogHeader>
+          {logModalLoading ? (
+            <div className="flex items-center justify-center py-8 gap-2 text-muted-foreground">
+              <Loader2 className="w-5 h-5 animate-spin" />
+              <span className="text-sm">Carregando logs…</span>
+            </div>
+          ) : logModalData && logModalData.length > 0 ? (
+            <div className="space-y-3">
+              {logModalData.map((evt, i) => (
+                <div key={i} className={`p-3 rounded-lg border text-xs space-y-1 ${
+                  evt.status === "error" ? "bg-destructive/5 border-destructive/20" : "bg-primary/5 border-primary/20"
+                }`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <Badge variant={evt.status === "error" ? "destructive" : "outline"} className="text-[10px]">
+                      {evt.event_type}
+                    </Badge>
+                    <span className="text-muted-foreground">{new Date(evt.created_at).toLocaleString("pt-BR")}</span>
+                  </div>
+                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] text-muted-foreground bg-muted/30 p-2 rounded max-h-40 overflow-y-auto">
+                    {JSON.stringify(evt.metadata, null, 2)}
+                  </pre>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-muted-foreground text-center py-6">Nenhum log encontrado para este projeto.</p>
+          )}
+        </DialogContent>
+      </Dialog>
     </Card>
   );
 };
