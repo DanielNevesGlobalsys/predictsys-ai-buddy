@@ -243,24 +243,37 @@ Gere o IntentContract JSON.`;
     }
 
     // ─── Resolve industry from SSOT (project_settings) first ─
-    // RULE: Never fallback to "generic" if SSOT has a value
+    // RULE: Never fallback to "generic" if SSOT has a value.
+    // "generic"/"geral" are DISPLAY-only, never persisted.
 
     let ssotIndustry: string | null = null;
+    let ssotSegment: string | null = null;
+    let ssotContractVersion: number = 0;
     {
       const { data: psData } = await supabase
         .from("project_settings")
-        .select("industry, industry_source")
+        .select("industry, industry_source, segment, segment_source, contract_version")
         .eq("project_id", project_id)
         .maybeSingle();
       if (psData) {
-        ssotIndustry = (psData as any).industry || null;
+        const ps = psData as any;
+        ssotIndustry = (ps.industry && ps.industry !== "generic" && ps.industry !== "geral") ? ps.industry : null;
+        ssotSegment = (ps.segment && ps.segment !== "generic" && ps.segment !== "geral") ? ps.segment : null;
+        ssotContractVersion = ps.contract_version || 0;
       }
     }
 
-    // Priority: explicit param > SSOT > AI inference. Never default to "generic".
-    const resolvedIndustry: string | null = industry || ssotIndustry || contractJson.industry_hint || null;
+    // Sanitize incoming industry — never accept "generic"/"geral" from UI
+    const sanitizedIndustry = (industry && industry !== "generic" && industry !== "geral") ? industry : null;
+
+    // Priority: explicit param > SSOT > AI inference. NEVER default to "generic".
+    const resolvedIndustry: string | null = sanitizedIndustry || ssotIndustry || contractJson.industry_hint || null;
     const adapterKey = resolvedIndustry && DOMAIN_ADAPTERS[resolvedIndustry] ? resolvedIndustry : "generic";
     const adapter: DomainAdapter = DOMAIN_ADAPTERS[adapterKey];
+    const warnings: string[] = [];
+    if (!resolvedIndustry) {
+      warnings.push("Indústria não definida. O contrato usará configuração genérica. Recomendamos selecionar a indústria.");
+    }
 
     // ─── Check existing context for versioning ───────────────
 
@@ -401,17 +414,32 @@ Gere o IntentContract JSON.`;
 
     // ─── Persist industry + contract metadata back to SSOT ───
     // RULE: generate-intent-contract MUST sync to project_settings
+    // RULE: NEVER persist "generic"/"geral" — use NULL instead.
 
-    const industryToSync = resolvedIndustry || adapterKey;
+    const industryToSync = (resolvedIndustry && resolvedIndustry !== "generic" && resolvedIndustry !== "geral")
+      ? resolvedIndustry : null;
+
+    // Determine the ai_context record id for active_intent_contract_id
+    let aiContextId: string | null = existing?.id || null;
+    if (!aiContextId) {
+      // Fetch the just-inserted record
+      const { data: newCtx } = await supabase
+        .from("project_ai_context")
+        .select("id")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      aiContextId = newCtx?.id || null;
+    }
+
     await supabase
       .from("project_settings")
       .upsert(
         {
           project_id,
           org_id: orgId,
-          industry: industryToSync !== "generic" ? industryToSync : null,
-          industry_source: industry ? "user" : (ssotIndustry ? "adapter" : "lys"),
-          active_intent_contract_id: existing?.id || null,
+          industry: industryToSync,
+          industry_source: sanitizedIndustry ? "user" : (ssotIndustry ? ssotIndustry === industryToSync ? "user" : "adapter" : "lys"),
+          active_intent_contract_id: aiContextId,
           contract_version: newVersion,
           contract_generated_at: intentContractV2.created_at,
           updated_at: new Date().toISOString(),
@@ -458,6 +486,10 @@ Gere o IntentContract JSON.`;
     return new Response(
       JSON.stringify({
         success: true,
+        contract_id: aiContextId,
+        industry: industryToSync,
+        segment: ssotSegment,
+        warnings,
         // New v2 format
         intent_base,
         domain_adapter: safeAdapter,

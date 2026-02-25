@@ -53,22 +53,32 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
   const [intentContract, setIntentContract] = useState<AIContextIntent | null>(null);
   const [intentContractV2, setIntentContractV2] = useState<IntentContractV2 | null>(null);
   const [generatingContract, setGeneratingContract] = useState(false);
+  const [contractMeta, setContractMeta] = useState<{ id: string | null; version: number; generatedAt: string | null }>({ id: null, version: 0, generatedAt: null });
   const [gateWarnings, setGateWarnings] = useState<{ status: string; code: string; message: string; cta?: string }[]>([]);
 
   // Load existing contract + industry from SSOT on mount
   useEffect(() => {
     if (projectData.id) {
-      // Load industry from project_settings SSOT
+      // Load industry + contract meta from project_settings SSOT
       supabase
         .from("project_settings")
-        .select("industry, industry_source")
+        .select("industry, industry_source, segment, active_intent_contract_id, contract_version, contract_generated_at")
         .eq("project_id", projectData.id)
         .maybeSingle()
         .then(({ data }) => {
           if (data) {
-            const ind = (data as any).industry;
-            if (ind && ind !== "generic" && !selectedIndustry) {
+            const ps = data as any;
+            const ind = ps.industry;
+            // Only set if valid (not generic/geral) and not already set by user
+            if (ind && ind !== "generic" && ind !== "geral" && !selectedIndustry) {
               setSelectedIndustry(ind as IndustryKey);
+            }
+            if (ps.active_intent_contract_id || ps.contract_version) {
+              setContractMeta({
+                id: ps.active_intent_contract_id,
+                version: ps.contract_version || 0,
+                generatedAt: ps.contract_generated_at || null,
+              });
             }
           }
         });
@@ -145,6 +155,23 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
     return Object.keys(newErrors).length === 0;
   };
 
+  // Persist industry to SSOT immediately when changed
+  const handleIndustryChange = useCallback(async (value: IndustryKey | "") => {
+    setSelectedIndustry(value);
+    if (!projectData.id || !value) return;
+    // Never persist "generic"/"geral"
+    const cleanValue = (value && (value as string) !== "generic" && (value as string) !== "geral") ? value : null;
+    if (cleanValue) {
+      console.log(`[StepProjectInfo] Persisting industry=${cleanValue} to SSOT`);
+      await supabase
+        .from("project_settings")
+        .upsert(
+          { project_id: projectData.id, industry: cleanValue, industry_source: "user", updated_at: new Date().toISOString() },
+          { onConflict: "project_id" }
+        );
+    }
+  }, [projectData.id]);
+
   const generateIntentContract = useCallback(async (projectId: string, data: typeof formData) => {
     setGeneratingContract(true);
     try {
@@ -175,10 +202,24 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           contract_version: result.contract_version,
           created_at: result.created_at,
         });
-        // Also set industry from response
-        if (result.domain_adapter.industry) {
-          setSelectedIndustry(result.domain_adapter.industry as IndustryKey);
+        // Set industry from response only if it's not generic
+        if (result.industry && result.industry !== "generic" && result.industry !== "geral") {
+          setSelectedIndustry(result.industry as IndustryKey);
         }
+      }
+
+      // Update contract metadata from response
+      if (result?.contract_id || result?.contract_version) {
+        setContractMeta({
+          id: result.contract_id || null,
+          version: result.contract_version || 0,
+          generatedAt: result.created_at || new Date().toISOString(),
+        });
+      }
+
+      // Log warnings
+      if (result?.warnings?.length) {
+        console.warn("[StepProjectInfo] Contract warnings:", result.warnings);
       }
 
       // Legacy compat
@@ -198,20 +239,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
         ? "classification" 
         : formData.problem_type as "classification" | "regression";
 
-      // Persist industry to project_settings SSOT
-      if (projectData.id && selectedIndustry) {
-        await supabase
-          .from("project_settings")
-          .upsert(
-            {
-              project_id: projectData.id,
-              industry: selectedIndustry,
-              industry_source: "user",
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "project_id" }
-          );
-      }
+      // Industry already persisted on change via handleIndustryChange
       
       onNext({
         name: formData.name,
@@ -292,7 +320,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
           {/* ═══ Industry Selector (NEW) ═══ */}
           <IndustrySelector
             value={selectedIndustry}
-            onChange={setSelectedIndustry}
+            onChange={handleIndustryChange}
             error={errors.industry}
           />
 
@@ -413,6 +441,19 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
                 </AlertDescription>
               </Alert>
             ))}
+          </div>
+        )}
+
+        {/* Contract status badge */}
+        {contractMeta.id && contractMeta.generatedAt && (
+          <div className="flex items-center gap-2 text-sm">
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-accent/20 text-accent-foreground border border-accent/30">
+              <Sparkles className="w-3.5 h-3.5" />
+              Contrato ativo v{contractMeta.version}
+              <span className="text-muted-foreground ml-1">
+                — {new Date(contractMeta.generatedAt).toLocaleString("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
+              </span>
+            </span>
           </div>
         )}
 

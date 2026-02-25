@@ -3255,7 +3255,7 @@ export type Database = {
           feature_columns: Json | null
           human_label_config: Json | null
           human_label_result: Json | null
-          industry: string
+          industry: string | null
           industry_source: string
           ingestion_activation_log: Json | null
           ingestion_attempt_count: number | null
@@ -3323,7 +3323,7 @@ export type Database = {
           feature_columns?: Json | null
           human_label_config?: Json | null
           human_label_result?: Json | null
-          industry?: string
+          industry?: string | null
           industry_source?: string
           ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
@@ -3391,7 +3391,7 @@ export type Database = {
           feature_columns?: Json | null
           human_label_config?: Json | null
           human_label_result?: Json | null
-          industry?: string
+          industry?: string | null
           industry_source?: string
           ingestion_activation_log?: Json | null
           ingestion_attempt_count?: number | null
