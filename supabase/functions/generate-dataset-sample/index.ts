@@ -7,6 +7,7 @@ const corsHeaders = {
 };
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const BUCKETS_TO_TRY = ["datasets", "uploads", "imports", "project_datasets", "raw"];
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -32,12 +33,11 @@ Deno.serve(async (req) => {
     const body = await req.json();
     projectId = body.project_id;
 
-    // 1. Validate UUID
     if (!projectId || !UUID_RE.test(projectId)) {
       return fail("INVALID_PROJECT_ID", "project_id ausente ou inválido.");
     }
 
-    // 2. Get active_dataset_ref from project_dataset_state
+    // ── 1. Resolve dataset info ──────────────────────────────
     const { data: dsState } = await sb
       .from("project_dataset_state")
       .select("active_dataset_ref, organization_id")
@@ -49,17 +49,17 @@ Deno.serve(async (req) => {
       return fail("NO_ACTIVE_DATASET", "Nenhum dataset ativo encontrado para este projeto.");
     }
 
-    // 3. Resolve dataset record
     const datasetRef = dsState.active_dataset_ref;
     let datasetId: string | null = null;
     let storagePath: string | null = null;
     let userId: string | null = null;
+    let datasetMeta: Record<string, unknown> = {};
 
-    // Try active_dataset_ref as UUID → project_datasets lookup
+    // Try active_dataset_ref as UUID → project_datasets
     if (UUID_RE.test(datasetRef)) {
       const { data: dataset } = await sb
         .from("project_datasets")
-        .select("id, storage_path, user_id")
+        .select("id, storage_path, user_id, name, source_type, source_metadata, created_at, columns_count")
         .eq("id", datasetRef)
         .maybeSingle();
 
@@ -67,14 +67,15 @@ Deno.serve(async (req) => {
         datasetId = dataset.id;
         storagePath = dataset.storage_path;
         userId = dataset.user_id;
+        datasetMeta = { name: dataset.name, source_type: dataset.source_type, columns_count: dataset.columns_count, created_at: dataset.created_at };
       }
     }
 
-    // Fallback: search by project_id + is_active
+    // Fallback: project_id + is_active
     if (!storagePath) {
       const { data: dataset } = await sb
         .from("project_datasets")
-        .select("id, storage_path, user_id")
+        .select("id, storage_path, user_id, name, source_type, columns_count, created_at")
         .eq("project_id", projectId)
         .eq("is_active", true)
         .maybeSingle();
@@ -83,6 +84,7 @@ Deno.serve(async (req) => {
         datasetId = dataset.id;
         storagePath = dataset.storage_path;
         userId = dataset.user_id;
+        datasetMeta = { name: dataset.name, source_type: dataset.source_type, columns_count: dataset.columns_count, created_at: dataset.created_at };
       }
     }
 
@@ -102,40 +104,100 @@ Deno.serve(async (req) => {
 
     if (!storagePath) {
       await logEvent(sb, projectId, "dataset_sample_failed", { code: "NO_STORAGE_PATH", dataset_ref: datasetRef });
-      return fail("NO_STORAGE_PATH", "Caminho do arquivo não encontrado no storage.");
+      return fail("NO_STORAGE_PATH", "Caminho do arquivo não encontrado no storage.", { debug: { dataset_ref: datasetRef, dataset_id: datasetId } });
     }
 
-    // 4. Download file
+    // ── 2. Multi-bucket download with diagnostics ────────────
+    const folderPath = storagePath.includes("/") ? storagePath.substring(0, storagePath.lastIndexOf("/")) : "";
+    const attempts: Record<string, unknown>[] = [];
     let fileBlob: Blob | null = null;
+    let successBucket: string | null = null;
 
-    const { data: fileData, error: dlErr } = await sb.storage.from("datasets").download(storagePath);
+    for (const bucket of BUCKETS_TO_TRY) {
+      const attempt: Record<string, unknown> = { bucket, path: storagePath, folder: folderPath };
 
-    if (dlErr || !fileData) {
-      // Fallback: scan folder for CSV
-      if (userId) {
-        const folderPath = `${userId}/${projectId}`;
-        const { data: files } = await sb.storage.from("datasets").list(folderPath, { limit: 10 });
-        const csvFile = files?.find((f) => /\.csv$/i.test(f.name));
-        if (csvFile) {
-          storagePath = `${folderPath}/${csvFile.name}`;
-          const { data: retryData, error: retryErr } = await sb.storage.from("datasets").download(storagePath);
-          if (!retryErr && retryData) fileBlob = retryData;
+      // List folder contents first
+      try {
+        const { data: listData, error: listErr } = await sb.storage.from(bucket).list(folderPath, { limit: 20 });
+        if (listErr) {
+          attempt.list_error = listErr.message;
+          attempt.list_count = 0;
+        } else {
+          attempt.list_count = listData?.length ?? 0;
+          attempt.list_names = (listData || []).slice(0, 10).map((f: any) => f.name);
         }
+      } catch (e: any) {
+        attempt.list_error = e.message;
+        attempt.list_count = 0;
       }
-      if (!fileBlob) {
-        await logEvent(sb, projectId, "dataset_sample_failed", {
-          code: "STORAGE_DOWNLOAD_FAIL",
-          storage_path: storagePath,
-          error: dlErr?.message,
-        });
-        return fail("STORAGE_DOWNLOAD_FAIL", "Falha ao baixar o arquivo do storage.", { storage_path: storagePath });
+
+      // Try download
+      try {
+        const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(storagePath);
+        if (dlErr || !dlData) {
+          attempt.download_ok = false;
+          attempt.error_raw = dlErr?.message || "no data returned";
+        } else {
+          attempt.download_ok = true;
+          attempt.file_size = dlData.size;
+          fileBlob = dlData;
+          successBucket = bucket;
+        }
+      } catch (e: any) {
+        attempt.download_ok = false;
+        attempt.error_raw = e.message;
       }
-    } else {
-      fileBlob = fileData;
+
+      attempts.push(attempt);
+      if (fileBlob) break;
     }
 
-    // 5. Parse CSV
-    const text = await fileBlob!.text();
+    // If primary path failed, try scanning folder for CSV in datasets bucket
+    if (!fileBlob && userId) {
+      const scanFolder = `${userId}/${projectId}`;
+      const scanAttempt: Record<string, unknown> = { bucket: "datasets", path: "FOLDER_SCAN:" + scanFolder };
+      try {
+        const { data: files } = await sb.storage.from("datasets").list(scanFolder, { limit: 20 });
+        const csvFile = files?.find((f: any) => /\.csv$/i.test(f.name));
+        scanAttempt.list_count = files?.length ?? 0;
+        scanAttempt.list_names = (files || []).slice(0, 10).map((f: any) => f.name);
+        if (csvFile) {
+          const scanPath = `${scanFolder}/${csvFile.name}`;
+          const { data: scanData, error: scanErr } = await sb.storage.from("datasets").download(scanPath);
+          if (!scanErr && scanData) {
+            scanAttempt.download_ok = true;
+            scanAttempt.file_size = scanData.size;
+            scanAttempt.resolved_path = scanPath;
+            fileBlob = scanData;
+            successBucket = "datasets";
+            storagePath = scanPath;
+          } else {
+            scanAttempt.download_ok = false;
+            scanAttempt.error_raw = scanErr?.message;
+          }
+        } else {
+          scanAttempt.download_ok = false;
+          scanAttempt.error_raw = "no CSV found in folder";
+        }
+      } catch (e: any) {
+        scanAttempt.download_ok = false;
+        scanAttempt.error_raw = e.message;
+      }
+      attempts.push(scanAttempt);
+    }
+
+    if (!fileBlob) {
+      const debugInfo = { dataset_id: datasetId, storage_path: storagePath, dataset_meta: datasetMeta, attempts };
+      await logEvent(sb, projectId, "dataset_sample_failed", { code: "STORAGE_DOWNLOAD_FAIL", debug: debugInfo });
+      return fail(
+        "STORAGE_DOWNLOAD_FAIL",
+        `Falha ao baixar o arquivo em ${attempts.length} tentativas. Path: ${storagePath}`,
+        { debug: debugInfo }
+      );
+    }
+
+    // ── 3. Parse CSV ─────────────────────────────────────────
+    const text = await fileBlob.text();
     const lines = text.split("\n").filter((l) => l.trim().length > 0);
 
     if (lines.length < 2) {
@@ -158,11 +220,12 @@ Deno.serve(async (req) => {
       sampleRows.push(row);
     }
 
-    // 6. Build sample_json with _meta
+    // ── 4. Build sample_json & upsert ────────────────────────
     const sampleJson = {
       _meta: {
         dataset_id: datasetId,
         storage_path: storagePath,
+        bucket: successBucket,
         generated_at: new Date().toISOString(),
         delimiter,
         columns: headers,
@@ -170,41 +233,33 @@ Deno.serve(async (req) => {
       rows: sampleRows,
     };
 
-    // 7. UPSERT into project_dataset_sample (only columns that exist: project_id, sample_json, sample_rows)
     const { error: upsertError } = await sb
       .from("project_dataset_sample")
       .upsert(
-        {
-          project_id: projectId,
-          sample_json: sampleJson,
-          sample_rows: sampleRows.length,
-        },
+        { project_id: projectId, sample_json: sampleJson, sample_rows: sampleRows.length },
         { onConflict: "project_id" }
       );
 
     if (upsertError) {
       console.error("[generate-dataset-sample] Upsert error:", upsertError);
-      await logEvent(sb, projectId, "dataset_sample_failed", {
-        code: "UPSERT_FAIL",
-        error: upsertError.message,
-      });
-      return fail("UPSERT_FAIL", "Falha ao gravar a amostra no banco.", { details: { error: upsertError.message } });
+      await logEvent(sb, projectId, "dataset_sample_failed", { code: "UPSERT_FAIL", error: upsertError.message });
+      return fail("UPSERT_FAIL", "Falha ao gravar a amostra: " + upsertError.message);
     }
 
-    // 8. Update project_datasets.sample_rows
+    // ── 5. Update project_datasets ───────────────────────────
     if (datasetId) {
-      await sb
-        .from("project_datasets")
-        .update({ sample_rows: sampleRows.length })
+      await sb.from("project_datasets")
+        .update({ sample_rows: sampleRows.length, columns_count: headers.length })
         .eq("id", datasetId);
     }
 
-    // 9. Log success
+    // ── 6. Log success ───────────────────────────────────────
     await logEvent(sb, projectId, "dataset_sample_generated", {
       sample_rows: sampleRows.length,
       columns_detected: headers.length,
       dataset_id: datasetId,
       storage_path: storagePath,
+      bucket: successBucket,
     });
 
     return ok({
@@ -212,6 +267,7 @@ Deno.serve(async (req) => {
       sample_rows: sampleRows.length,
       columns_detected: headers.length,
       dataset_id: datasetId,
+      bucket: successBucket,
     });
   } catch (err: any) {
     console.error("[generate-dataset-sample] Error:", err);
@@ -222,16 +278,11 @@ Deno.serve(async (req) => {
         stack: (err.stack || "").slice(0, 4000),
       }).catch(() => {});
     }
-    return fail("INTERNAL_ERROR", err.message);
+    return fail("INTERNAL_ERROR", err.message || "Erro interno desconhecido.");
   }
 });
 
-async function logEvent(
-  sb: any,
-  projectId: string,
-  eventType: string,
-  metadata: Record<string, unknown>
-) {
+async function logEvent(sb: any, projectId: string, eventType: string, metadata: Record<string, unknown>) {
   try {
     await sb.from("platform_events").insert({
       project_id: projectId,
