@@ -89,7 +89,7 @@ serve(async (req: Request) => {
     let canSchedule = true;
     let dashboardAllowed = true;
 
-    // ===== 4.1 DATASET GATE =====
+    // ===== 4.1 DATASET GATE (multi-fallback) =====
     if (datasetState && (datasetState as any).row_count > 0 && (datasetState as any).col_count > 0) {
       const isVirtual = (datasetState as any).virtual_manifest;
       gates.push({
@@ -101,30 +101,68 @@ serve(async (req: Request) => {
         details: { row_count: (datasetState as any).row_count, col_count: (datasetState as any).col_count, virtual: isVirtual },
       });
     } else {
-      // Fallback: check import_manifests
-      const { data: manifest } = await supabase
-        .from("import_manifests")
-        .select("rows_consolidated, columns_final")
+      // Fallback 1: project_settings SSOT (ingestion_rows/cols)
+      const { data: ssotSettings } = await supabase
+        .from("project_settings")
+        .select("ingestion_rows_detected, ingestion_cols_detected, ingestion_state")
         .eq("project_id", project_id)
-        .order("created_at", { ascending: false })
-        .limit(1)
         .maybeSingle();
+      
+      const ssotRows = (ssotSettings as any)?.ingestion_rows_detected || 0;
+      const ssotCols = (ssotSettings as any)?.ingestion_cols_detected || 0;
 
-      if (manifest && manifest.rows_consolidated > 0) {
+      if (ssotRows > 0 && ssotCols > 0 && (ssotSettings as any)?.ingestion_state === "done") {
         gates.push({
           gate: "dataset",
           status: "WARN",
-          message: `Dataset via manifest (${manifest.rows_consolidated} linhas). SSOT não populado.`,
-          details: { row_count: manifest.rows_consolidated, col_count: manifest.columns_final },
+          message: `Dataset via SSOT (${ssotRows} linhas, ${ssotCols} colunas). dataset_state ausente — auto-repair recomendado.`,
+          details: { row_count: ssotRows, col_count: ssotCols, source: "project_settings" },
         });
       } else {
-        gates.push({
-          gate: "dataset",
-          status: "BLOCK",
-          message: "Nenhum dataset ativo. Importe dados ou conecte uma fonte.",
-        });
-        canBuild = false;
-        canTrain = false;
+        // Fallback 2: import_manifests
+        const { data: manifest } = await supabase
+          .from("import_manifests")
+          .select("rows_consolidated, columns_final")
+          .eq("project_id", project_id)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (manifest && manifest.rows_consolidated > 0) {
+          gates.push({
+            gate: "dataset",
+            status: "WARN",
+            message: `Dataset via manifest (${manifest.rows_consolidated} linhas). SSOT não populado.`,
+            details: { row_count: manifest.rows_consolidated, col_count: manifest.columns_final },
+          });
+        } else {
+          // Fallback 3: projects table
+          const { data: proj } = await supabase
+            .from("projects")
+            .select("dataset_rows, dataset_columns, total_rows")
+            .eq("id", project_id)
+            .maybeSingle();
+          
+          const projRows = (proj as any)?.total_rows || (proj as any)?.dataset_rows || 0;
+          const projCols = (proj as any)?.dataset_columns || 0;
+
+          if (projRows > 0 && projCols > 0) {
+            gates.push({
+              gate: "dataset",
+              status: "WARN",
+              message: `Dataset via projects (${projRows} linhas). Sem SSOT — auto-repair recomendado.`,
+              details: { row_count: projRows, col_count: projCols, source: "projects" },
+            });
+          } else {
+            gates.push({
+              gate: "dataset",
+              status: "BLOCK",
+              message: "Nenhum dataset ativo. Importe dados ou conecte uma fonte.",
+            });
+            canBuild = false;
+            canTrain = false;
+          }
+        }
       }
     }
 
