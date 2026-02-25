@@ -151,6 +151,25 @@ serve(async (req: Request) => {
         .eq("project_id", project_id);
     }
 
+    // ── Derive active_target_mode from target_column context ──
+    // Read current target_source to determine mode
+    const { data: currentSettings } = await supabase
+      .from("project_settings")
+      .select("target_source, active_target_mode")
+      .eq("project_id", project_id)
+      .maybeSingle();
+
+    const currentSource = (currentSettings as any)?.target_source || "manual";
+    // Map target_source → active_target_mode for resolveActiveTarget() parity
+    const sourceToMode: Record<string, string> = {
+      label_builder: "template",
+      weak_supervision: "weak",
+      human_labeling: "human",
+      manual: "column",
+      column: "column",
+    };
+    const resolvedMode = sourceToMode[currentSource] || "column";
+
     await supabase
       .from("project_settings")
       .upsert(
@@ -161,9 +180,11 @@ serve(async (req: Request) => {
           problem_type: problem_type || null,
           feature_columns: selected_features || [],
           excluded_columns: excluded_features || [],
-          // ── SSOT State Machine: sync selection_version + target_state ──
+          // ── SSOT State Machine: sync selection_version + target_state + active_target_mode ──
           selection_version: newVersion,
           target_state: target_column ? "ready" : "draft",
+          active_target_column: target_column,
+          active_target_mode: resolvedMode,
         },
         { onConflict: "project_id" },
       );
