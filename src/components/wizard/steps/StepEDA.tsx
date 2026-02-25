@@ -46,6 +46,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const ds = useDatasetState(projectData.id);
   const [tdeAutoTriggered, setTdeAutoTriggered] = useState<string | null>(null);
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
+  const [repairAttempted, setRepairAttempted] = useState(false);
 
   // ── Ingestion SSOT gate ──────────────────────────────────
   const [ingestion, setIngestion] = useState<IngestionSSOT>({
@@ -105,6 +106,29 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const ingestionRunning = ingestion.ingestion_state === "running";
   const ingestionFailed = ingestion.ingestion_state === "failed";
   const ingestionIdle = ingestion.ingestion_state === "idle" || ingestion.ingestion_state === null;
+
+  // Auto-repair: if ingestion done but dataset_state missing, trigger repair
+  useEffect(() => {
+    if (!ingestionReady || !projectData.id || repairAttempted) return;
+    if (ds.loaded && ds.rowCount === 0) {
+      // Dataset state missing or empty — attempt repair
+      setRepairAttempted(true);
+      console.log("[StepEDA] Ingestion done but dataset_state missing — triggering auto-repair");
+      supabase.functions.invoke("repair-dataset-activation", {
+        body: { project_id: projectData.id },
+      }).then(({ data }) => {
+        if (data?.repaired) {
+          console.log("[StepEDA] Auto-repair successful, reloading dataset state");
+          ds.load();
+        } else {
+          console.log("[StepEDA] Auto-repair result:", data?.reason);
+        }
+      }).catch((err) => {
+        console.warn("[StepEDA] Auto-repair failed (non-blocking):", err);
+      });
+    }
+  }, [ingestionReady, ds.loaded, ds.rowCount, projectData.id, repairAttempted]);
+
   const manifestMissing = ingestionReady && !ingestion.ingestion_manifest_id;
 
   // Auto-trigger TDE profile after EDA completes (idempotent, best-effort)
