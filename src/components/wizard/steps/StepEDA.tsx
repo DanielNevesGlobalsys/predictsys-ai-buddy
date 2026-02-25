@@ -3,7 +3,8 @@ import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle, Loader2, RefreshCw, ArrowLeft } from "lucide-react";
+import { BarChart3, Database, AlertTriangle, Info, CheckCircle, XCircle, Loader2, RefreshCw, ArrowLeft, FlaskConical } from "lucide-react";
+import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import { useDatasetState } from "@/hooks/useDatasetState";
@@ -43,10 +44,13 @@ const STRATEGY_MESSAGES_OK: Record<string, string> = {
 
 const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const ds = useDatasetState(projectData.id);
   const [tdeAutoTriggered, setTdeAutoTriggered] = useState<string | null>(null);
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
   const [repairAttempted, setRepairAttempted] = useState(false);
+  const [hasSample, setHasSample] = useState<boolean | null>(null);
+  const [generatingSample, setGeneratingSample] = useState(false);
 
   // ── Ingestion SSOT gate ──────────────────────────────────
   const [ingestion, setIngestion] = useState<IngestionSSOT>({
@@ -131,7 +135,37 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
 
   const manifestMissing = ingestionReady && !ingestion.ingestion_manifest_id;
 
-  // Auto-trigger TDE profile after EDA completes (idempotent, best-effort)
+  // Check if sample exists
+  useEffect(() => {
+    if (!projectData.id || !ingestionReady) return;
+    supabase
+      .from("project_dataset_sample")
+      .select("id")
+      .eq("project_id", projectData.id)
+      .maybeSingle()
+      .then(({ data }) => setHasSample(!!data));
+  }, [projectData.id, ingestionReady]);
+
+  const handleGenerateSample = async () => {
+    if (!projectData.id) return;
+    setGeneratingSample(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("generate-dataset-sample", {
+        body: { project_id: projectData.id },
+      });
+      if (error) throw error;
+      if (data?.success) {
+        setHasSample(true);
+        toast({ title: "Amostra gerada", description: `${data.sample_rows} linhas • ${data.columns_detected} colunas` });
+      } else {
+        toast({ title: "Erro ao gerar amostra", description: data?.error || "Erro desconhecido", variant: "destructive" });
+      }
+    } catch (err: any) {
+      toast({ title: "Erro", description: err.message, variant: "destructive" });
+    } finally {
+      setGeneratingSample(false);
+    }
+  };
   const handleEDAComplete = useCallback(async () => {
     const triggerId = projectData.id;
     if (!triggerId || tdeAutoTriggered === triggerId) return;
@@ -368,6 +402,21 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                 <strong className="text-secondary">{t("stepEDA.whatIsEDA")}</strong> {t("stepEDA.whatIsEDADesc")}
               </p>
             </div>
+
+            {/* Generate Sample Button */}
+            {ingestionReady && hasSample === false && !edaBlocked && (
+              <div className="flex items-center gap-3 p-4 rounded-lg border border-primary/20 bg-primary/5">
+                <FlaskConical className="w-5 h-5 text-primary flex-shrink-0" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium">Amostra do dataset não encontrada</p>
+                  <p className="text-xs text-muted-foreground">Gere uma amostra de até 500 linhas para pré-visualização e diagnósticos.</p>
+                </div>
+                <Button size="sm" onClick={handleGenerateSample} disabled={generatingSample}>
+                  {generatingSample ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : <FlaskConical className="w-4 h-4 mr-1" />}
+                  Gerar amostra do dataset
+                </Button>
+              </div>
+            )}
 
             {/* EDA Display */}
             {edaBlocked ? (
