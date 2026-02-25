@@ -286,7 +286,203 @@ export function trainabilityHumanMessage(result: TrainabilityResult): string {
     TARGET_INVALID_TYPE: `Target textual incompatível com regressão.`,
     ONLY_ONE_CLASS: `Apenas uma classe rotulada (${d.n_unique} valor único). Rotule exemplos da classe oposta.`,
     MINORITY_CLASS_TOO_SMALL: `Classe minoritária com apenas ${d.minor_class_count} exemplos. Mínimo: 30. Rotule mais casos da classe sub-representada.`,
+    LOW_VARIANCE_TARGET: `Target com variância muito baixa (quase constante). Escolha outro alvo.`,
   };
 
   return messages[result.reason_code || ""] || `Target não treinável (${result.reason_code}).`;
+}
+
+// ────────────────────────────────────────────────────────────────
+// DB-aware wrapper: evaluateTargetTrainabilityFromSSOT
+// Queries real stats per active_target_mode and returns unified report.
+// Used by BOTH run-training-preflight AND train-models for parity.
+// ────────────────────────────────────────────────────────────────
+
+export interface SSOTTrainabilityReport {
+  trainable: boolean;
+  reason_code: string | null;
+  message_user: string;
+  details: {
+    join_rows: number;
+    distinct_y: number;
+    pos: number;
+    neg: number;
+    nulls: number;
+    mode: string;
+    target_col: string | null;
+  };
+  thresholds: {
+    min_total: number;
+    min_per_class: number;
+    min_distinct_y: number;
+  };
+  fix_suggestions: FixSuggestion[];
+  warnings: string[];
+  computed_at: string;
+}
+
+interface SSOTInput {
+  supabase: any;
+  projectId: string;
+  activeTargetMode: string; // "human" | "weak" | "template" | "column"
+  targetColumn: string | null;
+  problemType: string;
+  projectSettings: Record<string, any>;
+}
+
+/**
+ * Unified trainability evaluation that queries real stats per mode.
+ * Ensures preflight and train-models produce identical results.
+ */
+export async function evaluateTargetTrainabilityFromSSOT(
+  input: SSOTInput
+): Promise<SSOTTrainabilityReport> {
+  const { supabase, projectId, activeTargetMode, targetColumn, problemType, projectSettings } = input;
+
+  const mode = activeTargetMode || "column";
+  const thresholds = {
+    min_total: mode === "human" ? 100 : 200,
+    min_per_class: mode === "human" ? 30 : 50,
+    min_distinct_y: 2,
+  };
+
+  let targetValues: (string | number | boolean | null | undefined)[] = [];
+  let joinRows = 0;
+  let pos = 0;
+  let neg = 0;
+  let nulls = 0;
+  let distinctY = 0;
+
+  try {
+    if (mode === "human") {
+      // ── Real query of project_human_labels ──
+      const { data: labels, error } = await supabase
+        .from("project_human_labels")
+        .select("label, label_status")
+        .eq("project_id", projectId)
+        .neq("label_status", "unsure");
+
+      if (error || !labels) {
+        return buildSSOTReport(false, "HUMAN_LABEL_QUERY_ERROR",
+          error?.message || "Erro ao consultar rótulos humanos.",
+          { join_rows: 0, distinct_y: 0, pos: 0, neg: 0, nulls: 0, mode, target_col: null },
+          thresholds, [{ label: "Gerar amostras", action: "open_human_labeling" }], []);
+      }
+
+      joinRows = labels.length;
+      for (const l of labels) {
+        const v = l.label as number;
+        targetValues.push(v);
+        if (v === 1) pos++;
+        else if (v === 0) neg++;
+      }
+      distinctY = new Set(targetValues).size;
+      nulls = 0;
+
+    } else if (mode === "weak") {
+      // ── Use weak_label_result stats from SSOT ──
+      const wlr = projectSettings.weak_label_result as Record<string, any> | null;
+      if (wlr) {
+        const totalRows = projectSettings.ingestion_rows_detected || 0;
+        const coverage = wlr.coverage ?? 0;
+        const prevalence = wlr.prevalence ?? 0;
+        const coveredRows = Math.round(totalRows * coverage);
+        pos = Math.round(coveredRows * prevalence);
+        neg = coveredRows - pos;
+        joinRows = coveredRows;
+        nulls = totalRows - coveredRows;
+        targetValues = [
+          ...Array(pos).fill(1),
+          ...Array(neg).fill(0),
+          ...Array(nulls).fill(null),
+        ];
+        distinctY = pos > 0 && neg > 0 ? 2 : pos > 0 || neg > 0 ? 1 : 0;
+      }
+
+    } else if (mode === "template") {
+      // ── Use label_build_result stats from SSOT ──
+      const lbr = projectSettings.label_build_result as Record<string, any> | null;
+      if (lbr) {
+        const eligibleEntities = lbr.eligible_entities ?? projectSettings.ingestion_rows_detected ?? 0;
+        const pr = lbr.positive_rate ?? 0;
+        pos = Math.round(eligibleEntities * pr);
+        neg = eligibleEntities - pos;
+        joinRows = eligibleEntities;
+        nulls = 0;
+        targetValues = [...Array(pos).fill(1), ...Array(neg).fill(0)];
+        distinctY = pos > 0 && neg > 0 ? 2 : pos > 0 || neg > 0 ? 1 : 0;
+      }
+
+    } else {
+      // ── Column mode: use target_quality_report or dataset state ──
+      const tqr = projectSettings.target_quality_report as Record<string, any> | null;
+      if (tqr && tqr.n_classes > 0 && tqr.positive_rate != null) {
+        const totalRows = projectSettings.ingestion_rows_detected || 0;
+        pos = Math.round(totalRows * (tqr.positive_rate ?? 0));
+        neg = totalRows - pos;
+        joinRows = totalRows;
+        nulls = 0;
+        targetValues = [...Array(pos).fill(1), ...Array(neg).fill(0)];
+        distinctY = tqr.n_classes;
+      } else {
+        // Fallback: minimal check from ingestion stats
+        const totalRows = projectSettings.ingestion_rows_detected || 0;
+        joinRows = totalRows;
+        // Can't know class distribution without real data - will be validated by train-models on real y
+        if (totalRows > 0 && targetColumn) {
+          return buildSSOTReport(true, null, "Target selecionado. Distribuição será validada no treino.",
+            { join_rows: totalRows, distinct_y: 0, pos: 0, neg: 0, nulls: 0, mode, target_col: targetColumn },
+            thresholds, [], ["Distribuição de classes será validada durante o treinamento."]);
+        }
+      }
+    }
+
+    // Now evaluate using the pure function
+    const result = evaluateTargetTrainability({
+      target_values: targetValues,
+      target_column: targetColumn || "__target__",
+      problem_type: problemType,
+      target_source: mode === "template" ? "label_builder" : mode === "weak" ? "weak_supervision" : mode === "human" ? "human_labeling" : "manual",
+      weak_label_result: projectSettings.weak_label_result as Record<string, unknown> | null,
+      human_label_result: projectSettings.human_label_result as Record<string, unknown> | null,
+    });
+
+    const msg = trainabilityHumanMessage(result);
+
+    return buildSSOTReport(
+      result.trainable,
+      result.reason_code,
+      msg,
+      { join_rows: joinRows, distinct_y: distinctY || result.details.n_unique, pos, neg, nulls, mode, target_col: targetColumn },
+      thresholds,
+      result.fix_suggestions,
+      result.warnings,
+    );
+  } catch (err: any) {
+    return buildSSOTReport(false, "TRAINABILITY_EVAL_ERROR",
+      `Erro ao avaliar treinabilidade: ${err?.message || "desconhecido"}`,
+      { join_rows: 0, distinct_y: 0, pos: 0, neg: 0, nulls: 0, mode, target_col: targetColumn },
+      thresholds, [], []);
+  }
+}
+
+function buildSSOTReport(
+  trainable: boolean,
+  reasonCode: string | null,
+  messageUser: string,
+  details: SSOTTrainabilityReport["details"],
+  thresholds: SSOTTrainabilityReport["thresholds"],
+  fixSuggestions: FixSuggestion[],
+  warnings: string[],
+): SSOTTrainabilityReport {
+  return {
+    trainable,
+    reason_code: reasonCode,
+    message_user: messageUser,
+    details,
+    thresholds,
+    fix_suggestions: fixSuggestions,
+    warnings,
+    computed_at: new Date().toISOString(),
+  };
 }

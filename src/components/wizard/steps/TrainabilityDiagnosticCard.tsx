@@ -24,6 +24,13 @@ interface TrainabilityDetails {
   conflict_rate: number;
   coverage: number;
   target_type?: string;
+  // SSOT fields from evaluateTargetTrainabilityFromSSOT
+  join_rows?: number;
+  distinct_y?: number;
+  pos?: number;
+  neg?: number;
+  mode?: string;
+  target_col?: string | null;
 }
 
 interface TrainabilityDiagnosticProps {
@@ -93,6 +100,11 @@ export default function TrainabilityDiagnosticCard({
         <Badge variant="outline" className="text-[10px] border-destructive/40 text-destructive flex-shrink-0">
           {reasonCode}
         </Badge>
+        {details.mode && (
+          <Badge variant="secondary" className="text-[10px] flex-shrink-0">
+            {details.mode === "human" ? "Rotulagem Humana" : details.mode === "weak" ? "Assistido" : details.mode === "template" ? "Template" : "Manual"}
+          </Badge>
+        )}
       </div>
 
       {/* Expandable details */}
@@ -107,7 +119,19 @@ export default function TrainabilityDiagnosticCard({
           </Button>
         </CollapsibleTrigger>
         <CollapsibleContent className="pt-2">
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 text-[11px]">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px]">
+            {details.join_rows != null && details.join_rows > 0 && (
+              <DetailItem label="Join Rows" value={details.join_rows.toLocaleString()} />
+            )}
+            {details.pos != null && (
+              <DetailItem label="Positivos" value={String(details.pos)} warn={details.pos === 0} />
+            )}
+            {details.neg != null && (
+              <DetailItem label="Negativos" value={String(details.neg)} warn={details.neg === 0} />
+            )}
+            {details.distinct_y != null && (
+              <DetailItem label="Classes" value={String(details.distinct_y)} warn={details.distinct_y < 2} />
+            )}
             <DetailItem label="Linhas" value={details.n_rows.toLocaleString()} />
             <DetailItem label="Não-nulos" value={details.n_non_null.toLocaleString()} />
             <DetailItem label="Valores únicos" value={String(details.n_unique)} />
