@@ -3727,25 +3727,103 @@ serve(async (req) => {
     });
 
   } catch (error) {
-    console.error("Erro no treinamento:", error);
+    const err = error instanceof Error ? error : new Error(String(error));
+    const requestId = crypto.randomUUID();
+    console.error(`[TRAINING_CRASH] request_id=${requestId}`, err);
 
-    // ── SSOT: Mark training as failed (best-effort) ──
+    // Attempt to extract context for diagnostics
+    let crashProjectId: string | null = null;
+    let crashSelectionVersion: number | null = null;
+    let crashDatasetVersion: number | null = null;
+    let crashActiveTargetMode: string | null = null;
+    let crashActiveTargetRef: Record<string, unknown> | null = null;
+    let crashStep = "unknown";
+
     try {
       const body = await req.clone().json().catch(() => ({}));
-      if (body.project_id) {
+      crashProjectId = body.project_id || null;
+      
+      if (crashProjectId) {
         const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+
+        // Mark training as failed
         await sb.rpc("rpc_update_pipeline_state", {
-          p_project_id: body.project_id,
+          p_project_id: crashProjectId,
           p_stage: "training",
           p_new_state: "failed",
-        });
-      }
-    } catch (_) { /* best-effort */ }
+        }).catch(() => {});
 
-    return new Response(JSON.stringify({ 
-      error: error instanceof Error ? error.message : "Erro desconhecido" 
+        // Read SSOT for diagnostics
+        const { data: settings } = await sb
+          .from("project_settings")
+          .select("selection_version, dataset_version, active_target_mode, active_target_column, active_target_ref")
+          .eq("project_id", crashProjectId)
+          .maybeSingle()
+          .catch(() => ({ data: null }));
+        
+        if (settings) {
+          crashSelectionVersion = (settings as any).selection_version ?? null;
+          crashDatasetVersion = (settings as any).dataset_version ?? null;
+          crashActiveTargetMode = (settings as any).active_target_mode ?? null;
+          crashActiveTargetRef = (settings as any).active_target_ref ?? null;
+        }
+
+        // Infer step from stack trace
+        const stack = err.stack || "";
+        if (stack.includes("buildModelingDataset") || stack.includes("readParquet") || stack.includes("filePath")) crashStep = "build_dataset";
+        else if (stack.includes("splitData") || stack.includes("trainTest")) crashStep = "split";
+        else if (stack.includes("trainLogistic") || stack.includes("trainLinear") || stack.includes("trainGradient") || stack.includes("trainSimpleTree")) crashStep = "fit";
+        else if (stack.includes("calcMetrics") || stack.includes("calcPRAUC") || stack.includes("calcAUC")) crashStep = "metrics";
+        else if (stack.includes("insert") || stack.includes("upsert") || stack.includes("persist")) crashStep = "persist";
+
+        // Log to platform_events for audit
+        const truncatedStack = (err.stack || "").slice(0, 10_000);
+        await sb.from("platform_events").insert({
+          user_id: null,
+          organization_id: null,
+          project_id: crashProjectId,
+          event_type: "job_error",
+          status: "error",
+          source: "edge",
+          metadata: {
+            code: "TRAINING_CRASH",
+            step: crashStep,
+            request_id: requestId,
+            error_name: err.name,
+            error_message: err.message,
+            stack: truncatedStack,
+            selection_version: crashSelectionVersion,
+            dataset_version: crashDatasetVersion,
+            active_target_mode: crashActiveTargetMode,
+          },
+          timestamp: new Date().toISOString(),
+        }).catch((evtErr: unknown) => console.error("[TRAINING_CRASH] Failed to log event:", evtErr));
+      }
+    } catch (_diagErr) {
+      console.error("[TRAINING_CRASH] Diagnostics collection failed:", _diagErr);
+    }
+
+    // Return structured HTTP 200 error per reliability standards
+    return new Response(JSON.stringify({
+      success: false,
+      status: "error",
+      code: "TRAINING_CRASH",
+      message_user: "Erro interno ao treinar. Tente novamente ou compartilhe o código do erro.",
+      error: {
+        name: err.name,
+        message: err.message,
+        stack: (err.stack || "").slice(0, 4_000),
+        hint: "Verifique os logs de auditoria com o request_id abaixo.",
+        step: crashStep,
+        request_id: requestId,
+        project_id: crashProjectId,
+        selection_version: crashSelectionVersion,
+        dataset_version: crashDatasetVersion,
+        active_target_mode: crashActiveTargetMode,
+        active_target_ref: crashActiveTargetRef,
+      },
     }), {
-      status: 500,
+      status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   }
