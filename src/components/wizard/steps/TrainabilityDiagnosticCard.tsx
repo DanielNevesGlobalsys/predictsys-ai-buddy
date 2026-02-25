@@ -31,6 +31,14 @@ interface TrainabilityDetails {
   neg?: number;
   mode?: string;
   target_col?: string | null;
+  // Entity join diagnostics
+  labels_total?: number;
+  labels_distinct_entities?: number;
+  join_rate?: number;
+  // Regression
+  variance_y?: number;
+  // Sampling
+  sampling_mode?: string;
 }
 
 interface TrainabilityDiagnosticProps {
@@ -51,6 +59,8 @@ const ACTION_ICONS: Record<string, React.ReactNode> = {
   go_to_step_2: <Users className="w-3.5 h-3.5" />,
   change_problem_type: <Settings2 className="w-3.5 h-3.5" />,
   open_weak_supervision_config: <Settings2 className="w-3.5 h-3.5" />,
+  open_entity_selector: <Users className="w-3.5 h-3.5" />,
+  switch_problem_type: <Settings2 className="w-3.5 h-3.5" />,
 };
 
 export default function TrainabilityDiagnosticCard({
@@ -72,11 +82,11 @@ export default function TrainabilityDiagnosticCard({
       case "open_weak_supervision_config":
       case "open_human_labeling":
       case "change_problem_type":
-        // Step 4 = Target/Features in wizard
+      case "switch_problem_type":
+      case "open_entity_selector":
         onGoToStep?.(4);
         break;
       case "go_to_step_2":
-        // Step 2 = Data Upload
         onGoToStep?.(2);
         break;
       default:
@@ -166,6 +176,26 @@ export default function TrainabilityDiagnosticCard({
             )}
             {details.target_type && (
               <DetailItem label="Tipo" value={details.target_type} />
+            )}
+            {details.labels_total != null && details.labels_total > 0 && (
+              <DetailItem label="Rótulos" value={String(details.labels_total)} />
+            )}
+            {details.labels_distinct_entities != null && details.labels_distinct_entities > 0 && (
+              <DetailItem label="Entidades" value={String(details.labels_distinct_entities)} />
+            )}
+            {details.join_rate != null && details.join_rate < 1 && (
+              <DetailItem
+                label="Taxa de join"
+                value={`${(details.join_rate * 100).toFixed(0)}%`}
+                warn={details.join_rate < 0.5}
+              />
+            )}
+            {details.sampling_mode && details.sampling_mode !== "balanced" && (
+              <DetailItem
+                label="Amostragem"
+                value={details.sampling_mode === "targeted_positive" ? "→ Positivos" : "→ Negativos"}
+                warn
+              />
             )}
           </div>
         </CollapsibleContent>
