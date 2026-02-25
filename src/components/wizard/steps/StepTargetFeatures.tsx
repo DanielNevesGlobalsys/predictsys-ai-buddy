@@ -510,40 +510,80 @@ const StepTargetFeatures = ({
   };
 
   /**
+   * Leakage keyword blocklist for auto-feature selection.
+   * These patterns indicate columns that are likely derived from or identical to the target.
+   */
+  const LEAKAGE_KEYWORDS = [
+    "target", "label", "resultado", "result", "status_final", "outcome",
+    "predicted", "prediction", "score_final", "y_true", "y_pred",
+    "suggested_label", "confidence", "label_source",
+  ];
+
+  const isLeakageCandidate = (colName: string): boolean => {
+    const lower = colName.toLowerCase();
+    return LEAKAGE_KEYWORDS.some(kw => lower === kw || lower.includes(kw));
+  };
+
+  /**
    * Auto-populate features: preserves existing selection if any,
-   * otherwise selects all valid columns except target + structural keys.
+   * otherwise selects all valid columns except target + structural keys + leakage suspects.
+   * Always removes the target column and obvious leakage from the selection.
    */
   const autoPopulateFeatures = (newTarget: string) => {
     setSelectedFeatures(prev => {
-      if (prev.length > 0) {
-        return prev.filter(f => f !== newTarget);
-      }
       const structuralCols = new Set<string>();
       if (ssot.entity_key) structuralCols.add(ssot.entity_key);
       if (ssot.time_anchor_column) structuralCols.add(ssot.time_anchor_column);
       if (contractHints?.entity_key) structuralCols.add(contractHints.entity_key);
       if (contractHints?.time_anchor_column) structuralCols.add(contractHints.time_anchor_column);
       structuralCols.add(newTarget);
+
+      if (prev.length > 0) {
+        // Preserve existing but remove target + leakage
+        return prev.filter(f => f !== newTarget && !isLeakageCandidate(f));
+      }
+
+      // Auto-select: all valid columns minus structural + leakage
       return columns
-        .filter(c => !structuralCols.has(c.name) && !c.featureHasError)
+        .filter(c => !structuralCols.has(c.name) && !c.featureHasError && !isLeakageCandidate(c.name))
         .map(c => c.name);
     });
   };
 
   /**
-   * Persist target_source and selected_template_id to project_settings (SSOT).
+   * Map target_source to the canonical active_target_mode used by resolveActiveTarget().
    */
-  const persistTargetSourceToSSOT = async (source: string, templateId: string | null) => {
+  const sourceToMode = (source: string): string => {
+    const map: Record<string, string> = {
+      label_builder: "template",
+      weak_supervision: "weak",
+      human_labeling: "human",
+      manual: "column",
+      column: "column",
+    };
+    return map[source] || "column";
+  };
+
+  /**
+   * Persist target_source, active_target_mode, and active_target_column to project_settings (SSOT).
+   * This ensures resolveActiveTarget() in preflight/train-models reads the correct mode.
+   */
+  const persistTargetSourceToSSOT = async (source: string, templateId: string | null, targetCol?: string) => {
     if (!projectData.id) return;
+    const mode = sourceToMode(source);
+    const col = targetCol || targetColumn || (source !== "manual" ? "label" : null);
     try {
       await supabase
         .from("project_settings")
         .update({
           target_source: source,
           selected_template_id: templateId,
-          active_target_mode: source,
+          active_target_mode: mode,
+          active_target_column: col,
+          target_state: col ? "ready" : "draft",
         } as any)
         .eq("project_id", projectData.id);
+      console.log(`[StepTargetFeatures] SSOT persisted: source=${source}, mode=${mode}, col=${col}`);
       await loadSSOT();
       onSSOTChanged?.();
     } catch (err) {
@@ -876,6 +916,29 @@ const StepTargetFeatures = ({
             </span>
           </div>
         )}
+
+        {/* Regression / categorical target mismatch warning */}
+        {inferredProblemType === "regression" && targetColumn && (() => {
+          const colInfo = columns.find(c => c.name === targetColumn);
+          const colInf = columnInferenceMap.current.get(targetColumn);
+          const isCategorical = colInfo?.type === "categórico" || colInfo?.type === "text" || colInf?.inferred_type === "categorical";
+          const isBinary = colInf && colInf.semantic_role?.includes("EVENTO");
+          if (isCategorical || isBinary) {
+            return (
+              <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+                <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
+                <div className="text-sm">
+                  <p className="font-medium text-destructive">Tipo de problema incompatível</p>
+                  <p className="text-muted-foreground">
+                    O alvo "<strong>{targetColumn}</strong>" parece ser categórico/binário, mas o tipo selecionado é Regressão.
+                    Considere trocar para <strong>Classificação</strong> ou escolher um alvo numérico contínuo.
+                  </p>
+                </div>
+              </div>
+            );
+          }
+          return null;
+        })()}
 
         {/* Target Quality Card */}
         {projectData.id && targetColumn && appliedTargetColumn && (
