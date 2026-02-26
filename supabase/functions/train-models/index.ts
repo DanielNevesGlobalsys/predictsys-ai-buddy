@@ -4,7 +4,7 @@ import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 import { evaluateTargetTrainability, trainabilityHumanMessage, evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
-import { detectTargetType, validateTargetTypeMismatch, coerceToNumber, checkLowVariance, computeTargetStats, sampleRows as mvpSampleRows } from "../_shared/training-prepare-mvp-soft.ts";
+import { detectTargetType, validateTargetTypeMismatch, coerceToNumber, checkLowVariance, computeTargetStats, sampleRows as mvpSampleRows, samplePlan, validateSchemaSelection, filterInvalidFeatures } from "../_shared/training-prepare-mvp-soft.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1678,8 +1678,79 @@ serve(async (req) => {
       }
     }
 
-    // ── Gate 3: Builder (must be current + matching selection_version) ──
+    // ── Gate 3 prep: warnings accumulator ──
     const trainingWarningsGlobal: string[] = [];
+
+    // ── MVP-Soft Prepare: training_prepare events + feature filter + sample plan ──
+    {
+      // Log training_prepare_started
+      await supabase.from("platform_events").insert({
+        event_type: "training_prepare_started",
+        project_id: project_id,
+        status: "info",
+        source: "edge",
+        metadata: { target_column, problem_type, entity_key: entityKey },
+      });
+
+      // Feature filtering (leakage tokens)
+      const selectedFeatures = selection?.selected_features as string[] || [];
+      if (selectedFeatures.length > 0) {
+        let schemaCols = new Set<string>();
+        if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
+          schemaCols = new Set(Object.keys(dsState.active_schema_json).filter((k: string) => !k.startsWith("_")));
+        }
+        if (schemaCols.size > 0) {
+          const filterResult = filterInvalidFeatures(selectedFeatures, schemaCols);
+          if (filterResult.removed.length > 0) {
+            console.log(`[MVP-Soft] Removed ${filterResult.removed.length} features: ${filterResult.removed.map(r => `${r.col}(${r.reason})`).join(", ")}`);
+            trainingWarningsGlobal.push(`${filterResult.removed.length} feature(s) removida(s) por leakage/schema: ${filterResult.removed.slice(0, 5).map(r => r.col).join(", ")}`);
+          }
+          if (filterResult.valid.length < 3 && !useHumanLabelsAsTarget) {
+            await supabase.from("platform_events").insert({
+              event_type: "training_prepare_blocked",
+              project_id: project_id,
+              status: "error",
+              source: "edge",
+              metadata: { code: "NO_VALID_FEATURES", valid_count: filterResult.valid.length, removed: filterResult.removed.slice(0, 20) },
+            });
+            return blockResponse(
+              "NO_VALID_FEATURES",
+              `Apenas ${filterResult.valid.length} feature(s) válida(s) após filtro. Mínimo: 3. Re-selecione variáveis.`,
+              { label: "Re-selecionar features", go_to_step: 3 },
+              { valid_count: filterResult.valid.length, removed: filterResult.removed.slice(0, 20) }
+            );
+          }
+        }
+      }
+
+      // Sample plan for large datasets
+      const totalRows = dsState?.row_count || 0;
+      if (totalRows > 0) {
+        const plan = samplePlan(totalRows, problem_type);
+        if (plan.shouldSample) {
+          console.log(`[MVP-Soft] Sample plan: ${plan.sampleSize} rows (${plan.strategy}) from ${totalRows}`);
+          await supabase.from("platform_events").insert({
+            event_type: "training_prepare_sampled",
+            project_id: project_id,
+            status: "info",
+            source: "edge",
+            metadata: { total_rows: totalRows, sample_size: plan.sampleSize, strategy: plan.strategy },
+          });
+          trainingWarningsGlobal.push(`Amostra automática: ${plan.sampleSize.toLocaleString()} de ${totalRows.toLocaleString()} linhas (${plan.strategy})`);
+        }
+      }
+
+      // Log training_prepare_passed
+      await supabase.from("platform_events").insert({
+        event_type: "training_prepare_passed",
+        project_id: project_id,
+        status: "success",
+        source: "edge",
+        metadata: { target_column, problem_type },
+      });
+    }
+
+    // ── Gate 3: Builder (must be current + matching selection_version) ──
     let builderDatasetId: string | null = null;
 
     if (modelingDataset) {
@@ -3024,6 +3095,10 @@ serve(async (req) => {
             target_type_real: targetDetection.type,
             distinct_count: targetDetection.distinct_count,
             suggestion: mismatch.suggestion,
+            fix_suggestions: [
+              { label: mismatch.suggestion === "classification" ? "Trocar para Classificação" : "Trocar para Regressão", action: `change_problem_type_${mismatch.suggestion}` },
+              { label: "Revisar Target", action: "open_target_step" },
+            ],
           }
         );
       }
@@ -3046,9 +3121,37 @@ serve(async (req) => {
         return blockResponse(
           lowVarCheck.code!,
           lowVarCheck.message!,
-          { label: "Revisar Target", go_to_step: 3 }
+          { label: "Revisar Target", go_to_step: 3 },
+          {
+            fix_suggestions: [
+              { label: "Ajustar janela / critério do alvo", action: "open_target_step" },
+              { label: "Revisar regras do alvo", action: "open_target_step" },
+            ],
+          }
         );
       }
+    }
+
+    // ── MVP-Soft: Persist target_trainability_report (passed) ──
+    {
+      const targetStats = computeTargetStats(y, problem_type === "classification");
+      const trainabilityReport = {
+        trainable: true,
+        reason_code: null,
+        details: {
+          n_rows: y.length,
+          n_non_null: targetStats.n_valid,
+          distinct_count: targetStats.n_unique,
+          target_type_real: targetStats.target_type_real,
+          sampled: { on: X.length < (dsState?.row_count || 0), size: X.length },
+        },
+        fix_suggestions: [],
+        warnings: mvpSoftWarnings || [],
+      };
+      await supabase.from("project_settings")
+        .update({ target_trainability_report: trainabilityReport })
+        .eq("project_id", project_id)
+        .catch(() => {});
     }
 
     // ── MVP-Soft C: Row Sampling (cap at TRAINING_ROW_CAP for large datasets) ──

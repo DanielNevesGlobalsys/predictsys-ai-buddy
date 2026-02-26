@@ -415,6 +415,108 @@ export function checkLowVariance(
   return { blocked: false };
 }
 
+// ── Sample Plan ──
+
+export interface SamplePlanResult {
+  shouldSample: boolean;
+  sampleSize: number;
+  strategy: "stratified" | "random" | "full";
+}
+
+export function samplePlan(rowCount: number, problemType: string): SamplePlanResult {
+  if (rowCount <= TRAINING_ROW_CAP) {
+    return { shouldSample: false, sampleSize: rowCount, strategy: "full" };
+  }
+
+  let sampleSize: number;
+  if (problemType === "classification") {
+    sampleSize = Math.min(TRAINING_ROW_CAP, Math.max(30_000, Math.floor(0.02 * rowCount)));
+  } else {
+    sampleSize = Math.min(TRAINING_ROW_CAP, Math.max(50_000, Math.floor(0.01 * rowCount)));
+  }
+
+  return {
+    shouldSample: true,
+    sampleSize,
+    strategy: problemType === "classification" ? "stratified" : "random",
+  };
+}
+
+// ── Schema Selection Validation ──
+
+export function validateSchemaSelection(
+  schemaCols: Set<string>,
+  targetCol: string | null,
+  featureCols: string[],
+  entityKey: string | null,
+): { valid: boolean; code?: string; message?: string; missing: string[] } {
+  const missing: string[] = [];
+  const schemaLower = new Set([...schemaCols].map(c => c.toLowerCase()));
+
+  if (entityKey && !schemaLower.has(entityKey.toLowerCase())) {
+    return { valid: false, code: "INVALID_ENTITY_KEY", message: `Entity Key "${entityKey}" não existe no schema.`, missing: [entityKey] };
+  }
+
+  if (targetCol && targetCol !== "_label_" && targetCol !== "label" && !schemaLower.has(targetCol.toLowerCase())) {
+    missing.push(targetCol);
+  }
+
+  for (const f of featureCols) {
+    if (!schemaLower.has(f.toLowerCase())) {
+      missing.push(f);
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      valid: false,
+      code: "INVALID_SCHEMA_SELECTION",
+      message: `Colunas ausentes no schema: ${missing.slice(0, 5).join(", ")}`,
+      missing,
+    };
+  }
+
+  return { valid: true, missing: [] };
+}
+
+// ── Feature Leakage Filter ──
+
+const LEAKAGE_EXACT_TOKENS = new Set(["label", "target", "y", "predicted", "prob_", "score_", "predicted_class", "predicted_value", "outcome_final", "status_final"]);
+
+export function filterInvalidFeatures(
+  featureCols: string[],
+  schemaCols: Set<string>,
+): { valid: string[]; removed: { col: string; reason: string }[] } {
+  const schemaLower = new Set([...schemaCols].map(c => c.toLowerCase()));
+  const valid: string[] = [];
+  const removed: { col: string; reason: string }[] = [];
+
+  for (const col of featureCols) {
+    // Not in schema
+    if (!schemaLower.has(col.toLowerCase())) {
+      removed.push({ col, reason: "not_in_schema" });
+      continue;
+    }
+
+    // Exact leakage token match
+    const lower = col.toLowerCase().trim();
+    if (LEAKAGE_EXACT_TOKENS.has(lower)) {
+      removed.push({ col, reason: "leakage_token" });
+      continue;
+    }
+
+    // Prefix/suffix leakage patterns
+    if (lower.startsWith("prob_") || lower.startsWith("score_") || lower.startsWith("predicted_")) {
+      removed.push({ col, reason: "leakage_prefix" });
+      continue;
+    }
+
+    valid.push(col);
+  }
+
+  return { valid, removed };
+}
+
 // ── Feature Column Classification ──
 
 export interface ColumnClassification {
@@ -434,7 +536,6 @@ export function classifyColumns(
   const sample = sampleRows.slice(0, sampleSize);
 
   for (const h of headers) {
-    // Skip target and entity key
     if (h === targetColumn || h === entityKey) {
       result.push({ name: h, type: "skip", reason: h === targetColumn ? "target" : "entity_key" });
       continue;
@@ -447,24 +548,20 @@ export function classifyColumns(
       continue;
     }
 
-    // Check unique count
     const unique = new Set(values.map(v => String(v)));
     if (unique.size === 1) {
       result.push({ name: h, type: "constant", reason: "single_value" });
       continue;
     }
 
-    // Check if date
     const dateCount = values.filter(v => isDateValue(v)).length;
     if (dateCount / values.length > 0.8) {
       result.push({ name: h, type: "date" });
       continue;
     }
 
-    // Check if numeric
     const numericCount = values.filter(v => !isNaN(coerceToNumber(v))).length;
     if (numericCount / values.length > 0.8) {
-      // Check if ID-like (high cardinality + ID pattern)
       const idPattern = /^(id|_id|codigo|cod_|numero|num_|chave|key|uuid|pk|fk|idx|index)/i;
       const idSuffix = /(_id|_key|_code|_cod|_numero|_num|_uuid)$/i;
       const uniqueRatio = unique.size / values.length;
@@ -476,7 +573,6 @@ export function classifyColumns(
       continue;
     }
 
-    // Categorical
     result.push({ name: h, type: "categorical" });
   }
 

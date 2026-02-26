@@ -2,6 +2,7 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget } from "../_shared/resolve-active-target.ts";
+import { samplePlan, filterInvalidFeatures } from "../_shared/training-prepare-mvp-soft.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -255,7 +256,48 @@ serve(async (req: Request) => {
       }
     }
 
-    // ===== 4.4 BUILDER GATE (SSOT cross-validation) =====
+    // ===== 4.3b MVP-SOFT FEATURE FILTER GATE =====
+    {
+      const selectedFeatures = (selection as any)?.selected_features as string[] || [];
+      if (selectedFeatures.length > 0 && datasetState) {
+        const dsAny = datasetState as any;
+        let schemaCols = new Set<string>();
+        if (dsAny.active_schema_json && typeof dsAny.active_schema_json === "object") {
+          schemaCols = new Set(Object.keys(dsAny.active_schema_json).filter((k: string) => !k.startsWith("_")));
+        }
+        if (schemaCols.size > 0) {
+          const filterResult = filterInvalidFeatures(selectedFeatures, schemaCols);
+          if (filterResult.removed.length > 0) {
+            gates.push({
+              gate: "mvp_soft_features",
+              status: filterResult.valid.length < 3 ? "BLOCK" : "WARN",
+              message: filterResult.valid.length < 3
+                ? `Apenas ${filterResult.valid.length} feature(s) válida(s) após filtro de leakage. Mínimo: 3.`
+                : `${filterResult.removed.length} feature(s) removida(s) por leakage/schema: ${filterResult.removed.slice(0, 3).map(r => r.col).join(", ")}`,
+              details: { valid_count: filterResult.valid.length, removed_count: filterResult.removed.length, removed: filterResult.removed.slice(0, 10) },
+            });
+            if (filterResult.valid.length < 3) canTrain = false;
+          }
+        }
+      }
+    }
+
+    // ===== 4.3c SAMPLE PLAN GATE =====
+    {
+      const totalRows = (datasetState as any)?.row_count || 0;
+      if (totalRows > 0) {
+        const plan = samplePlan(totalRows, (selection as any)?.problem_type || "classification");
+        if (plan.shouldSample) {
+          gates.push({
+            gate: "mvp_soft_sampling",
+            status: "WARN",
+            message: `Dataset grande (${totalRows.toLocaleString()} linhas). Amostra automática de ${plan.sampleSize.toLocaleString()} linhas será usada (${plan.strategy}).`,
+            details: { total_rows: totalRows, sample_size: plan.sampleSize, strategy: plan.strategy },
+          });
+        }
+      }
+    }
+
     const selectionVersion = (selection as any)?.selection_version || 0;
     const diagnostics = (datasetState as any)?.diagnostics as Record<string, any> | null;
     const ssotBuilderDatasetId = diagnostics?.builder_dataset_id || null;
