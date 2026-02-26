@@ -12,7 +12,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban, Database, CheckCircle, XCircle } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban, Database, CheckCircle, XCircle, KeyRound } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -97,6 +97,7 @@ const StepTargetFeatures = ({
   const [inferredProblemType, setInferredProblemType] = useState<string | null>(null);
   const [targetSource, setTargetSource] = useState<"manual" | "label_builder" | "weak_supervision" | "human_labeling">("manual");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
+  const [entityKey, setEntityKey] = useState<string>("");
 
   // SSOT dataset state
   const ds = useDatasetState(projectData.id);
@@ -349,6 +350,10 @@ const StepTargetFeatures = ({
       }
       // Hydrate selection version
       setSelectionVersion(ssot.selection_version || null);
+      // Hydrate entity key
+      if (ssot.entity_key) {
+        setEntityKey(ssot.entity_key);
+      }
       // Hydrate industry into intentInfo
       if (ssot.industry) {
         setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
@@ -615,6 +620,14 @@ const StepTargetFeatures = ({
 
   const handleSaveSettings = async (): Promise<boolean> => {
     if (!projectData.id || !targetColumn) return false;
+    if (!entityKey) {
+      toast({
+        title: "Entity Key obrigatória",
+        description: "Selecione a coluna que identifica a entidade (ex: id_cliente, cpf) antes de salvar.",
+        variant: "destructive",
+      });
+      return false;
+    }
 
     const cleanFeatures = selectedFeatures.filter((f) => f !== targetColumn);
     if (cleanFeatures.length === 0) {
@@ -637,9 +650,35 @@ const StepTargetFeatures = ({
     });
 
     if (saved) {
+      // Persist entity_key to project_settings (separate from model selection)
+      supabase
+        .from("project_settings")
+        .update({ entity_key: entityKey } as any)
+        .eq("project_id", projectData.id)
+        .then(({ error }) => {
+          if (error) console.error("[StepTargetFeatures] Failed to persist entity_key:", error);
+          else console.log(`[StepTargetFeatures] entity_key persisted: ${entityKey}`);
+        });
+
+      // Fire observability event for entity_key selection
+      supabase.functions.invoke("track-event", {
+        body: {
+          event_type: "entity_key_selected",
+          project_id: projectData.id,
+          status: "success",
+          metadata: {
+            entity_key: entityKey,
+            schema_source: schemaSSOT.source,
+            schema_columns_count: schemaSSOT.schema_columns_count,
+            detected_columns_count: schemaSSOT.detected_columns_count ?? null,
+          },
+        },
+      }).catch(() => {});
+
       appendContext("targeting", {
         selected_problem: problemType || "",
         selected_target: targetColumn,
+        entity_key: entityKey,
         recommended_features: cleanFeatures,
         excluded_features: excludedColumns,
         justification: inference?.suggested_targets.find((t) => t.column === targetColumn)?.why_this_target || "Configuração manual pelo usuário.",
@@ -744,6 +783,7 @@ const StepTargetFeatures = ({
     { label: "Linhas consolidadas > 0", ok: ds.rowCount > 0, detail: `${ds.rowCount.toLocaleString()} linhas` },
     { label: "Colunas detectadas > 0", ok: columns.length > 0, detail: `${columns.length} colunas` },
     { label: "Target definido", ok: !!targetColumn, detail: targetColumn || "—" },
+    { label: "Entity Key definida", ok: !!entityKey, detail: entityKey || "—" },
     { label: "Features selecionadas", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} features` },
     { label: "EDA pronto", ok: ds.edaReady, detail: ds.edaReady ? "OK" : "BLOCKED" },
     { label: "Modelo pronto", ok: ds.modelReady, detail: ds.modelReady ? "OK" : (ds.fallback?.blockedReasonModel || "BLOCKED") },
@@ -1164,6 +1204,60 @@ const StepTargetFeatures = ({
           </div>
         </div>
 
+        {/* Entity Key selection (mandatory) */}
+        <div className="space-y-2">
+          <Label className="text-base font-medium flex items-center gap-2">
+            <KeyRound className="w-4 h-4 text-secondary" />
+            Entity Key (chave da entidade)
+            <Badge variant="destructive" className="text-[10px] py-0">obrigatório</Badge>
+          </Label>
+          <TooltipProvider delayDuration={100}>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <p className="text-sm text-muted-foreground cursor-help inline-flex items-center gap-1">
+                  <Info className="w-3 h-3" />
+                  Coluna que identifica unicamente a entidade (ex: id_cliente, cpf, email).
+                </p>
+              </TooltipTrigger>
+              <TooltipContent className="max-w-xs">
+                <p className="text-xs">EntityKey é usada para agrupar previsões por entidade e garantir split correto. Deve ser uma coluna com alta cardinalidade (muitos valores únicos).</p>
+              </TooltipContent>
+            </Tooltip>
+          </TooltipProvider>
+          <Select value={entityKey} onValueChange={setEntityKey}>
+            <SelectTrigger className={`bg-background ${!entityKey ? "border-destructive/50" : ""}`}>
+              <SelectValue placeholder="Selecione a coluna de entidade..." />
+            </SelectTrigger>
+            <SelectContent className="bg-popover border border-border shadow-lg z-50">
+              {columns.map((col) => {
+                const inf = columnInferenceMap.current.get(col.name);
+                const isId = inf?.semantic_role === "ID_TECNICO";
+                const notInSample = schemaSSOT.detected_columns_count != null &&
+                  schemaSSOT.detected_columns_count < schemaSSOT.schema_columns_count &&
+                  !columns.slice(0, schemaSSOT.detected_columns_count).some(c => c.name === col.name);
+                return (
+                  <SelectItem key={col.name} value={col.name}>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium">{col.name}</span>
+                      <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">{col.type}</span>
+                      {isId && <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">ID</Badge>}
+                      {notInSample && (
+                        <Badge variant="outline" className="text-[10px] py-0">só no schema</Badge>
+                      )}
+                    </div>
+                  </SelectItem>
+                );
+              })}
+            </SelectContent>
+          </Select>
+          {!entityKey && targetColumn && (
+            <p className="text-xs text-destructive flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" />
+              Selecione a Entity Key para poder avançar.
+            </p>
+          )}
+        </div>
+
         {/* Target Presence Scan */}
         {projectData.id && targetColumn && (
           <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} targetSource={targetSource} />
@@ -1416,7 +1510,7 @@ const StepTargetFeatures = ({
               <Button
                 variant="outline"
                 onClick={handleSaveSettings}
-                disabled={loading || !targetColumn}
+                disabled={loading || !targetColumn || !entityKey}
               >
                 <Save className="w-4 h-4 mr-1.5" />
                 {t("common.save")}
@@ -1424,7 +1518,7 @@ const StepTargetFeatures = ({
             )}
             <Button
               onClick={handleNext}
-              disabled={loading || !targetColumn}
+              disabled={loading || !targetColumn || !entityKey}
               className="bg-gradient-primary hover:shadow-hover transition-all"
             >
               {loading ? t("common.loading") : t("common.next")}

@@ -1479,9 +1479,61 @@ serve(async (req) => {
     // Load active_target fields from project_settings
     const { data: activeTargetSettings } = await supabase
       .from("project_settings")
-      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type")
+      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key")
       .eq("project_id", project_id)
       .maybeSingle();
+
+    // ── Gate 2: Entity Key validation ──
+    const entityKey = (activeTargetSettings as any)?.entity_key || null;
+    if (!entityKey) {
+      console.error(`[Gating] MISSING_ENTITY_KEY for project ${project_id}`);
+      await supabase.from("platform_events").insert({
+        event_type: "entity_key_missing",
+        project_id: project_id,
+        status: "error",
+        source: "edge",
+        metadata: {
+          dataset_id: dsState?.active_dataset_ref || null,
+          schema_source: dsState?.active_schema_json ? "active_schema_json" : "unknown",
+          schema_cols_count: dsState?.active_schema_json ? Object.keys(dsState.active_schema_json).filter((k: string) => !k.startsWith("_")).length : 0,
+        },
+      });
+      return blockResponse("MISSING_ENTITY_KEY", "Selecione a chave da entidade (Entity Key) antes de treinar.", { label: "Definir Entity Key", go_to_step: 3 });
+    }
+
+    // Validate entity_key exists in schema
+    {
+      let schemaCols: string[] = [];
+      if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
+        schemaCols = Object.keys(dsState.active_schema_json).filter((k: string) => !k.startsWith("_"));
+      }
+      if (schemaCols.length > 0) {
+        const schemaLower = new Set(schemaCols.map((c: string) => c.toLowerCase()));
+        if (!schemaLower.has(entityKey.toLowerCase())) {
+          console.error(`[Gating] INVALID_ENTITY_KEY: "${entityKey}" not in schema (${schemaCols.length} cols)`);
+          await supabase.from("platform_events").insert({
+            event_type: "entity_key_invalid",
+            project_id: project_id,
+            status: "error",
+            source: "edge",
+            metadata: {
+              entity_key: entityKey,
+              schema_cols_count: schemaCols.length,
+              first_20_cols: schemaCols.slice(0, 20),
+            },
+          });
+          return blockResponse("INVALID_ENTITY_KEY", `Entity Key "${entityKey}" não existe no schema consolidado (${schemaCols.length} colunas).`, { label: "Corrigir Entity Key", go_to_step: 3 });
+        }
+      }
+      console.log(`[Gating] Entity Key OK: "${entityKey}"`);
+      await supabase.from("platform_events").insert({
+        event_type: "entity_key_validated",
+        project_id: project_id,
+        status: "success",
+        source: "edge",
+        metadata: { entity_key: entityKey },
+      });
+    }
     
     const activeTarget = resolveActiveTarget((activeTargetSettings as any) || {});
     let useHumanLabelsAsTarget = false;
