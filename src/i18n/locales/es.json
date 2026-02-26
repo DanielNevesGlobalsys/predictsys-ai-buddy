@@ -49,7 +49,7 @@
     "passwordMinLength": "La contraseña debe tener al menos 6 caracteres",
     "nameRequired": "El nombre es obligatorio",
     "backToHome": "Volver al inicio",
-    "tagline": "Machine Learning sin escribir código",
+    "tagline": "Inteligencia Predictiva Estratégica",
     "emailPlaceholder": "tu@email.com",
     "passwordPlaceholder": "••••••••",
     "namePlaceholder": "Tu Nombre"
@@ -59,40 +59,73 @@
     "toggleTheme": "Cambiar tema (claro/oscuro)"
   },
   "landing": {
-    "heroTitle1": "Crea Modelos de ML",
-    "heroTitle2": "Sin Escribir Código",
-    "heroSubtitle": "Plataforma completa de AutoML con asistente de IA, análisis exploratorio automático y despliegue con un clic. Transforma tus datos en predicciones inteligentes.",
-    "createFreeAccount": "Crear Cuenta Gratis",
-    "viewDemo": "Ver Demostración",
-    "predictiveAI": "IA Predictiva",
+    "heroTitle1": "Predicciones Confiables para Decisiones Estratégicas.",
+    "heroSubtitle": "PredictSys transforma reglas de negocio en modelos predictivos robustos, aplica inteligencia estratégica a las decisiones y mide el impacto real en los resultados de su empresa.",
+    "createFreeAccount": "Crear Estrategia Predictiva",
+    "viewDemo": "Ver Cómo Funciona",
+    "predictiveAI": "Inteligencia Predictiva Estratégica",
     "secure": "100% Seguro",
-    "instantDeploy": "Despliegue Instantáneo",
-    "aiChatbot": "Lys",
-    "allYouNeed": "Todo lo que necesitas para ",
-    "predictFuture": "predecir el futuro",
-    "autoMLDescription": "Plataforma completa de AutoML con las mejores prácticas del mercado",
+    "governedPipeline": "Pipeline Gobernado",
+    "measurableImpact": "Impacto Medible",
+    "allYouNeed": "Recursos de la Plataforma",
+    "autoMLDescription": "Cada recurso fue diseñado para conectar estrategia, ejecución y resultado.",
     "readyToStart": "¿Listo para empezar?",
-    "readyDescription": "Crea tu cuenta gratuita y comienza a entrenar modelos de machine learning en minutos.",
+    "readyDescription": "Cree su estrategia predictiva y compruebe el impacto real en las decisiones de su negocio.",
     "startNow": "Empezar Ahora",
     "startFree": "Empezar Gratis",
-    "footer": "© 2024 PredictSys AI. Plataforma de Machine Learning.",
+    "footer": "© 2025 PredictSys AI. Plataforma de Inteligencia Predictiva Estratégica.",
+    "tagline": "PredictSys — De la Estrategia a la Decisión con Confianza.",
+    "problem": {
+      "title1": "Los modelos no fallan por algoritmo.",
+      "title2": "Fallan por falta de estrategia.",
+      "text": "Muchas plataformas entrenan modelos. Pocas garantizan que tengan sentido para el negocio.\n\nPredictSys conecta intención estratégica, validación inteligente e impacto medible en un solo flujo."
+    },
+    "pillarsTitle": "Los 3 Pilares de PredictSys",
+    "pillars": {
+      "strategy": {
+        "title": "Estrategia Primero",
+        "desc": "Transforme su intención de negocio en un modelo coherente.",
+        "items": ["Definición guiada de objetivo", "Conversión de estados en eventos", "Guardrails contra errores comunes", "Validación automática antes del entrenamiento"]
+      },
+      "decision": {
+        "title": "Decisión Orientada por Probabilidad",
+        "desc": "Use predicciones para priorizar acciones reales.",
+        "items": ["Segmentación estratégica", "Ranking inteligente", "Aplicación operacional inmediata", "Gobernanza del ciclo de decisión"]
+      },
+      "impact": {
+        "title": "Impacto Medible",
+        "desc": "Compruebe que la predicción generó resultado.",
+        "items": ["Medición de ROI", "Análisis de lift", "Monitoreo continuo", "Aprendizaje estratégico"]
+      }
+    },
+    "howItWorks": {
+      "title": "Cómo Funciona",
+      "step1": { "title": "Defina su Estrategia", "desc": "Elija el objetivo de su negocio y las reglas estratégicas." },
+      "step2": { "title": "Validación Inteligente", "desc": "El sistema analiza su objetivo, identifica riesgos y corrige inconsistencias automáticamente." },
+      "step3": { "title": "Ejecución Orientada", "desc": "Las predicciones se transforman en decisiones operacionales." },
+      "step4": { "title": "Medición de Impacto", "desc": "Acompañe ROI, lift y desempeño estratégico en tiempo real." }
+    },
+    "institutional": {
+      "title": "Más que Machine Learning.",
+      "text": "PredictSys es una plataforma de Inteligencia Predictiva Estratégica.\nTransformamos reglas de negocio en predicciones confiables y predicciones en decisiones medibles.\n\nNo es solo entrenar modelos.\nEs gobernar decisiones."
+    },
     "features": {
-      "automl": "AutoML Simplificado",
-      "automlDesc": "Entrena modelos de clasificación y regresión automáticamente, sin código.",
-      "chatbot": "Lys - Asistente IA",
-      "chatbotDesc": "Asistente virtual para ayudar en el análisis e interpretación de modelos.",
-      "eda": "Análisis Exploratorio Automático",
-      "edaDesc": "Visualiza estadísticas, distribuciones y correlaciones de tus datos.",
-      "deploy": "Despliegue con 1 Clic",
-      "deployDesc": "Pon tu modelo en producción con una API lista para usar.",
-      "dashboards": "Dashboards Inteligentes",
-      "dashboardsDesc": "Visualiza los resultados del modelo en paneles listos para usar, con métricas, gráficos e insights para el equipo de negocio.",
-      "ingestion": "Ingesta de Datos Escalable",
-      "ingestionDesc": "Conecta tus datos via archivos, bases de datos y data warehouses (SQL, Azure, AWS, Fabric y más), preparados para grandes volúmenes.",
+      "automl": "ML Estratégico Guiado",
+      "automlDesc": "La plataforma interpreta su industria y objetivo antes de entrenar cualquier modelo.",
+      "guardrails": "Guardrails Inteligentes",
+      "guardrailsDesc": "Evita errores como objetivo incorrecto, leakage, regresión indebida o modelos inconsistentes.",
+      "governance": "Gobernanza de Pipeline",
+      "governanceDesc": "Cada etapa es rastreable, auditable y recuperable automáticamente.",
+      "observability": "Diagnóstico y Observabilidad",
+      "observabilityDesc": "Sepa exactamente qué sucedió en cada ejecución.",
+      "segmentation": "Segmentación Accionable",
+      "segmentationDesc": "Transforme probabilidades en listas estratégicas listas para ejecución.",
+      "impactMeasure": "Medición de Impacto",
+      "impactMeasureDesc": "Compruebe el retorno financiero de las decisiones basadas en predicción.",
       "security": "Multi-Cliente Seguro",
-      "securityDesc": "Aislamiento completo de datos entre diferentes usuarios y proyectos.",
+      "securityDesc": "Aislamiento completo de datos entre proyectos y usuarios.",
       "learning": "Aprendizaje Continuo",
-      "learningDesc": "Re-entrena tus modelos con nuevos datos para mejorar las predicciones."
+      "learningDesc": "Re-entrene y refine decisiones con nuevos datos."
     }
   },
   "dashboard": {
@@ -229,39 +262,31 @@
   },
   "quickGuide": {
     "title": "Guía Rápida",
-    "heroTitle": "Tu primer modelo en 5 minutos",
-    "heroSubtitle": "Sigue los pasos a continuación para crear tu primer modelo de machine learning en PredictSys AI",
+    "heroTitle": "Comience su Estrategia Predictiva en Minutos",
+    "heroSubtitle": "Siga los pasos a continuación para crear una estrategia predictiva completa en PredictSys AI",
     "backToProjects": "Volver a Mis Proyectos",
     "tip": "Consejo",
-    "tipText": "En cualquier momento, puedes abrir el Asistente IA del proyecto para pedir explicaciones en lenguaje simple sobre lo que se hizo, las métricas y los próximos pasos.",
+    "tipText": "En cualquier momento, puede abrir el Asistente IA del proyecto para pedir explicaciones sobre lo que se hizo, las métricas y los próximos pasos.",
     "steps": {
       "1": {
-        "title": "Crea un nuevo proyecto",
-        "content": "Haz clic en \"Nuevo Proyecto\" y completa:\n• Nombre del proyecto (ej.: \"Predicción de churn de clientes\")\n• Descripción simple del problema de negocio\n• Objetivo (ej.: \"predecir churn de clientes en 90 días\")"
+        "title": "Defina su intención de negocio",
+        "content": "Cree un nuevo proyecto y describa el problema que desea resolver.\n\n• ¿Cuál es el objetivo? (ej.: reducir churn, predecir morosidad)\n• ¿Cuál es el público objetivo? (ej.: clientes activos, contratos vigentes)\n• ¿Cuál es el horizonte de decisión? (ej.: 30, 60, 90 días)"
       },
       "2": {
-        "title": "Conecta y sube tus datos",
-        "content": "En el paso \"Datos\", sube un archivo CSV o conéctate a tus fuentes de datos (base de datos, data lake, etc.).\n\nPredictSys detecta automáticamente columnas numéricas y categóricas y muestra una vista previa de las primeras filas."
+        "title": "Confirme el objetivo recomendado",
+        "content": "La plataforma analiza sus datos y sugiere el objetivo más coherente con su intención de negocio.\n\nRevise la recomendación y ajuste si es necesario. Guardrails inteligentes evitan opciones inconsistentes."
       },
       "3": {
-        "title": "Explora tus datos (EDA automático)",
-        "content": "En el paso \"Análisis\", haz clic en \"Calcular EDA ahora\".\n\nVe estadísticas, gráficos, calidad de datos e insights generados por IA (incluyendo alertas como alta cardinalidad, valores faltantes, etc.)."
+        "title": "Revise las validaciones automáticas",
+        "content": "Antes de cualquier entrenamiento, el sistema valida:\n\n• Tipo de problema vs. objetivo seleccionado\n• Varianza del objetivo y calidad de datos\n• Variables válidas (sin leakage o datos vacíos)\n• Schema e identificador principal"
       },
       "4": {
-        "title": "Configura variables y objetivo",
-        "content": "En el paso \"Variables\", elige la columna objetivo (clasificación o regresión) y selecciona qué variables se usarán en el modelo.\n\nLa plataforma ayuda sugiriendo el tipo de problema más adecuado."
+        "title": "Entrene con gobernanza inteligente",
+        "content": "El entrenamiento solo comienza después de que pasen todas las validaciones.\n\nCada etapa es rastreable, recuperable y auditable. Si algo se atasca, la plataforma le dice dónde, por qué y qué hacer."
       },
       "5": {
-        "title": "Entrena con el Entrenamiento Inteligente",
-        "content": "En el paso \"Entrenamiento\", usa el Entrenamiento Inteligente para probar diferentes algoritmos y recibir un modelo recomendado.\n\nVe las métricas principales (AUC, F1, Precisión, Recall, etc.) y los Insights de IA (SHAP) sobre las variables más importantes."
-      },
-      "6": {
-        "title": "Despliega y configura el agendamiento",
-        "content": "En \"API & Deploy\", selecciona el mejor modelo y publica en producción con 1 clic.\n\nActiva el agendador para generar nuevas predicciones o reprocesar el pipeline automáticamente (ej.: quincenal, mensual, trimestral) y recibir notificaciones por correo."
-      },
-      "7": {
-        "title": "Monitorea todo en el Dashboard del Proyecto",
-        "content": "En la pestaña \"Dashboard\", visualiza las principales métricas del modelo y los resultados más recientes en un panel interactivo, listo para presentación al equipo de negocio."
+        "title": "Aplique decisiones y mida el impacto",
+        "content": "Use las predicciones para generar listas de acción prioritarias.\n\nRegistre campañas, acompañe conversión y compruebe el ROI real de las decisiones basadas en el modelo."
       }
     }
   },
