@@ -1,10 +1,14 @@
+import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Loader2, AlertCircle, TrendingUp } from 'lucide-react';
 import { Alert, AlertDescription } from '@/components/ui/alert';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { useBusinessImpact } from './hooks/useBusinessImpact';
 import { BusinessConfigForm } from './BusinessConfigForm';
 import { ROISummaryCards } from './ROISummaryCards';
 import { ActionsTable } from './ActionsTable';
+import ChurnSimulator from './ChurnSimulator';
+import { supabase } from '@/integrations/supabase/client';
 
 interface BusinessImpactTabProps {
   projectId: string;
@@ -12,6 +16,9 @@ interface BusinessImpactTabProps {
 
 export function BusinessImpactTab({ projectId }: BusinessImpactTabProps) {
   const { t } = useTranslation();
+  const [extendedMetrics, setExtendedMetrics] = useState<any>(null);
+  const [totalEntities, setTotalEntities] = useState(0);
+  const [problemType, setProblemType] = useState<string>('classification');
   
   const {
     config,
@@ -27,6 +34,34 @@ export function BusinessImpactTab({ projectId }: BusinessImpactTabProps) {
     totalROI,
   } = useBusinessImpact(projectId);
 
+  // Load extended metrics from latest training run
+  useEffect(() => {
+    if (!projectId) return;
+    (async () => {
+      const { data: project } = await supabase
+        .from('projects')
+        .select('problem_type, total_rows')
+        .eq('id', projectId)
+        .maybeSingle();
+      if (project) {
+        setProblemType(project.problem_type || 'classification');
+        setTotalEntities(project.total_rows || 0);
+      }
+
+      const { data: run } = await supabase
+        .from('training_runs' as any)
+        .select('extended_metrics')
+        .eq('project_id', projectId)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      const runData = run as any;
+      if (runData?.extended_metrics) {
+        setExtendedMetrics(runData.extended_metrics);
+      }
+    })();
+  }, [projectId]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -34,6 +69,8 @@ export function BusinessImpactTab({ projectId }: BusinessImpactTabProps) {
       </div>
     );
   }
+
+  const hasSimulator = problemType === 'classification' && extendedMetrics;
 
   return (
     <div className="space-y-6">
@@ -56,26 +93,44 @@ export function BusinessImpactTab({ projectId }: BusinessImpactTabProps) {
         </Alert>
       )}
 
-      {/* ROI Summary Cards */}
-      <ROISummaryCards totalROI={totalROI} />
+      <Tabs defaultValue="config" className="w-full">
+        <TabsList className="w-full justify-start">
+          <TabsTrigger value="config">Configuração & Ações</TabsTrigger>
+          {hasSimulator && <TabsTrigger value="simulator">Simulador de Impacto</TabsTrigger>}
+        </TabsList>
 
-      {/* Configuration Form */}
-      <BusinessConfigForm 
-        config={config} 
-        onSave={saveConfig} 
-        saving={saving} 
-      />
+        <TabsContent value="config" className="space-y-6 mt-4">
+          {/* ROI Summary Cards */}
+          <ROISummaryCards totalROI={totalROI} />
 
-      {/* Actions Table */}
-      <ActionsTable
-        actions={actions}
-        config={config}
-        calculateROI={calculateActionROI}
-        onCreate={createAction}
-        onUpdate={updateAction}
-        onDelete={deleteAction}
-        saving={saving}
-      />
+          {/* Configuration Form */}
+          <BusinessConfigForm 
+            config={config} 
+            onSave={saveConfig} 
+            saving={saving} 
+          />
+
+          {/* Actions Table */}
+          <ActionsTable
+            actions={actions}
+            config={config}
+            calculateROI={calculateActionROI}
+            onCreate={createAction}
+            onUpdate={updateAction}
+            onDelete={deleteAction}
+            saving={saving}
+          />
+        </TabsContent>
+
+        {hasSimulator && (
+          <TabsContent value="simulator" className="mt-4">
+            <ChurnSimulator
+              extendedMetrics={extendedMetrics}
+              totalEntities={totalEntities}
+            />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }
