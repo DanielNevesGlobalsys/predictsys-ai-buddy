@@ -1489,23 +1489,62 @@ serve(async (req) => {
     const trainAiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
     const classBalanceMethod = trainAiCtx.class_balance?.method || "none";
 
-    // ── Gate 1: Dataset (SSOT) ──
+    // ── Gate 1: Dataset + EDA (multi-source, consistent with get-project-modeling-state) ──
+    let datasetRows = 0;
+    let datasetCols = 0;
+    let edaEffectivelyReady = false;
+
     if (dsState && (dsState.row_count > 0) && (dsState.col_count > 0)) {
+      datasetRows = dsState.row_count;
+      datasetCols = dsState.col_count;
       console.log(`[Gating] Dataset SSOT: ${dsState.row_count} rows, ${dsState.col_count} cols, virtual=${dsState.virtual_manifest}`);
-      if (dsState.eda_ready === false) {
-        return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise (EDA bloqueado).", { label: "Voltar à Etapa 2", go_to_step: 2 });
+
+      // Multi-source EDA check (same logic as get-project-modeling-state)
+      if (dsState.eda_ready === true) {
+        edaEffectivelyReady = true;
+      } else {
+        // Check alternative EDA sources before blocking
+        const [edaStatsRes, settingsEdaRes] = await Promise.all([
+          supabase.from("project_numeric_stats").select("id", { count: "exact", head: true }).eq("project_id", project_id),
+          supabase.from("project_settings").select("eda_state, eda_status, eda_profile_json").eq("project_id", project_id).maybeSingle(),
+        ]);
+        const hasEdaStats = (edaStatsRes.count || 0) > 0;
+        const settingsEda = settingsEdaRes.data as any;
+        edaEffectivelyReady = hasEdaStats
+          || settingsEda?.eda_state === "done"
+          || settingsEda?.eda_status === "succeeded"
+          || settingsEda?.eda_profile_json != null;
+        console.log(`[Gating] EDA multi-source check: dsState.eda_ready=${dsState.eda_ready}, hasEdaStats=${hasEdaStats}, eda_state=${settingsEda?.eda_state}, eda_status=${settingsEda?.eda_status}, profile_json=${settingsEda?.eda_profile_json != null} → effectivelyReady=${edaEffectivelyReady}`);
       }
     } else {
       // Fallback: check manifest
       const { data: manifest } = await supabase.from("import_manifests")
-        .select("eda_ready, rows_consolidated").eq("project_id", project_id)
+        .select("eda_ready, rows_consolidated, columns_final").eq("project_id", project_id)
         .order("created_at", { ascending: false }).limit(1).maybeSingle();
       if (!manifest || manifest.rows_consolidated === 0) {
         return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 });
       }
-      if (manifest.eda_ready === false) {
-        return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise.", { label: "Voltar à Etapa 2", go_to_step: 2 });
+      datasetRows = manifest.rows_consolidated;
+      datasetCols = manifest.columns_final || 0;
+      // For manifest fallback, also check multi-source EDA
+      if (manifest.eda_ready !== false) {
+        edaEffectivelyReady = true;
+      } else {
+        const [edaStatsRes2, settingsEdaRes2] = await Promise.all([
+          supabase.from("project_numeric_stats").select("id", { count: "exact", head: true }).eq("project_id", project_id),
+          supabase.from("project_settings").select("eda_state, eda_status, eda_profile_json").eq("project_id", project_id).maybeSingle(),
+        ]);
+        const hasEdaStats2 = (edaStatsRes2.count || 0) > 0;
+        const se2 = settingsEdaRes2.data as any;
+        edaEffectivelyReady = hasEdaStats2 || se2?.eda_state === "done" || se2?.eda_status === "succeeded" || se2?.eda_profile_json != null;
       }
+    }
+
+    if (!edaEffectivelyReady && datasetRows > 0) {
+      return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise. Execute o EDA na Etapa 2.", { label: "Voltar à Etapa 2", go_to_step: 2 });
+    }
+    if (datasetRows === 0) {
+      return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 });
     }
 
     // ── Gate 2: Selection (SSOT — project_model_selection) ──
