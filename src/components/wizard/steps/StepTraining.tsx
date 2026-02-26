@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
+import { Collapsible, CollapsibleTrigger, CollapsibleContent } from "@/components/ui/collapsible";
 import {
   Tooltip,
   TooltipContent,
@@ -154,6 +155,7 @@ const StepTraining = ({
   const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
+  const [edaDebug, setEdaDebug] = useState<{ data: any; error: any } | null>(null);
 
   // SSOT dataset state — force reload on mount
   const ds = useDatasetState(projectData.id);
@@ -266,6 +268,9 @@ const StepTraining = ({
 
     try {
       const { data: edaResult, error: edaErr } = await supabase.rpc("compute_eda_ready" as any, { p_project_id: projectData.id });
+      
+      console.log("[checkTrainReadiness] compute_eda_ready result:", { data: edaResult, error: edaErr });
+      setEdaDebug({ data: edaResult, error: edaErr });
 
       if (!edaErr && edaResult) {
         const r = edaResult as any;
@@ -830,6 +835,24 @@ const StepTraining = ({
                   Voltar e revisar Target/Features
                 </Button>
               </div>
+            )}
+
+            {/* EDA Debug Panel — collapsible raw RPC output */}
+            {edaDebug && (
+              <Collapsible>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="text-[10px] text-muted-foreground mt-1">
+                    <Info className="w-3 h-3 mr-1" /> Debug: compute_eda_ready
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <pre className="text-[10px] bg-muted/50 border border-border rounded p-2 mt-1 overflow-auto max-h-48 whitespace-pre-wrap">
+                    {edaDebug.error
+                      ? `RPC ERROR:\n${JSON.stringify(edaDebug.error, null, 2)}`
+                      : JSON.stringify(edaDebug.data, null, 2)}
+                  </pre>
+                </CollapsibleContent>
+              </Collapsible>
             )}
           </div>
         )}
