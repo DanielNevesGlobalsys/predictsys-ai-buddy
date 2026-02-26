@@ -361,6 +361,57 @@ serve(async (req) => {
       throw columnsError;
     }
 
+    // Get user_id from auth header
+    const authHeader = req.headers.get("Authorization") || "";
+    let userId: string | null = null;
+    try {
+      const { data: { user } } = await supabase.auth.getUser(authHeader.replace("Bearer ", ""));
+      userId = user?.id || null;
+    } catch { /* fallback below */ }
+
+    // Fallback: get user_id from project
+    if (!userId) {
+      const { data: proj } = await supabase.from("projects").select("user_id").eq("id", projectId).maybeSingle();
+      userId = proj?.user_id || null;
+    }
+
+    const storagePath = userId ? `${userId}/${projectId}/${file.name}` : `${projectId}/${file.name}`;
+
+    // ── Create/update project_datasets record ──
+    let datasetId: string | null = null;
+    if (userId) {
+      try {
+        // Deactivate old datasets
+        await supabase.from("project_datasets").update({ is_active: false, updated_at: new Date().toISOString() }).eq("project_id", projectId).eq("is_active", true);
+        // Insert new active dataset
+        const { data: dsRecord, error: dsError } = await supabase
+          .from("project_datasets")
+          .insert({
+            project_id: projectId,
+            user_id: userId,
+            name: file.name,
+            storage_path: storagePath,
+            file_size_bytes: originalSize || file.size,
+            total_rows: parsedData.totalRows,
+            sample_rows: Math.min(500, parsedData.totalRows),
+            columns_count: parsedData.columns.length,
+            is_active: true,
+            source_type: "upload",
+            source_metadata: { ingested_at: new Date().toISOString(), parse_file: true },
+          })
+          .select("id")
+          .single();
+        if (dsError) {
+          console.error("[parse-file] Error creating dataset record:", dsError);
+        } else {
+          datasetId = dsRecord?.id || null;
+          console.log(`[parse-file] Created project_datasets record: ${datasetId}`);
+        }
+      } catch (e) {
+        console.error("[parse-file] Dataset record creation error:", e);
+      }
+    }
+
     await supabase
       .from('projects')
       .update({
@@ -369,7 +420,8 @@ serve(async (req) => {
         dataset_rows: parsedData.sampleRows,
         dataset_columns: parsedData.columns.length,
         dataset_filename: file.name,
-        status: 'data_uploaded'
+        status: 'data_uploaded',
+        dataset_ready_for_modeling: true,
       })
       .eq('id', projectId);
 
@@ -379,7 +431,25 @@ serve(async (req) => {
       colsDetected: parsedData.columns.length,
       fileCount: 1,
       totalBytes: originalSize || file.size,
+      datasetId: datasetId || undefined,
     });
+
+    // ── Log observability event ──
+    try {
+      await supabase.from("platform_events").insert({
+        project_id: projectId,
+        event_type: "dataset_registered",
+        status: "success",
+        source: "edge",
+        metadata: {
+          dataset_id: datasetId,
+          total_rows: parsedData.totalRows,
+          columns_count: parsedData.columns.length,
+          file_name: file.name,
+          file_size: originalSize || file.size,
+        },
+      });
+    } catch { /* non-blocking */ }
 
     console.log(`[parse-file] File processing complete for project ${projectId}`);
 
@@ -391,7 +461,8 @@ serve(async (req) => {
         columns: parsedData.columns,
         totalRows: parsedData.totalRows,
         sampleRows: parsedData.sampleRows,
-        preview: parsedData.rows.slice(0, 10)
+        preview: parsedData.rows.slice(0, 10),
+        dataset_id: datasetId,
       }),
       { 
         headers: { ...corsHeaders, "Content-Type": "application/json" },

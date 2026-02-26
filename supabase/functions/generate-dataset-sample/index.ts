@@ -386,8 +386,9 @@ Deno.serve(async (req) => {
     return ok({
       success: true, sample_rows: sampleRows.length,
       columns_detected: headers.length, columns_schema: schemaColumns.length,
-      schema_applied: schemaApplied, dataset_id: datasetId,
+      schema_applied: schemaApplied, dataset_id: datasetId || null,
       bucket: pickedBucket, format: "csv",
+      warning: datasetId ? undefined : "dataset_id não encontrado — registro em project_datasets pode estar ausente.",
     });
   } catch (err: any) {
     console.error("[generate-dataset-sample] Error:", err);

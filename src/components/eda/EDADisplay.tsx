@@ -110,7 +110,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
         .select("id, name, total_rows, columns_count, sample_rows, source_type, source_metadata")
         .eq("project_id", projectId)
         .eq("is_active", true)
-        .single();
+        .maybeSingle();
 
       if (activeDataset) {
         // Found an active dataset (file upload, cloud, etc.)
@@ -160,7 +160,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
         supabase.from("project_numeric_stats").select("*").eq("project_id", projectId),
         supabase.from("project_categorical_stats").select("*").eq("project_id", projectId),
         supabase.from("projects").select("dataset_rows, dataset_columns, target_column, total_rows").eq("id", projectId).single(),
-        supabase.from("project_datasets").select("total_rows, columns_count, sample_rows").eq("project_id", projectId).eq("is_active", true).single(),
+        supabase.from("project_datasets").select("total_rows, columns_count, sample_rows").eq("project_id", projectId).eq("is_active", true).maybeSingle(),
       ]);
 
       // Determine the correct row count (prefer dataset total_rows over project fields)
