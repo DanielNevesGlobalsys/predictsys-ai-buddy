@@ -377,42 +377,66 @@ serve(async (req) => {
 
     const storagePath = userId ? `${userId}/${projectId}/${file.name}` : `${projectId}/${file.name}`;
 
-    // ── Create/update project_datasets record ──
-    let datasetId: string | null = null;
-    if (userId) {
-      try {
-        // Deactivate old datasets
-        await supabase.from("project_datasets").update({ is_active: false, updated_at: new Date().toISOString() }).eq("project_id", projectId).eq("is_active", true);
-        // Insert new active dataset
-        const { data: dsRecord, error: dsError } = await supabase
-          .from("project_datasets")
-          .insert({
-            project_id: projectId,
-            user_id: userId,
-            name: file.name,
-            storage_path: storagePath,
-            file_size_bytes: originalSize || file.size,
-            total_rows: parsedData.totalRows,
-            sample_rows: Math.min(500, parsedData.totalRows),
-            columns_count: parsedData.columns.length,
-            is_active: true,
-            source_type: "upload",
-            source_metadata: { ingested_at: new Date().toISOString(), parse_file: true },
-          })
-          .select("id")
-          .single();
-        if (dsError) {
-          console.error("[parse-file] Error creating dataset record:", dsError);
-        } else {
-          datasetId = dsRecord?.id || null;
-          console.log(`[parse-file] Created project_datasets record: ${datasetId}`);
-        }
-      } catch (e) {
-        console.error("[parse-file] Dataset record creation error:", e);
-      }
+    // ── Create/update project_datasets record (MANDATORY) ──
+    // Use service role client to bypass RLS
+    const supabaseAdmin = createClient(supabaseUrl, supabaseServiceKey);
+
+    // Step 1: Deactivate old datasets
+    await supabaseAdmin
+      .from("project_datasets")
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq("project_id", projectId)
+      .eq("is_active", true);
+
+    // Step 2: Insert new active dataset
+    const { data: insertedDataset, error: insertError } = await supabaseAdmin
+      .from("project_datasets")
+      .insert({
+        project_id: projectId,
+        user_id: userId || "00000000-0000-0000-0000-000000000000",
+        name: file.name,
+        storage_path: storagePath,
+        file_size_bytes: originalSize || file.size,
+        total_rows: parsedData.totalRows,
+        sample_rows: Math.min(500, parsedData.totalRows),
+        columns_count: parsedData.columns.length,
+        is_active: true,
+        source_type: "upload",
+        source_metadata: { ingested_at: new Date().toISOString(), parse_file: true },
+      })
+      .select("id")
+      .single();
+
+    if (insertError) {
+      console.error("[parse-file] DATASET INSERT FAILED:", insertError);
+      throw new Error("DATASET_PERSIST_FAILED: " + insertError.message);
     }
 
-    await supabase
+    const datasetId = insertedDataset?.id || null;
+    console.log(`[parse-file] Created project_datasets record: ${datasetId}`);
+
+    // Step 3: Create initial sample in project_dataset_sample
+    const sampleRows = parsedData.rows.slice(0, 500);
+    const { error: sampleError } = await supabaseAdmin
+      .from("project_dataset_sample")
+      .upsert({
+        project_id: projectId,
+        sample_rows: sampleRows.length,
+        sample_json: {
+          rows: sampleRows,
+          columns: parsedData.columns,
+          _meta: { dataset_id: datasetId },
+        },
+      }, { onConflict: "project_id" });
+
+    if (sampleError) {
+      console.error("[parse-file] Sample insert error (non-blocking):", sampleError);
+    } else {
+      console.log(`[parse-file] Upserted project_dataset_sample: ${sampleRows.length} rows`);
+    }
+
+    // Step 4: Update projects table
+    await supabaseAdmin
       .from('projects')
       .update({
         total_rows: parsedData.totalRows,
@@ -422,6 +446,7 @@ serve(async (req) => {
         dataset_filename: file.name,
         status: 'data_uploaded',
         dataset_ready_for_modeling: true,
+        updated_at: new Date().toISOString(),
       })
       .eq('id', projectId);
 
