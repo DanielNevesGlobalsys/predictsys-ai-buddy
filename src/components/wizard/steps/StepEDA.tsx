@@ -526,21 +526,26 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                   {(() => {
                     try {
                       const parsed = JSON.parse(debugResult);
-                      const attempts = parsed?.data?.debug?.attempts;
-                      if (Array.isArray(attempts) && attempts.length > 0) {
+                      const diags = parsed?.data?.debug?.diagnostics;
+                      if (Array.isArray(diags) && diags.length > 0) {
                         return (
                           <div className="space-y-1">
-                            <p className="text-xs font-mono font-bold text-destructive">📦 Tentativas por bucket:</p>
-                            {attempts.map((a: any, i: number) => (
+                            <p className="text-xs font-mono font-bold text-destructive">📦 Diagnóstico por etapa:</p>
+                            {diags.map((d: any, i: number) => (
                               <div key={i} className="text-[10px] font-mono p-2 rounded border bg-background">
-                                <span className={a.download_ok ? "text-green-600" : "text-destructive"}>
-                                  {a.download_ok ? "✅" : "❌"} {a.bucket}
+                                <span className={d.download_ok || d.ok ? "text-green-600" : d.download_ok === false || d.ok === false ? "text-destructive" : "text-muted-foreground"}>
+                                  {d.download_ok || d.ok ? "✅" : d.download_ok === false || d.ok === false ? "❌" : "🔍"} [{d.step}] {d.bucket}
                                 </span>
-                                {" → "}{a.path}
-                                {a.list_count != null && <span className="text-muted-foreground"> | list:{a.list_count}</span>}
-                                {a.list_names && <span className="text-muted-foreground"> [{a.list_names.join(", ")}]</span>}
-                                {a.error_raw && <span className="text-destructive"> | {a.error_raw}</span>}
-                                {a.file_size && <span className="text-green-600"> | {(a.file_size / 1024).toFixed(1)}KB</span>}
+                                {d.filePath && <span> → {d.filePath}</span>}
+                                {d.folder && <span> 📁 {d.folder}</span>}
+                                {d.path && !d.filePath && <span> → {d.path}</span>}
+                                {d.list_count != null && <span className="text-muted-foreground"> | items:{d.list_count}</span>}
+                                {d.list_names && d.list_names.length > 0 && <span className="text-muted-foreground"> [{d.list_names.join(", ")}]</span>}
+                                {d.error_raw && <span className="text-destructive"> | {d.error_raw}</span>}
+                                {d.list_error && <span className="text-destructive"> | {d.list_error}</span>}
+                                {d.blob_size != null && <span className="text-green-600"> | {(d.blob_size / 1024).toFixed(1)}KB</span>}
+                                {d.sniff_result && <span className="text-blue-500"> | sniff:{d.sniff_result}</span>}
+                                {d.candidate_name && <span className="text-primary"> | file:{d.candidate_name}</span>}
                               </div>
                             ))}
                           </div>
