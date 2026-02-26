@@ -294,19 +294,34 @@ const StepTargetFeatures = ({
     }
   }, [projectData.id, businessObjective, businessIndustry]);
 
+  // Auto-repair: ensure active dataset exists before loading columns
+  const ensureActiveDataset = useCallback(async () => {
+    if (!projectData.id) return;
+    try {
+      await supabase.functions.invoke("ensure-active-dataset", {
+        body: { project_id: projectData.id },
+      });
+    } catch (e) {
+      console.warn("[StepTargetFeatures] ensure-active-dataset failed (non-blocking):", e);
+    }
+  }, [projectData.id]);
+
   useEffect(() => {
     if (projectData.id) {
-      loadColumns();
-      checkEDA();
-      ds.load();
-      loadSSOT();
-      schemaSSOT.load();
-      loadSelectionVersion();
-      loadBuilderVersion();
-      loadContractHints();
-      loadIntentInfo();
-      loadSettings();
-      loadBusinessContract();
+      // First ensure dataset exists, then load everything
+      ensureActiveDataset().then(() => {
+        loadColumns();
+        checkEDA();
+        ds.load();
+        loadSSOT();
+        schemaSSOT.load();
+        loadSelectionVersion();
+        loadBuilderVersion();
+        loadContractHints();
+        loadIntentInfo();
+        loadSettings();
+        loadBusinessContract();
+      });
     }
   }, [projectData.id]);
 
@@ -914,9 +929,11 @@ const StepTargetFeatures = ({
   const availableFeatures = columns.filter((col) => col.name !== targetColumn);
   const effectiveProblemType = inferredProblemType || projectData.problem_type;
 
-  // ── Gating logic (uses SSOT) ──
-  const isHardBlocked = ds.loaded && !ds.edaReady;
-  const hasModelWarning = ds.loaded && ds.edaReady && !ds.modelReady;
+  // ── Gating logic ──
+  // Step 4 should NOT block on edaReady — EDA is a profiling step, not a gate for variable selection.
+  // Only block if dataset truly has 0 rows/cols or columns list is empty (handled below).
+  const isHardBlocked = false;
+  const hasModelWarning = ds.loaded && ds.edaReady === false && ds.rowCount > 0;
 
   if (loadingColumns) {
     return (

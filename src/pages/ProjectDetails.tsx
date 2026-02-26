@@ -102,7 +102,7 @@ const ProjectDetails = () => {
   const loadProject = async (id: string) => {
     const [projectResult, datasetResult] = await Promise.all([
       supabase.from("projects").select("*").eq("id", id).single(),
-      supabase.from("project_datasets").select("id, name, total_rows, columns_count, source_type, source_metadata").eq("project_id", id).eq("is_active", true).single(),
+      supabase.from("project_datasets").select("id, name, total_rows, columns_count, source_type, source_metadata").eq("project_id", id).eq("is_active", true).maybeSingle(),
     ]);
 
     if (projectResult.error) {
