@@ -4,14 +4,13 @@ import { Card } from "@/components/ui/card";
 import { useNavigate } from "react-router-dom";
 import {
   ChevronLeft,
-  FileSpreadsheet,
-  BarChart3,
   Target,
+  CheckCircle,
+  Shield,
   Cpu,
-  Rocket,
+  TrendingUp,
   MessageSquare,
   Lightbulb,
-  LayoutDashboard,
 } from "lucide-react";
 import Header from "@/components/layout/Header";
 import PredictSysLogo from "@/components/PredictSysLogo";
@@ -21,13 +20,11 @@ const QuickGuide = () => {
   const { t } = useTranslation();
 
   const steps = [
-    { number: 1, useLogo: true },
-    { number: 2, icon: FileSpreadsheet },
-    { number: 3, icon: BarChart3 },
-    { number: 4, icon: Target },
-    { number: 5, icon: Cpu },
-    { number: 6, icon: Rocket },
-    { number: 7, icon: LayoutDashboard },
+    { number: 1, icon: Target },
+    { number: 2, icon: CheckCircle },
+    { number: 3, icon: Shield },
+    { number: 4, icon: Cpu },
+    { number: 5, icon: TrendingUp },
   ];
 
   return (
@@ -48,13 +45,9 @@ const QuickGuide = () => {
           {steps.map((step) => (
             <Card key={step.number} className="bg-gradient-card shadow-card p-6">
               <div className="flex items-start gap-4">
-                {step.useLogo ? (
-                  <PredictSysLogo size="lg" className="flex-shrink-0" />
-                ) : (
-                  <div className="flex-shrink-0 w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center">
-                    {step.icon && <step.icon className="w-6 h-6 text-primary-foreground" />}
-                  </div>
-                )}
+                <div className="flex-shrink-0 w-12 h-12 bg-gradient-primary rounded-xl flex items-center justify-center">
+                  {step.icon && <step.icon className="w-6 h-6 text-primary-foreground" />}
+                </div>
                 <div className="flex-1">
                   <h3 className="text-lg font-semibold mb-2 flex items-center gap-2">
                     <span className="w-7 h-7 bg-primary/10 rounded-full flex items-center justify-center text-sm font-bold text-primary">

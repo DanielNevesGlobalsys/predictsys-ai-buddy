@@ -1,7 +1,7 @@
 import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/button";
 import { useNavigate } from "react-router-dom";
-import { BarChart3, MessageSquare, Zap, Shield, TrendingUp, LayoutDashboard, Database, Cpu } from "lucide-react";
+import { Shield, TrendingUp, LayoutDashboard, Database, Cpu, Target, Eye, BarChart3, CheckCircle, ArrowRight, Crosshair, Activity, Lock, RefreshCw } from "lucide-react";
 import GlobalControls from "@/components/layout/GlobalControls";
 import PredictSysLogo from "@/components/PredictSysLogo";
 
@@ -9,47 +9,46 @@ const Landing = () => {
   const navigate = useNavigate();
   const { t } = useTranslation();
 
-  const features = [
+  const pillars = [
     {
-      icon: Cpu,
-      titleKey: "landing.features.automl",
-      descKey: "landing.features.automlDesc"
+      icon: Target,
+      titleKey: "landing.pillars.strategy.title",
+      descKey: "landing.pillars.strategy.desc",
+      itemsKey: "landing.pillars.strategy.items",
+      color: "text-primary",
     },
     {
-      icon: MessageSquare,
-      titleKey: "landing.features.chatbot",
-      descKey: "landing.features.chatbotDesc"
-    },
-    {
-      icon: BarChart3,
-      titleKey: "landing.features.eda",
-      descKey: "landing.features.edaDesc"
-    },
-    {
-      icon: Zap,
-      titleKey: "landing.features.deploy",
-      descKey: "landing.features.deployDesc"
-    },
-    {
-      icon: LayoutDashboard,
-      titleKey: "landing.features.dashboards",
-      descKey: "landing.features.dashboardsDesc"
-    },
-    {
-      icon: Database,
-      titleKey: "landing.features.ingestion",
-      descKey: "landing.features.ingestionDesc"
-    },
-    {
-      icon: Shield,
-      titleKey: "landing.features.security",
-      descKey: "landing.features.securityDesc"
+      icon: Crosshair,
+      titleKey: "landing.pillars.decision.title",
+      descKey: "landing.pillars.decision.desc",
+      itemsKey: "landing.pillars.decision.items",
+      color: "text-accent",
     },
     {
       icon: TrendingUp,
-      titleKey: "landing.features.learning",
-      descKey: "landing.features.learningDesc"
-    }
+      titleKey: "landing.pillars.impact.title",
+      descKey: "landing.pillars.impact.desc",
+      itemsKey: "landing.pillars.impact.items",
+      color: "text-primary",
+    },
+  ];
+
+  const features = [
+    { icon: Cpu, titleKey: "landing.features.automl", descKey: "landing.features.automlDesc" },
+    { icon: Shield, titleKey: "landing.features.guardrails", descKey: "landing.features.guardrailsDesc" },
+    { icon: Activity, titleKey: "landing.features.governance", descKey: "landing.features.governanceDesc" },
+    { icon: Eye, titleKey: "landing.features.observability", descKey: "landing.features.observabilityDesc" },
+    { icon: LayoutDashboard, titleKey: "landing.features.segmentation", descKey: "landing.features.segmentationDesc" },
+    { icon: BarChart3, titleKey: "landing.features.impactMeasure", descKey: "landing.features.impactMeasureDesc" },
+    { icon: Lock, titleKey: "landing.features.security", descKey: "landing.features.securityDesc" },
+    { icon: RefreshCw, titleKey: "landing.features.learning", descKey: "landing.features.learningDesc" },
+  ];
+
+  const steps = [
+    { number: "1", titleKey: "landing.howItWorks.step1.title", descKey: "landing.howItWorks.step1.desc" },
+    { number: "2", titleKey: "landing.howItWorks.step2.title", descKey: "landing.howItWorks.step2.desc" },
+    { number: "3", titleKey: "landing.howItWorks.step3.title", descKey: "landing.howItWorks.step3.desc" },
+    { number: "4", titleKey: "landing.howItWorks.step4.title", descKey: "landing.howItWorks.step4.desc" },
   ];
 
   return (
@@ -86,19 +85,15 @@ const Landing = () => {
       <section className="container mx-auto px-4 py-20 text-center">
         <div className="max-w-4xl mx-auto space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-1000">
           <div className="inline-flex items-center gap-2 px-4 py-2 bg-primary/10 rounded-full text-sm font-medium text-primary mb-4">
-            <Zap className="w-4 h-4" />
+            <Target className="w-4 h-4" />
             <span>{t("landing.predictiveAI")}</span>
           </div>
           
           <h1 className="text-5xl md:text-7xl font-display font-bold leading-tight">
             {t("landing.heroTitle1")}
-            <br />
-            <span className="bg-gradient-primary bg-clip-text text-transparent">
-              {t("landing.heroTitle2")}
-            </span>
           </h1>
           
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed">
+          <p className="text-xl text-muted-foreground max-w-3xl mx-auto leading-relaxed">
             {t("landing.heroSubtitle")}
           </p>
           
@@ -125,14 +120,69 @@ const Landing = () => {
               <span>{t("landing.secure")}</span>
             </div>
             <div className="flex items-center gap-2">
-              <Zap className="w-4 h-4 text-accent" />
-              <span>{t("landing.instantDeploy")}</span>
+              <CheckCircle className="w-4 h-4 text-accent" />
+              <span>{t("landing.governedPipeline")}</span>
             </div>
             <div className="flex items-center gap-2">
-              <MessageSquare className="w-4 h-4 text-accent" />
-              <span>{t("landing.aiChatbot")}</span>
+              <TrendingUp className="w-4 h-4 text-accent" />
+              <span>{t("landing.measurableImpact")}</span>
             </div>
           </div>
+        </div>
+      </section>
+
+      {/* Problem Section */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="max-w-3xl mx-auto text-center space-y-6">
+          <h2 className="text-4xl font-display font-bold leading-tight">
+            {t("landing.problem.title1")}
+            <br />
+            <span className="bg-gradient-primary bg-clip-text text-transparent">
+              {t("landing.problem.title2")}
+            </span>
+          </h2>
+          <p className="text-xl text-muted-foreground leading-relaxed">
+            {t("landing.problem.text")}
+          </p>
+        </div>
+      </section>
+
+      {/* 3 Pillars */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="text-center mb-16">
+          <h2 className="text-4xl font-display font-bold mb-4">
+            {t("landing.pillarsTitle")}
+          </h2>
+        </div>
+        <div className="grid md:grid-cols-3 gap-8">
+          {pillars.map((pillar, index) => {
+            const Icon = pillar.icon;
+            const items = t(pillar.itemsKey, { returnObjects: true }) as string[];
+            return (
+              <div
+                key={index}
+                className="group bg-gradient-card rounded-2xl p-8 shadow-card hover:shadow-hover transition-all duration-300 hover:-translate-y-1"
+              >
+                <div className="w-14 h-14 bg-gradient-primary rounded-xl flex items-center justify-center mb-6 group-hover:scale-110 transition-transform">
+                  <Icon className="w-7 h-7 text-primary-foreground" />
+                </div>
+                <h3 className="text-2xl font-display font-semibold mb-3">
+                  {t(pillar.titleKey)}
+                </h3>
+                <p className="text-muted-foreground mb-4">
+                  {t(pillar.descKey)}
+                </p>
+                <ul className="space-y-2">
+                  {Array.isArray(items) && items.map((item, i) => (
+                    <li key={i} className="flex items-start gap-2 text-sm text-muted-foreground">
+                      <CheckCircle className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                      <span>{item}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            );
+          })}
         </div>
       </section>
 
@@ -141,7 +191,6 @@ const Landing = () => {
         <div className="text-center mb-16">
           <h2 className="text-4xl font-display font-bold mb-4">
             {t("landing.allYouNeed")}
-            <span className="bg-gradient-primary bg-clip-text text-transparent">{t("landing.predictFuture")}</span>
           </h2>
           <p className="text-xl text-muted-foreground">
             {t("landing.autoMLDescription")}
@@ -172,6 +221,45 @@ const Landing = () => {
         </div>
       </section>
 
+      {/* How It Works */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="text-center mb-16">
+          <h2 className="text-4xl font-display font-bold mb-4">
+            {t("landing.howItWorks.title")}
+          </h2>
+        </div>
+        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
+          {steps.map((step, index) => (
+            <div key={index} className="relative bg-gradient-card rounded-2xl p-8 shadow-card">
+              <div className="w-10 h-10 bg-gradient-primary rounded-full flex items-center justify-center mb-4 text-primary-foreground font-bold text-lg">
+                {step.number}
+              </div>
+              <h3 className="text-lg font-display font-semibold mb-2">
+                {t(step.titleKey)}
+              </h3>
+              <p className="text-muted-foreground text-sm leading-relaxed">
+                {t(step.descKey)}
+              </p>
+              {index < steps.length - 1 && (
+                <ArrowRight className="hidden lg:block absolute top-1/2 -right-3 w-6 h-6 text-muted-foreground/30" />
+              )}
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Institutional Block */}
+      <section className="container mx-auto px-4 py-20">
+        <div className="max-w-3xl mx-auto text-center space-y-6">
+          <h2 className="text-4xl font-display font-bold">
+            {t("landing.institutional.title")}
+          </h2>
+          <p className="text-xl text-muted-foreground leading-relaxed whitespace-pre-line">
+            {t("landing.institutional.text")}
+          </p>
+        </div>
+      </section>
+
       {/* CTA Section */}
       <section className="container mx-auto px-4 py-20">
         <div className="bg-gradient-primary rounded-3xl p-12 text-center shadow-hover">
@@ -191,7 +279,13 @@ const Landing = () => {
         </div>
       </section>
 
-      {/* Footer */}
+      {/* Footer Tagline + Footer */}
+      <div className="container mx-auto px-4 py-8 text-center">
+        <p className="text-lg font-display font-semibold bg-gradient-primary bg-clip-text text-transparent">
+          {t("landing.tagline")}
+        </p>
+      </div>
+
       <footer className="border-t border-border/40 bg-card/50 backdrop-blur-sm">
         <div className="container mx-auto px-4 py-8">
           <div className="flex flex-col md:flex-row items-center justify-between gap-4">
