@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import { Switch } from "@/components/ui/switch";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Select,
   SelectContent,
@@ -12,7 +14,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban, Database, CheckCircle, XCircle, KeyRound } from "lucide-react";
+import { Target, Layers, Info, Loader2, Sparkles, AlertCircle, Save, AlertTriangle, Ban, Database, CheckCircle, XCircle, KeyRound, Settings2 } from "lucide-react";
 import {
   Tooltip,
   TooltipContent,
@@ -45,6 +47,10 @@ import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import { useTargetFeaturesSSOT } from "@/hooks/useTargetFeaturesSSOT";
 import { useProjectSchemaSSOT } from "@/hooks/useProjectSchemaSSOT";
+import { trackEvent } from "@/lib/platformTracking";
+import type { BusinessIntentContract, ObjectiveKey, IndustryKey } from "@/lib/industryRules";
+import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
+import BusinessGuidancePanel from "../shared/BusinessGuidancePanel";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -151,6 +157,84 @@ const StepTargetFeatures = ({
   const [labelBuilderId, setLabelBuilderId] = useState<string | null>(null);
   const [labelTemplateId, setLabelTemplateId] = useState<string | null>(null);
 
+  // ═══ Business Intent Contract (from SSOT) ═══
+  const [businessContract, setBusinessContract] = useState<BusinessIntentContract | null>(null);
+  const [businessObjective, setBusinessObjective] = useState<string | null>(null);
+  const [businessIndustry, setBusinessIndustry] = useState<string | null>(null);
+  const [advancedMode, setAdvancedMode] = useState(false);
+  const [contractMissing, setContractMissing] = useState(false);
+  const [leakageWarning, setLeakageWarning] = useState<string | null>(null);
+  const [leakageBlock, setLeakageBlock] = useState<string | null>(null);
+  const isSegmentation = businessContract?.problem_type_default === "clustering" || businessObjective === "segmentation";
+
+  // Load business intent contract from SSOT
+  const loadBusinessContract = useCallback(async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_settings")
+      .select("business_intent_contract, objective, industry, advanced_mode_enabled")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (data) {
+      const ps = data as any;
+      if (ps.business_intent_contract) {
+        setBusinessContract(ps.business_intent_contract as BusinessIntentContract);
+        setContractMissing(false);
+      } else if (ps.industry && ps.objective) {
+        // Rebuild from saved industry+objective
+        try {
+          const contract = buildBusinessIntentContract(ps.industry as IndustryKey, ps.objective as ObjectiveKey);
+          setBusinessContract(contract);
+          setContractMissing(false);
+        } catch {
+          setContractMissing(true);
+        }
+      } else {
+        setContractMissing(true);
+      }
+      setBusinessObjective(ps.objective || null);
+      setBusinessIndustry(ps.industry || null);
+      setAdvancedMode(ps.advanced_mode_enabled === true);
+    } else {
+      setContractMissing(true);
+    }
+  }, [projectData.id]);
+
+  // Leakage check helper
+  const looksLikeLeakage = useCallback((colName: string, patterns?: string[]): boolean => {
+    const lower = colName.toLowerCase();
+    const allPatterns = [
+      ...(patterns || []),
+      ...(businessContract?.guardrails?.forbid_leakage_patterns || []),
+    ];
+    return allPatterns.some(p => lower.includes(p.toLowerCase()));
+  }, [businessContract]);
+
+  // Hard-block tokens
+  const HARD_BLOCK_TOKENS = ["label", "target", "y", "outcome_final", "status_final"];
+  const isHardBlockedTarget = useCallback((colName: string): boolean => {
+    const lower = colName.toLowerCase().trim();
+    return HARD_BLOCK_TOKENS.some(t => lower === t);
+  }, []);
+
+  // Toggle advanced mode + persist
+  const handleAdvancedModeToggle = useCallback(async (enabled: boolean) => {
+    setAdvancedMode(enabled);
+    if (projectData.id) {
+      await supabase
+        .from("project_settings")
+        .upsert(
+          { project_id: projectData.id, advanced_mode_enabled: enabled, updated_at: new Date().toISOString() } as any,
+          { onConflict: "project_id" }
+        );
+      trackEvent({
+        event_type: "project_created",
+        project_id: projectData.id,
+        metadata: { sub_event: "advanced_mode_toggled", enabled, objective: businessObjective, industry: businessIndustry },
+      });
+    }
+  }, [projectData.id, businessObjective, businessIndustry]);
+
   useEffect(() => {
     if (projectData.id) {
       loadColumns();
@@ -163,6 +247,7 @@ const StepTargetFeatures = ({
       loadContractHints();
       loadIntentInfo();
       loadSettings();
+      loadBusinessContract();
     }
   }, [projectData.id]);
 
@@ -512,6 +597,31 @@ const StepTargetFeatures = ({
       hasChangedConfig.current = true;
       onConfigChange?.();
     }
+
+    // Leakage guardrails
+    if (isHardBlockedTarget(value) && !advancedMode) {
+      setLeakageBlock(`O campo "${value}" parece ser o próprio resultado. Escolha um alvo anterior ao evento.`);
+      setLeakageWarning(null);
+      trackEvent({
+        event_type: "project_created",
+        project_id: projectData.id,
+        metadata: { sub_event: "target_leakage_blocked", target: value, objective: businessObjective, industry: businessIndustry },
+      });
+      return; // Don't set the target
+    }
+    setLeakageBlock(null);
+
+    if (looksLikeLeakage(value)) {
+      setLeakageWarning(`O campo "${value}" parece ser um 'resultado final' (ex: status final/resultado). Isso costuma gerar um modelo irreal.`);
+      trackEvent({
+        event_type: "project_created",
+        project_id: projectData.id,
+        metadata: { sub_event: "target_leakage_warning_shown", target: value, objective: businessObjective, industry: businessIndustry },
+      });
+    } else {
+      setLeakageWarning(null);
+    }
+
     setTargetColumn(value);
     // If switching away from label, mark as manual
     if (value !== "label") {
@@ -804,7 +914,74 @@ const StepTargetFeatures = ({
           </p>
         </div>
 
-        {/* Coverage Report Banner */}
+        {/* ═══ Advanced Mode Toggle ═══ */}
+        <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border/50">
+          <div className="flex items-center gap-2">
+            <Settings2 className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Modo avançado</span>
+            {advancedMode && <Badge className="bg-accent/20 text-accent border-accent/30 text-[9px]">Ativo</Badge>}
+          </div>
+          <Switch checked={advancedMode} onCheckedChange={handleAdvancedModeToggle} />
+        </div>
+
+        {/* ═══ Business Guidance Panel ═══ */}
+        {businessContract && (
+          <BusinessGuidancePanel
+            contract={businessContract}
+            objectiveLabel={
+              INDUSTRY_OBJECTIVE_MATRIX[businessContract.industry]?.objectives.find(
+                o => o.key === businessContract.objective
+              )?.label_pt || businessContract.objective
+            }
+            industryLabel={
+              businessContract.industry === "retail" ? "Varejo" :
+              businessContract.industry === "health" ? "Saúde" :
+              businessContract.industry === "finance" ? "Finanças" :
+              businessContract.industry === "education" ? "Educação" :
+              businessContract.industry === "logistics" ? "Logística" : "Geral"
+            }
+          />
+        )}
+
+        {/* Contract missing warning */}
+        {contractMissing && !businessContract && (
+          <Alert className="border-amber-500/30 bg-amber-500/5">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <AlertDescription className="text-sm">
+              Contrato de negócio não encontrado — volte na Etapa 1 e gere novamente para receber orientações de alvo.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Segmentation mode — no target needed */}
+        {isSegmentation && (
+          <Alert className="border-primary/30 bg-primary/5">
+            <Info className="w-4 h-4 text-primary" />
+            <AlertDescription className="text-sm">
+              Para <strong>segmentação</strong>, não existe "alvo". O sistema agrupa perfis parecidos automaticamente. Foque na seleção do Entity Key e das features.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Leakage warnings */}
+        {leakageWarning && (
+          <Alert className="border-amber-500/30 bg-amber-500/5">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <AlertDescription className="text-sm text-amber-700 dark:text-amber-400">
+              {leakageWarning}
+            </AlertDescription>
+          </Alert>
+        )}
+        {leakageBlock && (
+          <Alert className="border-destructive/30 bg-destructive/5">
+            <Ban className="w-4 h-4 text-destructive" />
+            <AlertDescription className="text-sm text-destructive">
+              {leakageBlock}
+              {!advancedMode && <span className="block text-xs text-muted-foreground mt-1">Ative o "Modo avançado" para permitir essa escolha.</span>}
+            </AlertDescription>
+          </Alert>
+        )}
+
         {ds.loaded && ds.rowCount > 0 && (
           <div className={`p-4 rounded-lg border space-y-3 ${
             hasModelWarning
@@ -915,68 +1092,92 @@ const StepTargetFeatures = ({
           </div>
         )}
 
-        {/* ═══ Unified Strategy Panel ═══ */}
-        {projectData.id && (
-          <div id="target-builder-panel">
-            <TargetStrategyPanel
-              projectId={projectData.id}
-              industry={intentInfo.industry}
-              onBuilderReady={(builderId, templateId, templateParams) => {
-                setLabelBuilderId(builderId);
-                setLabelTemplateId(templateId);
-                setTargetColumn("label");
-                setTargetSource("label_builder");
-                setSelectedTemplateId(templateId);
-                setAppliedTargetColumn("label");
-                const tmpl = LABEL_TEMPLATES[templateId];
-                setInferredProblemType(tmpl?.problem_type || "classification");
-                // Auto-populate features: all valid columns except label + structural
-                autoPopulateFeatures("label");
-                setPreflightRefreshKey(k => k + 1);
-                // Persist target_source to SSOT
-                persistTargetSourceToSSOT("label_builder", templateId);
-              }}
-            />
-          </div>
-        )}
 
-        {/* Weak Supervision / Assisted Mode (Etapa E) */}
-        {projectData.id && (
-          <WeakLabelBuilderCard
-            projectId={projectData.id}
-            onActivated={() => {
-              setTargetColumn("label");
-              setTargetSource("weak_supervision");
-              setSelectedTemplateId("weak_supervision_assisted");
-              setAppliedTargetColumn("label");
-              setInferredProblemType("classification");
-              // Auto-populate features
-              autoPopulateFeatures("label");
-              setPreflightRefreshKey(k => k + 1);
-              // Persist target_source to SSOT
-              persistTargetSourceToSSOT("weak_supervision", "weak_supervision_assisted");
-            }}
-          />
-        )}
+        {/* ═══ Target Mode Panels (filtered by contract) ═══ */}
+        {(() => {
+          const allowed = businessContract?.target_modes_allowed;
+          const showAll = advancedMode || !allowed || allowed.length === 0;
+          const canAssisted = showAll || allowed?.includes("assisted_build");
+          const canQuickLabel = showAll || allowed?.includes("quick_label");
+          const canManual = showAll || allowed?.includes("manual");
 
-        {/* Human Labeling Card (Etapa F) */}
-        {projectData.id && (
-          <HumanLabelingCard
-            projectId={projectData.id}
-            onActivated={() => {
-              setTargetColumn("label");
-              setTargetSource("human_labeling");
-              setSelectedTemplateId("human_labeling_assisted");
-              setAppliedTargetColumn("label");
-              setInferredProblemType("classification");
-              // Auto-populate features
-              autoPopulateFeatures("label");
-              setPreflightRefreshKey(k => k + 1);
-              // Persist target_source to SSOT
-              persistTargetSourceToSSOT("human_labeling", "human_labeling_assisted");
-            }}
-          />
-        )}
+          return (
+            <>
+              {/* ═══ Unified Strategy Panel (assisted_build) ═══ */}
+              {projectData.id && canAssisted && !isSegmentation && (
+                <div id="target-builder-panel">
+                  <TargetStrategyPanel
+                    projectId={projectData.id}
+                    industry={intentInfo.industry}
+                    onBuilderReady={(builderId, templateId, templateParams) => {
+                      setLabelBuilderId(builderId);
+                      setLabelTemplateId(templateId);
+                      setTargetColumn("label");
+                      setTargetSource("label_builder");
+                      setSelectedTemplateId(templateId);
+                      setAppliedTargetColumn("label");
+                      const tmpl = LABEL_TEMPLATES[templateId];
+                      setInferredProblemType(tmpl?.problem_type || "classification");
+                      autoPopulateFeatures("label");
+                      setPreflightRefreshKey(k => k + 1);
+                      persistTargetSourceToSSOT("label_builder", templateId);
+                      // Track mode selection
+                      trackEvent({
+                        event_type: "project_created",
+                        project_id: projectData.id,
+                        metadata: { sub_event: "target_mode_selected", mode: "assisted_build", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
+                      });
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Weak Supervision / Quick Label (Etapa E) */}
+              {projectData.id && canQuickLabel && !isSegmentation && (
+                <WeakLabelBuilderCard
+                  projectId={projectData.id}
+                  onActivated={() => {
+                    setTargetColumn("label");
+                    setTargetSource("weak_supervision");
+                    setSelectedTemplateId("weak_supervision_assisted");
+                    setAppliedTargetColumn("label");
+                    setInferredProblemType("classification");
+                    autoPopulateFeatures("label");
+                    setPreflightRefreshKey(k => k + 1);
+                    persistTargetSourceToSSOT("weak_supervision", "weak_supervision_assisted");
+                    trackEvent({
+                      event_type: "project_created",
+                      project_id: projectData.id,
+                      metadata: { sub_event: "target_mode_selected", mode: "quick_label", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
+                    });
+                  }}
+                />
+              )}
+
+              {/* Human Labeling Card (Etapa F — manual) */}
+              {projectData.id && canManual && !isSegmentation && (
+                <HumanLabelingCard
+                  projectId={projectData.id}
+                  onActivated={() => {
+                    setTargetColumn("label");
+                    setTargetSource("human_labeling");
+                    setSelectedTemplateId("human_labeling_assisted");
+                    setAppliedTargetColumn("label");
+                    setInferredProblemType("classification");
+                    autoPopulateFeatures("label");
+                    setPreflightRefreshKey(k => k + 1);
+                    persistTargetSourceToSSOT("human_labeling", "human_labeling_assisted");
+                    trackEvent({
+                      event_type: "project_created",
+                      project_id: projectData.id,
+                      metadata: { sub_event: "target_mode_selected", mode: "manual", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
+                    });
+                  }}
+                />
+              )}
+            </>
+          );
+        })()}
 
         {/* Column Inference Matrix (collapsible) */}
         {projectData.id && (

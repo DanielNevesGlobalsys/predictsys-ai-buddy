@@ -3243,6 +3243,7 @@ export type Database = {
           active_target_mode: string | null
           active_target_ref: Json | null
           active_target_updated_at: string | null
+          advanced_mode_enabled: boolean | null
           builder_state: string
           business_intent_contract: Json | null
           contract_generated_at: string | null
@@ -3295,6 +3296,7 @@ export type Database = {
           target_column: string | null
           target_last_validated_at: string | null
           target_lifecycle_state: Json | null
+          target_mode_selected: string | null
           target_quality_report: Json | null
           target_source: string
           target_state: string
@@ -3314,6 +3316,7 @@ export type Database = {
           active_target_mode?: string | null
           active_target_ref?: Json | null
           active_target_updated_at?: string | null
+          advanced_mode_enabled?: boolean | null
           builder_state?: string
           business_intent_contract?: Json | null
           contract_generated_at?: string | null
@@ -3366,6 +3369,7 @@ export type Database = {
           target_column?: string | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
+          target_mode_selected?: string | null
           target_quality_report?: Json | null
           target_source?: string
           target_state?: string
@@ -3385,6 +3389,7 @@ export type Database = {
           active_target_mode?: string | null
           active_target_ref?: Json | null
           active_target_updated_at?: string | null
+          advanced_mode_enabled?: boolean | null
           builder_state?: string
           business_intent_contract?: Json | null
           contract_generated_at?: string | null
@@ -3437,6 +3442,7 @@ export type Database = {
           target_column?: string | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
+          target_mode_selected?: string | null
           target_quality_report?: Json | null
           target_source?: string
           target_state?: string

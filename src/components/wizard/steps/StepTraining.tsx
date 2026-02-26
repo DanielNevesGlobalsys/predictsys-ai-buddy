@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/tooltip";
 import { 
   Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, 
-  HelpCircle, AlertTriangle, Sparkles, Info, XCircle, ArrowLeft
+  HelpCircle, AlertTriangle, Sparkles, Info, XCircle, ArrowLeft, Settings2
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -26,6 +26,9 @@ import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import TrainabilityDiagnosticCard from "./TrainabilityDiagnosticCard";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { useDatasetState } from "@/hooks/useDatasetState";
+import type { BusinessIntentContract } from "@/lib/industryRules";
+import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
+import type { IndustryKey, ObjectiveKey } from "@/lib/industryRules";
 
 interface StepTrainingProps {
   projectData: ProjectData;
@@ -157,6 +160,17 @@ const StepTraining = ({
   const [selectionVersion, setSelectionVersion] = useState<number | null>(null);
   const [preflightRefreshKey, setPreflightRefreshKey] = useState(0);
 
+  // Business intent contract summary
+  const [contractSummary, setContractSummary] = useState<{
+    industry: string;
+    objective: string;
+    problemType: string;
+    doBullets: string[];
+    advancedMode: boolean;
+    industryLabel: string;
+    objectiveLabel: string;
+  } | null>(null);
+
   const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
 
   const loadSelectionVersion = useCallback(async () => {
@@ -169,6 +183,33 @@ const StepTraining = ({
     if (data) setSelectionVersion((data as any).selection_version);
   }, [projectData.id]);
 
+  const loadContractSummary = useCallback(async () => {
+    if (!projectData.id) return;
+    const { data } = await supabase
+      .from("project_settings")
+      .select("business_intent_contract, objective, industry, advanced_mode_enabled")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (!data) return;
+    const ps = data as any;
+    let contract: BusinessIntentContract | null = ps.business_intent_contract;
+    if (!contract && ps.industry && ps.objective) {
+      try { contract = buildBusinessIntentContract(ps.industry, ps.objective); } catch { /* noop */ }
+    }
+    if (!contract) return;
+    const industryLabels: Record<string, string> = { retail: "Varejo", health: "Saúde", finance: "Finanças", education: "Educação", logistics: "Logística", generic: "Geral" };
+    const objDef = INDUSTRY_OBJECTIVE_MATRIX[contract.industry]?.objectives.find(o => o.key === contract!.objective);
+    setContractSummary({
+      industry: contract.industry,
+      objective: contract.objective,
+      problemType: contract.problem_type_default,
+      doBullets: contract.target_recommendations.do.slice(0, 2),
+      advancedMode: ps.advanced_mode_enabled === true,
+      industryLabel: industryLabels[contract.industry] || contract.industry,
+      objectiveLabel: objDef?.label_pt || contract.objective,
+    });
+  }, [projectData.id]);
+
   // Track whether we already checked for builder outdated redirect
   const [builderOutdatedChecked, setBuilderOutdatedChecked] = useState(false);
   const [builderOutdated, setBuilderOutdated] = useState(false);
@@ -177,13 +218,11 @@ const StepTraining = ({
     loadExistingModels();
     detectProblemType();
     checkTrainReadiness();
-    // Force SSOT reload + selection version on mount
     ds.load();
     loadSelectionVersion();
-    // Run preflight and check for BUILDER_OUTDATED — auto-redirect to step 4
     runPreflightGuard();
-    // Bump preflight key to force fresh check
     setPreflightRefreshKey(k => k + 1);
+    loadContractSummary();
   }, [projectData.id]);
 
   const runPreflightGuard = useCallback(async () => {
@@ -655,7 +694,32 @@ const StepTraining = ({
           </span>
         </div>
 
-        {/* Smart Training Info */}
+        {/* ═══ Business Intent Contract Summary ═══ */}
+        {contractSummary && (
+          <div className="p-4 border border-primary/20 bg-primary/5 rounded-lg space-y-2">
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className="text-[10px]">{contractSummary.industryLabel}</Badge>
+              <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px]">{contractSummary.objectiveLabel}</Badge>
+              <Badge variant="outline" className="text-[10px]">
+                {contractSummary.problemType === "classification" ? "Classificação" : contractSummary.problemType === "regression" ? "Regressão" : "Clustering"}
+              </Badge>
+              {contractSummary.advancedMode && (
+                <Badge className="bg-accent/20 text-accent border-accent/30 text-[9px] gap-1">
+                  <Settings2 className="w-3 h-3" />
+                  Avançado ligado
+                </Badge>
+              )}
+            </div>
+            {contractSummary.doBullets.length > 0 && (
+              <ul className="text-xs text-muted-foreground space-y-0.5 pl-4 list-disc">
+                {contractSummary.doBullets.map((b, i) => (
+                  <li key={i}>{b}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
         <div className="p-4 bg-secondary/10 border border-secondary/20 rounded-lg">
           <div className="flex items-start gap-3">
             <Sparkles className="w-5 h-5 text-secondary mt-0.5" />
