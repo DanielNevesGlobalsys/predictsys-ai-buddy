@@ -124,7 +124,7 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
         .eq("project_id", projectId)
         .order("created_at", { ascending: false })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       if (!error && data) {
         setManifest(data as unknown as ImportManifest);
@@ -167,12 +167,12 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
     return <span title="<30% NULL" className="text-accent">🟢</span>;
   };
 
-  const files = (manifest.files || []) as ManifestFile[];
-  const nullDiag = (manifest.null_diagnostic || []) as NullDiagnostic[];
-  const colMapping = (manifest.column_mapping_report || []) as ColumnMapping[];
+  const files = Array.isArray(manifest.files) ? (manifest.files as unknown as ManifestFile[]) : [];
+  const nullDiag = Array.isArray(manifest.null_diagnostic) ? (manifest.null_diagnostic as unknown as NullDiagnostic[]) : [];
+  const colMapping = Array.isArray(manifest.column_mapping_report) ? (manifest.column_mapping_report as unknown as ColumnMapping[]) : [];
   const rawSchema = manifest.canonical_schema || {};
-  const coverageStats = (rawSchema as any)._coverage_stats as CoverageStats | undefined;
-  const criticalColumns = (rawSchema as any)._critical_columns as CriticalColumnTag[] | undefined;
+  const coverageStats = (rawSchema as any)?._coverage_stats as CoverageStats | undefined;
+  const criticalColumns = Array.isArray((rawSchema as any)?._critical_columns) ? (rawSchema as any)._critical_columns as CriticalColumnTag[] : undefined;
   const schema = Object.fromEntries(Object.entries(rawSchema).filter(([k]) => !k.startsWith("_"))) as Record<string, string>;
 
   return (
@@ -251,7 +251,7 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
           </div>
           <div className="p-3 bg-muted/30 rounded-lg text-center col-span-2">
             <div className="flex flex-wrap gap-1 justify-center">
-              {coverageStats.file_contribution.map((fc, i) => (
+              {(Array.isArray(coverageStats.file_contribution) ? coverageStats.file_contribution : []).map((fc, i) => (
                 <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
                   {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
                   {fc.contribution_type === "mostly_null" && " ⚠️"}
@@ -264,7 +264,7 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
       )}
 
       {/* Top 10 Null Columns */}
-      {coverageStats && coverageStats.top_10_null_columns.length > 0 && (
+      {coverageStats && Array.isArray(coverageStats.top_10_null_columns) && coverageStats.top_10_null_columns.length > 0 && (
         <Collapsible>
           <CollapsibleTrigger className="flex items-center gap-2 text-sm font-medium hover:text-primary transition-colors w-full">
             <ChevronDown className="w-4 h-4" />
@@ -330,8 +330,9 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
           </TableHeader>
           <TableBody>
             {files.map((f, i) => {
-              const avgNull = f.null_pct_by_col.length > 0
-                ? (f.null_pct_by_col.reduce((s, c) => s + c.pct, 0) / f.null_pct_by_col.length).toFixed(1)
+              const nullPctByCols = Array.isArray(f.null_pct_by_col) ? f.null_pct_by_col : [];
+              const avgNull = nullPctByCols.length > 0
+                ? (nullPctByCols.reduce((s, c) => s + c.pct, 0) / nullPctByCols.length).toFixed(1)
                 : "0.0";
               return (
                 <TableRow key={i}>
@@ -354,9 +355,9 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
                   <TableCell className="text-xs text-right tabular-nums">{f.cols_detected}</TableCell>
                   <TableCell className="text-xs text-right tabular-nums">{avgNull}%</TableCell>
                   <TableCell className="text-xs">
-                    {f.parse_warnings.length > 0 ? (
+                    {Array.isArray(f.parse_warnings) && f.parse_warnings.length > 0 ? (
                       <span className="text-amber-600">{f.parse_warnings.length} aviso(s)</span>
-                    ) : f.missing_cols.length > 0 ? (
+                    ) : Array.isArray(f.missing_cols) && f.missing_cols.length > 0 ? (
                       <span className="text-muted-foreground">{f.missing_cols.length} col. ausente(s)</span>
                     ) : (
                       <span className="text-muted-foreground">—</span>
@@ -401,7 +402,7 @@ const ImportManifestPanel = ({ projectId }: ImportManifestPanelProps) => {
                     <Badge variant="outline" className="text-[10px]">{d.null_pct.toFixed(1)}% null</Badge>
                   </div>
                   <p className="text-muted-foreground">{d.probable_cause}</p>
-                  {d.files_with_data.length > 0 && (
+                  {Array.isArray(d.files_with_data) && d.files_with_data.length > 0 && (
                     <p className="text-muted-foreground">
                       Dados em: {d.files_with_data.join(", ")}
                     </p>

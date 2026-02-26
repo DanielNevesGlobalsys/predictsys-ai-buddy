@@ -133,7 +133,7 @@ export function useDatasetState(projectId: string | undefined) {
   // Unified accessors
   const rowCount = state?.row_count ?? fallback?.totalRows ?? 0;
   const colCount = state?.col_count ?? fallback?.columnsCount ?? 0;
-  const edaReady = state?.eda_ready ?? fallback?.edaReady ?? true;
+  const edaReady = state?.eda_ready ?? fallback?.edaReady ?? false;
   const modelReady = state?.model_ready ?? fallback?.modelReady ?? true;
   const sourceType = state?.source_type ?? fallback?.sourceType ?? "upload";
   const isVirtual = state?.virtual_manifest ?? fallback?.virtualManifest ?? false;

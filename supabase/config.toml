@@ -182,3 +182,6 @@ verify_jwt = false
 
 [functions.platform-audit-az]
 verify_jwt = false
+
+[functions.get-project-modeling-state]
+verify_jwt = false
