@@ -178,36 +178,71 @@ function validateTarget(
  * Validates features BEFORE training.
  * Blocks: IDs/keys, high cardinality categoricals, zero-variance, leakage suspects
  */
+interface LeakageReport {
+  blocked: string[];
+  blockReasons: Record<string, string>;
+  warnings: string[];
+  suspects: { leakage: string[]; id_like: string[] };
+  base_rate: number | null;
+}
+
 function validateFeatures(
   featureNames: string[],
   X: number[][],
   targetName: string,
   y: number[]
-): { blocked: string[]; blockReasons: Record<string, string>; warnings: string[] } {
+): LeakageReport {
   const blocked: string[] = [];
   const blockReasons: Record<string, string> = {};
   const warnings: string[] = [];
+  const suspectsLeakage: string[] = [];
+  const suspectsIdLike: string[] = [];
 
   const idPatterns = /^(id|_id|codigo|cod_|numero|num_|chave|key|uuid|pk|fk|idx|index)/i;
   const idSuffixPatterns = /(_id|_key|_code|_cod|_numero|_num|_uuid)$/i;
 
+  // Churn-specific leakage patterns
+  const churnLeakageTokens = [
+    "status", "churn", "cancel", "inativ", "encerr", "dt_fim", "fim_previsto",
+    "vencimento", "pago", "multa", "juros", "mora", "inadimpl", "rescis",
+    "deslig", "saida", "obito", "alta", "resultado", "outcome", "target",
+    "label", "y_true", "y_pred",
+  ];
+  const targetLower = targetName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  // Base rate for classification
+  let baseRate: number | null = null;
+  if (y.length > 0) {
+    const positives = y.filter(v => v === 1).length;
+    baseRate = positives / y.length;
+  }
+
   for (let j = 0; j < featureNames.length; j++) {
     const name = featureNames[j];
-    const nameLower = name.toLowerCase();
+    const nameLower = name.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    let isBlocked = false;
+
+    // 0. Exact target name match (should never be a feature)
+    if (nameLower === targetLower) {
+      blocked.push(name);
+      blockReasons[name] = `Idêntica ao target "${targetName}".`;
+      continue;
+    }
 
     // 1. ID/Key pattern detection
     if (idPatterns.test(nameLower) || idSuffixPatterns.test(nameLower)) {
-      // Check if it actually has high cardinality
       const col = X.map(row => row[j]);
       const uniqueCount = new Set(col).size;
       const uniqueRatio = uniqueCount / col.length;
       
       if (uniqueRatio > 0.5) {
         blocked.push(name);
-        blockReasons[name] = `Parece ser ID/chave (${uniqueCount} valores únicos em ${col.length} linhas).`;
+        blockReasons[name] = `ID/chave alta cardinalidade (${uniqueCount} únicos em ${col.length} linhas).`;
+        suspectsIdLike.push(name);
         continue;
-      } else {
-        warnings.push(`Feature "${name}" tem nome de ID mas baixa cardinalidade (${uniqueCount} únicos) — mantida.`);
+      } else if (uniqueRatio > 0.98) {
+        suspectsIdLike.push(name);
+        warnings.push(`Feature "${name}" quase-ID (${(uniqueRatio * 100).toFixed(0)}% únicos) — mantida com cautela.`);
       }
     }
 
@@ -220,12 +255,22 @@ function validateFeatures(
       continue;
     }
 
-    // 3. Leakage: feature contains target name
-    if (nameLower.includes(targetName.toLowerCase()) && nameLower !== targetName.toLowerCase()) {
+    // 3. Churn-specific leakage: feature name contains leakage tokens
+    for (const token of churnLeakageTokens) {
+      if (nameLower.includes(token)) {
+        suspectsLeakage.push(name);
+        warnings.push(`Feature "${name}" contém token suspeito "${token}" — possível vazamento.`);
+        break;
+      }
+    }
+
+    // 4. Feature contains target name as substring
+    if (nameLower.includes(targetLower) && nameLower !== targetLower) {
+      suspectsLeakage.push(name);
       warnings.push(`Feature "${name}" contém o nome do target "${targetName}" — possível vazamento.`);
     }
 
-    // 4. Leakage: extremely high correlation with target
+    // 5. Extremely high correlation with target (leakage)
     if (y.length > 0 && y.length === col.length) {
       const yMean = mean(y);
       const colMean = mean(col);
@@ -241,16 +286,28 @@ function validateFeatures(
         
         if (corr > 0.98) {
           blocked.push(name);
-          blockReasons[name] = `Correlação com target = ${corr.toFixed(4)} — provável vazamento de dados.`;
+          blockReasons[name] = `Correlação com target = ${corr.toFixed(4)} — vazamento de dados.`;
+          suspectsLeakage.push(name);
           continue;
         } else if (corr > 0.9) {
-          warnings.push(`Feature "${name}" tem alta correlação com target (${corr.toFixed(3)}) — verifique vazamento.`);
+          suspectsLeakage.push(name);
+          warnings.push(`Feature "${name}" alta correlação com target (${corr.toFixed(3)}) — verifique vazamento.`);
         }
+      }
+    }
+
+    // 6. High unique ratio (possible ID even without name match)
+    {
+      const uniqueCount = new Set(col).size;
+      const uniqueRatio = uniqueCount / col.length;
+      if (uniqueRatio > 0.98 && col.length > 100) {
+        suspectsIdLike.push(name);
+        warnings.push(`Feature "${name}" tem ${(uniqueRatio * 100).toFixed(0)}% valores únicos — possível ID.`);
       }
     }
   }
 
-  return { blocked, blockReasons, warnings };
+  return { blocked, blockReasons, warnings, suspects: { leakage: [...new Set(suspectsLeakage)], id_like: [...new Set(suspectsIdLike)] }, base_rate: baseRate };
 }
 
 // ==================== MODEL STRATEGY ====================
@@ -802,6 +859,75 @@ function calcClassificationMetrics(yTrue: number[], yProb: number[]): Record<str
 
 function calcRegressionMetrics(yTrue: number[], yPred: number[]): Record<string, number> {
   return calcRegressionMetricsDetailed(yTrue, yPred).clamped;
+}
+
+// ==================== EXTENDED METRICS (Precision@K, Recall@K, Lift@K) ====================
+
+function calcPrecisionAtK(yTrue: number[], yProb: number[], kPercent: number): number {
+  const n = yTrue.length;
+  const k = Math.max(1, Math.ceil((kPercent / 100) * n));
+  const sorted = yTrue.map((t, i) => ({ t, p: yProb[i] })).sort((a, b) => b.p - a.p);
+  const topK = sorted.slice(0, k);
+  const tp = topK.filter(x => x.t === 1).length;
+  return tp / k;
+}
+
+function calcRecallAtK(yTrue: number[], yProb: number[], kPercent: number): number {
+  const n = yTrue.length;
+  const k = Math.max(1, Math.ceil((kPercent / 100) * n));
+  const totalPos = yTrue.filter(y => y === 1).length;
+  if (totalPos === 0) return 0;
+  const sorted = yTrue.map((t, i) => ({ t, p: yProb[i] })).sort((a, b) => b.p - a.p);
+  const topK = sorted.slice(0, k);
+  const tp = topK.filter(x => x.t === 1).length;
+  return tp / totalPos;
+}
+
+function calcLiftAtK(yTrue: number[], yProb: number[], kPercent: number): number {
+  const baseRate = yTrue.filter(y => y === 1).length / yTrue.length;
+  if (baseRate === 0) return 0;
+  const precAtK = calcPrecisionAtK(yTrue, yProb, kPercent);
+  return precAtK / baseRate;
+}
+
+function calcConfusionMatrixAtThreshold(yTrue: number[], yProb: number[], threshold: number): { tp: number; fp: number; fn: number; tn: number; precision: number; recall: number; f1: number } {
+  let tp = 0, fp = 0, fn = 0, tn = 0;
+  for (let i = 0; i < yTrue.length; i++) {
+    const pred = yProb[i] >= threshold ? 1 : 0;
+    if (yTrue[i] === 1 && pred === 1) tp++;
+    else if (yTrue[i] === 0 && pred === 1) fp++;
+    else if (yTrue[i] === 1 && pred === 0) fn++;
+    else tn++;
+  }
+  const precision = tp + fp > 0 ? tp / (tp + fp) : 0;
+  const recall = tp + fn > 0 ? tp / (tp + fn) : 0;
+  const f1 = precision + recall > 0 ? 2 * precision * recall / (precision + recall) : 0;
+  return { tp, fp, fn, tn, precision, recall, f1 };
+}
+
+function calcThresholdCurve(yTrue: number[], yProb: number[], nPoints = 50): { threshold: number; precision: number; recall: number; f1: number; tp: number; fp: number }[] {
+  const curve: { threshold: number; precision: number; recall: number; f1: number; tp: number; fp: number }[] = [];
+  for (let i = 1; i <= nPoints; i++) {
+    const t = i / (nPoints + 1);
+    const cm = calcConfusionMatrixAtThreshold(yTrue, yProb, t);
+    curve.push({ threshold: Math.round(t * 1000) / 1000, precision: cm.precision, recall: cm.recall, f1: cm.f1, tp: cm.tp, fp: cm.fp });
+  }
+  return curve;
+}
+
+interface ExtendedClassificationMetrics {
+  base_rate: number;
+  precision_at_5: number;
+  precision_at_10: number;
+  precision_at_20: number;
+  recall_at_5: number;
+  recall_at_10: number;
+  recall_at_20: number;
+  lift_at_10: number;
+  confusion_matrix: { tp: number; fp: number; fn: number; tn: number; precision: number; recall: number; f1: number };
+  threshold_curve: { threshold: number; precision: number; recall: number; f1: number; tp: number; fp: number }[];
+  chosen_threshold: number;
+  threshold_method: string;
 }
 
 function calcFeatureImportance(weights: number[], featureNames: string[]): { feature_name: string; importance_value: number }[] {
@@ -3821,6 +3947,31 @@ serve(async (req) => {
       console.log(`[Threshold] Optimal: ${recommendedThreshold.toFixed(2)} (strategy: ${metricsProfile.threshold_strategy})`);
     }
 
+    // ==================== EXTENDED CLASSIFICATION METRICS ====================
+    let extendedMetrics: ExtendedClassificationMetrics | null = null;
+    if (isClassification) {
+      const totalPos = ytestForModel.filter(v => v === 1).length;
+      const baseRate = totalPos / ytestForModel.length;
+      const predsToUse = calibratedPredictions;
+      
+      extendedMetrics = {
+        base_rate: baseRate,
+        precision_at_5: calcPrecisionAtK(ytestForModel, predsToUse, 5),
+        precision_at_10: calcPrecisionAtK(ytestForModel, predsToUse, 10),
+        precision_at_20: calcPrecisionAtK(ytestForModel, predsToUse, 20),
+        recall_at_5: calcRecallAtK(ytestForModel, predsToUse, 5),
+        recall_at_10: calcRecallAtK(ytestForModel, predsToUse, 10),
+        recall_at_20: calcRecallAtK(ytestForModel, predsToUse, 20),
+        lift_at_10: calcLiftAtK(ytestForModel, predsToUse, 10),
+        confusion_matrix: calcConfusionMatrixAtThreshold(ytestForModel, predsToUse, recommendedThreshold),
+        threshold_curve: calcThresholdCurve(ytestForModel, predsToUse, 50),
+        chosen_threshold: recommendedThreshold,
+        threshold_method: metricsProfile.threshold_strategy || "max_f1",
+      };
+      console.log(`[ExtendedMetrics] base_rate=${(baseRate*100).toFixed(1)}%, P@10=${(extendedMetrics.precision_at_10*100).toFixed(1)}%, R@10=${(extendedMetrics.recall_at_10*100).toFixed(1)}%, Lift@10=${extendedMetrics.lift_at_10.toFixed(2)}`);
+      console.log(`[ExtendedMetrics] CM@${recommendedThreshold}: TP=${extendedMetrics.confusion_matrix.tp} FP=${extendedMetrics.confusion_matrix.fp} FN=${extendedMetrics.confusion_matrix.fn} TN=${extendedMetrics.confusion_matrix.tn}`);
+    }
+
     // Delete existing models for this project
     await supabase
       .from("project_models")
@@ -4023,6 +4174,13 @@ serve(async (req) => {
           calibration: calibrationInfo,
           recommended_threshold: recommendedThreshold,
           metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+          extended_metrics: extendedMetrics,
+          leakage_report: {
+            blocked: featureValidation.blocked,
+            blockReasons: featureValidation.blockReasons,
+            suspects: featureValidation.suspects,
+            base_rate: featureValidation.base_rate,
+          },
         },
       })
       .select()
@@ -4256,6 +4414,13 @@ serve(async (req) => {
       calibration: calibrationInfo,
       recommended_threshold: recommendedThreshold,
       metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+      extended_metrics: extendedMetrics,
+      leakage_report: {
+        blocked: featureValidation.blocked,
+        blockReasons: featureValidation.blockReasons,
+        suspects: featureValidation.suspects,
+        base_rate: featureValidation.base_rate,
+      },
       champion: {
         model_id: modelData.id,
         name: strategy.name,

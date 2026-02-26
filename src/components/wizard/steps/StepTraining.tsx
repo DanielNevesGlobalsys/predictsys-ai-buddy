@@ -26,6 +26,8 @@ import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import TrainabilityDiagnosticCard from "./TrainabilityDiagnosticCard";
 import PipelineDiagnosticsModal from "../shared/PipelineDiagnosticsModal";
+import TrainingMetricsReport from "@/components/training/TrainingMetricsReport";
+import ChurnSimulator from "@/components/business-impact/ChurnSimulator";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import type { BusinessIntentContract } from "@/lib/industryRules";
@@ -153,6 +155,8 @@ const StepTraining = ({
   const [qualityResult, setQualityResult] = useState<TrainingQualityResult | null>(null);
   const [trainabilityError, setTrainabilityError] = useState<TrainingErrorDetails | null>(null);
   const [showDiagnostics, setShowDiagnostics] = useState(false);
+  const [extendedMetrics, setExtendedMetrics] = useState<any>(null);
+  const [leakageReport, setLeakageReport] = useState<any>(null);
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
   const [edaDebug, setEdaDebug] = useState<{ data: any; error: any } | null>(null);
@@ -530,6 +534,9 @@ const StepTraining = ({
           metrics_summary: d.metrics_summary?.model || d.metrics_summary || {},
           train_diagnostics: d.train_diagnostics || undefined,
         });
+        // Capture extended metrics and leakage report
+        if (d.extended_metrics) setExtendedMetrics(d.extended_metrics);
+        if (d.leakage_report) setLeakageReport(d.leakage_report);
       }
 
       toast.success(t("stepTraining.trainingSuccess"));
