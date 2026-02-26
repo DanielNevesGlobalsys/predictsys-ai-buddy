@@ -258,50 +258,43 @@ const StepTraining = ({
 
     const blockReasons: string[] = [];
 
-    // Use unified modeling state as single source of truth for EDA status
+    // Use compute_eda_ready RPC as single source of truth
     let edaReady = true;
     let modelReady = true;
     let totalRows = 0;
     let blockedReasonModel: string | null = null;
 
     try {
-      const { data: modelingState, error: msErr } = await supabase.functions.invoke("get-project-modeling-state", {
-        body: { project_id: projectData.id },
-      });
+      const { data: edaResult, error: edaErr } = await supabase.rpc("compute_eda_ready" as any, { p_project_id: projectData.id });
 
-      if (!msErr && modelingState?.success) {
-        const ms = modelingState as any;
-        // EDA status from unified function (checks project_settings, project_numeric_stats, project_dataset_state)
-        edaReady = ms.eda?.status === "ok";
-        totalRows = ms.active_dataset?.total_rows || 0;
+      if (!edaErr && edaResult) {
+        const r = edaResult as any;
+        edaReady = r.eda_ready === true;
+        totalRows = r.evidence?.rows_len || 0;
 
-        if (!ms.active_dataset) {
-          blockReasons.push("Nenhum dataset ativo registrado para este projeto.");
-          edaReady = false;
-        } else if (totalRows === 0) {
-          blockReasons.push("Dataset ativo com 0 linhas.");
-          edaReady = false;
-        } else if ((ms.active_dataset?.columns_count || 0) < 2) {
-          blockReasons.push("Dataset ativo com menos de 2 colunas.");
-          edaReady = false;
+        if (!edaReady) {
+          const reasons: string[] = r.reasons || [];
+          // Map reason codes to user-friendly messages
+          const reasonMap: Record<string, string> = {
+            no_active_dataset: "Nenhum dataset ativo registrado.",
+            zero_rows: "Dataset com 0 linhas.",
+            insufficient_columns: "Dataset com menos de 2 colunas.",
+            no_sample: "Amostra do dataset não encontrada.",
+            no_eda_evidence: "EDA não foi calculado. Execute na Etapa 2.",
+          };
+          reasons.forEach(code => {
+            blockReasons.push(reasonMap[code] || code);
+          });
         }
 
-        // EDA "blocked" but dataset has data → EDA not yet run is NOT a hard block
-        // The train-models function itself does a multi-source EDA check
-        if (!edaReady && totalRows > 0 && (ms.active_dataset?.columns_count || 0) >= 2) {
-          // Don't block from the frontend — let the backend gate decide
-          edaReady = true;
-        }
-
-        modelReady = true; // model_ready is determined by preflight gates, not here
+        modelReady = true; // determined by preflight gates
       } else {
-        // Fallback: if unified function fails, be permissive
-        console.warn("[checkTrainReadiness] get-project-modeling-state failed, using permissive defaults");
+        console.warn("[checkTrainReadiness] compute_eda_ready failed, using permissive defaults", edaErr);
         edaReady = true;
         totalRows = projectData.total_rows || 0;
       }
     } catch (err) {
-      console.warn("[checkTrainReadiness] Error calling modeling state:", err);
+      console.warn("[checkTrainReadiness] Error calling compute_eda_ready:", err);
       edaReady = true;
       totalRows = projectData.total_rows || 0;
     }

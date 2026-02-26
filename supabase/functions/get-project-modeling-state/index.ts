@@ -47,61 +47,28 @@ serve(async (req) => {
       .limit(1)
       .maybeSingle();
 
-    // 3. EDA status - check multiple sources
+    // 3. EDA status — via compute_eda_ready SSOT RPC
     let edaStatus: "ok" | "blocked" | "missing" = "missing";
     let edaMeta: Record<string, unknown> = {};
 
     if (!activeDataset) {
       edaStatus = "missing";
     } else {
-      // Check project_settings for eda_state / eda_profile
-      const { data: settings } = await sb
-        .from("project_settings")
-        .select("eda_state, eda_status, eda_profile_json, eda_profile_created_at, ingestion_state, ingestion_rows_detected, ingestion_cols_detected")
-        .eq("project_id", project_id)
-        .maybeSingle();
-
-      const settingsAny = settings as Record<string, unknown> | null;
-
-      // Check if EDA has been calculated (numeric stats exist)
-      const { count: edaCount } = await sb
-        .from("project_numeric_stats")
-        .select("id", { count: "exact", head: true })
-        .eq("project_id", project_id);
-
-      const hasEdaStats = (edaCount || 0) > 0;
-
-      // Check project_dataset_state
-      const { data: dsState } = await sb
-        .from("project_dataset_state")
-        .select("eda_ready, model_ready, row_count, col_count")
-        .eq("project_id", project_id)
-        .maybeSingle();
-
-      // EDA is OK if ANY of these are true:
-      // - project_dataset_state.eda_ready = true
-      // - project_settings.eda_state = 'done' or eda_status = 'succeeded'
-      // - project_numeric_stats has rows (EDA was calculated)
-      // - project_settings.eda_profile_json is not null
-      if (
-        dsState?.eda_ready === true ||
-        settingsAny?.eda_state === "done" ||
-        settingsAny?.eda_status === "succeeded" ||
-        settingsAny?.eda_profile_json != null ||
-        hasEdaStats
-      ) {
-        edaStatus = "ok";
+      const { data: edaResult, error: edaRpcErr } = await sb.rpc("compute_eda_ready", { p_project_id: project_id });
+      if (!edaRpcErr && edaResult) {
+        const r = edaResult as Record<string, unknown>;
+        edaStatus = r.eda_ready === true ? "ok" : "blocked";
+        const evidence = r.evidence as Record<string, unknown> || {};
+        edaMeta = {
+          ...evidence,
+          reasons: r.reasons,
+          source: "compute_eda_ready",
+        };
       } else {
+        // Fallback if RPC fails
         edaStatus = "blocked";
+        edaMeta = { rpc_error: edaRpcErr?.message || "unknown" };
       }
-
-      edaMeta = {
-        eda_ready_dsstate: dsState?.eda_ready ?? null,
-        eda_state_settings: settingsAny?.eda_state ?? null,
-        eda_status_settings: settingsAny?.eda_status ?? null,
-        has_eda_stats: hasEdaStats,
-        has_profile_json: settingsAny?.eda_profile_json != null,
-      };
     }
 
     // 4. Schema columns - priority resolution
