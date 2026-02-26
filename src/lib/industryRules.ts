@@ -39,6 +39,12 @@ export interface BusinessIntentContract {
     require_min_positive_rate?: number;
     forbid_leakage_patterns?: string[];
   };
+  // ── PROMPT 11: new guided UX patterns ──
+  recommended_target_patterns: string[];
+  blocked_target_patterns: string[];
+  state_to_event_candidates: string[];
+  time_anchor_candidates: string[];
+  entity_key_hint_patterns: string[];
 }
 
 interface ObjectiveOption {
@@ -265,6 +271,13 @@ export function buildBusinessIntentContract(
       targetModes = ['choose_existing', 'assisted_build', 'quick_label', 'manual'];
   }
 
+  // ── New guided patterns (PROMPT 11) ──
+  const recommended_target_patterns = RECOMMENDED_TARGET_PATTERNS[objective] ?? [];
+  const blocked_target_patterns = BLOCKED_TARGET_PATTERNS_MAP[industry] ?? BLOCKED_TARGET_PATTERNS_MAP.generic;
+  const state_to_event_candidates = STATE_TO_EVENT_CANDIDATES[objective] ?? [];
+  const time_anchor_candidates = TIME_ANCHOR_CANDIDATES[industry] ?? TIME_ANCHOR_CANDIDATES.generic;
+  const entity_key_hint_patterns = ENTITY_KEY_HINT_PATTERNS[industry] ?? ENTITY_KEY_HINT_PATTERNS.generic;
+
   return {
     industry,
     objective,
@@ -273,8 +286,70 @@ export function buildBusinessIntentContract(
     target_recommendations: TARGET_RECS[objective],
     entity_key_policy: ENTITY_KEY_POLICIES[industry],
     guardrails: GUARDRAILS[objective],
+    recommended_target_patterns,
+    blocked_target_patterns,
+    state_to_event_candidates,
+    time_anchor_candidates,
+    entity_key_hint_patterns,
   };
 }
+
+// ─── Recommended Target Patterns per Objective ───────────────
+
+const RECOMMENDED_TARGET_PATTERNS: Record<ObjectiveKey, string[]> = {
+  churn: ['churn', 'cancel', 'evasao', 'inativ', 'abandono'],
+  propensity: ['inadimpl', 'default', 'conver', 'comprou', 'pagou'],
+  segmentation: [],
+  demand_forecast: ['vendas', 'receita', 'volume', 'demanda', 'faturamento'],
+  anomaly: ['fraude', 'anomalia', 'suspeita', 'atipic'],
+  price_optimization: ['preco', 'price', 'valor_venda', 'ticket'],
+  generic_prediction: [],
+};
+
+// ─── Blocked Target Patterns (IDs) per Industry ─────────────
+
+const BLOCKED_TARGET_PATTERNS_MAP: Record<IndustryKey, string[]> = {
+  retail: ['id', 'uuid', 'hash', 'token', 'codigo', 'contratoid', 'id_contrato', 'id_pedido', 'id_transacao'],
+  health: ['id', 'uuid', 'hash', 'token', 'prontuario', 'matricula_id', 'id_paciente'],
+  finance: ['id', 'uuid', 'hash', 'token', 'id_conta', 'id_contrato', 'numero_contrato'],
+  education: ['id', 'uuid', 'hash', 'token', 'ra', 'matricula_id', 'id_aluno'],
+  logistics: ['id', 'uuid', 'hash', 'token', 'tracking', 'id_pedido', 'id_remessa'],
+  generic: ['id', 'uuid', 'hash', 'token', 'codigo', 'key', 'index', '_id'],
+};
+
+// ─── State-to-Event Candidates per Objective ─────────────────
+
+const STATE_TO_EVENT_CANDIDATES: Record<ObjectiveKey, string[]> = {
+  churn: ['status_contrato', 'status', 'situacao', 'fase', 'estado', 'status_cliente'],
+  propensity: ['status', 'situacao', 'fase', 'estado_pagamento', 'status_pagamento'],
+  segmentation: [],
+  demand_forecast: [],
+  anomaly: ['status', 'situacao'],
+  price_optimization: [],
+  generic_prediction: ['status', 'situacao', 'fase', 'estado'],
+};
+
+// ─── Time Anchor Candidates per Industry ─────────────────────
+
+const TIME_ANCHOR_CANDIDATES: Record<IndustryKey, string[]> = {
+  retail: ['data_cadastro', 'created_at', 'dt_ref', 'data_movimento', 'data_compra', 'data_pedido'],
+  health: ['data_cadastro', 'created_at', 'dt_ref', 'data_atendimento', 'data_internacao'],
+  finance: ['data_cadastro', 'created_at', 'dt_ref', 'data_abertura', 'data_contrato'],
+  education: ['data_matricula', 'created_at', 'dt_ref', 'data_ingresso'],
+  logistics: ['data_pedido', 'created_at', 'dt_ref', 'data_embarque', 'data_entrega'],
+  generic: ['data_cadastro', 'created_at', 'dt_ref', 'data_movimento', 'date', 'timestamp'],
+};
+
+// ─── Entity Key Hint Patterns per Industry ───────────────────
+
+const ENTITY_KEY_HINT_PATTERNS: Record<IndustryKey, string[]> = {
+  retail: ['id_cliente', 'cpf', 'cnpj', 'customer_id', 'client_id', 'account_id'],
+  health: ['id_paciente', 'cpf', 'prontuario', 'patient_id', 'matricula'],
+  finance: ['id_cliente', 'cpf', 'cnpj', 'account_id', 'contract_id', 'contrato'],
+  education: ['id_aluno', 'ra', 'cpf', 'matricula', 'student_id'],
+  logistics: ['id_pedido', 'order_id', 'shipment_id', 'tracking_id'],
+  generic: ['id_cliente', 'cpf', 'cnpj', 'contrato', 'account', 'customer_id', 'entity_id'],
+};
 
 // ─── Helpers ─────────────────────────────────────────────────
 

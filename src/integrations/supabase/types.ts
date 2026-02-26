@@ -3252,6 +3252,7 @@ export type Database = {
           dashboard_state: string
           dashboard_version: number
           dataset_version: number
+          derived_target_plan: Json | null
           eda_state: string
           entity_key: string | null
           excluded_columns: Json | null
@@ -3306,6 +3307,7 @@ export type Database = {
           target_state: string
           target_suggestion_meta: Json | null
           target_trainability_report: Json | null
+          time_anchor_col: string | null
           time_anchor_column: string | null
           training_state: string
           training_version: number
@@ -3329,6 +3331,7 @@ export type Database = {
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number
+          derived_target_plan?: Json | null
           eda_state?: string
           entity_key?: string | null
           excluded_columns?: Json | null
@@ -3383,6 +3386,7 @@ export type Database = {
           target_state?: string
           target_suggestion_meta?: Json | null
           target_trainability_report?: Json | null
+          time_anchor_col?: string | null
           time_anchor_column?: string | null
           training_state?: string
           training_version?: number
@@ -3406,6 +3410,7 @@ export type Database = {
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number
+          derived_target_plan?: Json | null
           eda_state?: string
           entity_key?: string | null
           excluded_columns?: Json | null
@@ -3460,6 +3465,7 @@ export type Database = {
           target_state?: string
           target_suggestion_meta?: Json | null
           target_trainability_report?: Json | null
+          time_anchor_col?: string | null
           time_anchor_column?: string | null
           training_state?: string
           training_version?: number

@@ -50,7 +50,7 @@ import { useProjectSchemaSSOT } from "@/hooks/useProjectSchemaSSOT";
 import { trackEvent } from "@/lib/platformTracking";
 import type { BusinessIntentContract, ObjectiveKey, IndustryKey } from "@/lib/industryRules";
 import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
-import BusinessGuidancePanel from "../shared/BusinessGuidancePanel";
+import BusinessGuidancePanel, { type TargetSuggestionCard } from "../shared/BusinessGuidancePanel";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -167,6 +167,13 @@ const StepTargetFeatures = ({
   const [leakageBlock, setLeakageBlock] = useState<string | null>(null);
   const isSegmentation = businessContract?.problem_type_default === "clustering" || businessObjective === "segmentation";
 
+  // State→Event conversion panel
+  const [showStateToEvent, setShowStateToEvent] = useState(false);
+  const [stateToEventCol, setStateToEventCol] = useState<string | null>(null);
+
+  // Blocked target (ID) modal
+  const [blockedIdTarget, setBlockedIdTarget] = useState<string | null>(null);
+
   // Load business intent contract from SSOT
   const loadBusinessContract = useCallback(async () => {
     if (!projectData.id) return;
@@ -215,6 +222,58 @@ const StepTargetFeatures = ({
   const isHardBlockedTarget = useCallback((colName: string): boolean => {
     const lower = colName.toLowerCase().trim();
     return HARD_BLOCK_TOKENS.some(t => lower === t);
+  }, []);
+
+  // Check if column looks like an ID (blocked_target_patterns)
+  const looksLikeId = useCallback((colName: string): boolean => {
+    const lower = colName.toLowerCase().trim();
+    const patterns = businessContract?.blocked_target_patterns || [];
+    return patterns.some(p => lower === p || lower.startsWith(p + '_') || lower.endsWith('_' + p) || lower === p.replace(/_/g, ''));
+  }, [businessContract]);
+
+  // Check if column is a state candidate (state_to_event_candidates)
+  const looksLikeState = useCallback((colName: string): boolean => {
+    const lower = colName.toLowerCase().trim();
+    const candidates = businessContract?.state_to_event_candidates || [];
+    return candidates.some(c => lower === c || lower.includes(c));
+  }, [businessContract]);
+
+  // Auto-suggest entity key from schema
+  const suggestEntityKey = useCallback((): string | null => {
+    if (!businessContract || columns.length === 0) return null;
+    const patterns = businessContract.entity_key_hint_patterns;
+    for (const p of patterns) {
+      const match = columns.find(c => c.name.toLowerCase().includes(p.toLowerCase()));
+      if (match) return match.name;
+    }
+    return null;
+  }, [businessContract, columns]);
+
+  // Apply a suggestion card — uses ref-stable approach to avoid dependency issues
+  const handleApplySuggestionRef = useRef<((card: TargetSuggestionCard) => void) | null>(null);
+  handleApplySuggestionRef.current = (card: TargetSuggestionCard) => {
+    if (card.action.entityKey) {
+      setEntityKey(card.action.entityKey);
+    }
+    if (card.action.problemType) {
+      setInferredProblemType(card.action.problemType);
+    }
+    if (card.action.mode === "assisted_build") {
+      document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+    } else if (card.action.targetColumn) {
+      // Direct set instead of handleTargetChange to avoid guardrail loops
+      setTargetColumn(card.action.targetColumn);
+      setTargetSource("manual");
+      setAppliedTargetColumn(null);
+    }
+    trackEvent({
+      event_type: "project_created",
+      project_id: projectData.id,
+      metadata: { sub_event: "guided_target_applied", card_id: card.id, card_variant: card.variant, ...card.action },
+    });
+  };
+  const handleApplySuggestion = useCallback((card: TargetSuggestionCard) => {
+    handleApplySuggestionRef.current?.(card);
   }, []);
 
   // Toggle advanced mode + persist
@@ -435,9 +494,12 @@ const StepTargetFeatures = ({
       }
       // Hydrate selection version
       setSelectionVersion(ssot.selection_version || null);
-      // Hydrate entity key
+      // Hydrate entity key (SSOT first, then auto-suggest from contract)
       if (ssot.entity_key) {
         setEntityKey(ssot.entity_key);
+      } else if (!entityKey) {
+        const suggested = suggestEntityKey();
+        if (suggested) setEntityKey(suggested);
       }
       // Hydrate industry into intentInfo
       if (ssot.industry) {
@@ -598,6 +660,18 @@ const StepTargetFeatures = ({
       onConfigChange?.();
     }
 
+    // ID blocking (PROMPT 11)
+    if (looksLikeId(value) && !advancedMode) {
+      setBlockedIdTarget(value);
+      trackEvent({
+        event_type: "project_created",
+        project_id: projectData.id,
+        metadata: { sub_event: "target_id_blocked", target: value, objective: businessObjective, industry: businessIndustry },
+      });
+      return; // Don't set
+    }
+    setBlockedIdTarget(null);
+
     // Leakage guardrails
     if (isHardBlockedTarget(value) && !advancedMode) {
       setLeakageBlock(`O campo "${value}" parece ser o próprio resultado. Escolha um alvo anterior ao evento.`);
@@ -607,7 +681,7 @@ const StepTargetFeatures = ({
         project_id: projectData.id,
         metadata: { sub_event: "target_leakage_blocked", target: value, objective: businessObjective, industry: businessIndustry },
       });
-      return; // Don't set the target
+      return;
     }
     setLeakageBlock(null);
 
@@ -622,8 +696,17 @@ const StepTargetFeatures = ({
       setLeakageWarning(null);
     }
 
+    // State→Event detection (PROMPT 11)
+    if (looksLikeState(value) && !advancedMode &&
+        (businessObjective === "churn" || businessObjective === "propensity" || businessObjective === "anomaly")) {
+      setShowStateToEvent(true);
+      setStateToEventCol(value);
+    } else {
+      setShowStateToEvent(false);
+      setStateToEventCol(null);
+    }
+
     setTargetColumn(value);
-    // If switching away from label, mark as manual
     if (value !== "label") {
       setTargetSource("manual");
     }
@@ -924,7 +1007,7 @@ const StepTargetFeatures = ({
           <Switch checked={advancedMode} onCheckedChange={handleAdvancedModeToggle} />
         </div>
 
-        {/* ═══ Business Guidance Panel ═══ */}
+        {/* ═══ Business Guidance Panel with Suggestion Cards ═══ */}
         {businessContract && (
           <BusinessGuidancePanel
             contract={businessContract}
@@ -940,6 +1023,9 @@ const StepTargetFeatures = ({
               businessContract.industry === "education" ? "Educação" :
               businessContract.industry === "logistics" ? "Logística" : "Geral"
             }
+            schemaColumns={columns.map(c => c.name)}
+            advancedMode={advancedMode}
+            onApplySuggestion={handleApplySuggestion}
           />
         )}
 
@@ -959,6 +1045,88 @@ const StepTargetFeatures = ({
             <Info className="w-4 h-4 text-primary" />
             <AlertDescription className="text-sm">
               Para <strong>segmentação</strong>, não existe "alvo". O sistema agrupa perfis parecidos automaticamente. Foque na seleção do Entity Key e das features.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* ID blocked alert (PROMPT 11) */}
+        {blockedIdTarget && (
+          <Alert className="border-destructive/30 bg-destructive/5">
+            <Ban className="w-4 h-4 text-destructive" />
+            <AlertDescription className="text-sm">
+              <strong>Esse campo parece ser um identificador</strong> ("{blockedIdTarget}"). Identificadores não são um bom alvo — eles não contêm informação preditiva.
+              <div className="mt-2 flex gap-2">
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBlockedIdTarget(null)}>
+                  Entendi, quero escolher outro alvo
+                </Button>
+                {!advancedMode && (
+                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => { handleAdvancedModeToggle(true); setBlockedIdTarget(null); }}>
+                    Ativar modo avançado
+                  </Button>
+                )}
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* State→Event conversion panel (PROMPT 11) */}
+        {showStateToEvent && stateToEventCol && (
+          <Alert className="border-primary/30 bg-primary/5">
+            <AlertTriangle className="w-4 h-4 text-primary" />
+            <AlertDescription className="text-sm space-y-2">
+              <p>
+                Você escolheu <strong>"{stateToEventCol}"</strong>, que é um campo de estado.
+                Para previsão, o ideal é prever uma <strong>mudança</strong> nesse estado dentro de uma janela de tempo.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <Button size="sm" variant="default" className="h-7 text-xs" onClick={async () => {
+                  const plan = {
+                    type: "state_to_event",
+                    base_column: stateToEventCol,
+                    window_days: 30,
+                    anchor_time_col: businessContract?.time_anchor_candidates?.[0] || null,
+                    event_definition: "mudou_status_30d",
+                  };
+                  setShowStateToEvent(false);
+                  // Persist derived_target_plan
+                  if (projectData.id) {
+                    await supabase.from("project_settings").update({ derived_target_plan: plan as any } as any).eq("project_id", projectData.id);
+                    trackEvent({
+                      event_type: "project_created",
+                      project_id: projectData.id,
+                      metadata: { sub_event: "derived_target_plan_set", plan },
+                    });
+                  }
+                  // Switch to assisted build mode
+                  document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+                }}>
+                  Criar alvo: mudou de status em 30 dias
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={async () => {
+                  const plan = {
+                    type: "state_to_event",
+                    base_column: stateToEventCol,
+                    window_days: 30,
+                    anchor_time_col: businessContract?.time_anchor_candidates?.[0] || null,
+                    event_definition: "atraso_30d",
+                  };
+                  setShowStateToEvent(false);
+                  if (projectData.id) {
+                    await supabase.from("project_settings").update({ derived_target_plan: plan as any } as any).eq("project_id", projectData.id);
+                    trackEvent({
+                      event_type: "project_created",
+                      project_id: projectData.id,
+                      metadata: { sub_event: "derived_target_plan_set", plan },
+                    });
+                  }
+                  document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+                }}>
+                  Criar alvo: ficou inadimplente em 30 dias
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => setShowStateToEvent(false)}>
+                  Usar como está (manual)
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         )}
