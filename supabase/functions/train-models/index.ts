@@ -5,6 +5,7 @@ import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-
 import { evaluateTargetTrainability, trainabilityHumanMessage, evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
 import { detectTargetType, validateTargetTypeMismatch, coerceToNumber, checkLowVariance, computeTargetStats, sampleRows as mvpSampleRows, samplePlan, validateSchemaSelection, filterInvalidFeatures } from "../_shared/training-prepare-mvp-soft.ts";
+import { recoverAllStaleStates } from "../_shared/stale-state-recovery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1375,26 +1376,63 @@ serve(async (req) => {
     }
 
     const startMs = Date.now();
+    const run_id = crypto.randomUUID();
     console.log(`\n========================================`);
     console.log(`[AutoML] Iniciando treinamento para projeto: ${project_id}`);
+    console.log(`[AutoML] run_id: ${run_id}`);
     console.log(`========================================\n`);
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // ── SSOT: Mark training as running ──
+    // ── Auto-recovery: check for stale states ──
     try {
-      await supabase.rpc("rpc_update_pipeline_state", {
+      const recoveries = await recoverAllStaleStates(supabase, project_id);
+      if (recoveries.length > 0) {
+        console.log(`[AutoML] Recovered ${recoveries.length} stale state(s): ${recoveries.map(r => r.stage).join(", ")}`);
+      }
+    } catch (_) { /* best-effort */ }
+
+    // ── SSOT: Mark training as running + persist run_id ──
+    try {
+      await supabase.rpc("rpc_set_pipeline_state", {
         p_project_id: project_id,
         p_stage: "training",
-        p_new_state: "running",
+        p_state: "running",
+        p_meta: { run_id },
       });
+      await supabase.from("project_settings")
+        .update({ active_run_id: run_id })
+        .eq("project_id", project_id);
     } catch (_) { /* best-effort */ }
+
+    // ── Log training_run_started ──
+    await supabase.from("platform_events").insert({
+      event_type: "training_run_started",
+      project_id: project_id,
+      status: "info",
+      source: "edge",
+      metadata: { run_id },
+    }).catch(() => {});
 
     // Helper to return structured block response (HTTP 200 per reliability standards)
     const blockResponse = (code: string, message: string, cta: { label: string; go_to_step?: number } | null, details?: Record<string, unknown>) => {
       console.error(`[Gating] BLOCKED: ${code} — ${message}`);
+      // Fire-and-forget: log training_run_blocked + set pipeline state
+      supabase.from("platform_events").insert({
+        event_type: "training_run_blocked",
+        project_id: project_id,
+        status: "error",
+        source: "edge",
+        metadata: { run_id, code, message },
+      }).then(() => {}).catch(() => {});
+      supabase.rpc("rpc_set_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "training",
+        p_state: "failed",
+        p_meta: { run_id, blocked_code: code },
+      }).then(() => {}).catch(() => {});
       return new Response(JSON.stringify({
         success: false,
         status: "blocked",
@@ -1405,6 +1443,10 @@ serve(async (req) => {
         details: details || {},
         error: message,
         action: cta ? "navigate" : "review_target",
+        fix_suggestions: [
+          ...(cta ? [{ label: cta.label, action: cta.go_to_step ? `open_step_${cta.go_to_step}` : "review_target" }] : []),
+          { label: "Ver diagnóstico", action: "open_diagnostics" },
+        ],
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     };
 
@@ -4132,6 +4174,15 @@ serve(async (req) => {
     } catch (stateErr) {
       console.warn("[train-models] Failed to update pipeline state (non-blocking):", stateErr);
     }
+
+    // ── Log training_run_succeeded ──
+    supabase.from("platform_events").insert({
+      event_type: "training_run_succeeded",
+      project_id: project_id,
+      status: "success",
+      source: "edge",
+      metadata: { run_id, selection_version: currentSelectionVersion, duration_ms: Date.now() - startMs },
+    }).then(() => {}).catch(() => {});
 
     // Build CTAs for UI
     const ctas: { label: string; go_to_step?: number }[] = [];

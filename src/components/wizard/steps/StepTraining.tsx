@@ -12,7 +12,7 @@ import {
 } from "@/components/ui/tooltip";
 import { 
   Cpu, Play, Clock, CheckCircle, Loader2, Trophy, AlertCircle, 
-  HelpCircle, AlertTriangle, Sparkles, Info, XCircle, ArrowLeft, Settings2
+  HelpCircle, AlertTriangle, Sparkles, Info, XCircle, ArrowLeft, Settings2, Activity
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
@@ -24,6 +24,7 @@ import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import TrainabilityDiagnosticCard from "./TrainabilityDiagnosticCard";
+import PipelineDiagnosticsModal from "../shared/PipelineDiagnosticsModal";
 import { trackEventWithTiming } from "@/lib/platformTracking";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import type { BusinessIntentContract } from "@/lib/industryRules";
@@ -150,6 +151,7 @@ const StepTraining = ({
   const [showTypeWarning, setShowTypeWarning] = useState(false);
   const [qualityResult, setQualityResult] = useState<TrainingQualityResult | null>(null);
   const [trainabilityError, setTrainabilityError] = useState<TrainingErrorDetails | null>(null);
+  const [showDiagnostics, setShowDiagnostics] = useState(false);
 
   const [trainReadiness, setTrainReadiness] = useState<TrainReadiness | null>(null);
 
@@ -654,6 +656,9 @@ const StepTraining = ({
     <Card className="bg-gradient-card shadow-card p-8">
       <div className="space-y-6">
         <div className="text-center mb-8">
+          <div className="flex items-center justify-end mb-2">
+            <PipelineDiagnosticsModal projectId={projectData.id} />
+          </div>
           <div className="w-16 h-16 bg-gradient-primary rounded-2xl flex items-center justify-center mx-auto mb-4">
             <Cpu className="w-8 h-8 text-primary-foreground" />
           </div>
@@ -966,14 +971,19 @@ const StepTraining = ({
                         variant={i === 0 ? "default" : "outline"}
                         size="sm"
                         onClick={async () => {
+                          if (fs.action === "open_diagnostics") {
+                            setShowDiagnostics(true);
+                            return;
+                          }
                           if (fs.action?.startsWith("change_problem_type_")) {
                             const newType = fs.action.replace("change_problem_type_", "") as "classification" | "regression";
                             await saveProject({ problem_type: newType });
                             toast.success(`Tipo alterado para ${newType === "classification" ? "Classificação" : "Regressão"}`);
                             setError(null);
                             setTrainabilityError(null);
-                          } else if (fs.action === "open_target_step") {
-                            if (onGoToStep) onGoToStep(3); else onBack();
+                          } else if (fs.action === "open_target_step" || fs.action?.startsWith("open_step_")) {
+                            const step = fs.action.startsWith("open_step_") ? parseInt(fs.action.replace("open_step_", ""), 10) : 3;
+                            if (onGoToStep && !isNaN(step)) onGoToStep(step); else onBack();
                           } else if (fs.action === "open_human_labeling") {
                             if (onGoToStep) onGoToStep(3); else onBack();
                           }

@@ -3239,6 +3239,7 @@ export type Database = {
       project_settings: {
         Row: {
           active_intent_contract_id: string | null
+          active_run_id: string | null
           active_target_column: string | null
           active_target_mode: string | null
           active_target_ref: Json | null
@@ -3275,6 +3276,9 @@ export type Database = {
           ingestion_state: string
           ingestion_total_bytes: number | null
           label_build_result: Json | null
+          last_pipeline_meta: Json | null
+          last_pipeline_stage: string | null
+          last_pipeline_state: string | null
           modeling_dataset_meta: Json | null
           objective: string | null
           org_id: string | null
@@ -3312,6 +3316,7 @@ export type Database = {
         }
         Insert: {
           active_intent_contract_id?: string | null
+          active_run_id?: string | null
           active_target_column?: string | null
           active_target_mode?: string | null
           active_target_ref?: Json | null
@@ -3348,6 +3353,9 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          last_pipeline_meta?: Json | null
+          last_pipeline_stage?: string | null
+          last_pipeline_state?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null
@@ -3385,6 +3393,7 @@ export type Database = {
         }
         Update: {
           active_intent_contract_id?: string | null
+          active_run_id?: string | null
           active_target_column?: string | null
           active_target_mode?: string | null
           active_target_ref?: Json | null
@@ -3421,6 +3430,9 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          last_pipeline_meta?: Json | null
+          last_pipeline_stage?: string | null
+          last_pipeline_state?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null
@@ -3828,6 +3840,15 @@ export type Database = {
       }
       rpc_recover_stale_ingestion: {
         Args: { p_project_id: string }
+        Returns: Json
+      }
+      rpc_set_pipeline_state: {
+        Args: {
+          p_meta?: Json
+          p_project_id: string
+          p_stage: string
+          p_state: string
+        }
         Returns: Json
       }
       rpc_start_ingestion: {
