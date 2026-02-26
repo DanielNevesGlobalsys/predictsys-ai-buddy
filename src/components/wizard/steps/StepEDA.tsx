@@ -168,11 +168,20 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (data?.success) {
         setHasSample(true);
         const isSchemaOnly = data.preview_mode === "schema_only" || data.format === "parquet";
+        const schemaApplied = !!data.schema_applied;
+        const colsSchema = data.columns_schema || data.columns_detected || 0;
+        const colsDetected = data.columns_detected || 0;
         toast({
-          title: isSchemaOnly ? "Amostra gerada (somente esquema)" : "Amostra gerada com sucesso",
+          title: isSchemaOnly
+            ? "Amostra gerada (somente esquema)"
+            : schemaApplied
+              ? `Amostra gerada • ${data.sample_rows} linhas • Schema ${colsSchema} colunas`
+              : "Amostra gerada com sucesso",
           description: isSchemaOnly
-            ? `${data.columns_detected} colunas detectadas. Preview de linhas para Parquet será habilitado em breve.`
-            : `${data.sample_rows} linhas • ${data.columns_detected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
+            ? `${colsSchema} colunas detectadas. Preview de linhas para Parquet será habilitado em breve.`
+            : schemaApplied && colsDetected !== colsSchema
+              ? `Amostra: ${colsDetected} colunas (arquivo parcial) • Schema consolidado: ${colsSchema} colunas`
+              : `${data.sample_rows} linhas • ${colsDetected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
         });
       } else {
         toast({
@@ -466,13 +475,18 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* Sample exists — show log viewer */}
+            {/* Sample exists — show log viewer + schema info */}
             {ingestionReady && hasSample === true && (
-              <div className="flex items-center gap-2 justify-end">
+              <div className="flex items-center gap-2 justify-end flex-wrap">
                 <Badge variant="outline" className="text-[10px]">
                   <CheckCircle className="w-3 h-3 mr-1" />
                   Amostra disponível
                 </Badge>
+                {ds.loaded && ds.colCount > 0 && (
+                  <Badge variant="secondary" className="text-[10px]" title="A amostra pode conter menos colunas quando o dataset é particionado; o schema representa o consolidado.">
+                    Colunas (schema): {ds.colCount}
+                  </Badge>
+                )}
                 <Button size="sm" variant="ghost" onClick={handleViewSampleLogs}>
                   <FileSearch className="w-4 h-4 mr-1" />
                   Ver último log

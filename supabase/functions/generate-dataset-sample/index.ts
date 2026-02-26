@@ -52,6 +52,20 @@ Deno.serve(async (req) => {
 
     const datasetRef = dsState.active_dataset_ref;
     const schemaJson = dsState.active_schema_json;
+
+    // ── Normalize schema columns ─────────────────────────────
+    let schemaColumns: { name: string; type: string }[] = [];
+    if (Array.isArray(schemaJson)) {
+      schemaColumns = schemaJson.map((col: any) => ({
+        name: col.name || col.column_name || String(col),
+        type: col.type || col.inferred_type || "unknown",
+      })).filter((c: any) => c.name);
+    } else if (schemaJson && typeof schemaJson === "object") {
+      schemaColumns = Object.entries(schemaJson).map(([name, type]) => ({
+        name,
+        type: typeof type === "string" ? type : "unknown",
+      }));
+    }
     let datasetId: string | null = null;
     let storagePath: string | null = null;
     let userId: string | null = null;
@@ -234,13 +248,6 @@ Deno.serve(async (req) => {
 
     // ── 3. Handle Parquet schema-only mode ────────────────────
     if (pickedFormat === "parquet" && pickedFile) {
-      let columns: string[] = [];
-      if (Array.isArray(schemaJson)) {
-        columns = schemaJson.map((col: any) => col.name || col.column_name || String(col)).filter(Boolean);
-      } else if (schemaJson && typeof schemaJson === "object") {
-        columns = Object.keys(schemaJson);
-      }
-
       const sampleJson = {
         _meta: {
           dataset_id: datasetId,
@@ -252,9 +259,12 @@ Deno.serve(async (req) => {
           selected_mimetype: pickedMimetype,
           format: "parquet",
           preview_mode: "schema_only",
+          schema_source: "active_schema_json",
+          detected_columns_count: 0,
+          schema_columns_count: schemaColumns.length,
           generated_at: new Date().toISOString(),
-          columns,
         },
+        columns: schemaColumns,
         rows: [],
       };
 
@@ -278,7 +288,8 @@ Deno.serve(async (req) => {
       });
 
       return ok({
-        success: true, sample_rows: 0, columns_detected: columns.length,
+        success: true, sample_rows: 0, columns_detected: schemaColumns.length,
+        columns_schema: schemaColumns.length, schema_applied: true,
         dataset_id: datasetId, bucket: pickedBucket, format: "parquet", preview_mode: "schema_only",
       });
     }
@@ -319,6 +330,9 @@ Deno.serve(async (req) => {
     }
 
     // ── 6. Build sample_json & upsert ────────────────────────
+    const schemaApplied = schemaColumns.length > 0;
+    const finalColumns = schemaApplied ? schemaColumns : headers.map(h => ({ name: h, type: "unknown" }));
+
     const sampleJson = {
       _meta: {
         dataset_id: datasetId,
@@ -329,10 +343,14 @@ Deno.serve(async (req) => {
         selected_size: pickedSize,
         selected_mimetype: pickedMimetype,
         format: "csv",
+        preview_source: "sample_rows",
+        schema_source: schemaApplied ? "active_schema_json" : "file_headers",
+        detected_columns_count: headers.length,
+        schema_columns_count: schemaColumns.length,
         generated_at: new Date().toISOString(),
         delimiter,
-        columns: headers,
       },
+      columns: finalColumns,
       rows: sampleRows,
     };
 
@@ -358,6 +376,7 @@ Deno.serve(async (req) => {
     // ── 8. Log success ───────────────────────────────────────
     await logEvent(sb, projectId, "dataset_sample_generated", {
       sample_rows: sampleRows.length, columns_detected: headers.length,
+      columns_schema: schemaColumns.length, schema_applied: schemaApplied,
       dataset_id: datasetId, original_storage_path: storagePath,
       picked_file: pickedFile, picked_bucket: pickedBucket, format: "csv",
       picked_size: pickedSize, picked_mimetype: pickedMimetype,
@@ -366,7 +385,8 @@ Deno.serve(async (req) => {
 
     return ok({
       success: true, sample_rows: sampleRows.length,
-      columns_detected: headers.length, dataset_id: datasetId,
+      columns_detected: headers.length, columns_schema: schemaColumns.length,
+      schema_applied: schemaApplied, dataset_id: datasetId,
       bucket: pickedBucket, format: "csv",
     });
   } catch (err: any) {
