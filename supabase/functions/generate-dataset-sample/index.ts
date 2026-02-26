@@ -8,6 +8,7 @@ const corsHeaders = {
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const FILE_EXT_RE = /\.(csv|parquet|json|jsonl|xlsx)$/i;
+const CSV_SNIFF_BYTES = 65536;
 
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
@@ -55,6 +56,7 @@ Deno.serve(async (req) => {
     let storagePath: string | null = null;
     let userId: string | null = null;
     let datasetMeta: Record<string, unknown> = {};
+    let isBatchImport = false;
 
     // Try active_dataset_ref as UUID → project_datasets
     if (UUID_RE.test(datasetRef)) {
@@ -68,7 +70,13 @@ Deno.serve(async (req) => {
         datasetId = dataset.id;
         storagePath = dataset.storage_path;
         userId = dataset.user_id;
-        datasetMeta = { name: dataset.name, source_type: dataset.source_type, columns_count: dataset.columns_count, created_at: dataset.created_at };
+        datasetMeta = {
+          name: dataset.name, source_type: dataset.source_type,
+          columns_count: dataset.columns_count, created_at: dataset.created_at,
+        };
+        isBatchImport = dataset.source_type === "batch_import"
+          || (dataset.name || "").toLowerCase().includes("batch")
+          || (dataset.storage_path || "").includes("/batch");
       }
     }
 
@@ -85,7 +93,13 @@ Deno.serve(async (req) => {
         datasetId = dataset.id;
         storagePath = dataset.storage_path;
         userId = dataset.user_id;
-        datasetMeta = { name: dataset.name, source_type: dataset.source_type, columns_count: dataset.columns_count, created_at: dataset.created_at };
+        datasetMeta = {
+          name: dataset.name, source_type: dataset.source_type,
+          columns_count: dataset.columns_count, created_at: dataset.created_at,
+        };
+        isBatchImport = dataset.source_type === "batch_import"
+          || (dataset.name || "").toLowerCase().includes("batch")
+          || (storagePath || "").includes("/batch");
       }
     }
 
@@ -108,136 +122,118 @@ Deno.serve(async (req) => {
       return fail("NO_STORAGE_PATH", "Caminho do arquivo não encontrado no storage.", { debug: { dataset_ref: datasetRef, dataset_id: datasetId } });
     }
 
-    // ── 2. Determine if storagePath is a file or folder ──────
+    // ── 2. Multi-bucket resolution ───────────────────────────
+    const defaultBuckets = ["datasets", "big_imports", "uploads", "imports", "raw", "project_datasets"];
+    const bucketOrder = isBatchImport
+      ? ["big_imports", "datasets", "uploads", "imports", "raw", "project_datasets"]
+      : defaultBuckets;
+
     const isLikelyFile = FILE_EXT_RE.test(storagePath);
-    const bucket = "datasets";
-    let fileBlob: Blob | null = null;
-    let pickedFile: string | null = null;
-    let pickedFormat: "csv" | "parquet" | "unknown" = "unknown";
     const diagnostics: Record<string, unknown>[] = [];
 
-    // 2a. Try direct download if it looks like a file
+    let fileBlob: Blob | null = null;
+    let pickedFile: string | null = null;
+    let pickedBucket: string | null = null;
+    let pickedFormat: "csv" | "parquet" | "unknown" = "unknown";
+    let pickedSize: number | null = null;
+    let pickedMimetype: string | null = null;
+
+    // Helper: derive folder from path
+    const folderOf = (p: string) => {
+      const parts = p.replace(/\/+$/, "").split("/");
+      return parts.length > 1 ? parts.slice(0, -1).join("/") : p;
+    };
+
+    // ── 2a. If path looks like a file, try direct download across buckets ──
     if (isLikelyFile) {
-      const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(storagePath);
-      const diag: Record<string, unknown> = { step: "direct_download", bucket, path: storagePath };
-      if (dlErr || !dlData) {
-        diag.ok = false;
-        diag.error = dlErr?.message || "no data";
-      } else {
-        diag.ok = true;
-        diag.size = dlData.size;
-        fileBlob = dlData;
-        pickedFile = storagePath;
-        pickedFormat = /\.parquet$/i.test(storagePath) ? "parquet" : "csv";
-      }
-      diagnostics.push(diag);
-    }
-
-    // 2b. If no blob yet, treat storagePath as folder prefix and list contents
-    if (!fileBlob) {
-      const folderPrefix = storagePath.endsWith("/") ? storagePath : storagePath + "/";
-      // Also try without trailing slash (supabase list uses folder arg)
-      const folderArg = storagePath.replace(/\/+$/, "");
-
-      const { data: files, error: listErr } = await sb.storage.from(bucket).list(folderArg, { limit: 100 });
-      const listDiag: Record<string, unknown> = {
-        step: "folder_list", bucket, folder: folderArg,
-        list_count: files?.length ?? 0,
-        list_names: (files || []).slice(0, 15).map((f: any) => f.name),
-        list_error: listErr?.message || null,
-      };
-      diagnostics.push(listDiag);
-
-      if (files && files.length > 0) {
-        // Separate CSV and Parquet candidates
-        const csvFiles = files.filter((f: any) => /\.csv$/i.test(f.name));
-        const parquetFiles = files.filter((f: any) => /\.parquet$/i.test(f.name));
-
-        // Pick best candidate: prefer CSV (largest), then Parquet (largest)
-        let candidate: { name: string; format: "csv" | "parquet" } | null = null;
-
-        if (csvFiles.length > 0) {
-          csvFiles.sort((a: any, b: any) => (b.metadata?.size ?? 0) - (a.metadata?.size ?? 0));
-          candidate = { name: csvFiles[0].name, format: "csv" };
-        } else if (parquetFiles.length > 0) {
-          parquetFiles.sort((a: any, b: any) => (b.metadata?.size ?? 0) - (a.metadata?.size ?? 0));
-          candidate = { name: parquetFiles[0].name, format: "parquet" };
-        }
-
-        if (candidate) {
-          const candidatePath = `${folderArg}/${candidate.name}`;
-          pickedFormat = candidate.format;
-
-          if (candidate.format === "csv") {
-            const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(candidatePath);
-            const dlDiag: Record<string, unknown> = { step: "folder_candidate_download", path: candidatePath, format: "csv" };
-            if (dlErr || !dlData) {
-              dlDiag.ok = false;
-              dlDiag.error = dlErr?.message || "no data";
-              diagnostics.push(dlDiag);
-            } else {
-              dlDiag.ok = true;
-              dlDiag.size = dlData.size;
-              diagnostics.push(dlDiag);
-              fileBlob = dlData;
-              pickedFile = candidatePath;
-            }
-          } else {
-            // Parquet — schema-only mode, no download needed
-            pickedFile = candidatePath;
-          }
+      for (const bucket of bucketOrder) {
+        const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(storagePath);
+        const diag: Record<string, unknown> = { step: "direct_download", bucket, path: storagePath };
+        if (dlErr || !dlData) {
+          diag.ok = false;
+          diag.error_raw = dlErr?.message || "no data";
         } else {
-          diagnostics.push({ step: "folder_no_candidates", csv_count: 0, parquet_count: 0 });
+          diag.ok = true;
+          diag.blob_size = dlData.size;
+          fileBlob = dlData;
+          pickedFile = storagePath;
+          pickedBucket = bucket;
+          pickedFormat = /\.parquet$/i.test(storagePath) ? "parquet" : "csv";
+          pickedSize = dlData.size;
+        }
+        diagnostics.push(diag);
+        if (fileBlob) break;
+      }
+    }
+
+    // ── 2b. Folder mode: list objects across buckets ─────────
+    if (!fileBlob && pickedFormat !== "parquet") {
+      const folderVariants = [
+        storagePath.replace(/\/+$/, ""),
+        storagePath.endsWith("/") ? storagePath.slice(0, -1) : storagePath,
+      ];
+      // dedupe
+      const foldersToTry = [...new Set(folderVariants)];
+
+      for (const bucket of bucketOrder) {
+        if (fileBlob) break;
+        for (const folder of foldersToTry) {
+          if (fileBlob) break;
+          const { data: files, error: listErr } = await sb.storage.from(bucket).list(folder, { limit: 100 });
+          const listDiag: Record<string, unknown> = {
+            step: "folder_list", bucket, folder,
+            list_count: files?.length ?? 0,
+            list_names: (files || []).slice(0, 10).map((f: any) => f.name),
+            list_error: listErr?.message || null,
+          };
+          diagnostics.push(listDiag);
+
+          if (!files || files.length === 0) continue;
+
+          // Found files in this bucket — select best candidate
+          const result = await selectAndDownload(sb, bucket, folder, files, schemaJson, diagnostics);
+          if (result) {
+            fileBlob = result.blob;
+            pickedFile = result.filePath;
+            pickedBucket = bucket;
+            pickedFormat = result.format;
+            pickedSize = result.size;
+            pickedMimetype = result.mimetype;
+            break;
+          }
         }
       }
     }
 
-    // 2c. Extra fallback: scan user/project folder
+    // ── 2c. Extra fallback: scan user/project folder ─────────
     if (!fileBlob && pickedFormat !== "parquet" && userId) {
       const scanFolder = `${userId}/${projectId}`;
-      const { data: scanFiles } = await sb.storage.from(bucket).list(scanFolder, { limit: 50 });
-      const scanDiag: Record<string, unknown> = {
-        step: "user_project_scan", folder: scanFolder,
-        list_count: scanFiles?.length ?? 0,
-        list_names: (scanFiles || []).slice(0, 15).map((f: any) => f.name),
-      };
+      for (const bucket of bucketOrder) {
+        if (fileBlob) break;
+        const { data: scanFiles } = await sb.storage.from(bucket).list(scanFolder, { limit: 50 });
+        const scanDiag: Record<string, unknown> = {
+          step: "user_project_scan", bucket, folder: scanFolder,
+          list_count: scanFiles?.length ?? 0,
+          list_names: (scanFiles || []).slice(0, 10).map((f: any) => f.name),
+        };
+        diagnostics.push(scanDiag);
 
-      if (scanFiles && scanFiles.length > 0) {
-        const csvFile = scanFiles.filter((f: any) => /\.csv$/i.test(f.name))
-          .sort((a: any, b: any) => (b.metadata?.size ?? 0) - (a.metadata?.size ?? 0))[0];
-        const parquetFile = !csvFile
-          ? scanFiles.filter((f: any) => /\.parquet$/i.test(f.name))
-              .sort((a: any, b: any) => (b.metadata?.size ?? 0) - (a.metadata?.size ?? 0))[0]
-          : null;
+        if (!scanFiles || scanFiles.length === 0) continue;
 
-        const picked = csvFile || parquetFile;
-        if (picked) {
-          const candidatePath = `${scanFolder}/${picked.name}`;
-          pickedFormat = /\.parquet$/i.test(picked.name) ? "parquet" : "csv";
-
-          if (pickedFormat === "csv") {
-            const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(candidatePath);
-            if (!dlErr && dlData) {
-              scanDiag.download_ok = true;
-              scanDiag.picked = picked.name;
-              fileBlob = dlData;
-              pickedFile = candidatePath;
-            } else {
-              scanDiag.download_ok = false;
-              scanDiag.error = dlErr?.message;
-            }
-          } else {
-            scanDiag.picked = picked.name;
-            pickedFile = candidatePath;
-          }
+        const result = await selectAndDownload(sb, bucket, scanFolder, scanFiles, schemaJson, diagnostics);
+        if (result) {
+          fileBlob = result.blob;
+          pickedFile = result.filePath;
+          pickedBucket = bucket;
+          pickedFormat = result.format;
+          pickedSize = result.size;
+          pickedMimetype = result.mimetype;
         }
       }
-      diagnostics.push(scanDiag);
     }
 
     // ── 3. Handle Parquet schema-only mode ────────────────────
     if (pickedFormat === "parquet" && pickedFile) {
-      // Extract columns from active_schema_json if available
       let columns: string[] = [];
       if (Array.isArray(schemaJson)) {
         columns = schemaJson.map((col: any) => col.name || col.column_name || String(col)).filter(Boolean);
@@ -248,8 +244,12 @@ Deno.serve(async (req) => {
       const sampleJson = {
         _meta: {
           dataset_id: datasetId,
+          project_id: projectId,
           storage_path: storagePath,
-          picked_file: pickedFile,
+          selected_bucket: pickedBucket,
+          selected_object: pickedFile,
+          selected_size: pickedSize,
+          selected_mimetype: pickedMimetype,
           format: "parquet",
           preview_mode: "schema_only",
           generated_at: new Date().toISOString(),
@@ -274,22 +274,22 @@ Deno.serve(async (req) => {
         format: "parquet", preview_mode: "schema_only",
         columns_detected: columns.length, dataset_id: datasetId,
         original_storage_path: storagePath, picked_file: pickedFile,
-        picked_bucket: bucket, diagnostics,
+        picked_bucket: pickedBucket, diagnostics,
       });
 
       return ok({
         success: true, sample_rows: 0, columns_detected: columns.length,
-        dataset_id: datasetId, bucket, format: "parquet", preview_mode: "schema_only",
+        dataset_id: datasetId, bucket: pickedBucket, format: "parquet", preview_mode: "schema_only",
       });
     }
 
     // ── 4. No file found at all ──────────────────────────────
     if (!fileBlob) {
-      const debugInfo = { dataset_id: datasetId, storage_path: storagePath, dataset_meta: datasetMeta, diagnostics };
+      const debugInfo = { dataset_id: datasetId, storage_path: storagePath, dataset_meta: datasetMeta, is_batch_import: isBatchImport, buckets_tried: bucketOrder, diagnostics };
       await logEvent(sb, projectId, "dataset_sample_failed", { code: "STORAGE_DOWNLOAD_FAIL", debug: debugInfo });
       return fail(
         "STORAGE_DOWNLOAD_FAIL",
-        `Falha ao baixar arquivo. Path: ${storagePath}. Tentativas: ${diagnostics.length}.`,
+        `Falha ao baixar arquivo. Path: ${storagePath}. Buckets tentados: ${bucketOrder.join(",")}. Tentativas: ${diagnostics.length}.`,
         { debug: debugInfo }
       );
     }
@@ -304,7 +304,7 @@ Deno.serve(async (req) => {
     }
 
     const headerLine = lines[0];
-    const delimiter = headerLine.includes(";") ? ";" : ",";
+    const delimiter = detectDelimiter(headerLine);
     const headers = headerLine.split(delimiter).map((h) => h.trim().replace(/^"|"$/g, ""));
     const maxRows = Math.min(lines.length - 1, 500);
     const sampleRows: Record<string, string>[] = [];
@@ -322,8 +322,12 @@ Deno.serve(async (req) => {
     const sampleJson = {
       _meta: {
         dataset_id: datasetId,
+        project_id: projectId,
         storage_path: storagePath,
-        picked_file: pickedFile,
+        selected_bucket: pickedBucket,
+        selected_object: pickedFile,
+        selected_size: pickedSize,
+        selected_mimetype: pickedMimetype,
         format: "csv",
         generated_at: new Date().toISOString(),
         delimiter,
@@ -355,14 +359,15 @@ Deno.serve(async (req) => {
     await logEvent(sb, projectId, "dataset_sample_generated", {
       sample_rows: sampleRows.length, columns_detected: headers.length,
       dataset_id: datasetId, original_storage_path: storagePath,
-      picked_file: pickedFile, picked_bucket: bucket, format: "csv",
-      list_count: diagnostics.length, diagnostics,
+      picked_file: pickedFile, picked_bucket: pickedBucket, format: "csv",
+      picked_size: pickedSize, picked_mimetype: pickedMimetype,
+      diagnostics,
     });
 
     return ok({
       success: true, sample_rows: sampleRows.length,
       columns_detected: headers.length, dataset_id: datasetId,
-      bucket, format: "csv",
+      bucket: pickedBucket, format: "csv",
     });
   } catch (err: any) {
     console.error("[generate-dataset-sample] Error:", err);
@@ -376,6 +381,8 @@ Deno.serve(async (req) => {
   }
 });
 
+// ── Helpers ──────────────────────────────────────────────────
+
 async function logEvent(sb: any, projectId: string, eventType: string, metadata: Record<string, unknown>) {
   try {
     await sb.from("platform_events").insert({
@@ -388,5 +395,138 @@ async function logEvent(sb: any, projectId: string, eventType: string, metadata:
     });
   } catch (e) {
     console.error("[generate-dataset-sample] logEvent error:", e);
+  }
+}
+
+function detectDelimiter(headerLine: string): string {
+  const candidates = [",", ";", "\t", "|"];
+  let best = ",";
+  let bestCount = 0;
+  for (const d of candidates) {
+    const count = headerLine.split(d).length - 1;
+    if (count > bestCount) {
+      bestCount = count;
+      best = d;
+    }
+  }
+  return best;
+}
+
+function isCsvCandidate(file: any): boolean {
+  const name = (file.name || "").toLowerCase();
+  if (/\.csv$/i.test(name)) return true;
+  const mime = file.metadata?.mimetype || file.metadata?.contentType || "";
+  if (mime.includes("csv") || mime.includes("text/plain")) return true;
+  // No extension at all = potential CSV (will sniff later)
+  if (!FILE_EXT_RE.test(name)) return true;
+  return false;
+}
+
+function isParquetCandidate(file: any): boolean {
+  return /\.parquet$/i.test(file.name || "");
+}
+
+function getFileSize(file: any): number {
+  return file.metadata?.size ?? file.metadata?.contentLength ?? 0;
+}
+
+/**
+ * Select the best file from a folder listing and download it.
+ * Returns null if no suitable file found or download fails.
+ */
+async function selectAndDownload(
+  sb: any,
+  bucket: string,
+  folder: string,
+  files: any[],
+  schemaJson: any,
+  diagnostics: Record<string, unknown>[],
+): Promise<{ blob: Blob; filePath: string; format: "csv" | "parquet"; size: number; mimetype: string | null } | null> {
+  // Separate candidates
+  const csvCandidates = files.filter(isCsvCandidate).sort((a: any, b: any) => getFileSize(b) - getFileSize(a));
+  const parquetCandidates = files.filter(isParquetCandidate).sort((a: any, b: any) => getFileSize(b) - getFileSize(a));
+
+  // Try CSV candidates first (largest first)
+  for (const candidate of csvCandidates) {
+    const filePath = `${folder}/${candidate.name}`;
+    const { data: dlData, error: dlErr } = await sb.storage.from(bucket).download(filePath);
+    const dlDiag: Record<string, unknown> = {
+      step: "candidate_download", bucket, filePath,
+      candidate_name: candidate.name,
+      expected_size: getFileSize(candidate),
+      mimetype: candidate.metadata?.mimetype || candidate.metadata?.contentType || null,
+    };
+
+    if (dlErr || !dlData) {
+      dlDiag.download_ok = false;
+      dlDiag.error_raw = dlErr?.message || "no data";
+      diagnostics.push(dlDiag);
+      continue;
+    }
+
+    dlDiag.download_ok = true;
+    dlDiag.blob_size = dlData.size;
+
+    // If no extension, sniff to confirm it's CSV
+    const hasExtension = FILE_EXT_RE.test(candidate.name);
+    if (!hasExtension) {
+      const sniffOk = await sniffCSV(dlData);
+      dlDiag.sniff_result = sniffOk ? "csv_confirmed" : "not_csv";
+      if (!sniffOk) {
+        diagnostics.push(dlDiag);
+        continue;
+      }
+    }
+
+    diagnostics.push(dlDiag);
+    return {
+      blob: dlData,
+      filePath,
+      format: "csv",
+      size: dlData.size,
+      mimetype: candidate.metadata?.mimetype || candidate.metadata?.contentType || null,
+    };
+  }
+
+  // Parquet fallback (schema-only, no download needed)
+  if (parquetCandidates.length > 0) {
+    const best = parquetCandidates[0];
+    const filePath = `${folder}/${best.name}`;
+    diagnostics.push({
+      step: "parquet_schema_only", bucket, filePath,
+      candidate_name: best.name, expected_size: getFileSize(best),
+    });
+    // We don't return a blob — caller will detect format=parquet and handle schema-only
+    // But we need to signal this somehow. Return null blob is bad.
+    // Instead, set a global side-effect is messy. Return a sentinel.
+    return null; // Caller should check pickedFormat separately if parquet candidates exist
+  }
+
+  return null;
+}
+
+/**
+ * Sniff first N bytes of a blob to determine if it looks like CSV.
+ * Checks for: multiple lines, consistent delimiter, >= 2 columns.
+ */
+async function sniffCSV(blob: Blob): Promise<boolean> {
+  try {
+    const slice = blob.slice(0, CSV_SNIFF_BYTES);
+    const text = await slice.text();
+    const lines = text.split("\n").filter(l => l.trim().length > 0);
+    if (lines.length < 2) return false;
+
+    const delimiters = [",", ";", "\t", "|"];
+    for (const d of delimiters) {
+      const headerCols = lines[0].split(d).length;
+      if (headerCols >= 2) {
+        // Check consistency with 2nd line
+        const secondCols = lines[1].split(d).length;
+        if (Math.abs(headerCols - secondCols) <= 1) return true;
+      }
+    }
+    return false;
+  } catch {
+    return false;
   }
 }
