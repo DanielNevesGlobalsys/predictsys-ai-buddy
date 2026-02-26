@@ -167,9 +167,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (error) throw error;
       if (data?.success) {
         setHasSample(true);
+        const isSchemaOnly = data.preview_mode === "schema_only" || data.format === "parquet";
         toast({
-          title: "Amostra gerada com sucesso",
-          description: `${data.sample_rows} linhas • ${data.columns_detected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
+          title: isSchemaOnly ? "Amostra gerada (somente esquema)" : "Amostra gerada com sucesso",
+          description: isSchemaOnly
+            ? `${data.columns_detected} colunas detectadas. Preview de linhas para Parquet será habilitado em breve.`
+            : `${data.sample_rows} linhas • ${data.columns_detected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
         });
       } else {
         toast({
