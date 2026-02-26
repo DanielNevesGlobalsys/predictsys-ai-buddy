@@ -177,11 +177,13 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
 
       if (numericResult.data) setNumericStats(numericResult.data);
       if (categoricalResult.data) {
-        const parsed = categoricalResult.data.map((item) => ({
+        const parsed = (categoricalResult.data ?? []).map((item) => ({
           ...item,
-          top_categories: typeof item.top_categories === "string"
-            ? JSON.parse(item.top_categories)
-            : item.top_categories || [],
+          top_categories: Array.isArray(item.top_categories)
+            ? item.top_categories
+            : typeof item.top_categories === "string"
+              ? (() => { try { return JSON.parse(item.top_categories); } catch { return []; } })()
+              : [],
         }));
         setCategoricalStats(parsed);
       }

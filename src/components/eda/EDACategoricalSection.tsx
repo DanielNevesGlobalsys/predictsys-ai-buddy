@@ -80,15 +80,16 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
 
   // Check if column is imbalanced
   const isImbalanced = (stat: CategoricalStat): boolean => {
-    if (stat.top_categories.length < 2) return false;
-    const topCount = stat.top_categories[0]?.count || 0;
-    const totalInTop = stat.top_categories.reduce((sum, c) => sum + c.count, 0);
+    const cats = stat.top_categories ?? [];
+    if (cats.length < 2) return false;
+    const topCount = cats[0]?.count || 0;
+    const totalInTop = cats.reduce((sum, c) => sum + c.count, 0);
     return topCount > totalInTop * 0.8;
   };
 
   // Prepare chart data with percentage
   const chartData = selectedData
-    ? selectedData.top_categories.slice(0, showTop).map((cat, index) => ({
+    ? (selectedData.top_categories ?? []).slice(0, showTop).map((cat, index) => ({
         category: cat.category.length > 20 ? cat.category.slice(0, 17) + "..." : cat.category,
         fullCategory: cat.category,
         count: cat.count,
@@ -140,7 +141,7 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
             </TableHeader>
             <TableBody>
               {stats.map((stat) => {
-                const topCat = stat.top_categories[0];
+                const topCat = (stat.top_categories ?? [])[0];
                 const topPercent = topCat ? ((topCat.count / totalRows) * 100).toFixed(1) : "0";
                 return (
                   <TableRow
