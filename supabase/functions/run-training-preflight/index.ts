@@ -3,6 +3,7 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget } from "../_shared/resolve-active-target.ts";
 import { samplePlan, filterInvalidFeatures } from "../_shared/training-prepare-mvp-soft.ts";
+import { recoverAllStaleStates } from "../_shared/stale-state-recovery.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -48,6 +49,14 @@ serve(async (req: Request) => {
     }
 
     console.log(`[run-training-preflight] Starting for project ${project_id}`);
+
+    // ── Auto-recovery: check for stale states ──
+    try {
+      const recoveries = await recoverAllStaleStates(supabase, project_id);
+      if (recoveries.length > 0) {
+        console.log(`[preflight] Recovered ${recoveries.length} stale state(s)`);
+      }
+    } catch (_) { /* best-effort */ }
 
     // Parallel fetch all needed data
     const [datasetStateRes, selectionRes, aiCtxRes, modelingDatasetRes, versionMatchedDatasetRes, contractRes, splitPolicyRes, settingsRes] = await Promise.all([
