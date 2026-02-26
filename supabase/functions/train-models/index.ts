@@ -4,6 +4,7 @@ import { parquetRead } from "npm:hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 import { evaluateTargetTrainability, trainabilityHumanMessage, evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
+import { detectTargetType, validateTargetTypeMismatch, coerceToNumber, checkLowVariance, computeTargetStats, sampleRows as mvpSampleRows } from "../_shared/training-prepare-mvp-soft.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -2958,6 +2959,218 @@ serve(async (req) => {
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
+
+    // ==================== MVP-SOFT: Pre-training Preparation ====================
+    console.log(`\n=== MVP-Soft Preparation ===`);
+    const mvpSoftWarnings: string[] = [];
+    const mvpSoftCoercions: string[] = [];
+
+    // Log preparation start
+    try {
+      await supabase.from("platform_events").insert({
+        event_type: "training_prepare_started",
+        project_id: project_id,
+        source: "edge",
+        status: "info",
+        metadata: {
+          rows: X.length,
+          features: allFeatureNames.length,
+          problem_type,
+          target_column,
+          dataset_version: settings?.dataset_version || 0,
+          selection_version: currentSelectionVersion,
+        },
+      });
+    } catch (_) { /* best-effort */ }
+
+    // ── MVP-Soft A: Target Type Mismatch Detection ──
+    {
+      // Reconstruct raw y values for type detection
+      const rawYForDetection: (string | number | null)[] = [];
+      if (isTargetCategorical && labelMap.size > 0) {
+        const reverseLabelMap = new Map<number, string>();
+        for (const [k, v] of labelMap.entries()) reverseLabelMap.set(v, k);
+        for (const val of y) rawYForDetection.push(reverseLabelMap.get(val) ?? val);
+      } else {
+        for (const val of y) rawYForDetection.push(val);
+      }
+
+      const targetDetection = detectTargetType(rawYForDetection);
+      console.log(`[MVP-Soft] Target type detected: ${targetDetection.type} (distinct=${targetDetection.distinct_count}, strings=${targetDetection.has_strings})`);
+
+      const mismatch = validateTargetTypeMismatch(problem_type, targetDetection);
+      if (!mismatch.valid) {
+        console.error(`[MVP-Soft] TARGET_TYPE_MISMATCH: ${mismatch.message}`);
+
+        await supabase.from("platform_events").insert({
+          event_type: "target_type_mismatch",
+          project_id: project_id,
+          source: "edge",
+          status: "blocked",
+          metadata: {
+            problem_type,
+            target_type_real: targetDetection.type,
+            distinct_count: targetDetection.distinct_count,
+            suggestion: mismatch.suggestion,
+          },
+        }).catch(() => {});
+
+        return blockResponse(
+          "TARGET_TYPE_MISMATCH",
+          mismatch.message!,
+          { label: mismatch.suggestion === "classification" ? "Trocar para classificação" : "Trocar para regressão", go_to_step: 3 },
+          {
+            problem_type,
+            target_type_real: targetDetection.type,
+            distinct_count: targetDetection.distinct_count,
+            suggestion: mismatch.suggestion,
+          }
+        );
+      }
+    }
+
+    // ── MVP-Soft B: Low Variance / Constant Target ──
+    {
+      const lowVarCheck = checkLowVariance(y, problem_type);
+      if (lowVarCheck.blocked) {
+        console.error(`[MVP-Soft] ${lowVarCheck.code}: ${lowVarCheck.message}`);
+
+        await supabase.from("platform_events").insert({
+          event_type: "training_prepare_blocked",
+          project_id: project_id,
+          source: "edge",
+          status: "blocked",
+          metadata: { code: lowVarCheck.code, message: lowVarCheck.message },
+        }).catch(() => {});
+
+        return blockResponse(
+          lowVarCheck.code!,
+          lowVarCheck.message!,
+          { label: "Revisar Target", go_to_step: 3 }
+        );
+      }
+    }
+
+    // ── MVP-Soft C: Row Sampling (cap at TRAINING_ROW_CAP for large datasets) ──
+    const TRAINING_ROW_CAP = 200_000;
+    if (X.length > TRAINING_ROW_CAP) {
+      console.log(`[MVP-Soft] Dataset exceeds row cap: ${X.length.toLocaleString()} > ${TRAINING_ROW_CAP.toLocaleString()}`);
+      const samplingResult = mvpSampleRows(
+        X.map((row, i) => ({ row, idx: i })),
+        TRAINING_ROW_CAP,
+        y,
+        problem_type,
+      );
+
+      const newX = samplingResult.sampled.map(s => s.row);
+      const newY = samplingResult.sampledY;
+
+      mvpSoftWarnings.push(`Dataset amostrado: ${X.length.toLocaleString()} → ${newX.length.toLocaleString()} linhas (estratégia: ${samplingResult.strategy})`);
+
+      // Replace X and y in-place
+      X.length = 0;
+      X.push(...newX);
+      y.length = 0;
+      y.push(...newY);
+
+      console.log(`[MVP-Soft] Sampled: ${newX.length.toLocaleString()} rows (strategy: ${samplingResult.strategy})`);
+
+      await supabase.from("platform_events").insert({
+        event_type: "training_prepare_sampled",
+        project_id: project_id,
+        source: "edge",
+        status: "info",
+        metadata: {
+          sample_strategy: samplingResult.strategy,
+          original_rows: newX.length + (X.length - newX.length),
+          used_rows: newX.length,
+        },
+      }).catch(() => {});
+    }
+
+    // ── MVP-Soft D: Robust type coercion on X (NaN handling, boolean/string coercion) ──
+    {
+      let coercedCount = 0;
+      for (let i = 0; i < X.length; i++) {
+        for (let j = 0; j < X[i].length; j++) {
+          const val = X[i][j];
+          if (isNaN(val) || !isFinite(val)) {
+            // Will be handled by imputation below
+            continue;
+          }
+        }
+      }
+
+      // Per-feature NaN imputation (median for numeric)
+      if (X.length > 0 && X[0].length > 0) {
+        const nFeatures = X[0].length;
+        for (let j = 0; j < nFeatures; j++) {
+          const col = X.map(row => row[j]);
+          const nanCount = col.filter(v => isNaN(v) || !isFinite(v)).length;
+          if (nanCount > 0) {
+            // Compute median of valid values
+            const valid = col.filter(v => !isNaN(v) && isFinite(v));
+            let median = 0;
+            if (valid.length > 0) {
+              const sorted = [...valid].sort((a, b) => a - b);
+              const mid = Math.floor(sorted.length / 2);
+              median = sorted.length % 2 === 0 ? (sorted[mid - 1] + sorted[mid]) / 2 : sorted[mid];
+            }
+            for (let i = 0; i < X.length; i++) {
+              if (isNaN(X[i][j]) || !isFinite(X[i][j])) {
+                X[i][j] = median;
+                coercedCount++;
+              }
+            }
+            if (nanCount > col.length * 0.1) {
+              mvpSoftCoercions.push(`${allFeatureNames[j]}: ${nanCount} NaN → median(${median.toFixed(2)})`);
+            }
+          }
+        }
+      }
+
+      if (coercedCount > 0) {
+        console.log(`[MVP-Soft] Coerced ${coercedCount} NaN values via median imputation`);
+      }
+    }
+
+    // ── MVP-Soft: Target Stats ──
+    {
+      const targetStats = computeTargetStats(y, problem_type === "classification");
+      console.log(`[MVP-Soft] Target stats: valid=${targetStats.n_valid}, null=${targetStats.n_null}, unique=${targetStats.n_unique}, std=${targetStats.std.toFixed(4)}`);
+    }
+
+    // Log MVP-Soft warnings
+    if (mvpSoftWarnings.length > 0 || mvpSoftCoercions.length > 0) {
+      trainingWarningsGlobal.push(...mvpSoftWarnings);
+      await supabase.from("platform_events").insert({
+        event_type: "training_prepare_warning",
+        project_id: project_id,
+        source: "edge",
+        status: "warning",
+        metadata: {
+          warnings: mvpSoftWarnings,
+          coercions: mvpSoftCoercions,
+        },
+      }).catch(() => {});
+    }
+
+    // Log preparation success
+    await supabase.from("platform_events").insert({
+      event_type: "training_prepare_success",
+      project_id: project_id,
+      source: "edge",
+      status: "success",
+      metadata: {
+        used_rows: X.length,
+        n_features_final: allFeatureNames.length,
+        target_type_real: problem_type,
+        coercions_count: mvpSoftCoercions.length,
+        warnings_count: mvpSoftWarnings.length,
+      },
+    }).catch(() => {});
+
+    console.log(`[MVP-Soft] ✅ Preparation complete: ${X.length} rows, ${allFeatureNames.length} features`);
 
     // ==================== PREFLIGHT VALIDATION ====================
     console.log(`\n=== Preflight Validation ===`);
