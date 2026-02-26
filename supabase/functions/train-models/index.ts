@@ -3740,9 +3740,11 @@ serve(async (req) => {
     // Check if any datetime column was detected during data reading
     // We store raw datetime values during parsing for split
     if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
-      datetimeValues = (globalThis as any).__datetimeValues;
+      const rawDt = (globalThis as any).__datetimeValues as (number | null)[];
+      // CRITICAL: truncate to match current X length (may differ after human-label override)
+      datetimeValues = rawDt.length > Xfinal.length ? rawDt.slice(0, Xfinal.length) : rawDt;
       detectedDatetimeCol = (globalThis as any).__datetimeCol;
-      console.log(`[Split] Using detected datetime column: "${detectedDatetimeCol}"`);
+      console.log(`[Split] Using detected datetime column: "${detectedDatetimeCol}" (${datetimeValues.length} values for ${Xfinal.length} rows)`);
     }
     
     // Detect group key from column uniqueness
@@ -3750,9 +3752,10 @@ serve(async (req) => {
     let detectedGroupKey: string | null = null;
     
     if (!datetimeValues && (globalThis as any).__groupValues && (globalThis as any).__groupCol) {
-      groupValues = (globalThis as any).__groupValues;
+      const rawGrp = (globalThis as any).__groupValues as (string | null)[];
+      groupValues = rawGrp.length > Xfinal.length ? rawGrp.slice(0, Xfinal.length) : rawGrp;
       detectedGroupKey = (globalThis as any).__groupCol;
-      console.log(`[Split] Using detected group key: "${detectedGroupKey}"`);
+      console.log(`[Split] Using detected group key: "${detectedGroupKey}" (${groupValues.length} values for ${Xfinal.length} rows)`);
     }
 
     const isClassification = problem_type === "classification";
