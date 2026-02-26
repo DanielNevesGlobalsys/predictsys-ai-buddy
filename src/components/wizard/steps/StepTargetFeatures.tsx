@@ -44,6 +44,7 @@ import { useProblemInference } from "@/hooks/useProblemInference";
 import { logProjectAuditEvent } from "@/lib/auditLog";
 import { useDatasetState } from "@/hooks/useDatasetState";
 import { useTargetFeaturesSSOT } from "@/hooks/useTargetFeaturesSSOT";
+import { useProjectSchemaSSOT } from "@/hooks/useProjectSchemaSSOT";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -100,6 +101,9 @@ const StepTargetFeatures = ({
   // SSOT dataset state
   const ds = useDatasetState(projectData.id);
 
+  // Schema SSOT — consolidated column list
+  const schemaSSOT = useProjectSchemaSSOT(projectData.id);
+
   // Builder version mismatch tracking
   const [builderVersionUsed, setBuilderVersionUsed] = useState<number | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -152,6 +156,7 @@ const StepTargetFeatures = ({
       checkEDA();
       ds.load();
       loadSSOT();
+      schemaSSOT.load();
       loadSelectionVersion();
       loadBuilderVersion();
       loadContractHints();
@@ -467,6 +472,23 @@ const StepTargetFeatures = ({
             featureHasError: hasError,
           });
         }
+      }
+
+      // ── Enrich with Schema SSOT columns not in project_columns ──
+      // This ensures ALL consolidated columns are available even if project_columns
+      // only has a subset (e.g. from a partial file/part)
+      if (schemaSSOT.columns.length > 0) {
+        for (const sc of schemaSSOT.columns) {
+          if (!seenLower.has(sc.name.toLowerCase())) {
+            seenLower.add(sc.name.toLowerCase());
+            cols.push({
+              name: sc.name,
+              type: sc.type || "desconhecido",
+              isFeature: false,
+            });
+          }
+        }
+        console.log(`[StepTargetFeatures] Enriched columns with SSOT: ${cols.length} total (SSOT has ${schemaSSOT.schema_columns_count})`);
       }
 
       setColumns(cols);
@@ -821,6 +843,38 @@ const StepTargetFeatures = ({
             )}
           </div>
         )}
+
+        {/* Schema SSOT divergence info */}
+        {schemaSSOT.loaded && schemaSSOT.schema_columns_count > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <Badge variant="outline" className="text-xs gap-1">
+              <Database className="w-3 h-3" />
+              Colunas (schema): {schemaSSOT.schema_columns_count}
+            </Badge>
+            {schemaSSOT.detected_columns_count != null && schemaSSOT.detected_columns_count !== schemaSSOT.schema_columns_count && (
+              <TooltipProvider delayDuration={100}>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-xs gap-1 cursor-help">
+                      <AlertTriangle className="w-3 h-3" />
+                      Amostra: {schemaSSOT.detected_columns_count} colunas
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent className="max-w-xs">
+                    <p className="text-xs">A amostra é parcial (arquivo particionado). O treino usa o schema consolidado com {schemaSSOT.schema_columns_count} colunas.</p>
+                  </TooltipContent>
+                </Tooltip>
+              </TooltipProvider>
+            )}
+            {schemaSSOT.source !== "active_schema_json" && (
+              <Badge variant="outline" className="text-xs text-amber-600 border-amber-500/30 gap-1">
+                <AlertTriangle className="w-3 h-3" />
+                Schema obtido por fallback: {schemaSSOT.source}
+              </Badge>
+            )}
+          </div>
+        )}
+
         {/* ═══ Unified Strategy Panel ═══ */}
         {projectData.id && (
           <div id="target-builder-panel">

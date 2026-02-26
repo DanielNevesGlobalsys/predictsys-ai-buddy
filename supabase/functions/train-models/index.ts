@@ -1540,6 +1540,91 @@ serve(async (req) => {
       target_column = "_label_";
     }
 
+    // ── Gate 2.5: Schema SSOT Validation ──
+    // Validate that target/features exist in the consolidated schema
+    {
+      let schemaColumns: string[] = [];
+      let schemaSource = "unknown";
+
+      // Priority 1: active_schema_json from project_dataset_state
+      if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
+        schemaColumns = Object.keys(dsState.active_schema_json).filter(k => !k.startsWith("_"));
+        schemaSource = "active_schema_json";
+      }
+
+      // Priority 2: sample_json.columns from project_dataset_sample
+      if (schemaColumns.length === 0) {
+        const { data: sampleData } = await supabase
+          .from("project_dataset_sample")
+          .select("sample_json")
+          .eq("project_id", project_id)
+          .maybeSingle();
+        if (sampleData?.sample_json) {
+          const sj = sampleData.sample_json as Record<string, any>;
+          if (Array.isArray(sj.columns) && sj.columns.length > 0) {
+            schemaColumns = sj.columns.map((c: any) => typeof c === "string" ? c : c.name).filter(Boolean);
+            schemaSource = "sample_json.columns";
+          } else if (Array.isArray(sj.rows) && sj.rows.length > 0) {
+            schemaColumns = Object.keys(sj.rows[0]);
+            schemaSource = "sample_json.rows_keys";
+          }
+        }
+      }
+
+      if (schemaColumns.length > 0) {
+        const schemaLower = new Set(schemaColumns.map(c => c.toLowerCase()));
+        const missing: string[] = [];
+
+        // Check target (skip virtual targets like "label", "_label_")
+        if (!useHumanLabelsAsTarget && target_column !== "label" && target_column !== "_label_") {
+          if (!schemaLower.has(target_column.toLowerCase())) {
+            missing.push(`target: ${target_column}`);
+          }
+        }
+
+        // Check selected features if available
+        const selectedFeatures = selection?.selected_features;
+        if (Array.isArray(selectedFeatures) && selectedFeatures.length > 0) {
+          const featureList = selectedFeatures as string[];
+          for (const f of featureList) {
+            if (!schemaLower.has(f.toLowerCase())) {
+              missing.push(`feature: ${f}`);
+            }
+          }
+        }
+
+        if (missing.length > 0) {
+          console.error(`[Gating] Schema SSOT validation failed. Missing: ${missing.join(", ")}`);
+
+          // Log observability event
+          await supabase.from("platform_events").insert({
+            event_type: "schema_ssot_validation_failed",
+            project_id: project_id,
+            status: "error",
+            source: "edge",
+            metadata: {
+              missing,
+              target: target_column,
+              features_count: Array.isArray(selectedFeatures) ? selectedFeatures.length : 0,
+              schema_columns_count: schemaColumns.length,
+              source: schemaSource,
+            },
+          });
+
+          return blockResponse(
+            "INVALID_SCHEMA_SELECTION",
+            `Target/Features não existem no schema consolidado: ${missing.slice(0, 5).join(", ")}${missing.length > 5 ? ` (+${missing.length - 5})` : ""}`,
+            { label: "Revisar seleção", go_to_step: 3 },
+            { missing, schema_columns_count: schemaColumns.length, source: schemaSource }
+          );
+        }
+
+        console.log(`[Gating] Schema SSOT validation OK (${schemaColumns.length} cols, source=${schemaSource})`);
+      } else {
+        console.warn(`[Gating] No schema SSOT available — skipping validation`);
+      }
+    }
+
     // ── Gate 3: Builder (must be current + matching selection_version) ──
     const trainingWarningsGlobal: string[] = [];
     let builderDatasetId: string | null = null;
