@@ -68,7 +68,8 @@
     "toggleTheme": "Alternar tema (claro/escuro)"
   },
   "landing": {
-    "heroTitle1": "Previsões Confiáveis para Decisões Estratégicas.",
+    "heroTitle1Part1": "Previsões Confiáveis",
+    "heroTitle1Part2": "para Decisões Estratégicas.",
     "heroSubtitle": "O PredictSys transforma regras de negócio em modelos preditivos robustos, aplica inteligência estratégica às decisões e mede o impacto real no resultado da sua empresa.",
     "createFreeAccount": "Criar Estratégia Preditiva",
     "viewDemo": "Ver Como Funciona",
@@ -76,7 +77,8 @@
     "secure": "100% Seguro",
     "governedPipeline": "Pipeline Governado",
     "measurableImpact": "Impacto Mensurável",
-    "allYouNeed": "Recursos da Plataforma",
+    "allYouNeed1": "Recursos da",
+    "allYouNeed2": "Plataforma",
     "autoMLDescription": "Cada recurso foi desenhado para conectar estratégia, execução e resultado.",
     "readyToStart": "Pronto para começar?",
     "readyDescription": "Crie sua estratégia preditiva e comprove o impacto real nas decisões do seu negócio.",
@@ -89,7 +91,17 @@
       "title2": "Falham por falta de estratégia.",
       "text": "Muitas plataformas treinam modelos. Poucas garantem que eles fazem sentido para o negócio.\n\nO PredictSys conecta intenção estratégica, validação inteligente e impacto mensurável em um único fluxo."
     },
-    "pillarsTitle": "Os 3 Pilares do PredictSys",
+    "pillarsTitle1": "Os 3 Pilares do",
+    "pillarsTitle2": "PredictSys",
+    "strategicTitle1": "Diferenciais",
+    "strategicTitle2": "Estratégicos",
+    "strategicSubtitle": "Recursos exclusivos que conectam previsão a resultado de negócio.",
+    "strategic": {
+      "guided": { "title": "Estratégia Preditiva Guiada", "desc": "Transforme objetivos e regras de negócio em um caminho claro para previsão confiável." },
+      "guardrails": { "title": "Guardrails Inteligentes", "desc": "Evite escolhas que quebram o modelo (alvo ruim, leakage, inconsistência) com validações automáticas." },
+      "impact": { "title": "Impacto de Negócio", "desc": "Meça ROI, lift e resultados reais das decisões tomadas com base nas previsões." },
+      "audit": { "title": "Governança e Auditoria", "desc": "Tudo rastreável: eventos, diagnósticos e histórico do pipeline para confiança e transparência." }
+    },
     "pillars": {
       "strategy": {
         "title": "Estratégia Primeiro",
@@ -109,13 +121,16 @@
     },
     "howItWorks": {
       "title": "Como Funciona",
+      "titlePart1": "Como",
+      "titlePart2": "Funciona",
       "step1": { "title": "Defina sua Estratégia", "desc": "Escolha o objetivo do seu negócio e as regras estratégicas." },
       "step2": { "title": "Validação Inteligente", "desc": "O sistema analisa seu alvo, identifica riscos e corrige inconsistências automaticamente." },
       "step3": { "title": "Execução Orientada", "desc": "As previsões se transformam em decisões operacionais." },
       "step4": { "title": "Mensuração de Impacto", "desc": "Acompanhe ROI, lift e desempenho estratégico em tempo real." }
     },
     "institutional": {
-      "title": "Mais do que Machine Learning.",
+      "title1": "Mais do que",
+      "title2": "Machine Learning.",
       "text": "PredictSys é uma plataforma de Inteligência Preditiva Estratégica.\nTransformamos regras de negócio em previsões confiáveis e previsões em decisões mensuráveis.\n\nNão é apenas sobre treinar modelos.\nÉ sobre governar decisões."
     },
     "features": {

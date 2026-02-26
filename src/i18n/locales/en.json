@@ -59,7 +59,8 @@
     "toggleTheme": "Toggle theme (light/dark)"
   },
   "landing": {
-    "heroTitle1": "Reliable Predictions for Strategic Decisions.",
+    "heroTitle1Part1": "Reliable Predictions",
+    "heroTitle1Part2": "for Strategic Decisions.",
     "heroSubtitle": "PredictSys transforms business rules into robust predictive models, applies strategic intelligence to decisions, and measures the real impact on your company's results.",
     "createFreeAccount": "Create Predictive Strategy",
     "viewDemo": "See How It Works",
@@ -67,7 +68,8 @@
     "secure": "100% Secure",
     "governedPipeline": "Governed Pipeline",
     "measurableImpact": "Measurable Impact",
-    "allYouNeed": "Platform Features",
+    "allYouNeed1": "Platform",
+    "allYouNeed2": "Features",
     "autoMLDescription": "Each feature is designed to connect strategy, execution, and results.",
     "readyToStart": "Ready to start?",
     "readyDescription": "Create your predictive strategy and prove the real impact on your business decisions.",
@@ -80,7 +82,17 @@
       "title2": "They fail due to lack of strategy.",
       "text": "Many platforms train models. Few ensure they make sense for the business.\n\nPredictSys connects strategic intent, intelligent validation, and measurable impact in a single workflow."
     },
-    "pillarsTitle": "The 3 Pillars of PredictSys",
+    "pillarsTitle1": "The 3 Pillars of",
+    "pillarsTitle2": "PredictSys",
+    "strategicTitle1": "Strategic",
+    "strategicTitle2": "Differentiators",
+    "strategicSubtitle": "Exclusive features that connect prediction to business outcomes.",
+    "strategic": {
+      "guided": { "title": "Guided Predictive Strategy", "desc": "Turn business objectives and rules into a clear path to reliable prediction." },
+      "guardrails": { "title": "Intelligent Guardrails", "desc": "Prevent choices that break the model (bad target, leakage, inconsistency) with automatic validations." },
+      "impact": { "title": "Business Impact", "desc": "Measure ROI, lift, and real results from prediction-based decisions." },
+      "audit": { "title": "Governance & Audit", "desc": "Fully traceable: events, diagnostics, and pipeline history for trust and transparency." }
+    },
     "pillars": {
       "strategy": {
         "title": "Strategy First",
@@ -100,13 +112,16 @@
     },
     "howItWorks": {
       "title": "How It Works",
+      "titlePart1": "How It",
+      "titlePart2": "Works",
       "step1": { "title": "Define Your Strategy", "desc": "Choose your business objective and strategic rules." },
       "step2": { "title": "Intelligent Validation", "desc": "The system analyzes your target, identifies risks, and corrects inconsistencies automatically." },
       "step3": { "title": "Guided Execution", "desc": "Predictions become operational decisions." },
       "step4": { "title": "Impact Measurement", "desc": "Track ROI, lift, and strategic performance in real time." }
     },
     "institutional": {
-      "title": "More than Machine Learning.",
+      "title1": "More than",
+      "title2": "Machine Learning.",
       "text": "PredictSys is a Strategic Predictive Intelligence platform.\nWe transform business rules into reliable predictions and predictions into measurable decisions.\n\nIt's not just about training models.\nIt's about governing decisions."
     },
     "features": {
