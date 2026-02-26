@@ -1,6 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { resolveActiveTarget } from "../_shared/resolve-active-target.ts";
+import { resolveSchemaSSoT, runModelingDatasetPrepare, type ModelingPrepareMeta } from "../_shared/modeling-dataset-prepare.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -870,9 +871,7 @@ function generateLabelBuildResult(
     leakage_source_columns: leakageSourceColumns,
     generated_at: now,
   };
-}
-
-
+    }
 serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -953,6 +952,15 @@ serve(async (req: Request) => {
     }
 
     console.log(`[build-modeling-dataset] Starting for project ${project_id}`);
+
+    // ── Schema SSOT Resolution (enterprise) ──
+    let schemaSSOT: { columns: { name: string; type?: string | null }[]; source: string; schema_columns_count: number; detected_columns_count?: number } = { columns: [], source: "unknown", schema_columns_count: 0 };
+    try {
+      schemaSSOT = await resolveSchemaSSoT(supabase, project_id);
+      console.log(`[build-modeling-dataset] Schema SSOT: source=${schemaSSOT.source}, cols=${schemaSSOT.schema_columns_count}`);
+    } catch (schemaErr) {
+      console.warn("[build-modeling-dataset] Schema SSOT resolution failed (non-blocking):", schemaErr);
+    }
 
     // ── SSOT: Mark builder as building ──
     try {
@@ -1489,6 +1497,58 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Features: ${report.features_final.length} direct, ${report.features_generated.length} generated, ${report.features_removed.length} removed, ${report.features_blocked.length} blocked`);
 
+    // ══════════ ENTERPRISE: Modeling Dataset Prepare (types/encoding/quality) ══════════
+    let modelingPrepareMeta: ModelingPrepareMeta | null = null;
+    try {
+      // Load sample rows for stats computation (cap at 500 for edge memory)
+      let sampleRows: Record<string, any>[] = [];
+      const { data: sampleData } = await supabase
+        .from("project_dataset_sample")
+        .select("sample_json")
+        .eq("project_id", project_id)
+        .maybeSingle();
+      if (sampleData) {
+        const sj = (sampleData as any).sample_json as Record<string, any> | null;
+        if (sj?.rows && Array.isArray(sj.rows)) {
+          sampleRows = sj.rows.slice(0, 500);
+        }
+      }
+
+      if (sampleRows.length > 0 && schemaSSOT.columns.length > 0) {
+        const prepResult = runModelingDatasetPrepare({
+          sampleRows,
+          schemaColumns: schemaSSOT.columns,
+          schemaSource: schemaSSOT.source,
+          targetColumn,
+          entityKey,
+          totalRows,
+        });
+
+        if (prepResult.meta) {
+          modelingPrepareMeta = prepResult.meta;
+          // Merge warnings into main warnings array
+          for (const w of prepResult.meta.warnings) {
+            if (!warnings.includes(w)) warnings.push(w);
+          }
+          // Merge removed features into report (add any new ones found by quality filter)
+          for (const rf of prepResult.meta.removed_features) {
+            if (!report.features_removed.find(r => r.col === rf.col)) {
+              report.features_removed.push(rf);
+            }
+          }
+          console.log(`[build-modeling-dataset] Prepare: input=${prepResult.meta.n_features_input}, final=${prepResult.meta.n_features_final}, cat_encoded=${prepResult.meta.categorical_encoding.columns_encoded_count}, date_features=${prepResult.meta.date_features_created.length}`);
+        }
+
+        if (!prepResult.success && prepResult.code === "MODELING_DATASET_NO_FEATURES") {
+          allBlockedReasons.push(prepResult.message_user || "Nenhuma feature válida após filtragem de qualidade.");
+        }
+      } else {
+        console.log(`[build-modeling-dataset] Skipping prepare: sampleRows=${sampleRows.length}, schemaSSoT=${schemaSSOT.columns.length}`);
+      }
+    } catch (prepErr) {
+      console.warn("[build-modeling-dataset] Prepare pipeline error (non-blocking):", prepErr);
+    }
+
     // ── Feature-level blocked reasons ──
     if (report.features_final.length === 0 && report.features_generated.length === 0) {
       allBlockedReasons.push("Nenhuma feature válida após remoções. Dataset sem variabilidade suficiente.");
@@ -1686,6 +1746,52 @@ serve(async (req: Request) => {
       console.log(`[build-modeling-dataset] Persisted label_build_result: template=${labelBuildResult.template_id}, positive_rate=${labelBuildResult.positive_rate.toFixed(3)}, gates=${labelBuildResult.gates.length}`);
     }
 
+    // ── POST-BUILD: Persist modeling_dataset_meta to project_settings SSOT ──
+    if (modelingPrepareMeta) {
+      const metaPayload = {
+        ...modelingPrepareMeta,
+        dataset_version: settings?.dataset_version || 0,
+        selection_version: selectionVersion,
+      };
+      try {
+        await supabase.from("project_settings")
+          .update({ modeling_dataset_meta: metaPayload } as any)
+          .eq("project_id", project_id);
+        console.log(`[build-modeling-dataset] Persisted modeling_dataset_meta: features_final=${metaPayload.n_features_final}, schema_source=${metaPayload.schema_source}`);
+      } catch (metaErr) {
+        console.warn("[build-modeling-dataset] Failed to persist modeling_dataset_meta (non-blocking):", metaErr);
+      }
+    }
+
+    // ── POST-BUILD: Observability events ──
+    try {
+      const eventType = modelingDatasetReady ? "modeling_dataset_built_success" : "modeling_dataset_built_failed";
+      await supabase.from("platform_events").insert({
+        event_type: eventType,
+        project_id,
+        organization_id: project.organization_id,
+        source: "edge",
+        status: modelingDatasetReady ? "success" : "error",
+        metadata: {
+          schema_source: schemaSSOT.source,
+          schema_columns_count: schemaSSOT.schema_columns_count,
+          detected_columns_count: schemaSSOT.detected_columns_count ?? null,
+          n_features_input: modelingPrepareMeta?.n_features_input ?? enrichedColumns.length,
+          n_features_final: modelingPrepareMeta?.n_features_final ?? (report.features_final.length + report.features_generated.length),
+          cat_encoded_count: modelingPrepareMeta?.categorical_encoding?.columns_encoded_count ?? 0,
+          date_features_count: modelingPrepareMeta?.date_features_created?.length ?? 0,
+          removed_count: modelingPrepareMeta?.removed_features?.length ?? report.features_removed.length,
+          warnings_count: modelingPrepareMeta?.warnings?.length ?? 0,
+          rows_available: totalRows,
+          selection_version: selectionVersion,
+          builder_status: status,
+          blocked_reasons: allBlockedReasons.slice(0, 5),
+        },
+      });
+    } catch (evtErr) {
+      console.warn("[build-modeling-dataset] Failed to log observability event (non-blocking):", evtErr);
+    }
+
     // ── POST-BUILD: Re-check selection_version for race condition ──
     if (selectionVersion > 0) {
       const { data: postCheck } = await supabase
@@ -1765,6 +1871,12 @@ serve(async (req: Request) => {
         agregacoes_criadas: report.aggregation_features_created.length,
         column_count: totalFeaturesFinal + 1,
         coverage_pct: coveragePct,
+      },
+      modeling_dataset_meta: modelingPrepareMeta || null,
+      schema_ssot: {
+        source: schemaSSOT.source,
+        schema_columns_count: schemaSSOT.schema_columns_count,
+        detected_columns_count: schemaSSOT.detected_columns_count ?? null,
       },
       blocked_reasons: allBlockedReasons,
     }), {
