@@ -438,11 +438,11 @@ const StepTraining = ({
           setError(d.error || "Target não treinável");
           throw new Error(d.error || "Target não treinável");
         }
-        // Handle NO_VALID_FEATURES
-        if (d.code === "NO_VALID_FEATURES" || d.status === "blocked") {
+        // Handle NO_VALID_FEATURES or blocked status (TARGET_TYPE_MISMATCH, LOW_VARIANCE_TARGET, etc.)
+        if (d.code === "NO_VALID_FEATURES" || d.code === "TARGET_TYPE_MISMATCH" || d.code === "LOW_VARIANCE_TARGET" || d.code === "ONLY_ONE_CLASS" || d.status === "blocked") {
           setTrainabilityError(d);
-          setError(d.message_user || d.error || "Nenhuma feature válida");
-          throw new Error(d.message_user || d.error || "Nenhuma feature válida");
+          setError(d.message_user || d.error || "Treino bloqueado");
+          throw new Error(d.message_user || d.error || "Treino bloqueado");
         }
         // Handle TRAINING_CRASH with structured error
         if (d.code === "TRAINING_CRASH" || d.status === "error") {
@@ -850,6 +850,64 @@ const StepTraining = ({
                     </Button>
                     <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(4); else onBack(); }}>
                       Re-selecionar features
+                    </Button>
+                  </div>
+                </div>
+              )}
+
+              {/* TARGET_TYPE_MISMATCH Card */}
+              {trainabilityError && (trainabilityError.code === "TARGET_TYPE_MISMATCH" || trainabilityError.code === "LOW_VARIANCE_TARGET" || trainabilityError.code === "ONLY_ONE_CLASS") && (
+                <div className="space-y-4">
+                  <Alert className="bg-amber-500/10 border-amber-500/30">
+                    <AlertTriangle className="h-4 w-4 text-amber-600" />
+                    <AlertDescription>
+                      <p className="font-semibold mb-1 text-amber-700">
+                        {trainabilityError.code === "TARGET_TYPE_MISMATCH" 
+                          ? "Tipo de problema incompatível com o target"
+                          : trainabilityError.code === "LOW_VARIANCE_TARGET"
+                          ? "Target com variância insuficiente"
+                          : "Apenas uma classe encontrada"}
+                      </p>
+                      <p className="text-sm text-muted-foreground mb-3">
+                        {trainabilityError.message_user || trainabilityError.error || error}
+                      </p>
+                      {trainabilityError.details && (
+                        <div className="flex flex-wrap gap-1.5 mb-3">
+                          {(trainabilityError.details as any)?.distinct_count != null && (
+                            <Badge variant="outline" className="text-xs">
+                              Valores distintos: {(trainabilityError.details as any).distinct_count}
+                            </Badge>
+                          )}
+                          {(trainabilityError.details as any)?.target_type_real && (
+                            <Badge variant="outline" className="text-xs">
+                              Tipo detectado: {(trainabilityError.details as any).target_type_real}
+                            </Badge>
+                          )}
+                        </div>
+                      )}
+                    </AlertDescription>
+                  </Alert>
+                  <div className="flex gap-2 justify-center">
+                    {(trainabilityError.details as any)?.suggestion && (
+                      <Button 
+                        variant="default" 
+                        size="sm" 
+                        onClick={async () => {
+                          const suggestion = (trainabilityError.details as any)?.suggestion;
+                          if (suggestion) {
+                            await saveProject({ problem_type: suggestion as "classification" | "regression" });
+                            toast.success(`Tipo alterado para ${suggestion === "classification" ? "Classificação" : "Regressão"}`);
+                            setError(null);
+                            setTrainabilityError(null);
+                          }
+                        }}
+                      >
+                        <Sparkles className="w-4 h-4 mr-1" />
+                        Trocar para {(trainabilityError.details as any)?.suggestion === "classification" ? "Classificação" : "Regressão"}
+                      </Button>
+                    )}
+                    <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(3); else onBack(); }}>
+                      <ArrowLeft className="w-4 h-4 mr-1" /> Revisar Target
                     </Button>
                   </div>
                 </div>
