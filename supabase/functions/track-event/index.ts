@@ -5,7 +5,6 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-// Whitelist de tipos de evento permitidos
 const ALLOWED_EVENT_TYPES = [
   "project_created",
   "dataset_connected",
@@ -20,7 +19,6 @@ const ALLOWED_EVENT_TYPES = [
 ];
 
 Deno.serve(async (req) => {
-  // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
   }
@@ -30,7 +28,6 @@ Deno.serve(async (req) => {
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
 
-    // Validate auth
     const authHeader = req.headers.get("Authorization");
     if (!authHeader?.startsWith("Bearer ")) {
       return new Response(
@@ -39,7 +36,6 @@ Deno.serve(async (req) => {
       );
     }
 
-    // Create client with user token to verify
     const userClient = createClient(supabaseUrl, supabaseAnonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -55,9 +51,8 @@ Deno.serve(async (req) => {
 
     const userId = user.id;
 
-    // Parse body
     const body = await req.json();
-    const {
+    let {
       event_type,
       organization_id,
       project_id,
@@ -67,22 +62,27 @@ Deno.serve(async (req) => {
       source = "app",
     } = body;
 
-    // Validate event_type
     if (!event_type) {
+      // Best-effort: don't break UX
       return new Response(
-        JSON.stringify({ error: "event_type is required" }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, warning: "missing_event_type" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
+    // Map unknown event types to api_called instead of returning 400
+    let warning: string | undefined;
     if (!ALLOWED_EVENT_TYPES.includes(event_type)) {
-      return new Response(
-        JSON.stringify({ error: `Invalid event_type. Allowed: ${ALLOWED_EVENT_TYPES.join(", ")}` }),
-        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+      console.warn(`[track-event] Unknown event_type "${event_type}", mapping to "api_called"`);
+      metadata = {
+        ...metadata,
+        original_event_type: event_type,
+        original_payload: body,
+      };
+      event_type = "api_called";
+      warning = "event_type_mapped";
     }
 
-    // Use service role to insert (bypasses RLS)
     const serviceClient = createClient(supabaseUrl, supabaseServiceKey);
 
     const { error: insertError } = await serviceClient
@@ -101,24 +101,26 @@ Deno.serve(async (req) => {
 
     if (insertError) {
       console.error("[track-event] Insert error:", insertError);
+      // Still return 200 — tracking should not break UX
       return new Response(
-        JSON.stringify({ error: "Failed to track event" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        JSON.stringify({ success: true, warning: "insert_failed" }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
     console.log(`[track-event] Event tracked: ${event_type} by user ${userId}`);
 
     return new Response(
-      JSON.stringify({ success: true }),
+      JSON.stringify({ success: true, ...(warning ? { warning } : {}) }),
       { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   } catch (err) {
     const error = err as Error;
     console.error("[track-event] Error:", error);
+    // Best-effort: always return 200
     return new Response(
-      JSON.stringify({ error: error.message }),
-      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      JSON.stringify({ success: true, warning: "internal_tracking_error" }),
+      { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });
