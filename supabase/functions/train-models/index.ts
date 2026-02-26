@@ -1489,62 +1489,23 @@ serve(async (req) => {
     const trainAiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
     const classBalanceMethod = trainAiCtx.class_balance?.method || "none";
 
-    // ── Gate 1: Dataset + EDA (multi-source, consistent with get-project-modeling-state) ──
-    let datasetRows = 0;
-    let datasetCols = 0;
-    let edaEffectivelyReady = false;
+    // ── Gate 1: Dataset + EDA (via compute_eda_ready SSOT RPC) ──
+    const { data: edaResult, error: edaRpcErr } = await supabase.rpc("compute_eda_ready", { p_project_id: project_id });
+    const edaReady = edaResult?.eda_ready === true;
+    const edaReasons: string[] = edaResult?.reasons || [];
+    const edaEvidence = edaResult?.evidence || {};
+    const datasetRows = edaEvidence.rows_len || 0;
+    const datasetCols = edaEvidence.cols_len || 0;
 
-    if (dsState && (dsState.row_count > 0) && (dsState.col_count > 0)) {
-      datasetRows = dsState.row_count;
-      datasetCols = dsState.col_count;
-      console.log(`[Gating] Dataset SSOT: ${dsState.row_count} rows, ${dsState.col_count} cols, virtual=${dsState.virtual_manifest}`);
+    console.log(`[Gating] compute_eda_ready: ready=${edaReady}, reasons=${JSON.stringify(edaReasons)}, evidence=${JSON.stringify(edaEvidence)}`);
 
-      // Multi-source EDA check (same logic as get-project-modeling-state)
-      if (dsState.eda_ready === true) {
-        edaEffectivelyReady = true;
-      } else {
-        // Check alternative EDA sources before blocking
-        const [edaStatsRes, settingsEdaRes] = await Promise.all([
-          supabase.from("project_numeric_stats").select("id", { count: "exact", head: true }).eq("project_id", project_id),
-          supabase.from("project_settings").select("eda_state, eda_status, eda_profile_json").eq("project_id", project_id).maybeSingle(),
-        ]);
-        const hasEdaStats = (edaStatsRes.count || 0) > 0;
-        const settingsEda = settingsEdaRes.data as any;
-        edaEffectivelyReady = hasEdaStats
-          || settingsEda?.eda_state === "done"
-          || settingsEda?.eda_status === "succeeded"
-          || settingsEda?.eda_profile_json != null;
-        console.log(`[Gating] EDA multi-source check: dsState.eda_ready=${dsState.eda_ready}, hasEdaStats=${hasEdaStats}, eda_state=${settingsEda?.eda_state}, eda_status=${settingsEda?.eda_status}, profile_json=${settingsEda?.eda_profile_json != null} → effectivelyReady=${edaEffectivelyReady}`);
-      }
-    } else {
-      // Fallback: check manifest
-      const { data: manifest } = await supabase.from("import_manifests")
-        .select("eda_ready, rows_consolidated, columns_final").eq("project_id", project_id)
-        .order("created_at", { ascending: false }).limit(1).maybeSingle();
-      if (!manifest || manifest.rows_consolidated === 0) {
-        return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 });
-      }
-      datasetRows = manifest.rows_consolidated;
-      datasetCols = manifest.columns_final || 0;
-      // For manifest fallback, also check multi-source EDA
-      if (manifest.eda_ready !== false) {
-        edaEffectivelyReady = true;
-      } else {
-        const [edaStatsRes2, settingsEdaRes2] = await Promise.all([
-          supabase.from("project_numeric_stats").select("id", { count: "exact", head: true }).eq("project_id", project_id),
-          supabase.from("project_settings").select("eda_state, eda_status, eda_profile_json").eq("project_id", project_id).maybeSingle(),
-        ]);
-        const hasEdaStats2 = (edaStatsRes2.count || 0) > 0;
-        const se2 = settingsEdaRes2.data as any;
-        edaEffectivelyReady = hasEdaStats2 || se2?.eda_state === "done" || se2?.eda_status === "succeeded" || se2?.eda_profile_json != null;
-      }
-    }
-
-    if (!edaEffectivelyReady && datasetRows > 0) {
-      return blockResponse("EDA_NOT_READY", "Dataset não está pronto para análise. Execute o EDA na Etapa 2.", { label: "Voltar à Etapa 2", go_to_step: 2 });
-    }
-    if (datasetRows === 0) {
-      return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 });
+    if (edaRpcErr) {
+      console.error(`[Gating] compute_eda_ready RPC error:`, edaRpcErr);
+      // On RPC failure, fall through permissively (don't block training due to RPC issue)
+    } else if (!edaEvidence.has_active_dataset || datasetRows === 0) {
+      return blockResponse("NO_ACTIVE_DATASET", "Nenhum dataset ativo. Importe dados na Etapa 2.", { label: "Importar dados", go_to_step: 2 }, { reasons: edaReasons, evidence: edaEvidence });
+    } else if (!edaReady) {
+      return blockResponse("EDA_NOT_READY", `EDA não está pronto: ${edaReasons.join(", ")}. Execute o EDA na Etapa 2.`, { label: "Voltar à Etapa 2", go_to_step: 2 }, { reasons: edaReasons, evidence: edaEvidence });
     }
 
     // ── Gate 2: Selection (SSOT — project_model_selection) ──
