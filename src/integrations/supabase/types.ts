@@ -3253,7 +3253,11 @@ export type Database = {
           dashboard_version: number
           dataset_version: number
           derived_target_plan: Json | null
+          eda_error: string | null
+          eda_profile_created_at: string | null
+          eda_profile_json: Json | null
           eda_state: string
+          eda_status: string
           entity_key: string | null
           excluded_columns: Json | null
           feature_columns: Json | null
@@ -3332,7 +3336,11 @@ export type Database = {
           dashboard_version?: number
           dataset_version?: number
           derived_target_plan?: Json | null
+          eda_error?: string | null
+          eda_profile_created_at?: string | null
+          eda_profile_json?: Json | null
           eda_state?: string
+          eda_status?: string
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
@@ -3411,7 +3419,11 @@ export type Database = {
           dashboard_version?: number
           dataset_version?: number
           derived_target_plan?: Json | null
+          eda_error?: string | null
+          eda_profile_created_at?: string | null
+          eda_profile_json?: Json | null
           eda_state?: string
+          eda_status?: string
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
