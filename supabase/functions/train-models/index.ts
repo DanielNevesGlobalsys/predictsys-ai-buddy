@@ -25,6 +25,11 @@ const MIN_CLASS_SAMPLES = 50;
 
 // ==================== UTILITY FUNCTIONS ====================
 
+/** Safe fire-and-forget for Supabase query builders (which are PromiseLike, not Promise — no .catch) */
+function safeFire(query: PromiseLike<any>): void {
+  Promise.resolve(query).catch((e) => console.warn("[safeFire] suppressed:", e));
+}
+
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -1408,31 +1413,31 @@ serve(async (req) => {
     } catch (_) { /* best-effort */ }
 
     // ── Log training_run_started ──
-    await supabase.from("platform_events").insert({
+    safeFire(supabase.from("platform_events").insert({
       event_type: "training_run_started",
       project_id: project_id,
       status: "info",
       source: "edge",
       metadata: { run_id },
-    }).catch(() => {});
+    }));
 
     // Helper to return structured block response (HTTP 200 per reliability standards)
     const blockResponse = (code: string, message: string, cta: { label: string; go_to_step?: number } | null, details?: Record<string, unknown>) => {
       console.error(`[Gating] BLOCKED: ${code} — ${message}`);
       // Fire-and-forget: log training_run_blocked + set pipeline state
-      supabase.from("platform_events").insert({
+      safeFire(supabase.from("platform_events").insert({
         event_type: "training_run_blocked",
         project_id: project_id,
         status: "error",
         source: "edge",
         metadata: { run_id, code, message },
-      }).then(() => {}).catch(() => {});
-      supabase.rpc("rpc_set_pipeline_state", {
+      }));
+      safeFire(supabase.rpc("rpc_set_pipeline_state", {
         p_project_id: project_id,
         p_stage: "training",
         p_state: "failed",
         p_meta: { run_id, blocked_code: code },
-      }).then(() => {}).catch(() => {});
+      }));
       return new Response(JSON.stringify({
         success: false,
         status: "blocked",
@@ -3115,7 +3120,7 @@ serve(async (req) => {
       if (!mismatch.valid) {
         console.error(`[MVP-Soft] TARGET_TYPE_MISMATCH: ${mismatch.message}`);
 
-        await supabase.from("platform_events").insert({
+        safeFire(supabase.from("platform_events").insert({
           event_type: "target_type_mismatch",
           project_id: project_id,
           source: "edge",
@@ -3126,7 +3131,7 @@ serve(async (req) => {
             distinct_count: targetDetection.distinct_count,
             suggestion: mismatch.suggestion,
           },
-        }).catch(() => {});
+        }));
 
         return blockResponse(
           "TARGET_TYPE_MISMATCH",
@@ -3152,13 +3157,13 @@ serve(async (req) => {
       if (lowVarCheck.blocked) {
         console.error(`[MVP-Soft] ${lowVarCheck.code}: ${lowVarCheck.message}`);
 
-        await supabase.from("platform_events").insert({
+        safeFire(supabase.from("platform_events").insert({
           event_type: "training_prepare_blocked",
           project_id: project_id,
           source: "edge",
           status: "blocked",
           metadata: { code: lowVarCheck.code, message: lowVarCheck.message },
-        }).catch(() => {});
+        }));
 
         return blockResponse(
           lowVarCheck.code!,
@@ -3190,10 +3195,9 @@ serve(async (req) => {
         fix_suggestions: [],
         warnings: mvpSoftWarnings || [],
       };
-      await supabase.from("project_settings")
+      safeFire(supabase.from("project_settings")
         .update({ target_trainability_report: trainabilityReport })
-        .eq("project_id", project_id)
-        .catch(() => {});
+        .eq("project_id", project_id));
     }
 
     // ── MVP-Soft C: Row Sampling (cap at TRAINING_ROW_CAP for large datasets) ──
@@ -3220,7 +3224,7 @@ serve(async (req) => {
 
       console.log(`[MVP-Soft] Sampled: ${newX.length.toLocaleString()} rows (strategy: ${samplingResult.strategy})`);
 
-      await supabase.from("platform_events").insert({
+      safeFire(supabase.from("platform_events").insert({
         event_type: "training_prepare_sampled",
         project_id: project_id,
         source: "edge",
@@ -3230,7 +3234,7 @@ serve(async (req) => {
           original_rows: newX.length + (X.length - newX.length),
           used_rows: newX.length,
         },
-      }).catch(() => {});
+      }));
     }
 
     // ── MVP-Soft D: Robust type coercion on X (NaN handling, boolean/string coercion) ──
@@ -3288,7 +3292,7 @@ serve(async (req) => {
     // Log MVP-Soft warnings
     if (mvpSoftWarnings.length > 0 || mvpSoftCoercions.length > 0) {
       trainingWarningsGlobal.push(...mvpSoftWarnings);
-      await supabase.from("platform_events").insert({
+      safeFire(supabase.from("platform_events").insert({
         event_type: "training_prepare_warning",
         project_id: project_id,
         source: "edge",
@@ -3297,11 +3301,11 @@ serve(async (req) => {
           warnings: mvpSoftWarnings,
           coercions: mvpSoftCoercions,
         },
-      }).catch(() => {});
+      }));
     }
 
     // Log preparation success
-    await supabase.from("platform_events").insert({
+    safeFire(supabase.from("platform_events").insert({
       event_type: "training_prepare_success",
       project_id: project_id,
       source: "edge",
@@ -3313,7 +3317,7 @@ serve(async (req) => {
         coercions_count: mvpSoftCoercions.length,
         warnings_count: mvpSoftWarnings.length,
       },
-    }).catch(() => {});
+    }));
 
     console.log(`[MVP-Soft] ✅ Preparation complete: ${X.length} rows, ${allFeatureNames.length} features`);
 
@@ -4176,13 +4180,13 @@ serve(async (req) => {
     }
 
     // ── Log training_run_succeeded ──
-    supabase.from("platform_events").insert({
+    safeFire(supabase.from("platform_events").insert({
       event_type: "training_run_succeeded",
       project_id: project_id,
       status: "success",
       source: "edge",
       metadata: { run_id, selection_version: currentSelectionVersion, duration_ms: Date.now() - startMs },
-    }).then(() => {}).catch(() => {});
+    }));
 
     // Build CTAs for UI
     const ctas: { label: string; go_to_step?: number }[] = [];
@@ -4309,36 +4313,40 @@ serve(async (req) => {
     let crashDatasetVersion: number | null = null;
     let crashActiveTargetMode: string | null = null;
     let crashActiveTargetRef: Record<string, unknown> | null = null;
-    let crashStep = "unknown";
+    let crashStep = "init";
 
     try {
-      const body = await req.clone().json().catch(() => ({}));
+      let body: any = {};
+      try { body = await req.clone().json(); } catch { body = {}; }
       crashProjectId = body.project_id || null;
       
       if (crashProjectId) {
         const sb = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
 
         // Mark training as failed
-        await sb.rpc("rpc_update_pipeline_state", {
-          p_project_id: crashProjectId,
-          p_stage: "training",
-          p_new_state: "failed",
-        }).catch(() => {});
+        try {
+          await sb.rpc("rpc_update_pipeline_state", {
+            p_project_id: crashProjectId,
+            p_stage: "training",
+            p_new_state: "failed",
+          });
+        } catch { /* best-effort */ }
 
         // Read SSOT for diagnostics
-        const { data: settings } = await sb
-          .from("project_settings")
-          .select("selection_version, dataset_version, active_target_mode, active_target_column, active_target_ref")
-          .eq("project_id", crashProjectId)
-          .maybeSingle()
-          .catch(() => ({ data: null }));
-        
-        if (settings) {
-          crashSelectionVersion = (settings as any).selection_version ?? null;
-          crashDatasetVersion = (settings as any).dataset_version ?? null;
-          crashActiveTargetMode = (settings as any).active_target_mode ?? null;
-          crashActiveTargetRef = (settings as any).active_target_ref ?? null;
-        }
+        try {
+          const { data: settings } = await sb
+            .from("project_settings")
+            .select("selection_version, dataset_version, active_target_mode, active_target_column, active_target_ref")
+            .eq("project_id", crashProjectId)
+            .maybeSingle();
+          
+          if (settings) {
+            crashSelectionVersion = (settings as any).selection_version ?? null;
+            crashDatasetVersion = (settings as any).dataset_version ?? null;
+            crashActiveTargetMode = (settings as any).active_target_mode ?? null;
+            crashActiveTargetRef = (settings as any).active_target_ref ?? null;
+          }
+        } catch { /* best-effort */ }
 
         // Infer step from stack trace
         const stack = err.stack || "";
@@ -4347,29 +4355,32 @@ serve(async (req) => {
         else if (stack.includes("trainLogistic") || stack.includes("trainLinear") || stack.includes("trainGradient") || stack.includes("trainSimpleTree")) crashStep = "fit";
         else if (stack.includes("calcMetrics") || stack.includes("calcPRAUC") || stack.includes("calcAUC")) crashStep = "metrics";
         else if (stack.includes("insert") || stack.includes("upsert") || stack.includes("persist")) crashStep = "persist";
+        else if (stack.includes("safeFire") || stack.includes("platform_events")) crashStep = "logging";
 
         // Log to platform_events for audit
         const truncatedStack = (err.stack || "").slice(0, 10_000);
-        await sb.from("platform_events").insert({
-          user_id: null,
-          organization_id: null,
-          project_id: crashProjectId,
-          event_type: "job_error",
-          status: "error",
-          source: "edge",
-          metadata: {
-            code: "TRAINING_CRASH",
-            step: crashStep,
-            request_id: requestId,
-            error_name: err.name,
-            error_message: err.message,
-            stack: truncatedStack,
-            selection_version: crashSelectionVersion,
-            dataset_version: crashDatasetVersion,
-            active_target_mode: crashActiveTargetMode,
-          },
-          timestamp: new Date().toISOString(),
-        }).catch((evtErr: unknown) => console.error("[TRAINING_CRASH] Failed to log event:", evtErr));
+        try {
+          await sb.from("platform_events").insert({
+            user_id: null,
+            organization_id: null,
+            project_id: crashProjectId,
+            event_type: "job_error",
+            status: "error",
+            source: "edge",
+            metadata: {
+              code: "TRAINING_CRASH",
+              step: crashStep,
+              request_id: requestId,
+              error_name: err.name,
+              error_message: err.message,
+              stack: truncatedStack,
+              selection_version: crashSelectionVersion,
+              dataset_version: crashDatasetVersion,
+              active_target_mode: crashActiveTargetMode,
+            },
+            timestamp: new Date().toISOString(),
+          });
+        } catch (evtErr) { console.error("[TRAINING_CRASH] Failed to log event:", evtErr); }
       }
     } catch (_diagErr) {
       console.error("[TRAINING_CRASH] Diagnostics collection failed:", _diagErr);

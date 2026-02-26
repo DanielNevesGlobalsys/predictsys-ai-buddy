@@ -459,8 +459,10 @@ const StepTraining = ({
     try {
       await saveProject({ status: "training" });
 
+      const uiRequestId = crypto.randomUUID();
+
       const { data, error: fnError } = await supabase.functions.invoke("train-models", {
-        body: { project_id: projectData.id },
+        body: { project_id: projectData.id, ui_request_id: uiRequestId },
       });
 
       if (fnError) {
@@ -502,8 +504,9 @@ const StepTraining = ({
         if (d.code === "TRAINING_CRASH" || d.status === "error") {
           const requestId = d.error?.request_id || "N/A";
           const errorCode = d.code || "UNKNOWN";
+          const step = d.error?.step || "init";
           const crashError = new Error(d.message_user || "Erro interno no treinamento");
-          (crashError as any).__trainingCrash = { request_id: requestId, code: errorCode, step: d.error?.step };
+          (crashError as any).__trainingCrash = { request_id: requestId, code: errorCode, step, ui_request_id: uiRequestId };
           throw crashError;
         }
         if (d.preflight_report) {
@@ -554,7 +557,8 @@ const StepTraining = ({
       // Parse different error types
       let userMessage = errorMessage;
       if (crashInfo) {
-        userMessage = `${errorMessage} (Código: ${crashInfo.request_id})`;
+        const stepLabel = crashInfo.step && crashInfo.step !== "init" ? crashInfo.step : "inicialização";
+        userMessage = `Falha no treino na etapa: ${stepLabel}`;
       } else if (errorMessage.includes("violates check constraint")) {
         userMessage = t("stepTraining.errors.statusError");
       } else if (errorMessage.includes("non-2xx")) {
@@ -566,12 +570,18 @@ const StepTraining = ({
       setError(userMessage);
       
       if (crashInfo) {
-        toast.error(errorMessage, {
-          description: `Request ID: ${crashInfo.request_id}`,
+        const clipboardText = [
+          `TRAINING_CRASH | step: ${crashInfo.step || "init"}`,
+          `request_id: ${crashInfo.request_id}`,
+          crashInfo.ui_request_id ? `ui_request_id: ${crashInfo.ui_request_id}` : "",
+        ].filter(Boolean).join(" | ");
+
+        toast.error(userMessage, {
+          description: `Request ID: ${crashInfo.request_id}${crashInfo.ui_request_id ? `\nUI ID: ${crashInfo.ui_request_id}` : ""}`,
           action: {
             label: "Copiar código",
             onClick: () => {
-              navigator.clipboard.writeText(`TRAINING_CRASH | request_id: ${crashInfo.request_id} | step: ${crashInfo.step || "unknown"}`);
+              navigator.clipboard.writeText(clipboardText);
               toast.success("Código copiado!");
             },
           },
