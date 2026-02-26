@@ -258,40 +258,53 @@ const StepTraining = ({
 
     const blockReasons: string[] = [];
 
-    // Check SSOT dataset state first, then fallback to manifest
-    const { data: dsState } = await supabase
-      .from("project_dataset_state")
-      .select("row_count, col_count, eda_ready, model_ready, virtual_manifest, diagnostics")
-      .eq("project_id", projectData.id)
-      .maybeSingle();
-
+    // Use unified modeling state as single source of truth for EDA status
     let edaReady = true;
     let modelReady = true;
     let totalRows = 0;
     let blockedReasonModel: string | null = null;
 
-    if (dsState && (dsState as any).row_count > 0) {
-      edaReady = (dsState as any).eda_ready !== false;
-      modelReady = (dsState as any).model_ready !== false;
-      totalRows = (dsState as any).row_count;
-      blockedReasonModel = (dsState as any).diagnostics?.blocked_reason_model || null;
-    } else {
-      // Fallback to manifest
-      const { data: manifest } = await supabase
-        .from("import_manifests")
-        .select("eda_ready, model_ready, blocked_reason_model, rows_consolidated")
-        .eq("project_id", projectData.id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    try {
+      const { data: modelingState, error: msErr } = await supabase.functions.invoke("get-project-modeling-state", {
+        body: { project_id: projectData.id },
+      });
 
-      edaReady = manifest?.eda_ready !== false;
-      modelReady = manifest?.model_ready !== false;
-      totalRows = manifest?.rows_consolidated || projectData.total_rows || 0;
-      blockedReasonModel = manifest?.blocked_reason_model as string | null;
+      if (!msErr && modelingState?.success) {
+        const ms = modelingState as any;
+        // EDA status from unified function (checks project_settings, project_numeric_stats, project_dataset_state)
+        edaReady = ms.eda?.status === "ok";
+        totalRows = ms.active_dataset?.total_rows || 0;
+
+        if (!ms.active_dataset) {
+          blockReasons.push("Nenhum dataset ativo registrado para este projeto.");
+          edaReady = false;
+        } else if (totalRows === 0) {
+          blockReasons.push("Dataset ativo com 0 linhas.");
+          edaReady = false;
+        } else if ((ms.active_dataset?.columns_count || 0) < 2) {
+          blockReasons.push("Dataset ativo com menos de 2 colunas.");
+          edaReady = false;
+        }
+
+        // EDA not calculated but dataset exists — non-blocking warning, not a hard block
+        if (ms.eda?.status === "blocked" && totalRows > 0) {
+          // EDA not yet calculated is a soft issue — don't block training
+          // The preflight gates handle the real blocking logic
+          edaReady = true;
+        }
+
+        modelReady = true; // model_ready is determined by preflight gates, not here
+      } else {
+        // Fallback: if unified function fails, be permissive
+        console.warn("[checkTrainReadiness] get-project-modeling-state failed, using permissive defaults");
+        edaReady = true;
+        totalRows = projectData.total_rows || 0;
+      }
+    } catch (err) {
+      console.warn("[checkTrainReadiness] Error calling modeling state:", err);
+      edaReady = true;
+      totalRows = projectData.total_rows || 0;
     }
-
-    if (!edaReady) blockReasons.push("Dataset não está pronto para análise (EDA bloqueado).");
 
     // Check modeling contract
     const { data: contract } = await supabase
@@ -318,9 +331,9 @@ const StepTraining = ({
     const hasTarget = !!projectData.target_column;
     if (!hasTarget) blockReasons.push("Variável alvo (target) não definida.");
 
-    if (totalRows === 0) blockReasons.push("Dataset sem linhas válidas.");
+    if (totalRows === 0 && blockReasons.length === 0) blockReasons.push("Dataset sem linhas válidas.");
 
-    const canTrain = edaReady && hasTarget && blockReasons.length === 0;
+    const canTrain = hasTarget && blockReasons.length === 0;
 
     setTrainReadiness({
       edaReady,
