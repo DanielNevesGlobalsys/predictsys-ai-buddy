@@ -183,6 +183,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               ? `Amostra: ${colsDetected} colunas (arquivo parcial) • Schema consolidado: ${colsSchema} colunas`
               : `${data.sample_rows} linhas • ${colsDetected} colunas${data.dataset_id ? ` • dataset: ${data.dataset_id.slice(0, 8)}…` : ""}`,
         });
+      } else if (data?.code === "MISSING_ACTIVE_DATASET" || data?.code === "NO_ACTIVE_DATASET") {
+        toast({
+          title: "Dataset não registrado",
+          description: "Dataset ainda não registrado corretamente. Reimporte os dados na etapa anterior.",
+          variant: "destructive",
+        });
       } else {
         toast({
           title: "Erro ao gerar amostra",
@@ -493,85 +499,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                 </Button>
               </div>
             )}
-
-            {/* DEBUG: Test generate-dataset-sample */}
-            <div className="p-4 rounded-lg border-2 border-dashed border-destructive/40 bg-destructive/5 space-y-3">
-              <p className="text-xs font-mono font-bold text-destructive">🔧 DEBUG — Teste direto da Edge Function</p>
-              <Button
-                size="sm"
-                variant="destructive"
-                disabled={debugLoading}
-                onClick={async () => {
-                  setDebugLoading(true);
-                  setDebugResult(null);
-                  try {
-                    const res = await supabase.functions.invoke("generate-dataset-sample", {
-                      body: { project_id: projectData.id },
-                    });
-                    const payload = {
-                      ok: !res.error,
-                      data: res.data,
-                      error: res.error ? {
-                        message: (res.error as any)?.message,
-                        name: (res.error as any)?.name,
-                        context: (res.error as any)?.context,
-                        raw: String(res.error),
-                      } : null,
-                    };
-                    console.log("[DEBUG generate-dataset-sample]", payload);
-                    setDebugResult(JSON.stringify(payload, null, 2));
-                  } catch (e: any) {
-                    const payload = { ok: false, caught: e.message, name: e.name, stack: e.stack?.slice(0, 500) };
-                    console.log("[DEBUG generate-dataset-sample] CATCH", payload);
-                    setDebugResult(JSON.stringify(payload, null, 2));
-                  } finally {
-                    setDebugLoading(false);
-                  }
-                }}
-              >
-                {debugLoading ? <Loader2 className="w-4 h-4 animate-spin mr-1" /> : null}
-                TESTAR generate-dataset-sample
-              </Button>
-              {debugResult && (
-                <div className="space-y-2">
-                  <pre className="whitespace-pre-wrap break-all font-mono text-[11px] bg-muted/50 p-3 rounded max-h-60 overflow-y-auto border">
-                    Resultado do teste:{"\n"}{debugResult}
-                  </pre>
-                  {(() => {
-                    try {
-                      const parsed = JSON.parse(debugResult);
-                      const diags = parsed?.data?.debug?.diagnostics;
-                      if (Array.isArray(diags) && diags.length > 0) {
-                        return (
-                          <div className="space-y-1">
-                            <p className="text-xs font-mono font-bold text-destructive">📦 Diagnóstico por etapa:</p>
-                            {diags.map((d: any, i: number) => (
-                              <div key={i} className="text-[10px] font-mono p-2 rounded border bg-background">
-                                <span className={d.download_ok || d.ok ? "text-green-600" : d.download_ok === false || d.ok === false ? "text-destructive" : "text-muted-foreground"}>
-                                  {d.download_ok || d.ok ? "✅" : d.download_ok === false || d.ok === false ? "❌" : "🔍"} [{d.step}] {d.bucket}
-                                </span>
-                                {d.filePath && <span> → {d.filePath}</span>}
-                                {d.folder && <span> 📁 {d.folder}</span>}
-                                {d.path && !d.filePath && <span> → {d.path}</span>}
-                                {d.list_count != null && <span className="text-muted-foreground"> | items:{d.list_count}</span>}
-                                {d.list_names && d.list_names.length > 0 && <span className="text-muted-foreground"> [{d.list_names.join(", ")}]</span>}
-                                {d.error_raw && <span className="text-destructive"> | {d.error_raw}</span>}
-                                {d.list_error && <span className="text-destructive"> | {d.list_error}</span>}
-                                {d.blob_size != null && <span className="text-green-600"> | {(d.blob_size / 1024).toFixed(1)}KB</span>}
-                                {d.sniff_result && <span className="text-blue-500"> | sniff:{d.sniff_result}</span>}
-                                {d.candidate_name && <span className="text-primary"> | file:{d.candidate_name}</span>}
-                              </div>
-                            ))}
-                          </div>
-                        );
-                      }
-                      return null;
-                    } catch { return null; }
-                  })()}
-                </div>
-              )}
-            </div>
-
 
             {edaBlocked ? (
               <div className="text-center py-12 space-y-3">
