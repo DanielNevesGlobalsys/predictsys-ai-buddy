@@ -3244,6 +3244,7 @@ export type Database = {
           active_target_ref: Json | null
           active_target_updated_at: string | null
           builder_state: string
+          business_intent_contract: Json | null
           contract_generated_at: string | null
           contract_version: number | null
           dashboard_state: string
@@ -3274,6 +3275,7 @@ export type Database = {
           ingestion_total_bytes: number | null
           label_build_result: Json | null
           modeling_dataset_meta: Json | null
+          objective: string | null
           org_id: string | null
           prerequisites_resolved_at: string | null
           prerequisites_source: string | null
@@ -3313,6 +3315,7 @@ export type Database = {
           active_target_ref?: Json | null
           active_target_updated_at?: string | null
           builder_state?: string
+          business_intent_contract?: Json | null
           contract_generated_at?: string | null
           contract_version?: number | null
           dashboard_state?: string
@@ -3343,6 +3346,7 @@ export type Database = {
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
           modeling_dataset_meta?: Json | null
+          objective?: string | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
@@ -3382,6 +3386,7 @@ export type Database = {
           active_target_ref?: Json | null
           active_target_updated_at?: string | null
           builder_state?: string
+          business_intent_contract?: Json | null
           contract_generated_at?: string | null
           contract_version?: number | null
           dashboard_state?: string
@@ -3412,6 +3417,7 @@ export type Database = {
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
           modeling_dataset_meta?: Json | null
+          objective?: string | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -11,12 +11,20 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { FileText, Target, Lightbulb, Sparkles, Info, AlertTriangle, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useProjectAIContext, type AIContextIntent } from "@/hooks/useProjectAIContext";
+import { useToast } from "@/hooks/use-toast";
 import IntentContractSummary from "./IntentContractSummary";
 import IndustrySelector from "./IndustrySelector";
 import type { ProjectData } from "../WizardContainer";
 import type { IndustryKey, IntentContractV2 } from "@/types/intentContract";
 import { normalizeIntentContract, validateIntentGates } from "@/types/intentContract";
-import { hasAdapter, getDomainAdapter } from "@/config/domainAdapters";
+import { hasAdapter } from "@/config/domainAdapters";
+import {
+  type ObjectiveKey,
+  getObjectivesForIndustry,
+  buildBusinessIntentContract,
+  mapDeclaredObjectiveToKey,
+} from "@/lib/industryRules";
+import { trackEvent } from "@/lib/platformTracking";
 
 interface StepProjectInfoProps {
   projectData: ProjectData;
@@ -25,7 +33,8 @@ interface StepProjectInfoProps {
   loading: boolean;
 }
 
-const OBJECTIVE_OPTIONS = [
+// Static fallback — overridden by dynamic objectives when industry is selected
+const LEGACY_OBJECTIVE_OPTIONS = [
   { value: "churn", label: "Churn / Cancelamento" },
   { value: "inadimplencia", label: "Inadimplência / Default" },
   { value: "conversao", label: "Conversão / Vendas" },
@@ -39,6 +48,7 @@ const OBJECTIVE_OPTIONS = [
 
 const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProjectInfoProps) => {
   const { t } = useTranslation();
+  const { toast } = useToast();
   const { loadContext } = useProjectAIContext(projectData.id);
   
   const [formData, setFormData] = useState({
@@ -56,13 +66,25 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
   const [contractMeta, setContractMeta] = useState<{ id: string | null; version: number; generatedAt: string | null }>({ id: null, version: 0, generatedAt: null });
   const [gateWarnings, setGateWarnings] = useState<{ status: string; code: string; message: string; cta?: string }[]>([]);
 
+  // Dynamic objectives based on selected industry
+  const objectiveOptions = useMemo(() => {
+    if (selectedIndustry) {
+      return getObjectivesForIndustry(selectedIndustry as any).map((o) => ({
+        value: o.key,
+        label: o.label_pt,
+        description: o.description_pt,
+      }));
+    }
+    return LEGACY_OBJECTIVE_OPTIONS.map((o) => ({ ...o, description: "" }));
+  }, [selectedIndustry]);
+
   // Load existing contract + industry from SSOT on mount
   useEffect(() => {
     if (projectData.id) {
       // Load industry + contract meta from project_settings SSOT
       supabase
         .from("project_settings")
-        .select("industry, industry_source, segment, active_intent_contract_id, contract_version, contract_generated_at")
+        .select("industry, industry_source, segment, objective, active_intent_contract_id, contract_version, contract_generated_at")
         .eq("project_id", projectData.id)
         .maybeSingle()
         .then(({ data }) => {
@@ -79,6 +101,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
                 version: ps.contract_version || 0,
                 generatedAt: ps.contract_generated_at || null,
               });
+            }
+            // Restore saved objective
+            if (ps.objective && !formData.declared_objective) {
+              setFormData(prev => ({ ...prev, declared_objective: ps.objective }));
             }
           }
         });
@@ -234,22 +260,83 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
   }, [selectedIndustry]);
 
   const handleSubmit = async () => {
-    if (validate()) {
-      const effectiveProblemType = formData.problem_type === "auto" 
-        ? "classification" 
-        : formData.problem_type as "classification" | "regression";
+    if (!validate()) return;
 
-      // Industry already persisted on change via handleIndustryChange
-      
-      onNext({
-        name: formData.name,
-        description: formData.description,
-        business_objective: formData.declared_objective === "outro" 
-          ? formData.business_objective 
-          : formData.declared_objective || formData.business_objective,
-        problem_type: effectiveProblemType,
-      });
+    const effectiveProblemType = formData.problem_type === "auto" 
+      ? "classification" 
+      : formData.problem_type as "classification" | "regression";
+
+    // Build business intent contract
+    const industryKey = (selectedIndustry || "generic") as any;
+    const objectiveKey = mapDeclaredObjectiveToKey(formData.declared_objective || "outro");
+    const contract = buildBusinessIntentContract(industryKey, objectiveKey);
+
+    // Override problem_type from contract if user chose "auto"
+    const finalProblemType = formData.problem_type === "auto"
+      ? (contract.problem_type_default === "clustering" ? "classification" : contract.problem_type_default)
+      : effectiveProblemType;
+
+    // Persist contract to project_settings
+    if (projectData.id) {
+      try {
+        const { error } = await supabase
+          .from("project_settings")
+          .upsert(
+            {
+              project_id: projectData.id,
+              industry: industryKey !== "generic" ? industryKey : null,
+              industry_source: "user",
+              objective: objectiveKey,
+              business_intent_contract: contract as any,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "project_id" }
+          );
+
+        if (error) {
+          console.error("[StepProjectInfo] business_intent_save_failed:", error);
+          toast({
+            title: `[INTENT_SAVE_FAIL] Erro ao salvar contrato`,
+            description: error.message,
+            variant: "destructive",
+          });
+          // Track failure
+          trackEvent({ event_type: "project_created", project_id: projectData.id, status: "error", metadata: { sub_event: "business_intent_save_failed", code: error.code } });
+          return;
+        }
+
+        // Track success
+        trackEvent({
+          event_type: "project_created",
+          project_id: projectData.id,
+          metadata: {
+            sub_event: "business_intent_saved",
+            industry: industryKey,
+            objective: objectiveKey,
+            problem_type_default: contract.problem_type_default,
+            target_modes_allowed: contract.target_modes_allowed,
+          },
+        });
+        console.log("[StepProjectInfo] Business intent contract saved:", industryKey, objectiveKey);
+      } catch (err: any) {
+        console.error("[StepProjectInfo] business_intent_save_failed:", err);
+        toast({
+          title: `[INTENT_SAVE_FAIL] Erro inesperado`,
+          description: err?.message || "Erro ao salvar contrato de negócio",
+          variant: "destructive",
+        });
+        return;
+      }
     }
+
+    onNext({
+      name: formData.name,
+      description: formData.description,
+      business_objective: formData.declared_objective === "outro" 
+        ? formData.business_objective 
+        : formData.declared_objective || formData.business_objective,
+      problem_type: finalProblemType as "classification" | "regression",
+    });
   };
 
   const handleGenerateContract = () => {
@@ -338,9 +425,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
                 <SelectValue placeholder="Selecione o objetivo do projeto..." />
               </SelectTrigger>
               <SelectContent>
-                {OBJECTIVE_OPTIONS.map((opt) => (
+                {objectiveOptions.map((opt) => (
                   <SelectItem key={opt.value} value={opt.value}>
                     {opt.label}
+                    {opt.description && <span className="text-muted-foreground text-xs ml-2">— {opt.description}</span>}
                   </SelectItem>
                 ))}
               </SelectContent>
