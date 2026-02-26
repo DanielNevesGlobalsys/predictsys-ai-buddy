@@ -1370,8 +1370,14 @@ serve(async (req) => {
     return new Response(null, { headers: corsHeaders });
   }
 
+  // Parse body early and store for crash handler access
+  let _parsedBody: any = {};
   try {
-    const { project_id } = await req.json();
+    _parsedBody = await req.json();
+  } catch { _parsedBody = {}; }
+  const { project_id } = _parsedBody;
+
+  try {
     
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id é obrigatório" }), {
@@ -4316,8 +4322,7 @@ serve(async (req) => {
     let crashStep = "init";
 
     try {
-      let body: any = {};
-      try { body = await req.clone().json(); } catch { body = {}; }
+      const body: any = _parsedBody || {};
       crashProjectId = body.project_id || null;
       
       if (crashProjectId) {
