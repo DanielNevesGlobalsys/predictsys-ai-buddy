@@ -286,10 +286,10 @@ const StepTraining = ({
           edaReady = false;
         }
 
-        // EDA not calculated but dataset exists — non-blocking warning, not a hard block
-        if (ms.eda?.status === "blocked" && totalRows > 0) {
-          // EDA not yet calculated is a soft issue — don't block training
-          // The preflight gates handle the real blocking logic
+        // EDA "blocked" but dataset has data → EDA not yet run is NOT a hard block
+        // The train-models function itself does a multi-source EDA check
+        if (!edaReady && totalRows > 0 && (ms.active_dataset?.columns_count || 0) >= 2) {
+          // Don't block from the frontend — let the backend gate decide
           edaReady = true;
         }
 
