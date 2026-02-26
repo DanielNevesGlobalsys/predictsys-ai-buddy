@@ -3273,6 +3273,7 @@ export type Database = {
           ingestion_state: string
           ingestion_total_bytes: number | null
           label_build_result: Json | null
+          modeling_dataset_meta: Json | null
           org_id: string | null
           prerequisites_resolved_at: string | null
           prerequisites_source: string | null
@@ -3341,6 +3342,7 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          modeling_dataset_meta?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
@@ -3409,6 +3411,7 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          modeling_dataset_meta?: Json | null
           org_id?: string | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
