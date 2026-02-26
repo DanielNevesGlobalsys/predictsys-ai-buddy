@@ -919,8 +919,8 @@ const StepTraining = ({
                 </div>
               )}
 
-              {/* TARGET_TYPE_MISMATCH Card */}
-              {trainabilityError && (trainabilityError.code === "TARGET_TYPE_MISMATCH" || trainabilityError.code === "LOW_VARIANCE_TARGET" || trainabilityError.code === "ONLY_ONE_CLASS") && (
+              {/* TARGET_TYPE_MISMATCH / LOW_VARIANCE / ONLY_ONE_CLASS Card */}
+              {trainabilityError && (trainabilityError.code === "TARGET_TYPE_MISMATCH" || trainabilityError.code === "LOW_VARIANCE_TARGET" || trainabilityError.code === "ONLY_ONE_CLASS" || (trainabilityError.status === "blocked" && !trainabilityError.error_code)) && (
                 <div className="space-y-4">
                   <Alert className="bg-amber-500/10 border-amber-500/30">
                     <AlertTriangle className="h-4 w-4 text-amber-600" />
@@ -930,7 +930,9 @@ const StepTraining = ({
                           ? "Tipo de problema incompatível com o target"
                           : trainabilityError.code === "LOW_VARIANCE_TARGET"
                           ? "Target com variância insuficiente"
-                          : "Apenas uma classe encontrada"}
+                          : trainabilityError.code === "ONLY_ONE_CLASS"
+                          ? "Apenas uma classe encontrada"
+                          : "Treino bloqueado"}
                       </p>
                       <p className="text-sm text-muted-foreground mb-3">
                         {trainabilityError.message_user || trainabilityError.error || error}
@@ -947,32 +949,67 @@ const StepTraining = ({
                               Tipo detectado: {(trainabilityError.details as any).target_type_real}
                             </Badge>
                           )}
+                          {(trainabilityError.details as any)?.sampled?.on && (
+                            <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-xs">
+                              Treino com amostra (MVP)
+                            </Badge>
+                          )}
                         </div>
                       )}
                     </AlertDescription>
                   </Alert>
-                  <div className="flex gap-2 justify-center">
-                    {(trainabilityError.details as any)?.suggestion && (
-                      <Button 
-                        variant="default" 
-                        size="sm" 
+                  <div className="flex gap-2 justify-center flex-wrap">
+                    {/* Render fix_suggestions from backend */}
+                    {((trainabilityError.details as any)?.fix_suggestions || trainabilityError.fix_suggestions)?.map((fs: any, i: number) => (
+                      <Button
+                        key={i}
+                        variant={i === 0 ? "default" : "outline"}
+                        size="sm"
                         onClick={async () => {
-                          const suggestion = (trainabilityError.details as any)?.suggestion;
-                          if (suggestion) {
-                            await saveProject({ problem_type: suggestion as "classification" | "regression" });
-                            toast.success(`Tipo alterado para ${suggestion === "classification" ? "Classificação" : "Regressão"}`);
+                          if (fs.action?.startsWith("change_problem_type_")) {
+                            const newType = fs.action.replace("change_problem_type_", "") as "classification" | "regression";
+                            await saveProject({ problem_type: newType });
+                            toast.success(`Tipo alterado para ${newType === "classification" ? "Classificação" : "Regressão"}`);
                             setError(null);
                             setTrainabilityError(null);
+                          } else if (fs.action === "open_target_step") {
+                            if (onGoToStep) onGoToStep(3); else onBack();
+                          } else if (fs.action === "open_human_labeling") {
+                            if (onGoToStep) onGoToStep(3); else onBack();
                           }
                         }}
                       >
-                        <Sparkles className="w-4 h-4 mr-1" />
-                        Trocar para {(trainabilityError.details as any)?.suggestion === "classification" ? "Classificação" : "Regressão"}
+                        {i === 0 && <Sparkles className="w-4 h-4 mr-1" />}
+                        {i > 0 && <ArrowLeft className="w-4 h-4 mr-1" />}
+                        {fs.label}
                       </Button>
+                    ))}
+                    {/* Fallback CTA if no fix_suggestions */}
+                    {!((trainabilityError.details as any)?.fix_suggestions || trainabilityError.fix_suggestions)?.length && (
+                      <>
+                        {(trainabilityError.details as any)?.suggestion && (
+                          <Button 
+                            variant="default" 
+                            size="sm" 
+                            onClick={async () => {
+                              const suggestion = (trainabilityError.details as any)?.suggestion;
+                              if (suggestion) {
+                                await saveProject({ problem_type: suggestion as "classification" | "regression" });
+                                toast.success(`Tipo alterado para ${suggestion === "classification" ? "Classificação" : "Regressão"}`);
+                                setError(null);
+                                setTrainabilityError(null);
+                              }
+                            }}
+                          >
+                            <Sparkles className="w-4 h-4 mr-1" />
+                            Trocar para {(trainabilityError.details as any)?.suggestion === "classification" ? "Classificação" : "Regressão"}
+                          </Button>
+                        )}
+                        <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(3); else onBack(); }}>
+                          <ArrowLeft className="w-4 h-4 mr-1" /> Revisar Target
+                        </Button>
+                      </>
                     )}
-                    <Button variant="outline" size="sm" onClick={() => { if (onGoToStep) onGoToStep(3); else onBack(); }}>
-                      <ArrowLeft className="w-4 h-4 mr-1" /> Revisar Target
-                    </Button>
                   </div>
                 </div>
               )}
