@@ -1287,6 +1287,26 @@ const StepTraining = ({
           </div>
         )}
 
+        {/* Extended Metrics Report */}
+        {trainingComplete && qualityResult && extendedMetrics && (
+          <TrainingMetricsReport
+            metrics={qualityResult.metrics_summary}
+            baselineMetrics={qualityResult.baseline_summary}
+            extended={extendedMetrics}
+            leakageReport={leakageReport}
+            warnings={qualityResult.training_warnings}
+            improvementVsBaseline={qualityResult.improvement_vs_baseline}
+          />
+        )}
+
+        {/* Churn Simulator */}
+        {trainingComplete && extendedMetrics && projectData.problem_type === "classification" && (
+          <ChurnSimulator
+            extendedMetrics={extendedMetrics}
+            totalEntities={trainReadiness?.totalRows || projectData.total_rows || 0}
+          />
+        )}
+
         {/* Training Results Panel — champion/challenger + calibration + threshold */}
         {trainingComplete && qualityResult && (
           <TrainingResultsPanel
