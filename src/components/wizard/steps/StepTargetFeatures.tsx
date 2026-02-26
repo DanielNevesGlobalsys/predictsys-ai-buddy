@@ -111,6 +111,14 @@ const StepTargetFeatures = ({
   // Schema SSOT — consolidated column list
   const schemaSSOT = useProjectSchemaSSOT(projectData.id);
 
+  // Unified modeling state from backend
+  const [modelingState, setModelingState] = useState<{
+    eda: { status: string };
+    project: { business_objective: string | null; detected_problem_type: string | null };
+    active_dataset: { id: string; total_rows: number; columns_count: number } | null;
+    schema: { columns: { name: string; type: string | null }[]; source: string };
+  } | null>(null);
+
   // Builder version mismatch tracking
   const [builderVersionUsed, setBuilderVersionUsed] = useState<number | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
@@ -306,6 +314,26 @@ const StepTargetFeatures = ({
     }
   }, [projectData.id]);
 
+  // Load unified modeling state from backend
+  const loadModelingState = useCallback(async () => {
+    if (!projectData.id) return;
+    try {
+      const { data, error } = await supabase.functions.invoke("get-project-modeling-state", {
+        body: { project_id: projectData.id },
+      });
+      if (!error && data?.success) {
+        setModelingState(data);
+        // Update contract missing based on business_objective from project
+        if (data.project?.business_objective) {
+          // Has business objective — don't show contract missing just because of missing settings row
+          setContractMissing(false);
+        }
+      }
+    } catch (e) {
+      console.warn("[StepTargetFeatures] get-project-modeling-state failed (non-blocking):", e);
+    }
+  }, [projectData.id]);
+
   useEffect(() => {
     if (projectData.id) {
       // First ensure dataset exists, then load everything
@@ -321,6 +349,7 @@ const StepTargetFeatures = ({
         loadIntentInfo();
         loadSettings();
         loadBusinessContract();
+        loadModelingState();
       });
     }
   }, [projectData.id]);
@@ -465,8 +494,8 @@ const StepTargetFeatures = ({
     if (data) setSelectionVersion((data as any).selection_version);
   };
 
-  // Coverage stats from fallback
-  const coverageStats = ds.fallback?.coverageStats as CoverageStats | null;
+  // Coverage stats from fallback — safe access
+  const coverageStats = (ds.fallback?.coverageStats ?? null) as CoverageStats | null;
 
   // Auto-load inference when EDA is available
   useEffect(() => {
@@ -930,10 +959,11 @@ const StepTargetFeatures = ({
   const effectiveProblemType = inferredProblemType || projectData.problem_type;
 
   // ── Gating logic ──
-  // Step 4 should NOT block on edaReady — EDA is a profiling step, not a gate for variable selection.
+  // Use unified modeling state for EDA status. EDA is NOT a gate for variable selection.
   // Only block if dataset truly has 0 rows/cols or columns list is empty (handled below).
+  const unifiedEdaOk = modelingState?.eda?.status === "ok" || ds.edaReady;
   const isHardBlocked = false;
-  const hasModelWarning = ds.loaded && ds.edaReady === false && ds.rowCount > 0;
+  const hasModelWarning = ds.loaded && !unifiedEdaOk && ds.rowCount > 0;
 
   if (loadingColumns) {
     return (
@@ -965,37 +995,15 @@ const StepTargetFeatures = ({
     );
   }
 
-  // Hard block screen
-  if (isHardBlocked) {
-    const reason = ds.fallback?.blockedReasonEda || ds.fallback?.blockedReasonModel || "O dataset importado possui problemas estruturais que impedem a configuração de variáveis.";
-    return (
-      <Card className="bg-gradient-card shadow-card p-8">
-        <div className="text-center py-12 space-y-4">
-          <Ban className="w-12 h-12 text-destructive/50 mx-auto" />
-          <h2 className="text-xl font-display font-bold text-destructive">Dataset não está pronto para modelagem</h2>
-          <p className="text-sm text-muted-foreground max-w-md mx-auto">{reason}</p>
-          <p className="text-xs text-muted-foreground">
-            Volte à Etapa 2 (Importação) e corrija os problemas indicados no Resumo de Importação.
-          </p>
-          <div className="pt-4">
-            <Button variant="outline" onClick={onBack}>
-              {t("common.back")}
-            </Button>
-          </div>
-        </div>
-      </Card>
-    );
-  }
-
-  // Preflight checklist items
+  // Preflight checklist items — use unified EDA status
   const preflightChecks = [
-    { label: "Dataset ativo", ok: ds.hasManifest, detail: ds.isVirtual ? "virtual manifest" : ds.fallback?.manifestId ? "manifest real" : "Sem manifest" },
+    { label: "Dataset ativo", ok: !!(modelingState?.active_dataset || ds.hasManifest), detail: modelingState?.active_dataset ? `dataset ${modelingState.active_dataset.id.slice(0,8)}` : ds.isVirtual ? "virtual manifest" : ds.fallback?.manifestId ? "manifest real" : "Sem manifest" },
     { label: "Linhas consolidadas > 0", ok: ds.rowCount > 0, detail: `${ds.rowCount.toLocaleString()} linhas` },
     { label: "Colunas detectadas > 0", ok: columns.length > 0, detail: `${columns.length} colunas` },
     { label: "Target definido", ok: !!targetColumn, detail: targetColumn || "—" },
     { label: "Entity Key definida", ok: !!entityKey, detail: entityKey || "—" },
     { label: "Features selecionadas", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} features` },
-    { label: "EDA pronto", ok: ds.edaReady, detail: ds.edaReady ? "OK" : "BLOCKED" },
+    { label: "EDA pronto", ok: unifiedEdaOk, detail: unifiedEdaOk ? "OK" : (modelingState?.eda?.status === "blocked" ? "Recalcule EDA" : "Pendente") },
     { label: "Modelo pronto", ok: ds.modelReady, detail: ds.modelReady ? "OK" : (ds.fallback?.blockedReasonModel || "BLOCKED") },
   ];
 
@@ -1046,12 +1054,12 @@ const StepTargetFeatures = ({
           />
         )}
 
-        {/* Contract missing warning */}
-        {contractMissing && !businessContract && (
+        {/* Contract missing warning — only show if project has no business_objective */}
+        {contractMissing && !businessContract && !projectData.business_objective && !modelingState?.project?.business_objective && (
           <Alert className="border-amber-500/30 bg-amber-500/5">
             <AlertTriangle className="w-4 h-4 text-amber-500" />
             <AlertDescription className="text-sm">
-              Contrato de negócio não encontrado — volte na Etapa 1 e gere novamente para receber orientações de alvo.
+              Objetivo de negócio não definido — volte na Etapa 1 e preencha o objetivo para receber orientações de alvo.
             </AlertDescription>
           </Alert>
         )}
@@ -1188,10 +1196,13 @@ const StepTargetFeatures = ({
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {ds.edaReady ? (
+                {unifiedEdaOk ? (
                   <Badge className="bg-accent/20 text-accent border-accent/30">EDA: OK</Badge>
                 ) : (
-                  <Badge variant="destructive">EDA: BLOCKED</Badge>
+                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
+                    <AlertTriangle className="w-3 h-3 mr-1" />
+                    EDA: {modelingState?.eda?.status === "blocked" ? "Pendente" : "Verificando…"}
+                  </Badge>
                 )}
                 {ds.modelReady ? (
                   <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: OK</Badge>
@@ -1221,7 +1232,7 @@ const StepTargetFeatures = ({
                 </div>
                 <div className="p-2 bg-muted/30 rounded text-center col-span-2">
                   <div className="flex flex-wrap gap-1 justify-center">
-                    {coverageStats.file_contribution.map((fc, i) => (
+                    {(Array.isArray(coverageStats.file_contribution) ? coverageStats.file_contribution : []).map((fc, i) => (
                       <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
                         {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
                         {fc.contribution_type === "mostly_null" && " ⚠️"}
@@ -1268,10 +1279,10 @@ const StepTargetFeatures = ({
                 </Tooltip>
               </TooltipProvider>
             )}
-            {schemaSSOT.source !== "active_schema_json" && (
-              <Badge variant="outline" className="text-xs text-amber-600 border-amber-500/30 gap-1">
-                <AlertTriangle className="w-3 h-3" />
-                Schema obtido por fallback: {schemaSSOT.source}
+            {schemaSSOT.source !== "active_schema_json" && schemaSSOT.source !== "unknown" && (
+              <Badge variant="outline" className="text-xs text-muted-foreground border-border gap-1">
+                <Info className="w-3 h-3" />
+                Schema: {schemaSSOT.source}
               </Badge>
             )}
           </div>
