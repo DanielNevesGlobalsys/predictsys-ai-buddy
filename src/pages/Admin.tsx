@@ -370,7 +370,17 @@ const Admin = () => {
           </Button>
         </div>
 
-        {/* Stats Cards */}
+        <Tabs defaultValue="organizations" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="organizations" className="gap-1">
+              <Building2 className="w-3 h-3" />Organizações
+            </TabsTrigger>
+            <TabsTrigger value="external-connections" className="gap-1">
+              <Plug className="w-3 h-3" />Conexões Externas
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="organizations" className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
