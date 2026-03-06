@@ -25,8 +25,6 @@ serve(async (req) => {
   }
 
   try {
-    // OpenAI key will be fetched from external DB via callOpenAI
-    }
 
     const { texts, targetLanguage, sourceLanguage }: TranslationRequest = await req.json();
 
