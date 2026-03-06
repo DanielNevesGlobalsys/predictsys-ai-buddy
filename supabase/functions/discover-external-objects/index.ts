@@ -338,19 +338,64 @@ serve(async (req) => {
   const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
   try {
-    const { connection_id, project_id } = await req.json();
+    const body = await req.json();
+    const { connection_id, project_id, create_connection, data_source_id, connector_type, connection_name, organization_id, user_id } = body;
 
-    if (!connection_id || !project_id) {
-      throw new Error("connection_id and project_id are required");
+    if (!project_id) {
+      throw new Error("project_id is required");
     }
 
-    console.log(`[discover] Starting discovery for connection=${connection_id}, project=${project_id}`);
+    let effectiveConnectionId = connection_id;
+
+    // If create_connection mode: create or find existing connection via service role
+    if (create_connection && data_source_id && connector_type && connection_name && organization_id && user_id) {
+      console.log(`[discover] Creating connection for data_source=${data_source_id}, project=${project_id}`);
+
+      // Check if connection already exists for this data source + project
+      const { data: existing } = await supabase
+        .from("external_connections")
+        .select("id")
+        .eq("project_id", project_id)
+        .eq("data_source_id", data_source_id)
+        .limit(1);
+
+      if (existing && existing.length > 0) {
+        effectiveConnectionId = existing[0].id;
+        console.log(`[discover] Found existing connection=${effectiveConnectionId}`);
+      } else {
+        const { data: newConn, error: createError } = await supabase
+          .from("external_connections")
+          .insert({
+            project_id,
+            organization_id,
+            user_id,
+            data_source_id: data_source_id,
+            connector_type,
+            connection_name,
+          })
+          .select()
+          .single();
+
+        if (createError) {
+          console.error(`[discover] Failed to create connection:`, createError.message);
+          throw new Error(`Failed to create connection: ${createError.message}`);
+        }
+        effectiveConnectionId = newConn.id;
+        console.log(`[discover] Created connection=${effectiveConnectionId}`);
+      }
+    }
+
+    if (!effectiveConnectionId) {
+      throw new Error("connection_id is required (or provide create_connection params)");
+    }
+
+    console.log(`[discover] Starting discovery for connection=${effectiveConnectionId}, project=${project_id}`);
 
     // Get connection info
     const { data: connection, error: connError } = await supabase
       .from("external_connections")
       .select("*, data_sources!external_connections_data_source_id_fkey(*)")
-      .eq("id", connection_id)
+      .eq("id", effectiveConnectionId)
       .single();
 
     if (connError || !connection) {
@@ -370,7 +415,7 @@ serve(async (req) => {
       .from("external_discovery_runs")
       .insert({
         project_id,
-        connection_id,
+        connection_id: effectiveConnectionId,
         status: 'running',
         started_at: new Date().toISOString()
       })
@@ -424,7 +469,7 @@ serve(async (req) => {
         const objectsToInsert = objects.map(obj => ({
           discovery_run_id: runId,
           project_id,
-          connection_id,
+          connection_id: effectiveConnectionId,
           object_name: obj.object_name,
           object_type: obj.object_type,
           object_schema: obj.object_schema,
@@ -457,7 +502,7 @@ serve(async (req) => {
           last_validated_at: new Date().toISOString(),
           validation_message: `Discovery completed: ${objects.length} objects found`
         })
-        .eq("id", connection_id);
+        .eq("id", effectiveConnectionId);
 
     } catch (discoveryError) {
       const errMsg = discoveryError instanceof Error ? discoveryError.message : String(discoveryError);
@@ -479,6 +524,7 @@ serve(async (req) => {
     return new Response(
       JSON.stringify({
         success: true,
+        connection_id: effectiveConnectionId,
         run_id: runId,
         objects_found: objects.length,
         objects: objects.map(o => ({
