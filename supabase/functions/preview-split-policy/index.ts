@@ -554,26 +554,30 @@ serve(async (req: Request) => {
     }
 
     // ══════ Update SSOT: split_state ══════
-    await supabase.rpc("rpc_update_pipeline_state", {
-      p_project_id: project_id,
-      p_stage: "split",
-      p_new_state: policyStatus === "ready" ? "ready" : "blocked",
-    }).then(() => {
+    try {
+      await Promise.resolve(supabase.rpc("rpc_update_pipeline_state", {
+        p_project_id: project_id,
+        p_stage: "split",
+        p_new_state: policyStatus === "ready" ? "ready" : "blocked",
+      }));
       console.log(`[preview-split-policy] SSOT split_state → ${policyStatus}`);
-    }).catch((e: any) => {
-      console.warn(`[preview-split-policy] Failed to update SSOT split_state:`, e.message);
-    });
+    } catch (e: any) {
+      console.warn(`[preview-split-policy] Failed to update SSOT split_state:`, e?.message);
+    }
 
     // ══════ Persist split_validation_log in project_settings SSOT ══════
-    await supabase
-      .from("project_settings")
-      .update({
-        split_validation_log: validationLog,
-        updated_at: new Date().toISOString(),
-      })
-      .eq("project_id", project_id)
-      .then(() => console.log(`[preview-split-policy] split_validation_log persisted`))
-      .catch((e: any) => console.warn(`[preview-split-policy] Failed to persist validation_log:`, e.message));
+    try {
+      await Promise.resolve(supabase
+        .from("project_settings")
+        .update({
+          split_validation_log: validationLog,
+          updated_at: new Date().toISOString(),
+        })
+        .eq("project_id", project_id));
+      console.log(`[preview-split-policy] split_validation_log persisted`);
+    } catch (e: any) {
+      console.warn(`[preview-split-policy] Failed to persist validation_log:`, e?.message);
+    }
 
     // ══════ AI context update ══════
     if (aiCtxRes.data) {
