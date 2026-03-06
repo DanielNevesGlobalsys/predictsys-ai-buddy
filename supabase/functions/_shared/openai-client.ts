@@ -24,11 +24,16 @@ export async function getOpenAIKey(): Promise<string> {
     .from("api_openai")
     .select("key")
     .limit(1)
-    .single();
+    .maybeSingle();
 
-  if (error || !data?.key) {
-    console.error("[openai-client] Failed to fetch OpenAI key:", error);
-    throw new Error("Could not retrieve OpenAI API key from external database");
+  if (error) {
+    console.error("[openai-client] DB error fetching key:", JSON.stringify(error));
+    throw new Error(`Failed to query api_openai table: ${error.message} (code: ${error.code})`);
+  }
+
+  if (!data || !data.key) {
+    console.error("[openai-client] No rows found in api_openai table. Ensure the table has a row with a 'key' column and RLS allows reading with anon key.");
+    throw new Error("No OpenAI key found in api_openai table. Check that the table has data and RLS permits access.");
   }
 
   _cachedKey = data.key;
