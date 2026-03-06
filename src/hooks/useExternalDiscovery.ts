@@ -35,6 +35,17 @@ export interface DiscoveryFallback {
   fix_suggestion: string;
 }
 
+export interface SourceTrace {
+  detected: boolean;
+  datasource_type: string | null;
+  datasource_server: string | null;
+  datasource_database: string | null;
+  datasource_path: string | null;
+  semantic_model_type: string | null;
+  confidence: 'high' | 'medium' | 'low';
+  source_trace_status: 'detected' | 'partial' | 'not_available';
+}
+
 export interface ExternalConnection {
   id: string;
   connector_type: string;
@@ -54,6 +65,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [discoveryFallback, setDiscoveryFallback] = useState<DiscoveryFallback | null>(null);
+  const [sourceTrace, setSourceTrace] = useState<SourceTrace | null>(null);
   const [inspectingObjectId, setInspectingObjectId] = useState<string | null>(null);
   const [inspectionData, setInspectionData] = useState<{ columns: any[]; rows: any[] } | null>(null);
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set());
@@ -84,6 +96,14 @@ export function useExternalDiscovery(projectId: string | undefined) {
     if (runs && runs.length > 0) {
       setDiscoveryRun(runs[0] as DiscoveryRun);
 
+      // Extract source_trace from evidence if available
+      const ev = (runs[0] as any).evidence;
+      if (ev?.source_trace) {
+        setSourceTrace(ev.source_trace as SourceTrace);
+      } else {
+        setSourceTrace(null);
+      }
+
       const { data: objs } = await supabase
         .from("external_discovery_objects")
         .select("*")
@@ -100,6 +120,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
       setDiscoveryRun(null);
       setObjects([]);
       setSelectedObjectIds(new Set());
+      setSourceTrace(null);
     }
   }, [projectId]);
 
@@ -140,6 +161,13 @@ export function useExternalDiscovery(projectId: string | undefined) {
         setDiscoveryFallback(data.fallback as DiscoveryFallback);
       } else {
         setDiscoveryFallback(null);
+      }
+
+      // Handle source trace
+      if (data.source_trace) {
+        setSourceTrace(data.source_trace as SourceTrace);
+      } else {
+        setSourceTrace(null);
       }
 
       const connId = data.connection_id;
@@ -190,6 +218,12 @@ export function useExternalDiscovery(projectId: string | undefined) {
         setDiscoveryFallback(data.fallback as DiscoveryFallback);
       } else {
         setDiscoveryFallback(null);
+      }
+
+      if (data.source_trace) {
+        setSourceTrace(data.source_trace as SourceTrace);
+      } else {
+        setSourceTrace(null);
       }
 
       toast({
@@ -268,6 +302,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
     setActiveConnectionId,
     discoveryRun,
     discoveryFallback,
+    sourceTrace,
     objects,
     isDiscovering,
     isImporting,

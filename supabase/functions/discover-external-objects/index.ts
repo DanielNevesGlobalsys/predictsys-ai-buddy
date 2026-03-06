@@ -24,7 +24,6 @@ function classifyObject(name: string, colCount: number | null, rowCount: number 
   if (/^(dim_|d_|dimension)/.test(lower) || lower.includes('_dim')) return 'dimension';
   if (/^(fact_|f_|fct_)/.test(lower) || lower.includes('_fact')) return 'fact';
   if (/^(bridge_|br_)/.test(lower)) return 'bridge';
-  // Heuristic: high row count + many columns = likely fact
   if (rowCount && colCount && rowCount > 10000 && colCount > 8) return 'fact';
   if (rowCount && rowCount < 1000 && colCount && colCount < 10) return 'dimension';
   return 'unknown';
@@ -94,7 +93,6 @@ async function discoverDatabricks(config: Record<string, any>): Promise<Discover
   
   const warehouseId = httpPath.replace(/^\/sql\/1\.0\/warehouses\//, '').replace(/^\/sql\/protocolv1\/o\/\d+\//, '');
   
-  // List schemas if no specific schema
   const schemasToScan: string[] = [];
   if (schema) {
     schemasToScan.push(schema);
@@ -112,17 +110,16 @@ async function discoverDatabricks(config: Record<string, any>): Promise<Discover
 
   const objects: DiscoveredObject[] = [];
   
-  for (const s of schemasToScan.slice(0, 10)) { // Limit to 10 schemas
+  for (const s of schemasToScan.slice(0, 10)) {
     try {
       const tablesQuery = `SHOW TABLES IN ${catalog}.${s}`;
       const tablesResult = await executeDatabricksStatement(host, warehouseId, accessToken, tablesQuery, catalog, s);
       
       for (const row of tablesResult.rows) {
-        const tableName = row[1] || row[0]; // database, tableName, isTemporary
+        const tableName = row[1] || row[0];
         const isTemp = row[2] === 'true';
         if (isTemp) continue;
         
-        // Try to get row count (best-effort)
         let rowCount: number | null = null;
         let colCount: number | null = null;
         try {
@@ -193,8 +190,22 @@ async function executeDatabricksStatement(
 }
 
 // ═══════════════════════════════════════════════════
-// Power BI Discovery
+// Power BI Discovery with 3-level fallback
 // ═══════════════════════════════════════════════════
+
+interface SourceTraceResult {
+  detected: boolean;
+  datasource_type: string | null;
+  datasource_server: string | null;
+  datasource_database: string | null;
+  datasource_path: string | null;
+  lineage_available: boolean;
+  source_trace_status: 'detected' | 'partial' | 'not_available';
+  source_trace_reason_code: string;
+  confidence: 'high' | 'medium' | 'low';
+  raw_datasources: any[];
+  semantic_model_type: string | null;
+}
 
 interface PowerBIDiscoveryResult {
   objects: DiscoveredObject[];
@@ -202,6 +213,7 @@ interface PowerBIDiscoveryResult {
   discovery_method: string;
   reason_code?: string;
   error_detail?: string;
+  source_trace?: SourceTraceResult;
 }
 
 function classifyPowerBIError(errText: string): { reason_code: string; user_message: string; admin_message: string; fix_suggestion: string } {
@@ -245,6 +257,146 @@ function classifyPowerBIError(errText: string): { reason_code: string; user_mess
   };
 }
 
+/** Map Power BI datasource connectionDetails to a known type */
+function classifyDatasource(ds: any): { type: string; server: string | null; database: string | null; path: string | null } {
+  const kind = (ds.datasourceType || '').toLowerCase();
+  const details = ds.connectionDetails || {};
+  const server = details.server || details.url || null;
+  const database = details.database || null;
+  const path = details.path || details.url || null;
+
+  const typeMap: Record<string, string> = {
+    'sql': 'azure_sql', 'azuresqldw': 'azure_synapse', 'analysisservices': 'analysis_services',
+    'oracle': 'oracle', 'postgresql': 'postgresql', 'mysql': 'mysql',
+    'azureblobs': 'azure_blob', 'azuredatalakestoragegen2': 'azure_data_lake',
+    'azuredatalakestore': 'azure_data_lake', 'databricks': 'databricks',
+    'snowflake': 'snowflake', 'web': 'web_api', 'odata': 'odata',
+    'sharepoint': 'sharepoint', 'exchange': 'exchange',
+    'sqlserver': 'sql_server', 'file': 'file', 'folder': 'folder',
+    'azuretables': 'azure_tables', 'amazons3': 'aws_s3',
+    'amazonredshift': 'aws_redshift', 'googleanalytics': 'google_analytics',
+    'microsoftfabricwarehouse': 'fabric_warehouse', 'microsoftfabriclakehouse': 'fabric_lakehouse',
+  };
+
+  return {
+    type: typeMap[kind] || kind || 'unknown',
+    server,
+    database,
+    path: path !== server ? path : null,
+  };
+}
+
+/** Level 2: Source tracing — identify underlying data source */
+async function traceUnderlyingSource(
+  accessToken: string,
+  workspaceId: string,
+  datasetId: string,
+  supabaseClient: any,
+  connectionId: string,
+  projectId: string,
+): Promise<SourceTraceResult> {
+  const empty: SourceTraceResult = {
+    detected: false, datasource_type: null, datasource_server: null,
+    datasource_database: null, datasource_path: null,
+    lineage_available: false, source_trace_status: 'not_available',
+    source_trace_reason_code: 'no_datasource_info', confidence: 'low',
+    raw_datasources: [], semantic_model_type: null,
+  };
+
+  // Log start
+  try {
+    await supabaseClient.from('platform_events').insert({
+      event_type: 'powerbi_source_trace_started',
+      project_id: projectId,
+      source: 'connector_powerbi',
+      status: 'info',
+      metadata: { connection_id: connectionId, workspace_id: workspaceId, dataset_id: datasetId, timestamp: new Date().toISOString() },
+    });
+  } catch { /* best-effort */ }
+
+  // Try GET /datasets/{id}/datasources
+  const dsUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/datasources`;
+  try {
+    const resp = await fetch(dsUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+    if (!resp.ok) {
+      const errText = await resp.text();
+      await supabaseClient.from('platform_events').insert({
+        event_type: 'powerbi_source_trace_failed',
+        project_id: projectId, source: 'connector_powerbi', status: 'warn',
+        metadata: { connection_id: connectionId, http_status: resp.status, error: errText.substring(0, 500), endpoint: dsUrl, timestamp: new Date().toISOString() },
+      }).catch(() => {});
+      empty.source_trace_reason_code = `http_${resp.status}`;
+      return empty;
+    }
+
+    const body = await resp.json();
+    const datasources = body.value || [];
+    empty.raw_datasources = datasources;
+
+    if (datasources.length === 0) {
+      empty.source_trace_reason_code = 'empty_datasources_response';
+      return empty;
+    }
+
+    // Pick primary datasource (first SQL-like one, or first overall)
+    const sqlLike = datasources.find((d: any) => {
+      const t = (d.datasourceType || '').toLowerCase();
+      return ['sql', 'sqlserver', 'azuresqldw', 'postgresql', 'mysql', 'oracle', 'snowflake', 'databricks',
+        'amazonredshift', 'microsoftfabricwarehouse', 'microsoftfabriclakehouse'].includes(t);
+    });
+    const primary = sqlLike || datasources[0];
+    const classified = classifyDatasource(primary);
+
+    const result: SourceTraceResult = {
+      detected: true,
+      datasource_type: classified.type,
+      datasource_server: classified.server,
+      datasource_database: classified.database,
+      datasource_path: classified.path,
+      lineage_available: true,
+      source_trace_status: classified.server ? 'detected' : 'partial',
+      source_trace_reason_code: 'datasource_api_ok',
+      confidence: classified.server && classified.database ? 'high' : classified.server ? 'medium' : 'low',
+      raw_datasources: datasources,
+      semantic_model_type: null,
+    };
+
+    // Try to get dataset details for semantic_model_type
+    try {
+      const detailUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}`;
+      const detailResp = await fetch(detailUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
+      if (detailResp.ok) {
+        const detail = await detailResp.json();
+        // defaultMode: "Import" | "DirectQuery" | "Push" | "Streaming" | "PushStreaming"
+        result.semantic_model_type = detail.defaultMode || null;
+      }
+    } catch { /* ignore */ }
+
+    // Log success
+    await supabaseClient.from('platform_events').insert({
+      event_type: 'powerbi_source_detected',
+      project_id: projectId, source: 'connector_powerbi', status: 'info',
+      metadata: {
+        connection_id: connectionId, datasource_type: result.datasource_type,
+        datasource_server: result.datasource_server, datasource_database: result.datasource_database,
+        confidence: result.confidence, semantic_model_type: result.semantic_model_type,
+        datasources_count: datasources.length, timestamp: new Date().toISOString(),
+      },
+    }).catch(() => {});
+
+    return result;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    await supabaseClient.from('platform_events').insert({
+      event_type: 'powerbi_source_trace_failed',
+      project_id: projectId, source: 'connector_powerbi', status: 'warn',
+      metadata: { connection_id: connectionId, error: msg.substring(0, 500), timestamp: new Date().toISOString() },
+    }).catch(() => {});
+    empty.source_trace_reason_code = 'exception';
+    return empty;
+  }
+}
+
 async function discoverPowerBIWithFallback(
   config: Record<string, any>,
   supabaseClient: any,
@@ -252,11 +404,9 @@ async function discoverPowerBIWithFallback(
   projectId: string,
 ): Promise<PowerBIDiscoveryResult> {
   const { workspace_id, dataset_id, client_id, client_secret, tenant_id } = config;
-  const diagnosticEvents: Array<Record<string, any>> = [];
 
   /** Helper to persist a diagnostic event to platform_events */
   async function logDiagnostic(eventType: string, meta: Record<string, unknown>) {
-    // Sanitize: never log tokens/secrets
     const safeMeta = { ...meta };
     delete safeMeta.access_token;
     delete safeMeta.client_secret;
@@ -282,7 +432,6 @@ async function discoverPowerBIWithFallback(
         timestamp: new Date().toISOString(),
       },
     };
-    diagnosticEvents.push(event);
     try {
       await supabaseClient.from('platform_events').insert(event);
     } catch (e) {
@@ -303,14 +452,12 @@ async function discoverPowerBIWithFallback(
 
   const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
-  // ─── Primary: DAX discovery ───
+  // ─── Level 1 Primary: DAX discovery ───
   const daxQuery = `EVALUATE INFO.TABLES()`;
   const daxStartMs = Date.now();
 
   await logDiagnostic('powerbi_discovery_request', {
-    endpoint: executeUrl,
-    dax_query: daxQuery,
-    method: 'POST',
+    endpoint: executeUrl, dax_query: daxQuery, method: 'POST',
   });
 
   try {
@@ -325,11 +472,8 @@ async function discoverPowerBIWithFallback(
     if (!resp.ok) {
       const errText = await resp.text();
       await logDiagnostic('powerbi_discovery_error', {
-        http_status: resp.status,
-        error_payload_raw: errText.substring(0, 2000),
-        dax_query: daxQuery,
-        endpoint_called: executeUrl,
-        duration_ms: daxDurationMs,
+        http_status: resp.status, error_payload_raw: errText.substring(0, 2000),
+        dax_query: daxQuery, endpoint_called: executeUrl, duration_ms: daxDurationMs,
       });
       throw new Error(errText);
     }
@@ -338,15 +482,11 @@ async function discoverPowerBIWithFallback(
     const rows = result.results?.[0]?.tables?.[0]?.rows || [];
 
     await logDiagnostic('powerbi_discovery_response', {
-      http_status: 200,
-      duration_ms: daxDurationMs,
-      rows_returned: rows.length,
-      raw_response_size: JSON.stringify(result).length,
-      endpoint: executeUrl,
+      http_status: 200, duration_ms: daxDurationMs, rows_returned: rows.length,
+      raw_response_size: JSON.stringify(result).length, endpoint: executeUrl,
     });
 
     const objects: DiscoveredObject[] = [];
-
     for (const row of rows) {
       const name = row['[Name]'] || row['Name'];
       if (!name || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
@@ -386,9 +526,8 @@ async function discoverPowerBIWithFallback(
   } catch (daxError) {
     const daxErrMsg = daxError instanceof Error ? daxError.message : String(daxError);
     const daxStack = daxError instanceof Error ? daxError.stack : undefined;
-    console.warn(`[discover] Power BI DAX discovery failed, attempting metadata fallback:`, daxErrMsg);
+    console.warn(`[discover] Power BI DAX discovery failed, attempting fallback chain:`, daxErrMsg);
 
-    // Parse error codes from the raw payload
     let errorCode: string | undefined;
     try {
       const parsed = JSON.parse(daxErrMsg);
@@ -396,34 +535,31 @@ async function discoverPowerBIWithFallback(
     } catch { /* not JSON */ }
 
     await logDiagnostic('powerbi_discovery_error', {
-      http_status: null,
-      error_code: errorCode,
+      http_status: null, error_code: errorCode,
       error_message: daxErrMsg.substring(0, 500),
       error_payload_raw: daxErrMsg.substring(0, 2000),
-      dax_query: daxQuery,
-      endpoint_called: executeUrl,
+      dax_query: daxQuery, endpoint_called: executeUrl,
       stack_trace: daxStack?.substring(0, 1000),
-      duration_ms: Date.now() - daxStartMs,
-      phase: 'dax_primary',
+      duration_ms: Date.now() - daxStartMs, phase: 'dax_primary',
     });
 
     const classified = classifyPowerBIError(daxErrMsg);
 
-    // ─── Fallback: REST API metadata ───
+    // ─── Level 1 Fallback: REST API metadata ───
     const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
     const fallbackStartMs = Date.now();
 
     await logDiagnostic('powerbi_discovery_request', {
-      endpoint: fallbackUrl,
-      method: 'GET',
-      phase: 'rest_fallback',
+      endpoint: fallbackUrl, method: 'GET', phase: 'rest_fallback',
     });
+
+    let restObjects: DiscoveredObject[] = [];
+    let restFallbackWorked = false;
 
     try {
       const tablesResp = await fetch(fallbackUrl, {
         headers: { 'Authorization': `Bearer ${access_token}` }
       });
-
       const fallbackDurationMs = Date.now() - fallbackStartMs;
 
       if (tablesResp.ok) {
@@ -431,15 +567,11 @@ async function discoverPowerBIWithFallback(
         const tables = tablesData.value || [];
 
         await logDiagnostic('powerbi_discovery_response', {
-          http_status: 200,
-          duration_ms: fallbackDurationMs,
-          rows_returned: tables.length,
-          raw_response_size: JSON.stringify(tablesData).length,
-          endpoint: fallbackUrl,
-          phase: 'rest_fallback',
+          http_status: 200, duration_ms: fallbackDurationMs, rows_returned: tables.length,
+          raw_response_size: JSON.stringify(tablesData).length, endpoint: fallbackUrl, phase: 'rest_fallback',
         });
 
-        const objects: DiscoveredObject[] = tables.map((t: any) => ({
+        restObjects = tables.map((t: any) => ({
           object_name: t.name,
           object_type: 'semantic_model',
           object_schema: `${workspace_id}/${dataset_id}`,
@@ -450,41 +582,68 @@ async function discoverPowerBIWithFallback(
           metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
         }));
 
-        return {
-          objects,
-          fallback_used: true,
-          discovery_method: 'rest_api_tables',
-          reason_code: classified.reason_code,
-          error_detail: daxErrMsg.substring(0, 500),
-        };
+        if (restObjects.length > 0) restFallbackWorked = true;
       } else {
         const fallbackErrText = await tablesResp.text();
         await logDiagnostic('powerbi_discovery_error', {
-          http_status: tablesResp.status,
-          error_payload_raw: fallbackErrText.substring(0, 2000),
-          endpoint_called: fallbackUrl,
-          duration_ms: fallbackDurationMs,
-          phase: 'rest_fallback',
+          http_status: tablesResp.status, error_payload_raw: fallbackErrText.substring(0, 2000),
+          endpoint_called: fallbackUrl, duration_ms: fallbackDurationMs, phase: 'rest_fallback',
         });
       }
     } catch (fallbackErr) {
       const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
       await logDiagnostic('powerbi_discovery_error', {
-        error_message: fbMsg.substring(0, 500),
-        endpoint_called: fallbackUrl,
-        duration_ms: Date.now() - fallbackStartMs,
-        phase: 'rest_fallback',
+        error_message: fbMsg.substring(0, 500), endpoint_called: fallbackUrl,
+        duration_ms: Date.now() - fallbackStartMs, phase: 'rest_fallback',
       });
       console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
     }
 
-    // ─── Both methods failed: return structured failure ───
+    // ─── Level 2: Source tracing ───
+    await logDiagnostic('powerbi_metadata_fallback_started', { phase: 'source_trace' });
+
+    const sourceTrace = await traceUnderlyingSource(
+      access_token, workspace_id, dataset_id,
+      supabaseClient, connectionId, projectId,
+    );
+
+    await logDiagnostic('powerbi_metadata_fallback_finished', {
+      phase: 'source_trace',
+      source_detected: sourceTrace.detected,
+      datasource_type: sourceTrace.datasource_type,
+      confidence: sourceTrace.confidence,
+      semantic_model_type: sourceTrace.semantic_model_type,
+    });
+
+    // Log assisted ingestion offered
+    await logDiagnostic('powerbi_assisted_ingestion_offered', {
+      phase: 'level3',
+      rest_fallback_worked: restFallbackWorked,
+      rest_objects_count: restObjects.length,
+      source_detected: sourceTrace.detected,
+      datasource_type: sourceTrace.datasource_type,
+    });
+
+    // If REST fallback gave objects, return them with source trace
+    if (restFallbackWorked) {
+      return {
+        objects: restObjects,
+        fallback_used: true,
+        discovery_method: 'rest_api_tables',
+        reason_code: classified.reason_code,
+        error_detail: daxErrMsg.substring(0, 500),
+        source_trace: sourceTrace,
+      };
+    }
+
+    // Both DAX and REST failed — return failure with source trace
     return {
       objects: [],
       fallback_used: true,
       discovery_method: 'none',
       reason_code: classified.reason_code,
       error_detail: daxErrMsg.substring(0, 500),
+      source_trace: sourceTrace,
     };
   }
 }
@@ -493,9 +652,6 @@ async function discoverPowerBIWithFallback(
 // Azure SQL / Synapse Discovery
 // ═══════════════════════════════════════════════════
 async function discoverAzureSQL(config: Record<string, any>): Promise<DiscoveredObject[]> {
-  // Azure SQL uses the same protocol as PostgreSQL for discovery (via information_schema)
-  // But since we can't directly connect with pg driver, we return a placeholder
-  // In production, this would use the Azure SQL REST API or TDS protocol
   console.log(`[discover] Azure SQL discovery not yet fully implemented for server: ${config.server}`);
   return [{
     object_name: config.database || 'database',
@@ -513,10 +669,8 @@ async function discoverAzureSQL(config: Record<string, any>): Promise<Discovered
 // AWS S3 / Azure Blob Discovery (file-based)
 // ═══════════════════════════════════════════════════
 async function discoverCloudStorage(config: Record<string, any>, connectorType: string): Promise<DiscoveredObject[]> {
-  // For S3/Blob, we list files as discoverable objects
   if (connectorType === 'aws_s3') {
-    const { bucket, region, access_key_id, secret_access_key, prefix } = config;
-    // We'd use AWS SDK to list objects - simplified here
+    const { bucket, region, prefix } = config;
     return [{
       object_name: prefix || bucket,
       object_type: 'file',
@@ -571,7 +725,6 @@ serve(async (req) => {
     if (create_connection && data_source_id && connector_type && connection_name && organization_id && user_id) {
       console.log(`[discover] Creating connection for data_source=${data_source_id}, project=${project_id}`);
 
-      // Check if connection already exists for this data source + project
       const { data: existing } = await supabase
         .from("external_connections")
         .select("id")
@@ -646,7 +799,6 @@ serve(async (req) => {
     const runId = run.id;
 
     let objects: DiscoveredObject[] = [];
-
     let powerbiResult: PowerBIDiscoveryResult | null = null;
 
     try {
@@ -686,7 +838,6 @@ serve(async (req) => {
 
       console.log(`[discover] Found ${objects.length} objects`);
 
-      // Determine if Power BI had a fallback failure (0 objects + reason_code)
       const isPowerBIFallbackFailure = connectorType === 'powerbi' && powerbiResult && powerbiResult.reason_code && objects.length === 0;
 
       // Persist discovered objects
@@ -720,6 +871,23 @@ serve(async (req) => {
           evidence.message_admin = classified.admin_message;
           evidence.fix_suggestion = classified.fix_suggestion;
         }
+        // Persist source trace in evidence
+        if (powerbiResult.source_trace) {
+          const st = powerbiResult.source_trace;
+          evidence.source_trace = {
+            detected: st.detected,
+            datasource_type: st.datasource_type,
+            datasource_server: st.datasource_server,
+            datasource_database: st.datasource_database,
+            datasource_path: st.datasource_path,
+            lineage_available: st.lineage_available,
+            source_trace_status: st.source_trace_status,
+            source_trace_reason_code: st.source_trace_reason_code,
+            confidence: st.confidence,
+            semantic_model_type: st.semantic_model_type,
+            datasources_count: st.raw_datasources?.length || 0,
+          };
+        }
       }
 
       // Determine run status
@@ -730,7 +898,12 @@ serve(async (req) => {
       if (isPowerBIFallbackFailure) {
         runStatus = 'failed_with_fallback';
         const classified = classifyPowerBIError(powerbiResult!.error_detail || '');
-        runErrorMessage = classified.user_message;
+        // Use source-trace-aware message
+        if (powerbiResult!.source_trace?.detected) {
+          runErrorMessage = `Foi possível estabelecer conexão com o dataset do Power BI, mas o discovery automático do semantic model não está disponível para este caso. Detectamos uma possível fonte analítica subjacente (${powerbiResult!.source_trace.datasource_type}) e recomendamos conectar diretamente essa fonte para uma ingestão mais estável no PredictSys.`;
+        } else {
+          runErrorMessage = 'O dataset do Power BI foi localizado, mas a inspeção automática do semantic model não pôde ser concluída. Você pode usar um arquivo exportado ou conectar manualmente a fonte analítica de origem.';
+        }
         runReasons = [powerbiResult!.reason_code!];
       }
 
@@ -747,8 +920,8 @@ serve(async (req) => {
         })
         .eq("id", runId);
 
-      // Update connection status — keep connection usable even on DAX failure
-      const connStatus = isPowerBIFallbackFailure ? 'validated' : 'validated';
+      // Update connection status
+      const connStatus = 'validated';
       const connMessage = isPowerBIFallbackFailure
         ? `Discovery parcial: DAX falhou, conexão válida. ${powerbiResult?.reason_code}`
         : `Discovery completed: ${objects.length} objects found`;
@@ -786,16 +959,12 @@ serve(async (req) => {
       run_id: runId,
       objects_found: objects.length,
       objects: objects.map(o => ({
-        name: o.object_name,
-        type: o.object_type,
-        schema: o.object_schema,
-        columns: o.estimated_columns,
-        rows: o.estimated_rows,
-        classification: o.classification
+        name: o.object_name, type: o.object_type, schema: o.object_schema,
+        columns: o.estimated_columns, rows: o.estimated_rows, classification: o.classification
       })),
     };
 
-    // Attach fallback info so frontend can display appropriate UI
+    // Attach fallback info
     if (powerbiResult && powerbiResult.reason_code) {
       const classified = classifyPowerBIError(powerbiResult.error_detail || '');
       responsePayload.fallback = {
@@ -805,6 +974,20 @@ serve(async (req) => {
         user_message: classified.user_message,
         fix_suggestion: classified.fix_suggestion,
       };
+
+      // Attach source trace info for frontend
+      if (powerbiResult.source_trace) {
+        responsePayload.source_trace = {
+          detected: powerbiResult.source_trace.detected,
+          datasource_type: powerbiResult.source_trace.datasource_type,
+          datasource_server: powerbiResult.source_trace.datasource_server,
+          datasource_database: powerbiResult.source_trace.datasource_database,
+          datasource_path: powerbiResult.source_trace.datasource_path,
+          semantic_model_type: powerbiResult.source_trace.semantic_model_type,
+          confidence: powerbiResult.source_trace.confidence,
+          source_trace_status: powerbiResult.source_trace.source_trace_status,
+        };
+      }
     }
 
     return new Response(
