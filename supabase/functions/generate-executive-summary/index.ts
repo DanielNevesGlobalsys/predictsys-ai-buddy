@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -26,7 +27,7 @@ serve(async (req) => {
 
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // Fetch current AI context
@@ -106,37 +107,24 @@ Responda APENAS o texto do resumo executivo, sem markdown, sem títulos, sem bul
 
     let executiveSummary = "";
 
-    if (lovableApiKey) {
-      try {
-        const aiRes = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${lovableApiKey}`,
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              { role: "system", content: "Você é Lys, copiloto de IA do PredictSys. Gere resumos executivos concisos em português brasileiro, focados em impacto de negócio." },
-              { role: "user", content: prompt },
-            ],
-            max_tokens: 1000,
-            temperature: 0.5,
-          }),
-        });
+    try {
+      const aiRes = await callOpenAI({
+        messages: [
+          { role: "system", content: "Você é Lys, copiloto de IA do PredictSys. Gere resumos executivos concisos em português brasileiro, focados em impacto de negócio." },
+          { role: "user", content: prompt },
+        ],
+        max_tokens: 1000,
+        temperature: 0.5,
+      });
 
-        if (aiRes.ok) {
-          const aiData = await aiRes.json();
-          executiveSummary = aiData.choices?.[0]?.message?.content || "";
-        } else {
-          console.error(`[generate-executive-summary] AI API error: ${aiRes.status}`);
-          if (aiRes.status === 429) {
-            console.warn("[generate-executive-summary] Rate limited, using fallback");
-          }
-        }
-      } catch (aiErr) {
-        console.error("[generate-executive-summary] AI call failed:", aiErr);
+      if (aiRes.ok) {
+        const aiData = await aiRes.json();
+        executiveSummary = aiData.choices?.[0]?.message?.content || "";
+      } else {
+        console.error(`[generate-executive-summary] AI API error: ${aiRes.status}`);
       }
+    } catch (aiErr) {
+      console.error("[generate-executive-summary] AI call failed:", aiErr);
     }
 
     // Fallback: generate a rule-based summary

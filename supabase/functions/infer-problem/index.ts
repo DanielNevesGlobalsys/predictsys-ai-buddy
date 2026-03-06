@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -1083,8 +1084,7 @@ async function llmDisambiguate(
   industry: IndustryInference,
   allColumnNames: string[]
 ): Promise<Record<string, ColumnRole>> {
-  const apiKey = Deno.env.get("LOVABLE_API_KEY");
-  if (!apiKey || ambiguousColumns.length === 0) return {};
+  if (ambiguousColumns.length === 0) return {};
 
   const colList = ambiguousColumns.map(c => `- "${c.column}" (classificado heuristicamente como ${c.role}; motivos: ${c.reasons.join(", ")})`).join("\n");
 
@@ -1101,20 +1101,12 @@ ID_TECNICO, TEMPO, DIMENSAO_NEGOCIO, MEDIDA_NUMERICA, CATEGORICA, TEXTO, TARGET_
 Retorne APENAS um JSON: { "column_name": "ROLE", ... }`;
 
   try {
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: "Você classifica colunas de datasets para ML. Responda SOMENTE com JSON válido." },
-          { role: "user", content: prompt },
-        ],
-        temperature: 0.1,
-      }),
+    const response = await callOpenAI({
+      messages: [
+        { role: "system", content: "Você classifica colunas de datasets para ML. Responda SOMENTE com JSON válido." },
+        { role: "user", content: prompt },
+      ],
+      temperature: 0.1,
     });
 
     if (!response.ok) {

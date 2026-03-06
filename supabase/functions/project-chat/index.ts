@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -229,27 +230,16 @@ function buildConversationHistory(recentMessages: any[]): string {
 // ── LLM call ───────────────────────────────────────────────────────────────
 
 async function callLLM(systemPrompt: string, userMessage: string, projectContext: string, conversationHistory: string): Promise<string> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
-
   const fullPrompt = `${projectContext}\n${conversationHistory}\n=== PERGUNTA DO USUÁRIO ===\n${userMessage}`;
   console.log("[project-chat] Context length:", fullPrompt.length);
 
-  const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${LOVABLE_API_KEY}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({
-      model: "google/gemini-2.5-flash",
-      messages: [
-        { role: "system", content: systemPrompt },
-        { role: "user", content: fullPrompt },
-      ],
-      max_tokens: 2000,
-      temperature: 0.7,
-    }),
+  const response = await callOpenAI({
+    messages: [
+      { role: "system", content: systemPrompt },
+      { role: "user", content: fullPrompt },
+    ],
+    max_tokens: 2000,
+    temperature: 0.7,
   });
 
   if (!response.ok) {
@@ -373,7 +363,7 @@ serve(async (req) => {
       if (llmError instanceof Error) {
         if (llmError.message === "RATE_LIMITED") assistantReply = "⚠️ Estou temporariamente indisponível. Tente novamente em alguns segundos.";
         else if (llmError.message === "PAYMENT_REQUIRED") assistantReply = "⚠️ Serviço temporariamente indisponível. Entre em contato com o suporte.";
-        else if (llmError.message === "LOVABLE_API_KEY not configured") assistantReply = generateFallbackReply(context, message);
+        else if (llmError.message.includes("OpenAI API key")) assistantReply = generateFallbackReply(context, message);
         else assistantReply = "Não consegui gerar uma resposta agora. Tente novamente em alguns instantes.";
       } else {
         assistantReply = generateFallbackReply(context, message);

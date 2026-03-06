@@ -1,5 +1,6 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -280,31 +281,17 @@ async function runLysAnalysis(
   heuristicSuggestions: TargetSuggestion[],
   previousContext?: Record<string, any>
 ): Promise<{ analysis: any; enrichedSuggestions: TargetSuggestion[] }> {
-  const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-  if (!LOVABLE_API_KEY) {
-    console.warn("[ai-suggest-targets] LOVABLE_API_KEY not set, returning heuristics only");
-    return { analysis: null, enrichedSuggestions: heuristicSuggestions };
-  }
-
   try {
     const userPrompt = buildLysUserPrompt(eda, heuristicSuggestions, previousContext);
 
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: LYS_SYSTEM_PROMPT },
-          { role: "user", content: userPrompt },
-        ],
-        tools: [LYS_ANALYSIS_TOOL],
-        tool_choice: { type: "function", function: { name: "lys_full_analysis" } },
-        temperature: 0.3,
-      }),
+    const response = await callOpenAI({
+      messages: [
+        { role: "system", content: LYS_SYSTEM_PROMPT },
+        { role: "user", content: userPrompt },
+      ],
+      tools: [LYS_ANALYSIS_TOOL],
+      tool_choice: { type: "function", function: { name: "lys_full_analysis" } },
+      temperature: 0.3,
     });
 
     if (!response.ok) {

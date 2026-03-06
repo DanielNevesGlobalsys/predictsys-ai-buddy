@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -160,7 +161,7 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
+    
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
@@ -385,39 +386,28 @@ RULES:
 
     let aiAudit: any = null;
 
-    if (lovableApiKey) {
-      try {
-        const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${lovableApiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            model: "google/gemini-2.5-flash",
-            messages: [
-              { role: "system", content: "You are a pipeline audit engine. Always respond with valid JSON only, no markdown." },
-              { role: "user", content: auditPrompt },
-            ],
-            max_tokens: 2500,
-            temperature: 0.3,
-          }),
-        });
+    try {
+      const aiResponse = await callOpenAI({
+        messages: [
+          { role: "system", content: "You are a pipeline audit engine. Always respond with valid JSON only, no markdown." },
+          { role: "user", content: auditPrompt },
+        ],
+        max_tokens: 2500,
+        temperature: 0.3,
+      });
 
-        if (aiResponse.ok) {
-          const aiData = await aiResponse.json();
-          const text = aiData.choices?.[0]?.message?.content || "";
-          // Extract JSON from response
-          const jsonMatch = text.match(/\{[\s\S]*\}/);
-          if (jsonMatch) {
-            aiAudit = JSON.parse(jsonMatch[0]);
-          }
-        } else {
-          console.error(`[audit-pipeline] AI response error: ${aiResponse.status}`);
+      if (aiResponse.ok) {
+        const aiData = await aiResponse.json();
+        const text = aiData.choices?.[0]?.message?.content || "";
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (jsonMatch) {
+          aiAudit = JSON.parse(jsonMatch[0]);
         }
-      } catch (aiErr) {
-        console.error("[audit-pipeline] AI audit error:", aiErr);
+      } else {
+        console.error(`[audit-pipeline] AI response error: ${aiResponse.status}`);
       }
+    } catch (aiErr) {
+      console.error("[audit-pipeline] AI audit error:", aiErr);
     }
 
     // ── Build final report ──────────────────────────────────────────────────
