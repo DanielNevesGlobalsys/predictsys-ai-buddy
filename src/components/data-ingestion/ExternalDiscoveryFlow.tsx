@@ -65,7 +65,9 @@ const ExternalDiscoveryFlow = ({
   const handleImport = useCallback(async () => {
     const result = await importSelected(true);
     if (result?.completed > 0) onDataReady();
-  }, [importSelected, onDataReady]);
+  const effectiveSourceTrace = sourceTrace || (discoveryRun?.evidence as any)?.source_trace || null;
+  const sourceDetected = effectiveSourceTrace?.detected === true;
+
 
   const handleRediscover = useCallback(() => {
     if (activeConnectionId) runDiscovery(activeConnectionId);
@@ -93,7 +95,7 @@ const ExternalDiscoveryFlow = ({
     if (!currentOrganization?.id) return;
     const derivedName = `Derivada — ${effectiveSourceTrace?.datasource_type || 'fonte detectada'}`;
     const mapping = effectiveSourceTrace?.datasource_type
-      ? mapSourceToConnectorType(effectiveSourceTrace.datasource_type)
+      ? mapSourceToConnector(effectiveSourceTrace.datasource_type)
       : null;
     const cType = mapping || 'database';
 
