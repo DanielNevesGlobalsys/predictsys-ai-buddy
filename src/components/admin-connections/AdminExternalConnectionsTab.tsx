@@ -9,94 +9,55 @@ import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import {
   Plug, Radar, Download, RefreshCw, ArrowUpCircle, Search,
   Loader2, CheckCircle, AlertCircle, Clock, Eye, FileJson, Package,
-  Database, Layers, Activity,
+  Database, Layers, Activity, ShieldCheck, XCircle, AlertTriangle,
 } from "lucide-react";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { formatDistanceToNow, format } from "date-fns";
+import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 
 // ─── Types ───────────────────────────────────────
 interface Connection {
-  id: string;
-  connection_name: string;
-  connector_type: string;
-  connection_status: string;
-  project_id: string;
-  organization_id: string;
-  created_at: string;
-  updated_at: string;
-  metadata: Record<string, any> | null;
+  id: string; connection_name: string; connector_type: string; connection_status: string;
+  project_id: string; organization_id: string; created_at: string; updated_at: string; metadata: Record<string, any> | null;
 }
-
 interface DiscoveryRun {
-  id: string;
-  connection_id: string;
-  project_id: string;
-  status: string;
-  objects_found: number;
-  error_message: string | null;
-  started_at: string | null;
-  finished_at: string | null;
-  created_at: string;
-  reasons: string[] | null;
-  evidence: Record<string, any> | null;
+  id: string; connection_id: string; project_id: string; status: string; objects_found: number;
+  error_message: string | null; started_at: string | null; finished_at: string | null; created_at: string;
+  reasons: string[] | null; evidence: Record<string, any> | null;
 }
-
 interface DiscoveryObject {
-  id: string;
-  discovery_run_id: string;
-  connection_id: string;
-  project_id: string;
-  object_name: string;
-  object_type: string;
-  object_schema: string | null;
-  estimated_columns: number | null;
-  estimated_rows: number | null;
-  last_updated_at: string | null;
-  classification: string | null;
-  column_preview: any[] | null;
-  sample_rows: any[] | null;
-  is_selected: boolean;
-  metadata: Record<string, any> | null;
+  id: string; discovery_run_id: string; connection_id: string; project_id: string;
+  object_name: string; object_type: string; object_schema: string | null;
+  estimated_columns: number | null; estimated_rows: number | null; last_updated_at: string | null;
+  classification: string | null; column_preview: any[] | null; sample_rows: any[] | null;
+  is_selected: boolean; metadata: Record<string, any> | null;
 }
-
 interface ImportRun {
-  id: string;
-  connection_id: string;
-  project_id: string;
-  status: string;
-  total_objects: number;
-  objects_completed: number;
-  objects_failed: number;
-  started_at: string | null;
-  finished_at: string | null;
-  created_at: string;
-  reasons: string[] | null;
-  evidence: Record<string, any> | null;
+  id: string; connection_id: string; project_id: string; status: string;
+  total_objects: number; objects_completed: number; objects_failed: number;
+  started_at: string | null; finished_at: string | null; created_at: string;
+  reasons: string[] | null; evidence: Record<string, any> | null;
 }
-
 interface ImportObject {
-  id: string;
-  import_run_id: string;
-  project_id: string;
-  object_name: string;
-  status: string;
-  storage_path: string | null;
-  rows_imported: number | null;
-  columns_imported: number | null;
-  file_size_bytes: number | null;
-  dataset_id: string | null;
-  error_code: string | null;
-  error_message: string | null;
-  started_at: string | null;
-  finished_at: string | null;
+  id: string; import_run_id: string; project_id: string; object_name: string; status: string;
+  storage_path: string | null; rows_imported: number | null; columns_imported: number | null;
+  file_size_bytes: number | null; dataset_id: string | null;
+  error_code: string | null; error_message: string | null;
+  started_at: string | null; finished_at: string | null;
+}
+interface ValidationRun {
+  id: string; project_id: string; connection_id: string | null; import_run_id: string | null;
+  dataset_id: string | null; staging_valid: boolean; metadata_valid: boolean; promotion_valid: boolean;
+  schema_valid: boolean; sample_valid: boolean; eda_valid: boolean;
+  overall_status: string; details: Record<string, any> | null;
+  started_at: string | null; finished_at: string | null; created_at: string;
 }
 
 // ─── Status Badge ────────────────────────────────
@@ -109,27 +70,19 @@ function StatusBadge({ status }: { status: string }) {
     promoted: { variant: "default", icon: <ArrowUpCircle className="w-3 h-3" /> },
     running: { variant: "secondary", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
     importing: { variant: "secondary", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
+    pending: { variant: "secondary", icon: <Clock className="w-3 h-3" /> },
     failed: { variant: "destructive", icon: <AlertCircle className="w-3 h-3" /> },
+    warning: { variant: "outline", icon: <AlertTriangle className="w-3 h-3 text-yellow-500" /> },
     inactive: { variant: "outline", icon: <Clock className="w-3 h-3" /> },
   };
   const v = variants[status] || { variant: "outline" as const, icon: null };
-  return (
-    <Badge variant={v.variant} className="gap-1 text-xs">
-      {v.icon}
-      {status}
-    </Badge>
-  );
+  return <Badge variant={v.variant} className="gap-1 text-xs">{v.icon}{status}</Badge>;
 }
 
 function fmtDate(d: string | null) {
   if (!d) return "—";
-  try {
-    return formatDistanceToNow(new Date(d), { addSuffix: true, locale: ptBR });
-  } catch {
-    return d;
-  }
+  try { return formatDistanceToNow(new Date(d), { addSuffix: true, locale: ptBR }); } catch { return d; }
 }
-
 function duration(start: string | null, end: string | null) {
   if (!start || !end) return "—";
   const ms = new Date(end).getTime() - new Date(start).getTime();
@@ -137,9 +90,10 @@ function duration(start: string | null, end: string | null) {
   if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
   return `${(ms / 60000).toFixed(1)}min`;
 }
+function CheckIcon({ ok }: { ok: boolean }) {
+  return ok ? <CheckCircle className="w-4 h-4 text-primary" /> : <XCircle className="w-4 h-4 text-destructive" />;
+}
 
-// ═══════════════════════════════════════════════════
-// Main Component
 // ═══════════════════════════════════════════════════
 const AdminExternalConnectionsTab = () => {
   const { toast } = useToast();
@@ -148,30 +102,32 @@ const AdminExternalConnectionsTab = () => {
   const [connections, setConnections] = useState<Connection[]>([]);
   const [discoveryRuns, setDiscoveryRuns] = useState<DiscoveryRun[]>([]);
   const [importRuns, setImportRuns] = useState<ImportRun[]>([]);
+  const [validationRuns, setValidationRuns] = useState<ValidationRun[]>([]);
 
-  // Detail modals
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null);
   const [connectionDetail, setConnectionDetail] = useState<{ runs: DiscoveryRun[]; imports: ImportRun[]; objects: DiscoveryObject[] } | null>(null);
   const [selectedDiscoveryRun, setSelectedDiscoveryRun] = useState<DiscoveryRun | null>(null);
   const [discoveryObjects, setDiscoveryObjects] = useState<DiscoveryObject[]>([]);
   const [selectedImportRun, setSelectedImportRun] = useState<ImportRun | null>(null);
   const [importObjects, setImportObjects] = useState<ImportObject[]>([]);
+  const [selectedValidation, setSelectedValidation] = useState<ValidationRun | null>(null);
   const [jsonModal, setJsonModal] = useState<{ title: string; data: any } | null>(null);
-
   const [actionLoading, setActionLoading] = useState<string | null>(null);
 
-  // ─── Load all data ─────────────────────────────
+  // ─── Load all ─────────────────────────────
   const loadAll = useCallback(async () => {
     setLoading(true);
     try {
-      const [connsRes, discRes, impRes] = await Promise.all([
+      const [connsRes, discRes, impRes, valRes] = await Promise.all([
         supabase.from("external_connections").select("*").order("created_at", { ascending: false }),
         supabase.from("external_discovery_runs").select("*").order("created_at", { ascending: false }).limit(100),
         supabase.from("external_import_runs").select("*").order("created_at", { ascending: false }).limit(100),
+        supabase.from("pipeline_validation_runs").select("*").order("created_at", { ascending: false }).limit(100),
       ]);
       setConnections((connsRes.data || []) as Connection[]);
       setDiscoveryRuns((discRes.data || []) as DiscoveryRun[]);
       setImportRuns((impRes.data || []) as ImportRun[]);
+      setValidationRuns((valRes.data || []) as ValidationRun[]);
     } catch (e) {
       console.error("[admin-connections] load error", e);
     } finally {
@@ -181,7 +137,7 @@ const AdminExternalConnectionsTab = () => {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // ─── Summary KPIs ──────────────────────────────
+  // ─── Summary KPIs ──────────────────────────
   const totalConnections = connections.length;
   const activeConnections = connections.filter(c => c.connection_status === "active").length;
   const lastDiscovery = discoveryRuns[0];
@@ -190,7 +146,7 @@ const AdminExternalConnectionsTab = () => {
   const totalImported = importRuns.reduce((s, r) => s + (r.objects_completed || 0), 0);
   const totalImportErrors = importRuns.reduce((s, r) => s + (r.objects_failed || 0), 0);
 
-  // ─── Connection detail ─────────────────────────
+  // ─── Detail loaders ───────────────────────
   const openConnectionDetail = useCallback(async (connId: string) => {
     setSelectedConnectionId(connId);
     const [runsRes, impsRes, objsRes] = await Promise.all([
@@ -205,29 +161,19 @@ const AdminExternalConnectionsTab = () => {
     });
   }, []);
 
-  // ─── Discovery run detail ─────────────────────
   const openDiscoveryRunDetail = useCallback(async (run: DiscoveryRun) => {
     setSelectedDiscoveryRun(run);
-    const { data } = await supabase
-      .from("external_discovery_objects")
-      .select("*")
-      .eq("discovery_run_id", run.id)
-      .order("object_name");
+    const { data } = await supabase.from("external_discovery_objects").select("*").eq("discovery_run_id", run.id).order("object_name");
     setDiscoveryObjects((data || []) as DiscoveryObject[]);
   }, []);
 
-  // ─── Import run detail ────────────────────────
   const openImportRunDetail = useCallback(async (run: ImportRun) => {
     setSelectedImportRun(run);
-    const { data } = await supabase
-      .from("external_import_objects")
-      .select("*")
-      .eq("import_run_id", run.id)
-      .order("object_name");
+    const { data } = await supabase.from("external_import_objects").select("*").eq("import_run_id", run.id).order("object_name");
     setImportObjects((data || []) as ImportObject[]);
   }, []);
 
-  // ─── Actions ──────────────────────────────────
+  // ─── Actions ──────────────────────────────
   const rerunDiscovery = useCallback(async (connectionId: string, projectId: string) => {
     setActionLoading(`discovery-${connectionId}`);
     try {
@@ -239,22 +185,14 @@ const AdminExternalConnectionsTab = () => {
       await loadAll();
     } catch (e: any) {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
-    } finally {
-      setActionLoading(null);
-    }
+    } finally { setActionLoading(null); }
   }, [toast, loadAll]);
 
   const rerunImport = useCallback(async (importRun: ImportRun) => {
     setActionLoading(`import-${importRun.id}`);
     try {
-      // Get objects from the original import run
-      const { data: objs } = await supabase
-        .from("external_import_objects")
-        .select("discovery_object_id")
-        .eq("import_run_id", importRun.id);
-      
+      const { data: objs } = await supabase.from("external_import_objects").select("discovery_object_id").eq("import_run_id", importRun.id);
       if (!objs?.length) throw new Error("No objects found for this import run");
-
       const objectIds = objs.map(o => o.discovery_object_id);
       const { data, error } = await supabase.functions.invoke("import-external-objects", {
         body: { project_id: importRun.project_id, object_ids: objectIds, promote: false },
@@ -264,9 +202,7 @@ const AdminExternalConnectionsTab = () => {
       await loadAll();
     } catch (e: any) {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
-    } finally {
-      setActionLoading(null);
-    }
+    } finally { setActionLoading(null); }
   }, [toast, loadAll]);
 
   const promoteStaging = useCallback(async (importRunId: string, projectId: string) => {
@@ -281,28 +217,43 @@ const AdminExternalConnectionsTab = () => {
       await loadAll();
     } catch (e: any) {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
-    } finally {
-      setActionLoading(null);
-    }
+    } finally { setActionLoading(null); }
+  }, [toast, loadAll]);
+
+  const runValidation = useCallback(async (importRunId: string, projectId: string) => {
+    setActionLoading(`validate-${importRunId}`);
+    try {
+      const { data, error } = await supabase.functions.invoke("validate-connector-pipeline", {
+        body: { import_run_id: importRunId, project_id: projectId },
+      });
+      if (error) throw error;
+      toast({
+        title: `Validação: ${data?.overall_status?.toUpperCase()}`,
+        description: `Staging=${data?.staging_valid ? "✓" : "✗"} Meta=${data?.metadata_valid ? "✓" : "✗"} Promo=${data?.promotion_valid ? "✓" : "✗"} Schema=${data?.schema_valid ? "✓" : "✗"} Sample=${data?.sample_valid ? "✓" : "✗"} EDA=${data?.eda_valid ? "✓" : "✗"}`,
+        variant: data?.overall_status === "success" ? "default" : "destructive",
+      });
+      await loadAll();
+    } catch (e: any) {
+      toast({ title: "Erro na validação", description: e.message, variant: "destructive" });
+    } finally { setActionLoading(null); }
   }, [toast, loadAll]);
 
   const exportDiagnostic = useCallback(async (connectionId: string) => {
     try {
-      const [conns, disc, objs, imps, impObjs] = await Promise.all([
+      const [conns, disc, objs, imps] = await Promise.all([
         supabase.from("external_connections").select("*").eq("id", connectionId),
         supabase.from("external_discovery_runs").select("*").eq("connection_id", connectionId).order("created_at", { ascending: false }).limit(10),
         supabase.from("external_discovery_objects").select("*").eq("connection_id", connectionId).order("object_name"),
         supabase.from("external_import_runs").select("*").eq("connection_id", connectionId).order("created_at", { ascending: false }).limit(10),
-        supabase.from("external_import_objects").select("*").eq("import_run_id", connectionId), // will get none, but we'll merge below
       ]);
-
-      // Get import objects for all import runs of this connection
       const importRunIds = (imps.data || []).map((r: any) => r.id);
       let allImportObjs: any[] = [];
       if (importRunIds.length > 0) {
         const { data } = await supabase.from("external_import_objects").select("*").in("import_run_id", importRunIds);
         allImportObjs = data || [];
       }
+      // Get validation runs for this connection
+      const { data: vals } = await supabase.from("pipeline_validation_runs").select("*").eq("connection_id", connectionId).order("created_at", { ascending: false }).limit(10);
 
       const diagnostic = {
         exported_at: new Date().toISOString(),
@@ -311,38 +262,31 @@ const AdminExternalConnectionsTab = () => {
         discovered_objects: objs.data || [],
         import_runs: imps.data || [],
         import_objects: allImportObjs,
+        validation_runs: vals || [],
       };
-
       const blob = new Blob([JSON.stringify(diagnostic, null, 2)], { type: "application/json" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
-      a.href = url;
-      a.download = `diagnostic_${connectionId.substring(0, 8)}.json`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      a.href = url; a.download = `diagnostic_${connectionId.substring(0, 8)}.json`;
+      document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
       toast({ title: "Diagnóstico exportado" });
     } catch (e: any) {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
     }
   }, [toast]);
 
-  // ─── Filtered connections ──────────────────────
+  // ─── Helpers ──────────────────────────────
+  const getLatestValidation = (importRunId: string) => validationRuns.find(v => v.import_run_id === importRunId);
+
   const filtered = connections.filter(c =>
     c.connection_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.connector_type.toLowerCase().includes(searchTerm.toLowerCase()) ||
     c.id.toLowerCase().includes(searchTerm.toLowerCase())
   );
-
   const selectedConnection = connections.find(c => c.id === selectedConnectionId);
 
   if (loading) {
-    return (
-      <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-      </div>
-    );
+    return <div className="flex items-center justify-center py-12"><Loader2 className="h-8 w-8 animate-spin text-muted-foreground" /></div>;
   }
 
   return (
@@ -376,6 +320,7 @@ const AdminExternalConnectionsTab = () => {
           <TabsTrigger value="connections" className="gap-1"><Plug className="w-3 h-3" />Conexões</TabsTrigger>
           <TabsTrigger value="discovery" className="gap-1"><Radar className="w-3 h-3" />Discovery Runs</TabsTrigger>
           <TabsTrigger value="imports" className="gap-1"><Download className="w-3 h-3" />Import Runs</TabsTrigger>
+          <TabsTrigger value="validations" className="gap-1"><ShieldCheck className="w-3 h-3" />Validações</TabsTrigger>
         </TabsList>
 
         {/* ═══ Connections ═══ */}
@@ -387,18 +332,13 @@ const AdminExternalConnectionsTab = () => {
             </div>
             <Button variant="outline" size="sm" onClick={loadAll}><RefreshCw className="w-4 h-4 mr-1" />Atualizar</Button>
           </div>
-
           <Card>
             <CardContent className="p-0">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Projeto</TableHead>
-                    <TableHead>Criada</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    <TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Status</TableHead>
+                    <TableHead>Projeto</TableHead><TableHead>Criada</TableHead><TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -410,27 +350,15 @@ const AdminExternalConnectionsTab = () => {
                       <TableCell className="text-xs text-muted-foreground font-mono">{conn.project_id.substring(0, 8)}…</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{fmtDate(conn.created_at)}</TableCell>
                       <TableCell className="text-right space-x-1">
-                        <Button variant="ghost" size="sm" onClick={() => openConnectionDetail(conn.id)}>
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          variant="ghost" size="sm"
-                          disabled={actionLoading === `discovery-${conn.id}`}
-                          onClick={() => rerunDiscovery(conn.id, conn.project_id)}
-                        >
+                        <Button variant="ghost" size="sm" onClick={() => openConnectionDetail(conn.id)}><Eye className="w-4 h-4" /></Button>
+                        <Button variant="ghost" size="sm" disabled={actionLoading === `discovery-${conn.id}`} onClick={() => rerunDiscovery(conn.id, conn.project_id)}>
                           {actionLoading === `discovery-${conn.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <Radar className="w-4 h-4" />}
                         </Button>
-                        <Button variant="ghost" size="sm" onClick={() => exportDiagnostic(conn.id)}>
-                          <FileJson className="w-4 h-4" />
-                        </Button>
+                        <Button variant="ghost" size="sm" onClick={() => exportDiagnostic(conn.id)}><FileJson className="w-4 h-4" /></Button>
                       </TableCell>
                     </TableRow>
                   ))}
-                  {filtered.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhuma conexão encontrada</TableCell>
-                    </TableRow>
-                  )}
+                  {filtered.length === 0 && <TableRow><TableCell colSpan={6} className="text-center py-8 text-muted-foreground">Nenhuma conexão encontrada</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </CardContent>
@@ -444,13 +372,9 @@ const AdminExternalConnectionsTab = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Run ID</TableHead>
-                    <TableHead>Conexão</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-center">Objetos</TableHead>
-                    <TableHead>Início</TableHead>
-                    <TableHead>Duração</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    <TableHead>Run ID</TableHead><TableHead>Conexão</TableHead><TableHead>Status</TableHead>
+                    <TableHead className="text-center">Objetos</TableHead><TableHead>Início</TableHead>
+                    <TableHead>Duração</TableHead><TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -469,11 +393,7 @@ const AdminExternalConnectionsTab = () => {
                       </TableCell>
                     </TableRow>
                   ))}
-                  {discoveryRuns.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Nenhum discovery run</TableCell>
-                    </TableRow>
-                  )}
+                  {discoveryRuns.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Nenhum discovery run</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </CardContent>
@@ -487,56 +407,88 @@ const AdminExternalConnectionsTab = () => {
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Run ID</TableHead>
-                    <TableHead>Conexão</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead className="text-center">Total</TableHead>
-                    <TableHead className="text-center">OK</TableHead>
-                    <TableHead className="text-center">Falhas</TableHead>
-                    <TableHead>Início</TableHead>
-                    <TableHead>Duração</TableHead>
-                    <TableHead className="text-right">Ações</TableHead>
+                    <TableHead>Run ID</TableHead><TableHead>Conexão</TableHead><TableHead>Status</TableHead>
+                    <TableHead className="text-center">Total</TableHead><TableHead className="text-center">OK</TableHead>
+                    <TableHead className="text-center">Falhas</TableHead><TableHead>Início</TableHead>
+                    <TableHead>Duração</TableHead><TableHead>Validação</TableHead><TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {importRuns.map(run => (
-                    <TableRow key={run.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openImportRunDetail(run)}>
-                      <TableCell className="font-mono text-xs">{run.id.substring(0, 8)}…</TableCell>
-                      <TableCell className="font-mono text-xs">{run.connection_id.substring(0, 8)}…</TableCell>
-                      <TableCell><StatusBadge status={run.status} /></TableCell>
-                      <TableCell className="text-center">{run.total_objects}</TableCell>
-                      <TableCell className="text-center text-primary">{run.objects_completed}</TableCell>
-                      <TableCell className="text-center text-destructive">{run.objects_failed}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
-                      <TableCell className="text-right space-x-1">
-                        <Button
-                          variant="ghost" size="sm"
-                          disabled={actionLoading === `import-${run.id}`}
-                          onClick={e => { e.stopPropagation(); rerunImport(run); }}
-                          title="Reexecutar import"
-                        >
-                          {actionLoading === `import-${run.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        </Button>
-                        <Button
-                          variant="ghost" size="sm"
-                          disabled={actionLoading === `promote-${run.id}` || run.status !== "done"}
-                          onClick={e => { e.stopPropagation(); promoteStaging(run.id, run.project_id); }}
-                          title="Promover staging"
-                        >
-                          {actionLoading === `promote-${run.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUpCircle className="w-4 h-4" />}
-                        </Button>
-                        <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Evidence", data: run.evidence }); }}>
+                  {importRuns.map(run => {
+                    const val = getLatestValidation(run.id);
+                    return (
+                      <TableRow key={run.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openImportRunDetail(run)}>
+                        <TableCell className="font-mono text-xs">{run.id.substring(0, 8)}…</TableCell>
+                        <TableCell className="font-mono text-xs">{run.connection_id.substring(0, 8)}…</TableCell>
+                        <TableCell><StatusBadge status={run.status} /></TableCell>
+                        <TableCell className="text-center">{run.total_objects}</TableCell>
+                        <TableCell className="text-center text-primary">{run.objects_completed}</TableCell>
+                        <TableCell className="text-center text-destructive">{run.objects_failed}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
+                        <TableCell>{val ? <StatusBadge status={val.overall_status} /> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
+                        <TableCell className="text-right space-x-1">
+                          <Button variant="ghost" size="sm" disabled={actionLoading === `validate-${run.id}` || run.status !== "done"}
+                            onClick={e => { e.stopPropagation(); runValidation(run.id, run.project_id); }} title="Validar pipeline">
+                            {actionLoading === `validate-${run.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <ShieldCheck className="w-4 h-4" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={actionLoading === `import-${run.id}`}
+                            onClick={e => { e.stopPropagation(); rerunImport(run); }} title="Reexecutar import">
+                            {actionLoading === `import-${run.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" disabled={actionLoading === `promote-${run.id}` || run.status !== "done"}
+                            onClick={e => { e.stopPropagation(); promoteStaging(run.id, run.project_id); }} title="Promover staging">
+                            {actionLoading === `promote-${run.id}` ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowUpCircle className="w-4 h-4" />}
+                          </Button>
+                          <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Evidence", data: run.evidence }); }}>
+                            <FileJson className="w-4 h-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {importRuns.length === 0 && <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Nenhum import run</TableCell></TableRow>}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* ═══ Validations ═══ */}
+        <TabsContent value="validations" className="space-y-4">
+          <Card>
+            <CardContent className="p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>ID</TableHead><TableHead>Projeto</TableHead><TableHead>Status</TableHead>
+                    <TableHead className="text-center">Staging</TableHead><TableHead className="text-center">Metadata</TableHead>
+                    <TableHead className="text-center">Promoção</TableHead><TableHead className="text-center">Schema</TableHead>
+                    <TableHead className="text-center">Sample</TableHead><TableHead className="text-center">EDA</TableHead>
+                    <TableHead>Duração</TableHead><TableHead className="text-right">Ações</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {validationRuns.map(val => (
+                    <TableRow key={val.id} className="cursor-pointer hover:bg-muted/50" onClick={() => setSelectedValidation(val)}>
+                      <TableCell className="font-mono text-xs">{val.id.substring(0, 8)}…</TableCell>
+                      <TableCell className="font-mono text-xs">{val.project_id.substring(0, 8)}…</TableCell>
+                      <TableCell><StatusBadge status={val.overall_status} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.staging_valid} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.metadata_valid} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.promotion_valid} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.schema_valid} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.sample_valid} /></TableCell>
+                      <TableCell className="text-center"><CheckIcon ok={val.eda_valid} /></TableCell>
+                      <TableCell className="text-sm text-muted-foreground">{duration(val.started_at, val.finished_at)}</TableCell>
+                      <TableCell className="text-right">
+                        <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Detalhes da Validação", data: val.details }); }}>
                           <FileJson className="w-4 h-4" />
                         </Button>
                       </TableCell>
                     </TableRow>
                   ))}
-                  {importRuns.length === 0 && (
-                    <TableRow>
-                      <TableCell colSpan={9} className="text-center py-8 text-muted-foreground">Nenhum import run</TableCell>
-                    </TableRow>
-                  )}
+                  {validationRuns.length === 0 && <TableRow><TableCell colSpan={11} className="text-center py-8 text-muted-foreground">Nenhuma validação executada</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </CardContent>
@@ -544,17 +496,66 @@ const AdminExternalConnectionsTab = () => {
         </TabsContent>
       </Tabs>
 
+      {/* ═══ Validation Detail Modal ═══ */}
+      <Dialog open={!!selectedValidation} onOpenChange={() => setSelectedValidation(null)}>
+        <DialogContent className="max-w-3xl max-h-[85vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><ShieldCheck className="w-5 h-5" />Validação do Pipeline</DialogTitle>
+            <DialogDescription>{selectedValidation?.id} • <StatusBadge status={selectedValidation?.overall_status || ""} /></DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[60vh]">
+            {selectedValidation && (
+              <div className="space-y-4">
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div><span className="text-muted-foreground">Início:</span> {fmtDate(selectedValidation.started_at)}</div>
+                  <div><span className="text-muted-foreground">Fim:</span> {fmtDate(selectedValidation.finished_at)}</div>
+                  <div><span className="text-muted-foreground">Duração:</span> {duration(selectedValidation.started_at, selectedValidation.finished_at)}</div>
+                </div>
+
+                <div className="grid grid-cols-6 gap-2">
+                  {[
+                    { label: "Staging", ok: selectedValidation.staging_valid },
+                    { label: "Metadata", ok: selectedValidation.metadata_valid },
+                    { label: "Promoção", ok: selectedValidation.promotion_valid },
+                    { label: "Schema", ok: selectedValidation.schema_valid },
+                    { label: "Sample", ok: selectedValidation.sample_valid },
+                    { label: "EDA", ok: selectedValidation.eda_valid },
+                  ].map((step, i) => (
+                    <Card key={i} className={step.ok ? "border-primary/30 bg-primary/5" : "border-destructive/30 bg-destructive/5"}>
+                      <CardContent className="p-3 text-center">
+                        <CheckIcon ok={step.ok} />
+                        <p className="text-xs mt-1 font-medium">{step.label}</p>
+                      </CardContent>
+                    </Card>
+                  ))}
+                </div>
+
+                {selectedValidation.dataset_id && (
+                  <div className="text-sm"><span className="text-muted-foreground">Dataset ID:</span> <code className="text-xs bg-muted px-1 rounded">{selectedValidation.dataset_id}</code></div>
+                )}
+
+                <Separator />
+
+                {selectedValidation.details && Object.entries(selectedValidation.details).map(([key, val]) => (
+                  <div key={key}>
+                    <h4 className="text-sm font-medium capitalize mb-1">{key}</h4>
+                    <pre className="text-xs font-mono bg-muted p-3 rounded overflow-auto whitespace-pre-wrap max-h-40">
+                      {JSON.stringify(val, null, 2)}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            )}
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+
       {/* ═══ Connection Detail Modal ═══ */}
       <Dialog open={!!selectedConnectionId} onOpenChange={() => { setSelectedConnectionId(null); setConnectionDetail(null); }}>
         <DialogContent className="max-w-3xl max-h-[85vh]">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Plug className="w-5 h-5" />
-              {selectedConnection?.connection_name || "Conexão"}
-            </DialogTitle>
-            <DialogDescription>
-              {selectedConnection?.connector_type} • {selectedConnection?.id}
-            </DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><Plug className="w-5 h-5" />{selectedConnection?.connection_name || "Conexão"}</DialogTitle>
+            <DialogDescription>{selectedConnection?.connector_type} • {selectedConnection?.id}</DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             {connectionDetail && (
@@ -564,13 +565,10 @@ const AdminExternalConnectionsTab = () => {
                   {connectionDetail.runs.map(r => (
                     <div key={r.id} className="flex items-center justify-between py-2 border-b border-border">
                       <div className="flex items-center gap-2">
-                        <StatusBadge status={r.status} />
-                        <span className="text-sm">{r.objects_found} objetos</span>
+                        <StatusBadge status={r.status} /><span className="text-sm">{r.objects_found} objetos</span>
                         <span className="text-xs text-muted-foreground">{fmtDate(r.created_at)}</span>
                       </div>
-                      <Button variant="ghost" size="sm" onClick={() => openDiscoveryRunDetail(r)}>
-                        <Eye className="w-4 h-4" />
-                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => openDiscoveryRunDetail(r)}><Eye className="w-4 h-4" /></Button>
                     </div>
                   ))}
                 </div>
@@ -580,13 +578,10 @@ const AdminExternalConnectionsTab = () => {
                   {connectionDetail.imports.map(r => (
                     <div key={r.id} className="flex items-center justify-between py-2 border-b border-border">
                       <div className="flex items-center gap-2">
-                        <StatusBadge status={r.status} />
-                        <span className="text-sm">{r.objects_completed}/{r.total_objects}</span>
+                        <StatusBadge status={r.status} /><span className="text-sm">{r.objects_completed}/{r.total_objects}</span>
                         <span className="text-xs text-muted-foreground">{fmtDate(r.created_at)}</span>
                       </div>
-                      <Button variant="ghost" size="sm" onClick={() => openImportRunDetail(r)}>
-                        <Eye className="w-4 h-4" />
-                      </Button>
+                      <Button variant="ghost" size="sm" onClick={() => openImportRunDetail(r)}><Eye className="w-4 h-4" /></Button>
                     </div>
                   ))}
                 </div>
@@ -603,9 +598,7 @@ const AdminExternalConnectionsTab = () => {
                           {obj.classification && <Badge variant="secondary" className="text-xs">{obj.classification}</Badge>}
                           {obj.is_selected && <Badge className="text-xs">selecionado</Badge>}
                         </div>
-                        <span className="text-xs text-muted-foreground">
-                          {obj.estimated_columns || "?"} cols • {obj.estimated_rows?.toLocaleString() || "?"} rows
-                        </span>
+                        <span className="text-xs text-muted-foreground">{obj.estimated_columns || "?"} cols • {obj.estimated_rows?.toLocaleString() || "?"} rows</span>
                       </div>
                     ))}
                   </div>
@@ -620,13 +613,8 @@ const AdminExternalConnectionsTab = () => {
       <Dialog open={!!selectedDiscoveryRun} onOpenChange={() => { setSelectedDiscoveryRun(null); setDiscoveryObjects([]); }}>
         <DialogContent className="max-w-3xl max-h-[85vh]">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Radar className="w-5 h-5" />
-              Discovery Run
-            </DialogTitle>
-            <DialogDescription>
-              {selectedDiscoveryRun?.id} • <StatusBadge status={selectedDiscoveryRun?.status || ""} />
-            </DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><Radar className="w-5 h-5" />Discovery Run</DialogTitle>
+            <DialogDescription>{selectedDiscoveryRun?.id} • <StatusBadge status={selectedDiscoveryRun?.status || ""} /></DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-4">
@@ -635,24 +623,18 @@ const AdminExternalConnectionsTab = () => {
                   <CardContent className="p-3 text-sm text-destructive">{selectedDiscoveryRun.error_message}</CardContent>
                 </Card>
               )}
-
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div><span className="text-muted-foreground">Início:</span> {fmtDate(selectedDiscoveryRun?.started_at)}</div>
                 <div><span className="text-muted-foreground">Fim:</span> {fmtDate(selectedDiscoveryRun?.finished_at)}</div>
                 <div><span className="text-muted-foreground">Duração:</span> {duration(selectedDiscoveryRun?.started_at || null, selectedDiscoveryRun?.finished_at || null)}</div>
               </div>
-
               <h4 className="text-sm font-medium">Objetos Descobertos ({discoveryObjects.length})</h4>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Tipo</TableHead>
-                    <TableHead>Schema</TableHead>
-                    <TableHead>Classificação</TableHead>
-                    <TableHead className="text-center">Colunas</TableHead>
-                    <TableHead className="text-center">Linhas</TableHead>
-                    <TableHead>Selecionado</TableHead>
+                    <TableHead>Nome</TableHead><TableHead>Tipo</TableHead><TableHead>Schema</TableHead>
+                    <TableHead>Classificação</TableHead><TableHead className="text-center">Colunas</TableHead>
+                    <TableHead className="text-center">Linhas</TableHead><TableHead>Selecionado</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -669,13 +651,9 @@ const AdminExternalConnectionsTab = () => {
                   ))}
                 </TableBody>
               </Table>
-
               <div className="flex gap-2 pt-2">
-                <Button
-                  variant="outline" size="sm"
-                  disabled={!selectedDiscoveryRun || actionLoading === `discovery-${selectedDiscoveryRun?.connection_id}`}
-                  onClick={() => selectedDiscoveryRun && rerunDiscovery(selectedDiscoveryRun.connection_id, selectedDiscoveryRun.project_id)}
-                >
+                <Button variant="outline" size="sm" disabled={!selectedDiscoveryRun || actionLoading === `discovery-${selectedDiscoveryRun?.connection_id}`}
+                  onClick={() => selectedDiscoveryRun && rerunDiscovery(selectedDiscoveryRun.connection_id, selectedDiscoveryRun.project_id)}>
                   <RefreshCw className="w-4 h-4 mr-1" />Reexecutar Discovery
                 </Button>
                 <Button variant="outline" size="sm" onClick={() => setJsonModal({ title: "Evidence JSON", data: selectedDiscoveryRun?.evidence })}>
@@ -691,13 +669,8 @@ const AdminExternalConnectionsTab = () => {
       <Dialog open={!!selectedImportRun} onOpenChange={() => { setSelectedImportRun(null); setImportObjects([]); }}>
         <DialogContent className="max-w-4xl max-h-[85vh]">
           <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Download className="w-5 h-5" />
-              Import Run
-            </DialogTitle>
-            <DialogDescription>
-              {selectedImportRun?.id} • <StatusBadge status={selectedImportRun?.status || ""} />
-            </DialogDescription>
+            <DialogTitle className="flex items-center gap-2"><Download className="w-5 h-5" />Import Run</DialogTitle>
+            <DialogDescription>{selectedImportRun?.id} • <StatusBadge status={selectedImportRun?.status || ""} /></DialogDescription>
           </DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <div className="space-y-4">
@@ -707,19 +680,13 @@ const AdminExternalConnectionsTab = () => {
                 <div><span className="text-muted-foreground">Duração:</span> {duration(selectedImportRun?.started_at || null, selectedImportRun?.finished_at || null)}</div>
                 <div><span className="text-muted-foreground">Objetos:</span> {selectedImportRun?.objects_completed}/{selectedImportRun?.total_objects}</div>
               </div>
-
               <h4 className="text-sm font-medium">Objetos Importados ({importObjects.length})</h4>
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>Nome</TableHead>
-                    <TableHead>Status</TableHead>
-                    <TableHead>Storage Path</TableHead>
-                    <TableHead className="text-center">Linhas</TableHead>
-                    <TableHead className="text-center">Colunas</TableHead>
-                    <TableHead>Tamanho</TableHead>
-                    <TableHead>Dataset ID</TableHead>
-                    <TableHead>Erro</TableHead>
+                    <TableHead>Nome</TableHead><TableHead>Status</TableHead><TableHead>Storage Path</TableHead>
+                    <TableHead className="text-center">Linhas</TableHead><TableHead className="text-center">Colunas</TableHead>
+                    <TableHead>Tamanho</TableHead><TableHead>Dataset ID</TableHead><TableHead>Erro</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -737,20 +704,18 @@ const AdminExternalConnectionsTab = () => {
                   ))}
                 </TableBody>
               </Table>
-
               <div className="flex gap-2 pt-2">
-                <Button
-                  variant="outline" size="sm"
-                  disabled={!selectedImportRun || actionLoading === `import-${selectedImportRun?.id}`}
-                  onClick={() => selectedImportRun && rerunImport(selectedImportRun)}
-                >
+                <Button variant="outline" size="sm" disabled={!selectedImportRun || actionLoading === `validate-${selectedImportRun?.id}`}
+                  onClick={() => selectedImportRun && runValidation(selectedImportRun.id, selectedImportRun.project_id)}>
+                  {actionLoading === `validate-${selectedImportRun?.id}` ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ShieldCheck className="w-4 h-4 mr-1" />}
+                  Validar Pipeline
+                </Button>
+                <Button variant="outline" size="sm" disabled={!selectedImportRun || actionLoading === `import-${selectedImportRun?.id}`}
+                  onClick={() => selectedImportRun && rerunImport(selectedImportRun)}>
                   <RefreshCw className="w-4 h-4 mr-1" />Reexecutar Import
                 </Button>
-                <Button
-                  variant="outline" size="sm"
-                  disabled={!selectedImportRun || selectedImportRun.status !== "done" || actionLoading === `promote-${selectedImportRun?.id}`}
-                  onClick={() => selectedImportRun && promoteStaging(selectedImportRun.id, selectedImportRun.project_id)}
-                >
+                <Button variant="outline" size="sm" disabled={!selectedImportRun || selectedImportRun.status !== "done" || actionLoading === `promote-${selectedImportRun?.id}`}
+                  onClick={() => selectedImportRun && promoteStaging(selectedImportRun.id, selectedImportRun.project_id)}>
                   {actionLoading === `promote-${selectedImportRun?.id}` ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ArrowUpCircle className="w-4 h-4 mr-1" />}
                   Promover Staging
                 </Button>
@@ -766,9 +731,7 @@ const AdminExternalConnectionsTab = () => {
       {/* ═══ JSON Viewer Modal ═══ */}
       <Dialog open={!!jsonModal} onOpenChange={() => setJsonModal(null)}>
         <DialogContent className="max-w-2xl max-h-[80vh]">
-          <DialogHeader>
-            <DialogTitle>{jsonModal?.title}</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>{jsonModal?.title}</DialogTitle></DialogHeader>
           <ScrollArea className="max-h-[60vh]">
             <pre className="text-xs font-mono bg-muted p-4 rounded overflow-auto whitespace-pre-wrap">
               {jsonModal?.data ? JSON.stringify(jsonModal.data, null, 2) : "null"}
