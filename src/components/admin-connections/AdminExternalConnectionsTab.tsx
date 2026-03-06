@@ -418,7 +418,12 @@ const AdminExternalConnectionsTab = () => {
                         </TableCell>
                         <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
                         <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell className="text-right space-x-1">
+                          {(ev.connector_type === 'powerbi' || run.connection_id) && (
+                            <Button variant="ghost" size="sm" title="Ver Diagnóstico Power BI" onClick={e => { e.stopPropagation(); loadDiagnosticEvents(run.connection_id); }}>
+                              <Activity className="w-4 h-4" />
+                            </Button>
+                          )}
                           <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Evidence", data: run.evidence }); }}>
                             <FileJson className="w-4 h-4" />
                           </Button>
