@@ -6,11 +6,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Cloud, Zap, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ExternalLink, Pencil } from "lucide-react";
+import { Cloud, Zap, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ExternalLink, Pencil, Radar } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DatabricksSourceModeSelector from "./DatabricksSourceModeSelector";
+import ExternalDiscoveryFlow from "./ExternalDiscoveryFlow";
 
 interface CloudConnectorSectionProps {
   projectData: ProjectData;
@@ -237,41 +238,28 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
     }
   };
 
+  // Discovery flow state
+  const [discoveryConnection, setDiscoveryConnection] = useState<DataSource | null>(null);
+
   const handleSelectConnection = async (connection: DataSource) => {
     if (!projectData.id) return;
+    // Launch discovery flow instead of direct ingestion
+    setDiscoveryConnection(connection);
+  };
 
+  const handleDirectImport = async (connection: DataSource) => {
+    if (!projectData.id) return;
     try {
-      // Use specific function for Databricks
-      const functionName = connection.connector_type === "databricks" 
-        ? "ingest-databricks" 
-        : "ingest-cloud-data";
-      
+      const functionName = connection.connector_type === "databricks" ? "ingest-databricks" : "ingest-cloud-data";
       const { data, error } = await supabase.functions.invoke(functionName, {
-        body: {
-          project_id: projectData.id,
-          data_source_id: connection.id
-        }
+        body: { project_id: projectData.id, data_source_id: connection.id }
       });
-
       if (error) throw error;
-
-      await saveProject({
-        data_source_id: connection.id as any,
-        status: "data_uploaded"
-      });
-
-      toast({
-        title: t("common.success"),
-        description: t("dataIngestion.cloud.ingestionStarted")
-      });
-
+      await saveProject({ data_source_id: connection.id as any, status: "data_uploaded" });
+      toast({ title: t("common.success"), description: t("dataIngestion.cloud.ingestionStarted") });
       onDataReady();
     } catch (error: any) {
-      toast({
-        title: t("common.error"),
-        description: error.message,
-        variant: "destructive"
-      });
+      toast({ title: t("common.error"), description: error.message, variant: "destructive" });
     }
   };
 
@@ -709,12 +697,13 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                     <Button
                       size="sm"
                       onClick={() => handleSelectConnection(conn)}
                     >
-                      {t("dataIngestion.cloud.useConnection")}
+                      <Radar className="w-4 h-4 mr-1" />
+                      Descobrir Objetos
                     </Button>
                     <Button
                       size="sm"
@@ -736,6 +725,17 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
             })}
           </div>
         </div>
+      )}
+
+      {/* Discovery Flow */}
+      {discoveryConnection && projectData.id && (
+        <ExternalDiscoveryFlow
+          projectData={projectData}
+          dataSourceId={discoveryConnection.id}
+          connectorType={discoveryConnection.connector_type}
+          connectionName={discoveryConnection.name}
+          onDataReady={onDataReady}
+        />
       )}
 
       {/* Connection form */}

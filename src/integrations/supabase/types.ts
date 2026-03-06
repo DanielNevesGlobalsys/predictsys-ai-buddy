@@ -231,6 +231,361 @@ export type Database = {
           },
         ]
       }
+      external_connections: {
+        Row: {
+          connection_name: string
+          connection_status: string
+          connector_type: string
+          created_at: string
+          data_source_id: string | null
+          id: string
+          last_validated_at: string | null
+          metadata: Json | null
+          organization_id: string
+          project_id: string
+          updated_at: string
+          user_id: string
+          validation_message: string | null
+        }
+        Insert: {
+          connection_name: string
+          connection_status?: string
+          connector_type: string
+          created_at?: string
+          data_source_id?: string | null
+          id?: string
+          last_validated_at?: string | null
+          metadata?: Json | null
+          organization_id: string
+          project_id: string
+          updated_at?: string
+          user_id: string
+          validation_message?: string | null
+        }
+        Update: {
+          connection_name?: string
+          connection_status?: string
+          connector_type?: string
+          created_at?: string
+          data_source_id?: string | null
+          id?: string
+          last_validated_at?: string | null
+          metadata?: Json | null
+          organization_id?: string
+          project_id?: string
+          updated_at?: string
+          user_id?: string
+          validation_message?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_connections_data_source_id_fkey"
+            columns: ["data_source_id"]
+            isOneToOne: false
+            referencedRelation: "data_sources"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_connections_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_connections_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_discovery_objects: {
+        Row: {
+          classification: string | null
+          column_preview: Json | null
+          connection_id: string
+          created_at: string
+          discovery_run_id: string
+          estimated_columns: number | null
+          estimated_rows: number | null
+          id: string
+          is_selected: boolean
+          last_updated_at: string | null
+          metadata: Json | null
+          object_name: string
+          object_schema: string | null
+          object_type: string
+          project_id: string
+          sample_rows: Json | null
+        }
+        Insert: {
+          classification?: string | null
+          column_preview?: Json | null
+          connection_id: string
+          created_at?: string
+          discovery_run_id: string
+          estimated_columns?: number | null
+          estimated_rows?: number | null
+          id?: string
+          is_selected?: boolean
+          last_updated_at?: string | null
+          metadata?: Json | null
+          object_name: string
+          object_schema?: string | null
+          object_type?: string
+          project_id: string
+          sample_rows?: Json | null
+        }
+        Update: {
+          classification?: string | null
+          column_preview?: Json | null
+          connection_id?: string
+          created_at?: string
+          discovery_run_id?: string
+          estimated_columns?: number | null
+          estimated_rows?: number | null
+          id?: string
+          is_selected?: boolean
+          last_updated_at?: string | null
+          metadata?: Json | null
+          object_name?: string
+          object_schema?: string | null
+          object_type?: string
+          project_id?: string
+          sample_rows?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_discovery_objects_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "external_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_discovery_objects_discovery_run_id_fkey"
+            columns: ["discovery_run_id"]
+            isOneToOne: false
+            referencedRelation: "external_discovery_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_discovery_objects_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_discovery_runs: {
+        Row: {
+          connection_id: string
+          created_at: string
+          error_message: string | null
+          evidence: Json | null
+          finished_at: string | null
+          id: string
+          objects_found: number
+          project_id: string
+          reasons: string[] | null
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          error_message?: string | null
+          evidence?: Json | null
+          finished_at?: string | null
+          id?: string
+          objects_found?: number
+          project_id: string
+          reasons?: string[] | null
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          error_message?: string | null
+          evidence?: Json | null
+          finished_at?: string | null
+          id?: string
+          objects_found?: number
+          project_id?: string
+          reasons?: string[] | null
+          started_at?: string | null
+          status?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_discovery_runs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "external_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_discovery_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_import_objects: {
+        Row: {
+          columns_imported: number | null
+          created_at: string
+          dataset_id: string | null
+          discovery_object_id: string
+          error_code: string | null
+          error_message: string | null
+          file_size_bytes: number | null
+          finished_at: string | null
+          id: string
+          import_run_id: string
+          object_name: string
+          project_id: string
+          rows_imported: number | null
+          started_at: string | null
+          status: string
+          storage_path: string | null
+        }
+        Insert: {
+          columns_imported?: number | null
+          created_at?: string
+          dataset_id?: string | null
+          discovery_object_id: string
+          error_code?: string | null
+          error_message?: string | null
+          file_size_bytes?: number | null
+          finished_at?: string | null
+          id?: string
+          import_run_id: string
+          object_name: string
+          project_id: string
+          rows_imported?: number | null
+          started_at?: string | null
+          status?: string
+          storage_path?: string | null
+        }
+        Update: {
+          columns_imported?: number | null
+          created_at?: string
+          dataset_id?: string | null
+          discovery_object_id?: string
+          error_code?: string | null
+          error_message?: string | null
+          file_size_bytes?: number | null
+          finished_at?: string | null
+          id?: string
+          import_run_id?: string
+          object_name?: string
+          project_id?: string
+          rows_imported?: number | null
+          started_at?: string | null
+          status?: string
+          storage_path?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_import_objects_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_import_objects_discovery_object_id_fkey"
+            columns: ["discovery_object_id"]
+            isOneToOne: false
+            referencedRelation: "external_discovery_objects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_import_objects_import_run_id_fkey"
+            columns: ["import_run_id"]
+            isOneToOne: false
+            referencedRelation: "external_import_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_import_objects_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      external_import_runs: {
+        Row: {
+          connection_id: string
+          created_at: string
+          error_message: string | null
+          evidence: Json | null
+          finished_at: string | null
+          id: string
+          objects_completed: number
+          objects_failed: number
+          project_id: string
+          reasons: string[] | null
+          started_at: string | null
+          status: string
+          total_objects: number
+        }
+        Insert: {
+          connection_id: string
+          created_at?: string
+          error_message?: string | null
+          evidence?: Json | null
+          finished_at?: string | null
+          id?: string
+          objects_completed?: number
+          objects_failed?: number
+          project_id: string
+          reasons?: string[] | null
+          started_at?: string | null
+          status?: string
+          total_objects?: number
+        }
+        Update: {
+          connection_id?: string
+          created_at?: string
+          error_message?: string | null
+          evidence?: Json | null
+          finished_at?: string | null
+          id?: string
+          objects_completed?: number
+          objects_failed?: number
+          project_id?: string
+          reasons?: string[] | null
+          started_at?: string | null
+          status?: string
+          total_objects?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "external_import_runs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "external_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "external_import_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       global_chat_messages: {
         Row: {
           created_at: string

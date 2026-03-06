@@ -7,12 +7,13 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
-import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp, Layers, Pencil } from "lucide-react";
+import { Database, Server, Key, Eye, EyeOff, TestTube, Loader2, CheckCircle, AlertCircle, Info, Trash2, ChevronDown, ChevronUp, Layers, Pencil, Radar } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import TableSelector from "./TableSelector";
+import ExternalDiscoveryFlow from "./ExternalDiscoveryFlow";
 
 interface DatabaseConnectorSectionProps {
   projectData: ProjectData;
@@ -251,11 +252,18 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
     setTestMessage("");
   };
 
+  // Discovery flow state
+  const [discoveryConnection, setDiscoveryConnection] = useState<DataSource | null>(null);
+
   const handleSelectConnection = async (connection: DataSource) => {
     if (!projectData.id) return;
+    // Instead of direct ingestion, launch discovery flow
+    setDiscoveryConnection(connection);
+  };
 
+  const handleDirectImport = async (connection: DataSource) => {
+    if (!projectData.id) return;
     try {
-      // Trigger data ingestion from this connection
       const { data, error } = await supabase.functions.invoke("ingest-database", {
         body: {
           project_id: projectData.id,
@@ -263,26 +271,12 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
           custom_query: customQuery || null
         }
       });
-
       if (error) throw error;
-
-      await saveProject({
-        data_source_id: connection.id as any,
-        status: "data_uploaded"
-      });
-
-      toast({
-        title: t("common.success"),
-        description: t("dataIngestion.database.ingestionStarted")
-      });
-
+      await saveProject({ data_source_id: connection.id as any, status: "data_uploaded" });
+      toast({ title: t("common.success"), description: t("dataIngestion.database.ingestionStarted") });
       onDataReady();
     } catch (error: any) {
-      toast({
-        title: t("common.error"),
-        description: error.message,
-        variant: "destructive"
-      });
+      toast({ title: t("common.error"), description: error.message, variant: "destructive" });
     }
   };
 
@@ -402,7 +396,8 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
                     size="sm"
                     onClick={() => handleSelectConnection(conn)}
                   >
-                    {t("dataIngestion.database.useConnection")}
+                    <Radar className="w-4 h-4 mr-1" />
+                    Descobrir Objetos
                   </Button>
                   <Button
                     size="sm"
@@ -423,6 +418,17 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
             ))}
           </div>
         </div>
+      )}
+
+      {/* Discovery Flow */}
+      {discoveryConnection && projectData.id && (
+        <ExternalDiscoveryFlow
+          projectData={projectData}
+          dataSourceId={discoveryConnection.id}
+          connectorType={discoveryConnection.connector_type}
+          connectionName={discoveryConnection.name}
+          onDataReady={onDataReady}
+        />
       )}
 
       {/* Connection form */}
