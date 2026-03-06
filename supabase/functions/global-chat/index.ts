@@ -153,15 +153,8 @@ serve(async (req) => {
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
 
-    if (!lovableApiKey) {
-      console.error("[global-chat] LOVABLE_API_KEY not configured");
-      return new Response(
-        JSON.stringify({ success: false, error: "API de IA não configurada" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
-    }
+
 
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
