@@ -195,9 +195,59 @@ async function executeDatabricksStatement(
 // ═══════════════════════════════════════════════════
 // Power BI Discovery
 // ═══════════════════════════════════════════════════
-async function discoverPowerBI(config: Record<string, any>): Promise<DiscoveredObject[]> {
+
+interface PowerBIDiscoveryResult {
+  objects: DiscoveredObject[];
+  fallback_used: boolean;
+  discovery_method: string;
+  reason_code?: string;
+  error_detail?: string;
+}
+
+function classifyPowerBIError(errText: string): { reason_code: string; user_message: string; admin_message: string; fix_suggestion: string } {
+  if (errText.includes('DatasetExecuteQueriesError') || errText.includes('AnalysisServicesErrorCode') || errText.includes('Failed to execute the DAX query') || errText.includes('DAX')) {
+    return {
+      reason_code: 'powerbi_dax_discovery_failed',
+      user_message: 'A conexão com o dataset do Power BI foi estabelecida, mas o discovery automático falhou ao executar a consulta DAX de inspeção. Isso pode ocorrer por limitação do semantic model ou incompatibilidade do método de discovery.',
+      admin_message: 'Power BI discovery reached ExecuteQueries but DAX query failed.',
+      fix_suggestion: 'Use fallback metadata discovery, manual assisted selection, or connect to the SQL/lake source behind the semantic model.',
+    };
+  }
+  if (errText.includes('WORKSPACE_NOT_FOUND') || errText.includes('PowerBIFolderNotFound')) {
+    return {
+      reason_code: 'powerbi_workspace_not_found',
+      user_message: 'O workspace do Power BI não foi encontrado. Verifique o ID do workspace.',
+      admin_message: 'Workspace ID not found in Power BI tenant.',
+      fix_suggestion: 'Verify workspace_id and Service Principal access.',
+    };
+  }
+  if (errText.includes('DATASET_NOT_FOUND') || errText.includes('DatasetNotFound')) {
+    return {
+      reason_code: 'powerbi_dataset_not_found',
+      user_message: 'O dataset do Power BI não foi encontrado. Verifique o ID do dataset.',
+      admin_message: 'Dataset ID not found in Power BI workspace.',
+      fix_suggestion: 'Verify dataset_id exists and Service Principal has access.',
+    };
+  }
+  if (errText.includes('AUTH_ERROR') || errText.includes('401') || errText.includes('403')) {
+    return {
+      reason_code: 'powerbi_auth_error',
+      user_message: 'Erro de autenticação ao acessar o Power BI. Verifique as credenciais do Service Principal.',
+      admin_message: 'Authentication/authorization error with Power BI API.',
+      fix_suggestion: 'Verify client_id, client_secret, tenant_id and Service Principal permissions.',
+    };
+  }
+  return {
+    reason_code: 'powerbi_unknown_error',
+    user_message: 'Ocorreu um erro ao acessar o Power BI. Tente novamente ou use um método alternativo de importação.',
+    admin_message: `Power BI error: ${errText.substring(0, 200)}`,
+    fix_suggestion: 'Check Power BI API logs and retry.',
+  };
+}
+
+async function discoverPowerBIWithFallback(config: Record<string, any>): Promise<PowerBIDiscoveryResult> {
   const { workspace_id, dataset_id, client_id, client_secret, tenant_id } = config;
-  
+
   // Get access token
   const tokenUrl = `https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token`;
   const params = new URLSearchParams({
@@ -209,64 +259,111 @@ async function discoverPowerBI(config: Record<string, any>): Promise<DiscoveredO
   if (!tokenResp.ok) throw new Error(`Azure AD token error: ${tokenResp.status}`);
   const { access_token } = await tokenResp.json();
 
-  // Get tables via DMV
-  const daxQuery = `EVALUATE INFO.TABLES()`;
-  const url = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } })
-  });
-  
-  if (!resp.ok) {
-    const errText = await resp.text();
-    if (errText.includes('PowerBIFolderNotFound')) throw new Error(`WORKSPACE_NOT_FOUND: workspace_id ${workspace_id} não encontrado.`);
-    if (errText.includes('PowerBINotFound') || errText.includes('DatasetNotFound')) throw new Error(`DATASET_NOT_FOUND: dataset_id ${dataset_id} não encontrado.`);
-    if (resp.status === 401 || resp.status === 403) throw new Error(`AUTH_ERROR: Sem permissão. Verifique credenciais e Service Principal.`);
-    throw new Error(`Power BI error: ${resp.status} - ${errText}`);
-  }
+  const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
-  const result = await resp.json();
-  const rows = result.results?.[0]?.tables?.[0]?.rows || [];
-  
-  const objects: DiscoveredObject[] = [];
-  
-  for (const row of rows) {
-    const name = row['[Name]'] || row['Name'];
-    if (!name || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
-    
-    // Get column count via INFO.COLUMNS
-    let colCount: number | null = null;
-    let rowCount: number | null = null;
-    try {
-      const colResp = await fetch(url, {
-        method: 'POST',
-        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
-      });
-      if (colResp.ok) {
-        const colResult = await colResp.json();
-        const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
-        if (r) {
-          colCount = r['[cols]'] ?? r['cols'] ?? null;
-          rowCount = r['[rows]'] ?? r['rows'] ?? null;
-        }
-      }
-    } catch { /* ignore */ }
-
-    objects.push({
-      object_name: name,
-      object_type: 'semantic_model',
-      object_schema: `${workspace_id}/${dataset_id}`,
-      estimated_columns: colCount,
-      estimated_rows: rowCount,
-      last_updated_at: null,
-      classification: classifyObject(name, colCount, rowCount),
-      metadata: { workspace_id, dataset_id }
+  // ─── Primary: DAX discovery ───
+  try {
+    const daxQuery = `EVALUATE INFO.TABLES()`;
+    const resp = await fetch(executeUrl, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } })
     });
-  }
 
-  return objects;
+    if (!resp.ok) {
+      const errText = await resp.text();
+      throw new Error(errText);
+    }
+
+    const result = await resp.json();
+    const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+    const objects: DiscoveredObject[] = [];
+
+    for (const row of rows) {
+      const name = row['[Name]'] || row['Name'];
+      if (!name || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
+
+      let colCount: number | null = null;
+      let rowCount: number | null = null;
+      try {
+        const colResp = await fetch(executeUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
+        });
+        if (colResp.ok) {
+          const colResult = await colResp.json();
+          const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
+          if (r) {
+            colCount = r['[cols]'] ?? r['cols'] ?? null;
+            rowCount = r['[rows]'] ?? r['rows'] ?? null;
+          }
+        }
+      } catch { /* ignore */ }
+
+      objects.push({
+        object_name: name,
+        object_type: 'semantic_model',
+        object_schema: `${workspace_id}/${dataset_id}`,
+        estimated_columns: colCount,
+        estimated_rows: rowCount,
+        last_updated_at: null,
+        classification: classifyObject(name, colCount, rowCount),
+        metadata: { workspace_id, dataset_id }
+      });
+    }
+
+    return { objects, fallback_used: false, discovery_method: 'dax_info_tables' };
+
+  } catch (daxError) {
+    const daxErrMsg = daxError instanceof Error ? daxError.message : String(daxError);
+    console.warn(`[discover] Power BI DAX discovery failed, attempting metadata fallback:`, daxErrMsg);
+
+    const classified = classifyPowerBIError(daxErrMsg);
+
+    // ─── Fallback: REST API metadata ───
+    try {
+      // Try to get dataset info and tables via REST API (non-DAX)
+      const tablesResp = await fetch(
+        `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`,
+        { headers: { 'Authorization': `Bearer ${access_token}` } }
+      );
+
+      if (tablesResp.ok) {
+        const tablesData = await tablesResp.json();
+        const tables = tablesData.value || [];
+        const objects: DiscoveredObject[] = tables.map((t: any) => ({
+          object_name: t.name,
+          object_type: 'semantic_model',
+          object_schema: `${workspace_id}/${dataset_id}`,
+          estimated_columns: t.columns?.length ?? null,
+          estimated_rows: null,
+          last_updated_at: null,
+          classification: classifyObject(t.name, t.columns?.length ?? null, null),
+          metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
+        }));
+
+        return {
+          objects,
+          fallback_used: true,
+          discovery_method: 'rest_api_tables',
+          reason_code: classified.reason_code,
+          error_detail: daxErrMsg.substring(0, 500),
+        };
+      }
+    } catch (fallbackErr) {
+      console.warn(`[discover] Power BI REST fallback also failed:`, fallbackErr);
+    }
+
+    // ─── Both methods failed: return structured failure ───
+    return {
+      objects: [],
+      fallback_used: true,
+      discovery_method: 'none',
+      reason_code: classified.reason_code,
+      error_detail: daxErrMsg.substring(0, 500),
+    };
+  }
 }
 
 // ═══════════════════════════════════════════════════
@@ -427,6 +524,8 @@ serve(async (req) => {
 
     let objects: DiscoveredObject[] = [];
 
+    let powerbiResult: PowerBIDiscoveryResult | null = null;
+
     try {
       switch (connectorType) {
         case 'postgresql':
@@ -436,7 +535,8 @@ serve(async (req) => {
           objects = await discoverDatabricks(connectionConfig);
           break;
         case 'powerbi':
-          objects = await discoverPowerBI(connectionConfig);
+          powerbiResult = await discoverPowerBIWithFallback(connectionConfig);
+          objects = powerbiResult.objects;
           break;
         case 'azure_sql':
         case 'azure_synapse':
@@ -448,7 +548,6 @@ serve(async (req) => {
           break;
         case 'aws_rds':
         case 'aws_redshift':
-          // These use PostgreSQL protocol
           objects = await discoverPostgreSQL({
             host: connectionConfig.endpoint,
             port: connectionConfig.port || 5432,
