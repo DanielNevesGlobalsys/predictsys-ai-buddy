@@ -72,6 +72,7 @@ function StatusBadge({ status }: { status: string }) {
     importing: { variant: "secondary", icon: <Loader2 className="w-3 h-3 animate-spin" /> },
     pending: { variant: "secondary", icon: <Clock className="w-3 h-3" /> },
     failed: { variant: "destructive", icon: <AlertCircle className="w-3 h-3" /> },
+    failed_with_fallback: { variant: "outline", icon: <AlertTriangle className="w-3 h-3 text-yellow-500" /> },
     warning: { variant: "outline", icon: <AlertTriangle className="w-3 h-3 text-yellow-500" /> },
     inactive: { variant: "outline", icon: <Clock className="w-3 h-3" /> },
   };
@@ -373,27 +374,41 @@ const AdminExternalConnectionsTab = () => {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Run ID</TableHead><TableHead>Conexão</TableHead><TableHead>Status</TableHead>
-                    <TableHead className="text-center">Objetos</TableHead><TableHead>Início</TableHead>
-                    <TableHead>Duração</TableHead><TableHead className="text-right">Ações</TableHead>
+                    <TableHead className="text-center">Objetos</TableHead><TableHead>Método</TableHead>
+                    <TableHead>Reason Code</TableHead><TableHead>Fallback</TableHead>
+                    <TableHead>Início</TableHead><TableHead>Duração</TableHead><TableHead className="text-right">Ações</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {discoveryRuns.map(run => (
-                    <TableRow key={run.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openDiscoveryRunDetail(run)}>
-                      <TableCell className="font-mono text-xs">{run.id.substring(0, 8)}…</TableCell>
-                      <TableCell className="font-mono text-xs">{run.connection_id.substring(0, 8)}…</TableCell>
-                      <TableCell><StatusBadge status={run.status} /></TableCell>
-                      <TableCell className="text-center">{run.objects_found}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
-                      <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
-                      <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Evidence", data: run.evidence }); }}>
-                          <FileJson className="w-4 h-4" />
-                        </Button>
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                  {discoveryRuns.length === 0 && <TableRow><TableCell colSpan={7} className="text-center py-8 text-muted-foreground">Nenhum discovery run</TableCell></TableRow>}
+                  {discoveryRuns.map(run => {
+                    const ev = run.evidence || {};
+                    return (
+                      <TableRow key={run.id} className="cursor-pointer hover:bg-muted/50" onClick={() => openDiscoveryRunDetail(run)}>
+                        <TableCell className="font-mono text-xs">{run.id.substring(0, 8)}…</TableCell>
+                        <TableCell className="font-mono text-xs">{run.connection_id.substring(0, 8)}…</TableCell>
+                        <TableCell><StatusBadge status={run.status} /></TableCell>
+                        <TableCell className="text-center">{run.objects_found}</TableCell>
+                        <TableCell className="text-xs text-muted-foreground">{ev.discovery_method || '—'}</TableCell>
+                        <TableCell>
+                          {ev.reason_code ? (
+                            <Badge variant="outline" className="text-xs font-mono">{ev.reason_code}</Badge>
+                          ) : '—'}
+                        </TableCell>
+                        <TableCell className="text-center">
+                          {ev.fallback_used === true ? <AlertTriangle className="w-3 h-3 text-yellow-500 inline" /> :
+                           ev.fallback_used === false ? <CheckCircle className="w-3 h-3 text-primary inline" /> : '—'}
+                        </TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
+                        <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
+                        <TableCell className="text-right">
+                          <Button variant="ghost" size="sm" onClick={e => { e.stopPropagation(); setJsonModal({ title: "Evidence", data: run.evidence }); }}>
+                            <FileJson className="w-4 h-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                  {discoveryRuns.length === 0 && <TableRow><TableCell colSpan={10} className="text-center py-8 text-muted-foreground">Nenhum discovery run</TableCell></TableRow>}
                 </TableBody>
               </Table>
             </CardContent>
