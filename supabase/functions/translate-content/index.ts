@@ -1,4 +1,5 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { callOpenAI } from "../_shared/openai-client.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -24,13 +25,7 @@ serve(async (req) => {
   }
 
   try {
-    const lovableApiKey = Deno.env.get("LOVABLE_API_KEY");
-    if (!lovableApiKey) {
-      console.error("[translate-content] LOVABLE_API_KEY not configured");
-      return new Response(
-        JSON.stringify({ success: false, error: "AI API not configured" }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
-      );
+    // OpenAI key will be fetched from external DB via callOpenAI
     }
 
     const { texts, targetLanguage, sourceLanguage }: TranslationRequest = await req.json();
@@ -79,21 +74,13 @@ Return as JSON object like: {"key1": "translated text 1", "key2": "translated te
 
     console.log(`[translate-content] Translating ${validTexts.length} texts to ${targetLangName}`);
 
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
-        ],
-        max_tokens: 1024,
-        temperature: 0.3,
-      }),
+    const aiResponse = await callOpenAI({
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: userPrompt },
+      ],
+      max_tokens: 1024,
+      temperature: 0.3,
     });
 
     if (!aiResponse.ok) {

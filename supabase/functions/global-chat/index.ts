@@ -218,19 +218,11 @@ serve(async (req) => {
       { role: "user", content: message },
     ];
 
-    // Call AI Gateway
-    const aiResponse = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${lovableApiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages,
-        max_tokens: 1500,
-        temperature: 0.7,
-      }),
+    // Call OpenAI
+    const aiResponse = await callOpenAI({
+      messages,
+      max_tokens: 1500,
+      temperature: 0.7,
     });
 
     if (!aiResponse.ok) {
