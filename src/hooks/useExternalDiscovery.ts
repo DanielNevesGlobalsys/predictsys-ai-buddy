@@ -239,7 +239,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
     inspectingObjectId,
     inspectionData,
     selectedObjectIds,
-    createConnection,
+    createConnectionAndDiscover,
     runDiscovery,
     inspectObject,
     toggleSelection,
