@@ -789,18 +789,55 @@ const AdminExternalConnectionsTab = () => {
           </DialogHeader>
           <ScrollArea className="max-h-[65vh]">
             <div className="space-y-3">
+              {/* Source Trace Block — show if available in any discovery run */}
+              {(() => {
+                const traceRun = discoveryRuns.find(r => r.evidence?.source_trace?.detected === true);
+                const st = traceRun?.evidence?.source_trace;
+                if (!st) return null;
+                return (
+                  <Card className="border-primary/30 bg-primary/5">
+                    <CardContent className="p-4 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <Database className="w-4 h-4 text-primary" />
+                        <h4 className="text-sm font-medium">Fonte Subjacente Detectada</h4>
+                        <Badge variant="default" className="text-xs">{st.datasource_type}</Badge>
+                        <Badge variant="outline" className="text-xs">
+                          Confiança: {st.confidence === 'high' ? 'Alta' : st.confidence === 'medium' ? 'Média' : 'Baixa'}
+                        </Badge>
+                        {st.semantic_model_type && <Badge variant="secondary" className="text-xs">Modelo: {st.semantic_model_type}</Badge>}
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs">
+                        {st.datasource_server && <div><span className="text-muted-foreground">Servidor / Host:</span> <code className="bg-muted px-1 rounded">{st.datasource_server}</code></div>}
+                        {st.datasource_database && <div><span className="text-muted-foreground">Banco / Catálogo:</span> <code className="bg-muted px-1 rounded">{st.datasource_database}</code></div>}
+                        {st.datasource_path && <div><span className="text-muted-foreground">Caminho / Lake Path:</span> <code className="bg-muted px-1 rounded break-all">{st.datasource_path}</code></div>}
+                        <div><span className="text-muted-foreground">Descoberta automática:</span> {st.lineage_available ? 'Sim' : 'Não'}</div>
+                        <div><span className="text-muted-foreground">Status:</span> {st.source_trace_status}</div>
+                        {st.datasources_count != null && <div><span className="text-muted-foreground">Datasources:</span> {st.datasources_count}</div>}
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })()}
+
               {diagnosticEvents.length === 0 && (
                 <p className="text-sm text-muted-foreground text-center py-8">Nenhum evento de diagnóstico encontrado para esta conexão.</p>
               )}
               {diagnosticEvents.map((evt: any, i: number) => {
                 const meta = evt.metadata || {};
-                const isError = evt.event_type?.includes('error');
+                const isError = evt.event_type?.includes('error') || evt.event_type?.includes('failed');
+                const isTrace = evt.event_type?.includes('source_trace') || evt.event_type?.includes('source_detected');
+                const isAssisted = evt.event_type?.includes('assisted_ingestion');
                 return (
-                  <Card key={evt.id || i} className={isError ? "border-destructive/30 bg-destructive/5" : "border-border"}>
+                  <Card key={evt.id || i} className={
+                    isError ? "border-destructive/30 bg-destructive/5" :
+                    isTrace ? "border-primary/30 bg-primary/5" :
+                    isAssisted ? "border-yellow-500/30 bg-yellow-500/5" :
+                    "border-border"
+                  }>
                     <CardContent className="p-3 space-y-2">
                       <div className="flex items-center justify-between flex-wrap gap-2">
                         <div className="flex items-center gap-2">
-                          <Badge variant={isError ? "destructive" : "outline"} className="text-xs font-mono">{evt.event_type}</Badge>
+                          <Badge variant={isError ? "destructive" : isTrace ? "default" : "outline"} className="text-xs font-mono">{evt.event_type}</Badge>
                           {meta.phase && <Badge variant="secondary" className="text-xs">{meta.phase}</Badge>}
                           {meta.http_status && <Badge variant="outline" className="text-xs">HTTP {meta.http_status}</Badge>}
                         </div>
@@ -815,6 +852,13 @@ const AdminExternalConnectionsTab = () => {
                         {meta.rows_returned != null && <div><span className="text-muted-foreground">Rows:</span> {meta.rows_returned}</div>}
                         {meta.raw_response_size != null && <div><span className="text-muted-foreground">Response size:</span> {meta.raw_response_size} bytes</div>}
                         {meta.error_code && <div><span className="text-muted-foreground">Error code:</span> <code className="bg-muted px-1 rounded text-destructive">{meta.error_code}</code></div>}
+                        {meta.datasource_type && <div><span className="text-muted-foreground">Tipo fonte:</span> <code className="bg-muted px-1 rounded">{meta.datasource_type}</code></div>}
+                        {meta.datasource_server && <div><span className="text-muted-foreground">Servidor:</span> <code className="bg-muted px-1 rounded">{meta.datasource_server}</code></div>}
+                        {meta.datasource_database && <div><span className="text-muted-foreground">Banco:</span> <code className="bg-muted px-1 rounded">{meta.datasource_database}</code></div>}
+                        {meta.confidence && <div><span className="text-muted-foreground">Confiança:</span> {meta.confidence}</div>}
+                        {meta.semantic_model_type && <div><span className="text-muted-foreground">Modelo:</span> {meta.semantic_model_type}</div>}
+                        {meta.source_detected != null && <div><span className="text-muted-foreground">Fonte detectada:</span> {meta.source_detected ? 'Sim' : 'Não'}</div>}
+                        {meta.rest_fallback_worked != null && <div><span className="text-muted-foreground">REST fallback:</span> {meta.rest_fallback_worked ? 'OK' : 'Falhou'}</div>}
                       </div>
                       {meta.dax_query && (
                         <div className="text-xs"><span className="text-muted-foreground">DAX Query:</span> <code className="bg-muted px-1 rounded block mt-0.5">{meta.dax_query}</code></div>

@@ -1,9 +1,8 @@
 import { useState, useCallback, useEffect } from "react";
-import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Radar, CheckCircle, AlertCircle, Plug, AlertTriangle, Upload, Database, RefreshCw } from "lucide-react";
+import { Loader2, CheckCircle, AlertCircle, Plug, AlertTriangle, Upload, Database, RefreshCw, Link2, Server, ArrowRight } from "lucide-react";
 import { useExternalDiscovery } from "@/hooks/useExternalDiscovery";
 import { useOrganization } from "@/contexts/OrganizationContext";
 import DiscoveryGrid from "./DiscoveryGrid";
@@ -34,6 +33,7 @@ const ExternalDiscoveryFlow = ({
     setActiveConnectionId,
     discoveryRun,
     discoveryFallback,
+    sourceTrace,
     objects,
     isDiscovering,
     isImporting,
@@ -46,7 +46,6 @@ const ExternalDiscoveryFlow = ({
     toggleSelection,
     importSelected,
     setInspectingObjectId,
-    loadDiscoveryState,
   } = useExternalDiscovery(projectData.id);
 
   // Auto-create connection and run discovery on first mount
@@ -83,6 +82,11 @@ const ExternalDiscoveryFlow = ({
   // Determine if we're in a fallback failure state (DAX failed, no objects)
   const isDiscoveryFallbackFailure = discoveryFallback && objects.length === 0;
   const isDiscoveryRunFallback = discoveryRun?.status === 'failed_with_fallback';
+  const showFallbackUI = isDiscoveryFallbackFailure || isDiscoveryRunFallback;
+
+  // Source trace from hook or from discovery run evidence
+  const effectiveSourceTrace = sourceTrace || discoveryRun?.evidence?.source_trace || null;
+  const sourceDetected = effectiveSourceTrace?.detected === true;
 
   return (
     <div className="space-y-4">
@@ -124,18 +128,66 @@ const ExternalDiscoveryFlow = ({
         </Card>
       )}
 
-      {/* Discovery fallback state (Power BI DAX failure) */}
-      {(isDiscoveryFallbackFailure || isDiscoveryRunFallback) && (
+      {/* Discovery fallback state with source trace */}
+      {showFallbackUI && (
         <Card className="p-5 border-yellow-500/30 bg-yellow-500/5">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
             <div className="space-y-3 flex-1">
               <div>
-                <p className="font-medium text-sm">Discovery parcial — método automático indisponível</p>
+                <p className="font-medium text-sm">
+                  {sourceDetected
+                    ? 'Fonte analítica subjacente detectada'
+                    : 'Discovery parcial — método automático indisponível'}
+                </p>
                 <p className="text-sm text-muted-foreground mt-1">
-                  {discoveryFallback?.user_message || discoveryRun?.error_message || 'O discovery automático não conseguiu listar os objetos do dataset.'}
+                  {sourceDetected
+                    ? 'Foi possível estabelecer conexão com o dataset do Power BI, mas o discovery automático do semantic model não está disponível para este caso. Detectamos uma possível fonte analítica subjacente e recomendamos conectar diretamente essa fonte para uma ingestão mais estável no PredictSys.'
+                    : discoveryFallback?.user_message || discoveryRun?.error_message || 'O dataset do Power BI foi localizado, mas a inspeção automática do semantic model não pôde ser concluída. Você pode usar um arquivo exportado ou conectar manualmente a fonte analítica de origem.'
+                  }
                 </p>
               </div>
+
+              {/* Source trace detected card */}
+              {sourceDetected && effectiveSourceTrace && (
+                <Card className="p-4 border-primary/20 bg-primary/5">
+                  <div className="flex items-start gap-3">
+                    <Server className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+                    <div className="flex-1 space-y-2">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <p className="text-sm font-medium">Fonte detectada</p>
+                        <Badge variant="default" className="text-xs">{effectiveSourceTrace.datasource_type}</Badge>
+                        {effectiveSourceTrace.confidence && (
+                          <Badge variant="outline" className="text-xs">
+                            Confiança: {effectiveSourceTrace.confidence === 'high' ? 'Alta' : effectiveSourceTrace.confidence === 'medium' ? 'Média' : 'Baixa'}
+                          </Badge>
+                        )}
+                        {effectiveSourceTrace.semantic_model_type && (
+                          <Badge variant="secondary" className="text-xs">
+                            Modelo: {effectiveSourceTrace.semantic_model_type}
+                          </Badge>
+                        )}
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        {effectiveSourceTrace.datasource_server && (
+                          <div><span className="font-medium text-foreground">Servidor:</span> {effectiveSourceTrace.datasource_server}</div>
+                        )}
+                        {effectiveSourceTrace.datasource_database && (
+                          <div><span className="font-medium text-foreground">Banco:</span> {effectiveSourceTrace.datasource_database}</div>
+                        )}
+                        {effectiveSourceTrace.datasource_path && (
+                          <div className="col-span-full"><span className="font-medium text-foreground">Caminho:</span> {effectiveSourceTrace.datasource_path}</div>
+                        )}
+                      </div>
+                      <Button variant="default" size="sm" className="mt-2" onClick={onDataReady}>
+                        <Link2 className="w-3 h-3 mr-1" />
+                        Conectar fonte detectada
+                        <ArrowRight className="w-3 h-3 ml-1" />
+                      </Button>
+                    </div>
+                  </div>
+                </Card>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 <Button variant="outline" size="sm" onClick={handleRediscover} disabled={isDiscovering}>
@@ -146,10 +198,12 @@ const ExternalDiscoveryFlow = ({
                   <Upload className="w-3 h-3 mr-1" />
                   Importar arquivo exportado
                 </Button>
-                <Button variant="outline" size="sm" onClick={onDataReady}>
-                  <Database className="w-3 h-3 mr-1" />
-                  Conectar fonte SQL/Lake
-                </Button>
+                {!sourceDetected && (
+                  <Button variant="outline" size="sm" onClick={onDataReady}>
+                    <Database className="w-3 h-3 mr-1" />
+                    Conectar fonte SQL/Lake
+                  </Button>
+                )}
               </div>
 
               {discoveryFallback?.fix_suggestion && (
