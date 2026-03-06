@@ -303,15 +303,15 @@ async function traceUnderlyingSource(
     raw_datasources: [], semantic_model_type: null,
   };
 
-  // Log start
+  // Log start (best-effort, never fatal)
   try {
-    await supabaseClient.from('platform_events').insert({
+    await Promise.resolve(supabaseClient.from('platform_events').insert({
       event_type: 'powerbi_source_trace_started',
       project_id: projectId,
       source: 'connector_powerbi',
       status: 'info',
       metadata: { connection_id: connectionId, workspace_id: workspaceId, dataset_id: datasetId, timestamp: new Date().toISOString() },
-    });
+    }));
   } catch { /* best-effort */ }
 
   // Try GET /datasets/{id}/datasources
@@ -320,11 +320,13 @@ async function traceUnderlyingSource(
     const resp = await fetch(dsUrl, { headers: { 'Authorization': `Bearer ${accessToken}` } });
     if (!resp.ok) {
       const errText = await resp.text();
-      await supabaseClient.from('platform_events').insert({
-        event_type: 'powerbi_source_trace_failed',
-        project_id: projectId, source: 'connector_powerbi', status: 'warn',
-        metadata: { connection_id: connectionId, http_status: resp.status, error: errText.substring(0, 500), endpoint: dsUrl, timestamp: new Date().toISOString() },
-      }).catch(() => {});
+      try {
+        await Promise.resolve(supabaseClient.from('platform_events').insert({
+          event_type: 'powerbi_source_trace_failed',
+          project_id: projectId, source: 'connector_powerbi', status: 'warn',
+          metadata: { connection_id: connectionId, http_status: resp.status, error: errText.substring(0, 500), endpoint: dsUrl, timestamp: new Date().toISOString() },
+        }));
+      } catch (logErr) { console.warn('[source-trace] log persist failed:', logErr); }
       empty.source_trace_reason_code = `http_${resp.status}`;
       return empty;
     }
@@ -372,26 +374,30 @@ async function traceUnderlyingSource(
       }
     } catch { /* ignore */ }
 
-    // Log success
-    await supabaseClient.from('platform_events').insert({
-      event_type: 'powerbi_source_detected',
-      project_id: projectId, source: 'connector_powerbi', status: 'info',
-      metadata: {
-        connection_id: connectionId, datasource_type: result.datasource_type,
-        datasource_server: result.datasource_server, datasource_database: result.datasource_database,
-        confidence: result.confidence, semantic_model_type: result.semantic_model_type,
-        datasources_count: datasources.length, timestamp: new Date().toISOString(),
-      },
-    }).catch(() => {});
+    // Log success (best-effort)
+    try {
+      await Promise.resolve(supabaseClient.from('platform_events').insert({
+        event_type: 'powerbi_source_detected',
+        project_id: projectId, source: 'connector_powerbi', status: 'info',
+        metadata: {
+          connection_id: connectionId, datasource_type: result.datasource_type,
+          datasource_server: result.datasource_server, datasource_database: result.datasource_database,
+          confidence: result.confidence, semantic_model_type: result.semantic_model_type,
+          datasources_count: datasources.length, timestamp: new Date().toISOString(),
+        },
+      }));
+    } catch (logErr) { console.warn('[source-trace] log persist failed:', logErr); }
 
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await supabaseClient.from('platform_events').insert({
-      event_type: 'powerbi_source_trace_failed',
-      project_id: projectId, source: 'connector_powerbi', status: 'warn',
-      metadata: { connection_id: connectionId, error: msg.substring(0, 500), timestamp: new Date().toISOString() },
-    }).catch(() => {});
+    try {
+      await Promise.resolve(supabaseClient.from('platform_events').insert({
+        event_type: 'powerbi_source_trace_failed',
+        project_id: projectId, source: 'connector_powerbi', status: 'warn',
+        metadata: { connection_id: connectionId, error: msg.substring(0, 500), timestamp: new Date().toISOString() },
+      }));
+    } catch (logErr) { console.warn('[source-trace] log persist failed:', logErr); }
     empty.source_trace_reason_code = 'exception';
     return empty;
   }
@@ -433,7 +439,7 @@ async function discoverPowerBIWithFallback(
       },
     };
     try {
-      await supabaseClient.from('platform_events').insert(event);
+      await Promise.resolve(supabaseClient.from('platform_events').insert(event));
     } catch (e) {
       console.warn('[discover-pbi-diag] Failed to persist diagnostic event:', e);
     }
