@@ -114,6 +114,8 @@ const AdminExternalConnectionsTab = () => {
   const [selectedValidation, setSelectedValidation] = useState<ValidationRun | null>(null);
   const [jsonModal, setJsonModal] = useState<{ title: string; data: any } | null>(null);
   const [actionLoading, setActionLoading] = useState<string | null>(null);
+  const [diagnosticEvents, setDiagnosticEvents] = useState<any[]>([]);
+  const [showDiagnosticModal, setShowDiagnosticModal] = useState(false);
 
   // ─── Load all ─────────────────────────────
   const loadAll = useCallback(async () => {
@@ -275,6 +277,22 @@ const AdminExternalConnectionsTab = () => {
       toast({ title: "Erro", description: e.message, variant: "destructive" });
     }
   }, [toast]);
+
+  const loadDiagnosticEvents = useCallback(async (connectionId: string) => {
+    try {
+      const { data } = await supabase
+        .from("platform_events")
+        .select("*")
+        .eq("source", "connector_powerbi")
+        .filter("metadata->>connection_id", "eq", connectionId)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      setDiagnosticEvents(data || []);
+      setShowDiagnosticModal(true);
+    } catch (e) {
+      console.error("[admin] Failed to load diagnostic events", e);
+    }
+  }, []);
 
   // ─── Helpers ──────────────────────────────
   const getLatestValidation = (importRunId: string) => validationRuns.find(v => v.import_run_id === importRunId);
