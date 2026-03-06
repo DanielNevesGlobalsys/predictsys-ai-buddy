@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3, FileText, Download, Loader2 } from 'lucide-react';
+import { Plus, Building2, Users, FolderKanban, MoreVertical, Pencil, Trash2, Search, BarChart3, FileText, Download, Loader2, Plug } from 'lucide-react';
 import { ExportTechnicalReportButton } from '@/components/admin-analytics/ExportTechnicalReportButton';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
@@ -42,6 +42,8 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { Organization, OrgPlan, PLAN_LABELS } from '@/types/organization';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import AdminExternalConnectionsTab from '@/components/admin-connections/AdminExternalConnectionsTab';
 
 interface OrgStats {
   org_id: string;
@@ -368,7 +370,17 @@ const Admin = () => {
           </Button>
         </div>
 
-        {/* Stats Cards */}
+        <Tabs defaultValue="organizations" className="space-y-6">
+          <TabsList>
+            <TabsTrigger value="organizations" className="gap-1">
+              <Building2 className="w-3 h-3" />Organizações
+            </TabsTrigger>
+            <TabsTrigger value="external-connections" className="gap-1">
+              <Plug className="w-3 h-3" />Conexões Externas
+            </TabsTrigger>
+          </TabsList>
+
+          <TabsContent value="organizations" className="space-y-6">
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -506,6 +518,12 @@ const Admin = () => {
             )}
           </CardContent>
         </Card>
+          </TabsContent>
+
+          <TabsContent value="external-connections">
+            <AdminExternalConnectionsTab />
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* Create Organization Modal */}
