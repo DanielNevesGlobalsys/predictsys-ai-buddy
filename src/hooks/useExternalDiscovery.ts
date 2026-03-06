@@ -98,35 +98,56 @@ export function useExternalDiscovery(projectId: string | undefined) {
     if (activeConnectionId) loadDiscoveryState(activeConnectionId);
   }, [activeConnectionId, loadDiscoveryState]);
 
-  // Create external connection from data_source
-  const createConnection = useCallback(async (dataSourceId: string, connectorType: string, connectionName: string, organizationId: string) => {
+  // Create external connection + run discovery via edge function (service role)
+  const createConnectionAndDiscover = useCallback(async (
+    dataSourceId: string, connectorType: string, connectionName: string, organizationId: string
+  ) => {
     if (!projectId) return null;
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) return null;
 
-    const { data, error } = await supabase
-      .from("external_connections")
-      .insert({
-        project_id: projectId,
-        organization_id: organizationId,
-        user_id: user.id,
-        data_source_id: dataSourceId,
-        connector_type: connectorType,
-        connection_name: connectionName,
-      })
-      .select()
-      .single();
+    setIsDiscovering(true);
 
-    if (error) {
-      toast({ title: "Erro", description: error.message, variant: "destructive" });
+    try {
+      const { data, error } = await supabase.functions.invoke("discover-external-objects", {
+        body: {
+          project_id: projectId,
+          create_connection: true,
+          data_source_id: dataSourceId,
+          connector_type: connectorType,
+          connection_name: connectionName,
+          organization_id: organizationId,
+          user_id: user.id,
+        }
+      });
+
+      if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || "Discovery failed");
+
+      const connId = data.connection_id;
+      toast({ title: "Discovery concluído", description: `${data.objects_found} objetos encontrados` });
+
+      // Reload connections and discovery state
+      await loadConnections();
+      setActiveConnectionId(connId);
+      await loadDiscoveryState(connId);
+
+      return connId;
+    } catch (err: any) {
+      toast({
+        title: "Erro no Discovery",
+        description: err.message?.includes("row-level security")
+          ? "Você não tem permissão para acessar esta conexão externa. Verifique se a conexão pertence à sua organização."
+          : err.message,
+        variant: "destructive"
+      });
       return null;
+    } finally {
+      setIsDiscovering(false);
     }
+  }, [projectId, toast, loadConnections, loadDiscoveryState, setActiveConnectionId]);
 
-    await loadConnections();
-    return data as ExternalConnection;
-  }, [projectId, toast, loadConnections]);
-
-  // Run discovery
+  // Run discovery on existing connection
   const runDiscovery = useCallback(async (connectionId: string) => {
     if (!projectId) return;
     setIsDiscovering(true);
