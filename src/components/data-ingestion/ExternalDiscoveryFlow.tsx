@@ -65,10 +65,10 @@ const ExternalDiscoveryFlow = ({
   const handleImport = useCallback(async () => {
     const result = await importSelected(true);
     if (result?.completed > 0) onDataReady();
+  }, [importSelected, onDataReady]);
+
   const effectiveSourceTrace = sourceTrace || (discoveryRun?.evidence as any)?.source_trace || null;
   const sourceDetected = effectiveSourceTrace?.detected === true;
-
-
   const handleRediscover = useCallback(() => {
     if (activeConnectionId) runDiscovery(activeConnectionId);
   }, [activeConnectionId, runDiscovery]);
