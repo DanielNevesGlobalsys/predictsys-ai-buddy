@@ -94,10 +94,10 @@ const ExternalDiscoveryFlow = ({
   const handleConnectionCreated = useCallback(async (newDataSourceId: string) => {
     if (!currentOrganization?.id) return;
     const derivedName = `Derivada — ${effectiveSourceTrace?.datasource_type || 'fonte detectada'}`;
-    const mapping = effectiveSourceTrace?.datasource_type
+    const mapped = effectiveSourceTrace?.datasource_type
       ? mapSourceToConnector(effectiveSourceTrace.datasource_type)
       : null;
-    const cType = mapping || 'database';
+    const cType = mapped?.connectorType || 'database';
 
     // Log derived connection creation
     try {
@@ -143,8 +143,8 @@ const ExternalDiscoveryFlow = ({
   const isDiscoveryRunFallback = discoveryRun?.status === 'failed_with_fallback';
   const showFallbackUI = isDiscoveryFallbackFailure || isDiscoveryRunFallback;
 
-  const effectiveSourceTrace = sourceTrace || discoveryRun?.evidence?.source_trace || null;
-  const sourceDetected = effectiveSourceTrace?.detected === true;
+
+
 
   return (
     <div className="space-y-4">
