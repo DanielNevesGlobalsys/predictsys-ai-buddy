@@ -396,7 +396,8 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
                     size="sm"
                     onClick={() => handleSelectConnection(conn)}
                   >
-                    {t("dataIngestion.database.useConnection")}
+                    <Radar className="w-4 h-4 mr-1" />
+                    Descobrir Objetos
                   </Button>
                   <Button
                     size="sm"
@@ -417,6 +418,17 @@ const DatabaseConnectorSection = ({ projectData, saveProject, onDataReady }: Dat
             ))}
           </div>
         </div>
+      )}
+
+      {/* Discovery Flow */}
+      {discoveryConnection && projectData.id && (
+        <ExternalDiscoveryFlow
+          projectData={projectData}
+          dataSourceId={discoveryConnection.id}
+          connectorType={discoveryConnection.connector_type}
+          connectionName={discoveryConnection.name}
+          onDataReady={onDataReady}
+        />
       )}
 
       {/* Connection form */}
