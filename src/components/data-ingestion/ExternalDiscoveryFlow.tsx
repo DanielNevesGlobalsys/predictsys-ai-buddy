@@ -8,7 +8,7 @@ import { useOrganization } from "@/contexts/OrganizationContext";
 import { supabase } from "@/integrations/supabase/client";
 import DiscoveryGrid from "./DiscoveryGrid";
 import ObjectInspectionModal from "./ObjectInspectionModal";
-import SourceConnectionModal from "./SourceConnectionModal";
+import SourceConnectionModal, { mapSourceToConnector } from "./SourceConnectionModal";
 import type { ProjectData } from "../wizard/WizardContainer";
 
 interface ExternalDiscoveryFlowProps {
@@ -67,6 +67,8 @@ const ExternalDiscoveryFlow = ({
     if (result?.completed > 0) onDataReady();
   }, [importSelected, onDataReady]);
 
+  const effectiveSourceTrace = sourceTrace || (discoveryRun?.evidence as any)?.source_trace || null;
+  const sourceDetected = effectiveSourceTrace?.detected === true;
   const handleRediscover = useCallback(() => {
     if (activeConnectionId) runDiscovery(activeConnectionId);
   }, [activeConnectionId, runDiscovery]);
@@ -89,11 +91,47 @@ const ExternalDiscoveryFlow = ({
     setShowSourceModal(true);
   }, [projectData.id]);
 
-  const handleConnectionCreated = useCallback((newDataSourceId: string) => {
-    // After creating a derived connection, trigger discovery on it
-    // The user will see the new source in the database connector tab
-    onDataReady();
-  }, [onDataReady]);
+  const handleConnectionCreated = useCallback(async (newDataSourceId: string) => {
+    if (!currentOrganization?.id) return;
+    const derivedName = `Derivada — ${effectiveSourceTrace?.datasource_type || 'fonte detectada'}`;
+    const mapped = effectiveSourceTrace?.datasource_type
+      ? mapSourceToConnector(effectiveSourceTrace.datasource_type)
+      : null;
+    const cType = mapped?.connectorType || 'database';
+
+    // Log derived connection creation
+    try {
+      await Promise.resolve(supabase.from("platform_events").insert({
+        event_type: "derived_connection_created",
+        project_id: projectData.id,
+        source: "connector_powerbi",
+        status: "info",
+        metadata: {
+          data_source_id: newDataSourceId,
+          connector_type: cType,
+          datasource_type: effectiveSourceTrace?.datasource_type,
+        },
+      }));
+    } catch { /* best-effort */ }
+
+    // Trigger discovery on the newly created data source
+    const connId = await createConnectionAndDiscover(
+      newDataSourceId, cType, derivedName, currentOrganization.id
+    );
+
+    if (connId) {
+      // Log discovery started
+      try {
+        await Promise.resolve(supabase.from("platform_events").insert({
+          event_type: "derived_connection_discovery_started",
+          project_id: projectData.id,
+          source: "connector_powerbi",
+          status: "info",
+          metadata: { connection_id: connId, data_source_id: newDataSourceId },
+        }));
+      } catch { /* best-effort */ }
+    }
+  }, [currentOrganization?.id, effectiveSourceTrace, projectData.id, createConnectionAndDiscover]);
 
   const handleFallbackAction = useCallback((action: "upload" | "manual_sql") => {
     onDataReady();
@@ -105,8 +143,8 @@ const ExternalDiscoveryFlow = ({
   const isDiscoveryRunFallback = discoveryRun?.status === 'failed_with_fallback';
   const showFallbackUI = isDiscoveryFallbackFailure || isDiscoveryRunFallback;
 
-  const effectiveSourceTrace = sourceTrace || discoveryRun?.evidence?.source_trace || null;
-  const sourceDetected = effectiveSourceTrace?.detected === true;
+
+
 
   return (
     <div className="space-y-4">
