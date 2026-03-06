@@ -518,6 +518,12 @@ const Admin = () => {
             )}
           </CardContent>
         </Card>
+          </TabsContent>
+
+          <TabsContent value="external-connections">
+            <AdminExternalConnectionsTab />
+          </TabsContent>
+        </Tabs>
       </main>
 
       {/* Create Organization Modal */}
