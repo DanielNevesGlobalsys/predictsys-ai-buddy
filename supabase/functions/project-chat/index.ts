@@ -363,7 +363,7 @@ serve(async (req) => {
       if (llmError instanceof Error) {
         if (llmError.message === "RATE_LIMITED") assistantReply = "⚠️ Estou temporariamente indisponível. Tente novamente em alguns segundos.";
         else if (llmError.message === "PAYMENT_REQUIRED") assistantReply = "⚠️ Serviço temporariamente indisponível. Entre em contato com o suporte.";
-        else if (llmError.message === "LOVABLE_API_KEY not configured") assistantReply = generateFallbackReply(context, message);
+        else if (llmError.message.includes("OpenAI API key")) assistantReply = generateFallbackReply(context, message);
         else assistantReply = "Não consegui gerar uma resposta agora. Tente novamente em alguns instantes.";
       } else {
         assistantReply = generateFallbackReply(context, message);
