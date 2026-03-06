@@ -415,7 +415,7 @@ serve(async (req) => {
       .from("external_discovery_runs")
       .insert({
         project_id,
-        connection_id,
+        connection_id: effectiveConnectionId,
         status: 'running',
         started_at: new Date().toISOString()
       })
@@ -469,7 +469,7 @@ serve(async (req) => {
         const objectsToInsert = objects.map(obj => ({
           discovery_run_id: runId,
           project_id,
-          connection_id,
+          connection_id: effectiveConnectionId,
           object_name: obj.object_name,
           object_type: obj.object_type,
           object_schema: obj.object_schema,
@@ -502,7 +502,7 @@ serve(async (req) => {
           last_validated_at: new Date().toISOString(),
           validation_message: `Discovery completed: ${objects.length} objects found`
         })
-        .eq("id", connection_id);
+        .eq("id", effectiveConnectionId);
 
     } catch (discoveryError) {
       const errMsg = discoveryError instanceof Error ? discoveryError.message : String(discoveryError);
