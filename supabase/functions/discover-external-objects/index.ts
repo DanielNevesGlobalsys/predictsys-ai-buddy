@@ -563,6 +563,9 @@ serve(async (req) => {
 
       console.log(`[discover] Found ${objects.length} objects`);
 
+      // Determine if Power BI had a fallback failure (0 objects + reason_code)
+      const isPowerBIFallbackFailure = connectorType === 'powerbi' && powerbiResult && powerbiResult.reason_code && objects.length === 0;
+
       // Persist discovered objects
       if (objects.length > 0) {
         const objectsToInsert = objects.map(obj => ({
@@ -582,24 +585,57 @@ serve(async (req) => {
         await supabase.from("external_discovery_objects").insert(objectsToInsert);
       }
 
+      // Build evidence
+      const evidence: Record<string, any> = { connector_type: connectorType, objects_count: objects.length };
+      if (powerbiResult) {
+        evidence.discovery_method = powerbiResult.discovery_method;
+        evidence.fallback_used = powerbiResult.fallback_used;
+        if (powerbiResult.reason_code) evidence.reason_code = powerbiResult.reason_code;
+        if (powerbiResult.error_detail) evidence.error_detail = powerbiResult.error_detail;
+        if (powerbiResult.reason_code) {
+          const classified = classifyPowerBIError(powerbiResult.error_detail || '');
+          evidence.message_admin = classified.admin_message;
+          evidence.fix_suggestion = classified.fix_suggestion;
+        }
+      }
+
+      // Determine run status
+      let runStatus = 'done';
+      let runErrorMessage: string | null = null;
+      let runReasons: string[] | null = null;
+
+      if (isPowerBIFallbackFailure) {
+        runStatus = 'failed_with_fallback';
+        const classified = classifyPowerBIError(powerbiResult!.error_detail || '');
+        runErrorMessage = classified.user_message;
+        runReasons = [powerbiResult!.reason_code!];
+      }
+
       // Update run status
       await supabase
         .from("external_discovery_runs")
         .update({
-          status: 'done',
+          status: runStatus,
           objects_found: objects.length,
           finished_at: new Date().toISOString(),
-          evidence: { connector_type: connectorType, objects_count: objects.length }
+          evidence,
+          error_message: runErrorMessage,
+          reasons: runReasons,
         })
         .eq("id", runId);
 
-      // Update connection status
+      // Update connection status — keep connection usable even on DAX failure
+      const connStatus = isPowerBIFallbackFailure ? 'validated' : 'validated';
+      const connMessage = isPowerBIFallbackFailure
+        ? `Discovery parcial: DAX falhou, conexão válida. ${powerbiResult?.reason_code}`
+        : `Discovery completed: ${objects.length} objects found`;
+
       await supabase
         .from("external_connections")
         .update({
-          connection_status: 'validated',
+          connection_status: connStatus,
           last_validated_at: new Date().toISOString(),
-          validation_message: `Discovery completed: ${objects.length} objects found`
+          validation_message: connMessage
         })
         .eq("id", effectiveConnectionId);
 
@@ -620,21 +656,36 @@ serve(async (req) => {
       throw discoveryError;
     }
 
+    // Build response
+    const responsePayload: Record<string, any> = {
+      success: true,
+      connection_id: effectiveConnectionId,
+      run_id: runId,
+      objects_found: objects.length,
+      objects: objects.map(o => ({
+        name: o.object_name,
+        type: o.object_type,
+        schema: o.object_schema,
+        columns: o.estimated_columns,
+        rows: o.estimated_rows,
+        classification: o.classification
+      })),
+    };
+
+    // Attach fallback info so frontend can display appropriate UI
+    if (powerbiResult && powerbiResult.reason_code) {
+      const classified = classifyPowerBIError(powerbiResult.error_detail || '');
+      responsePayload.fallback = {
+        reason_code: powerbiResult.reason_code,
+        discovery_method: powerbiResult.discovery_method,
+        fallback_used: powerbiResult.fallback_used,
+        user_message: classified.user_message,
+        fix_suggestion: classified.fix_suggestion,
+      };
+    }
+
     return new Response(
-      JSON.stringify({
-        success: true,
-        connection_id: effectiveConnectionId,
-        run_id: runId,
-        objects_found: objects.length,
-        objects: objects.map(o => ({
-          name: o.object_name,
-          type: o.object_type,
-          schema: o.object_schema,
-          columns: o.estimated_columns,
-          rows: o.estimated_rows,
-          classification: o.classification
-        }))
-      }),
+      JSON.stringify(responsePayload),
       { headers: { ...corsHeaders, "Content-Type": "application/json" }, status: 200 }
     );
   } catch (error: unknown) {
