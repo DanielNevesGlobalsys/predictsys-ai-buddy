@@ -39,7 +39,7 @@ const ExternalDiscoveryFlow = ({
     inspectingObjectId,
     inspectionData,
     selectedObjectIds,
-    createConnection,
+    createConnectionAndDiscover,
     runDiscovery,
     inspectObject,
     toggleSelection,
@@ -61,16 +61,11 @@ const ExternalDiscoveryFlow = ({
         return;
       }
 
-      // Create new connection
-      const conn = await createConnection(dataSourceId, connectorType, connectionName, currentOrganization.id);
-      if (conn) {
-        setActiveConnectionId(conn.id);
-        // Auto-run discovery
-        await runDiscovery(conn.id);
-      }
+      // Create connection + run discovery via edge function (bypasses RLS)
+      await createConnectionAndDiscover(dataSourceId, connectorType, connectionName, currentOrganization.id);
     };
     init();
-  }, [hasInitialized, projectData.id, currentOrganization?.id, connections, dataSourceId, connectorType, connectionName, createConnection, runDiscovery, setActiveConnectionId]);
+  }, [hasInitialized, projectData.id, currentOrganization?.id, connections, dataSourceId, connectorType, connectionName, createConnectionAndDiscover, setActiveConnectionId]);
 
   const handleImport = useCallback(async () => {
     const result = await importSelected(true);
