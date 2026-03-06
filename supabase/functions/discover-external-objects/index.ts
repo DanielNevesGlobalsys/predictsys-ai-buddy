@@ -245,8 +245,50 @@ function classifyPowerBIError(errText: string): { reason_code: string; user_mess
   };
 }
 
-async function discoverPowerBIWithFallback(config: Record<string, any>): Promise<PowerBIDiscoveryResult> {
+async function discoverPowerBIWithFallback(
+  config: Record<string, any>,
+  supabaseClient: any,
+  connectionId: string,
+  projectId: string,
+): Promise<PowerBIDiscoveryResult> {
   const { workspace_id, dataset_id, client_id, client_secret, tenant_id } = config;
+  const diagnosticEvents: Array<Record<string, any>> = [];
+
+  /** Helper to persist a diagnostic event to platform_events */
+  async function logDiagnostic(eventType: string, meta: Record<string, unknown>) {
+    // Sanitize: never log tokens/secrets
+    const safeMeta = { ...meta };
+    delete safeMeta.access_token;
+    delete safeMeta.client_secret;
+    delete safeMeta.authorization;
+    if (safeMeta.headers && typeof safeMeta.headers === 'object') {
+      const h = { ...(safeMeta.headers as Record<string, unknown>) };
+      delete h.Authorization;
+      delete h.authorization;
+      safeMeta.headers = h;
+    }
+
+    const event = {
+      event_type: eventType,
+      project_id: projectId,
+      source: 'connector_powerbi',
+      status: 'info',
+      metadata: {
+        connection_id: connectionId,
+        connector_type: 'powerbi',
+        workspace_id,
+        dataset_id,
+        ...safeMeta,
+        timestamp: new Date().toISOString(),
+      },
+    };
+    diagnosticEvents.push(event);
+    try {
+      await supabaseClient.from('platform_events').insert(event);
+    } catch (e) {
+      console.warn('[discover-pbi-diag] Failed to persist diagnostic event:', e);
+    }
+  }
 
   // Get access token
   const tokenUrl = `https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token`;
@@ -262,21 +304,47 @@ async function discoverPowerBIWithFallback(config: Record<string, any>): Promise
   const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
   // ─── Primary: DAX discovery ───
+  const daxQuery = `EVALUATE INFO.TABLES()`;
+  const daxStartMs = Date.now();
+
+  await logDiagnostic('powerbi_discovery_request', {
+    endpoint: executeUrl,
+    dax_query: daxQuery,
+    method: 'POST',
+  });
+
   try {
-    const daxQuery = `EVALUATE INFO.TABLES()`;
     const resp = await fetch(executeUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } })
     });
 
+    const daxDurationMs = Date.now() - daxStartMs;
+
     if (!resp.ok) {
       const errText = await resp.text();
+      await logDiagnostic('powerbi_discovery_error', {
+        http_status: resp.status,
+        error_payload_raw: errText.substring(0, 2000),
+        dax_query: daxQuery,
+        endpoint_called: executeUrl,
+        duration_ms: daxDurationMs,
+      });
       throw new Error(errText);
     }
 
     const result = await resp.json();
     const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+
+    await logDiagnostic('powerbi_discovery_response', {
+      http_status: 200,
+      duration_ms: daxDurationMs,
+      rows_returned: rows.length,
+      raw_response_size: JSON.stringify(result).length,
+      endpoint: executeUrl,
+    });
+
     const objects: DiscoveredObject[] = [];
 
     for (const row of rows) {
@@ -317,21 +385,60 @@ async function discoverPowerBIWithFallback(config: Record<string, any>): Promise
 
   } catch (daxError) {
     const daxErrMsg = daxError instanceof Error ? daxError.message : String(daxError);
+    const daxStack = daxError instanceof Error ? daxError.stack : undefined;
     console.warn(`[discover] Power BI DAX discovery failed, attempting metadata fallback:`, daxErrMsg);
+
+    // Parse error codes from the raw payload
+    let errorCode: string | undefined;
+    try {
+      const parsed = JSON.parse(daxErrMsg);
+      errorCode = parsed?.error?.code || parsed?.error?.pbi_error?.code || undefined;
+    } catch { /* not JSON */ }
+
+    await logDiagnostic('powerbi_discovery_error', {
+      http_status: null,
+      error_code: errorCode,
+      error_message: daxErrMsg.substring(0, 500),
+      error_payload_raw: daxErrMsg.substring(0, 2000),
+      dax_query: daxQuery,
+      endpoint_called: executeUrl,
+      stack_trace: daxStack?.substring(0, 1000),
+      duration_ms: Date.now() - daxStartMs,
+      phase: 'dax_primary',
+    });
 
     const classified = classifyPowerBIError(daxErrMsg);
 
     // ─── Fallback: REST API metadata ───
+    const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
+    const fallbackStartMs = Date.now();
+
+    await logDiagnostic('powerbi_discovery_request', {
+      endpoint: fallbackUrl,
+      method: 'GET',
+      phase: 'rest_fallback',
+    });
+
     try {
-      // Try to get dataset info and tables via REST API (non-DAX)
-      const tablesResp = await fetch(
-        `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`,
-        { headers: { 'Authorization': `Bearer ${access_token}` } }
-      );
+      const tablesResp = await fetch(fallbackUrl, {
+        headers: { 'Authorization': `Bearer ${access_token}` }
+      });
+
+      const fallbackDurationMs = Date.now() - fallbackStartMs;
 
       if (tablesResp.ok) {
         const tablesData = await tablesResp.json();
         const tables = tablesData.value || [];
+
+        await logDiagnostic('powerbi_discovery_response', {
+          http_status: 200,
+          duration_ms: fallbackDurationMs,
+          rows_returned: tables.length,
+          raw_response_size: JSON.stringify(tablesData).length,
+          endpoint: fallbackUrl,
+          phase: 'rest_fallback',
+        });
+
         const objects: DiscoveredObject[] = tables.map((t: any) => ({
           object_name: t.name,
           object_type: 'semantic_model',
@@ -350,9 +457,25 @@ async function discoverPowerBIWithFallback(config: Record<string, any>): Promise
           reason_code: classified.reason_code,
           error_detail: daxErrMsg.substring(0, 500),
         };
+      } else {
+        const fallbackErrText = await tablesResp.text();
+        await logDiagnostic('powerbi_discovery_error', {
+          http_status: tablesResp.status,
+          error_payload_raw: fallbackErrText.substring(0, 2000),
+          endpoint_called: fallbackUrl,
+          duration_ms: fallbackDurationMs,
+          phase: 'rest_fallback',
+        });
       }
     } catch (fallbackErr) {
-      console.warn(`[discover] Power BI REST fallback also failed:`, fallbackErr);
+      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      await logDiagnostic('powerbi_discovery_error', {
+        error_message: fbMsg.substring(0, 500),
+        endpoint_called: fallbackUrl,
+        duration_ms: Date.now() - fallbackStartMs,
+        phase: 'rest_fallback',
+      });
+      console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
     }
 
     // ─── Both methods failed: return structured failure ───
@@ -535,7 +658,7 @@ serve(async (req) => {
           objects = await discoverDatabricks(connectionConfig);
           break;
         case 'powerbi':
-          powerbiResult = await discoverPowerBIWithFallback(connectionConfig);
+          powerbiResult = await discoverPowerBIWithFallback(connectionConfig, supabase, effectiveConnectionId, project_id);
           objects = powerbiResult.objects;
           break;
         case 'azure_sql':
