@@ -697,6 +697,9 @@ const AdminExternalConnectionsTab = () => {
                 <Button variant="outline" size="sm" onClick={() => setJsonModal({ title: "Evidence JSON", data: selectedDiscoveryRun?.evidence })}>
                   <FileJson className="w-4 h-4 mr-1" />Ver Evidence
                 </Button>
+                <Button variant="outline" size="sm" onClick={() => selectedDiscoveryRun && loadDiagnosticEvents(selectedDiscoveryRun.connection_id)}>
+                  <Activity className="w-4 h-4 mr-1" />Ver Diagnóstico
+                </Button>
               </div>
             </div>
           </ScrollArea>
@@ -774,6 +777,68 @@ const AdminExternalConnectionsTab = () => {
             <pre className="text-xs font-mono bg-muted p-4 rounded overflow-auto whitespace-pre-wrap">
               {jsonModal?.data ? JSON.stringify(jsonModal.data, null, 2) : "null"}
             </pre>
+          </ScrollArea>
+        </DialogContent>
+      </Dialog>
+      {/* ═══ Power BI Diagnostic Modal ═══ */}
+      <Dialog open={showDiagnosticModal} onOpenChange={setShowDiagnosticModal}>
+        <DialogContent className="max-w-4xl max-h-[85vh]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Activity className="w-5 h-5" />Diagnóstico Power BI</DialogTitle>
+            <DialogDescription>{diagnosticEvents.length} evento(s) de diagnóstico</DialogDescription>
+          </DialogHeader>
+          <ScrollArea className="max-h-[65vh]">
+            <div className="space-y-3">
+              {diagnosticEvents.length === 0 && (
+                <p className="text-sm text-muted-foreground text-center py-8">Nenhum evento de diagnóstico encontrado para esta conexão.</p>
+              )}
+              {diagnosticEvents.map((evt: any, i: number) => {
+                const meta = evt.metadata || {};
+                const isError = evt.event_type?.includes('error');
+                return (
+                  <Card key={evt.id || i} className={isError ? "border-destructive/30 bg-destructive/5" : "border-border"}>
+                    <CardContent className="p-3 space-y-2">
+                      <div className="flex items-center justify-between flex-wrap gap-2">
+                        <div className="flex items-center gap-2">
+                          <Badge variant={isError ? "destructive" : "outline"} className="text-xs font-mono">{evt.event_type}</Badge>
+                          {meta.phase && <Badge variant="secondary" className="text-xs">{meta.phase}</Badge>}
+                          {meta.http_status && <Badge variant="outline" className="text-xs">HTTP {meta.http_status}</Badge>}
+                        </div>
+                        <span className="text-[10px] text-muted-foreground">{meta.timestamp || fmtDate(evt.created_at)}</span>
+                      </div>
+                      <div className="grid grid-cols-2 md:grid-cols-3 gap-x-4 gap-y-1 text-xs">
+                        {meta.endpoint && <div><span className="text-muted-foreground">Endpoint:</span> <code className="bg-muted px-1 rounded break-all">{meta.endpoint || meta.endpoint_called}</code></div>}
+                        {meta.endpoint_called && !meta.endpoint && <div><span className="text-muted-foreground">Endpoint:</span> <code className="bg-muted px-1 rounded break-all">{meta.endpoint_called}</code></div>}
+                        {meta.workspace_id && <div><span className="text-muted-foreground">Workspace:</span> <code className="bg-muted px-1 rounded">{meta.workspace_id}</code></div>}
+                        {meta.dataset_id && <div><span className="text-muted-foreground">Dataset:</span> <code className="bg-muted px-1 rounded">{meta.dataset_id}</code></div>}
+                        {meta.duration_ms != null && <div><span className="text-muted-foreground">Duração:</span> {meta.duration_ms}ms</div>}
+                        {meta.rows_returned != null && <div><span className="text-muted-foreground">Rows:</span> {meta.rows_returned}</div>}
+                        {meta.raw_response_size != null && <div><span className="text-muted-foreground">Response size:</span> {meta.raw_response_size} bytes</div>}
+                        {meta.error_code && <div><span className="text-muted-foreground">Error code:</span> <code className="bg-muted px-1 rounded text-destructive">{meta.error_code}</code></div>}
+                      </div>
+                      {meta.dax_query && (
+                        <div className="text-xs"><span className="text-muted-foreground">DAX Query:</span> <code className="bg-muted px-1 rounded block mt-0.5">{meta.dax_query}</code></div>
+                      )}
+                      {meta.error_message && (
+                        <div className="text-xs"><span className="text-muted-foreground">Error:</span> <span className="text-destructive">{meta.error_message}</span></div>
+                      )}
+                      {meta.error_payload_raw && (
+                        <details className="text-[10px]">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Payload completo</summary>
+                          <pre className="mt-1 p-2 bg-muted rounded overflow-auto max-h-40 whitespace-pre-wrap">{meta.error_payload_raw}</pre>
+                        </details>
+                      )}
+                      {meta.stack_trace && (
+                        <details className="text-[10px]">
+                          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">Stack trace</summary>
+                          <pre className="mt-1 p-2 bg-muted rounded overflow-auto max-h-32 whitespace-pre-wrap">{meta.stack_trace}</pre>
+                        </details>
+                      )}
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
           </ScrollArea>
         </DialogContent>
       </Dialog>
