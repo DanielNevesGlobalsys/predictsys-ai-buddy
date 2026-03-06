@@ -1109,6 +1109,92 @@ export type Database = {
         }
         Relationships: []
       }
+      pipeline_validation_runs: {
+        Row: {
+          connection_id: string | null
+          created_at: string
+          dataset_id: string | null
+          details: Json | null
+          eda_valid: boolean | null
+          finished_at: string | null
+          id: string
+          import_run_id: string | null
+          metadata_valid: boolean | null
+          overall_status: string
+          project_id: string
+          promotion_valid: boolean | null
+          sample_valid: boolean | null
+          schema_valid: boolean | null
+          staging_valid: boolean | null
+          started_at: string | null
+        }
+        Insert: {
+          connection_id?: string | null
+          created_at?: string
+          dataset_id?: string | null
+          details?: Json | null
+          eda_valid?: boolean | null
+          finished_at?: string | null
+          id?: string
+          import_run_id?: string | null
+          metadata_valid?: boolean | null
+          overall_status?: string
+          project_id: string
+          promotion_valid?: boolean | null
+          sample_valid?: boolean | null
+          schema_valid?: boolean | null
+          staging_valid?: boolean | null
+          started_at?: string | null
+        }
+        Update: {
+          connection_id?: string | null
+          created_at?: string
+          dataset_id?: string | null
+          details?: Json | null
+          eda_valid?: boolean | null
+          finished_at?: string | null
+          id?: string
+          import_run_id?: string | null
+          metadata_valid?: boolean | null
+          overall_status?: string
+          project_id?: string
+          promotion_valid?: boolean | null
+          sample_valid?: boolean | null
+          schema_valid?: boolean | null
+          staging_valid?: boolean | null
+          started_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pipeline_validation_runs_connection_id_fkey"
+            columns: ["connection_id"]
+            isOneToOne: false
+            referencedRelation: "external_connections"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pipeline_validation_runs_dataset_id_fkey"
+            columns: ["dataset_id"]
+            isOneToOne: false
+            referencedRelation: "project_datasets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pipeline_validation_runs_import_run_id_fkey"
+            columns: ["import_run_id"]
+            isOneToOne: false
+            referencedRelation: "external_import_runs"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pipeline_validation_runs_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       platform_events: {
         Row: {
           created_at: string
