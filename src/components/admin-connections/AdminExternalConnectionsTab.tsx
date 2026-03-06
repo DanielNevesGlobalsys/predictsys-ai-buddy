@@ -505,7 +505,7 @@ const AdminExternalConnectionsTab = () => {
                       <TableCell className="font-mono text-xs">{run.connection_id.substring(0, 8)}…</TableCell>
                       <TableCell><StatusBadge status={run.status} /></TableCell>
                       <TableCell className="text-center">{run.total_objects}</TableCell>
-                      <TableCell className="text-center text-green-600">{run.objects_completed}</TableCell>
+                      <TableCell className="text-center text-primary">{run.objects_completed}</TableCell>
                       <TableCell className="text-center text-destructive">{run.objects_failed}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{fmtDate(run.started_at || run.created_at)}</TableCell>
                       <TableCell className="text-sm text-muted-foreground">{duration(run.started_at, run.finished_at)}</TableCell>
@@ -664,7 +664,7 @@ const AdminExternalConnectionsTab = () => {
                       <TableCell>{obj.classification ? <Badge variant="secondary" className="text-xs">{obj.classification}</Badge> : "—"}</TableCell>
                       <TableCell className="text-center">{obj.estimated_columns || "—"}</TableCell>
                       <TableCell className="text-center">{obj.estimated_rows?.toLocaleString() || "—"}</TableCell>
-                      <TableCell>{obj.is_selected ? <CheckCircle className="w-4 h-4 text-green-600" /> : "—"}</TableCell>
+                      <TableCell>{obj.is_selected ? <CheckCircle className="w-4 h-4 text-primary" /> : "—"}</TableCell>
                     </TableRow>
                   ))}
                 </TableBody>
