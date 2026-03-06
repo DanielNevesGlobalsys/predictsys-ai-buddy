@@ -5,8 +5,10 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, CheckCircle, AlertCircle, Plug, AlertTriangle, Upload, Database, RefreshCw, Link2, Server, ArrowRight } from "lucide-react";
 import { useExternalDiscovery } from "@/hooks/useExternalDiscovery";
 import { useOrganization } from "@/contexts/OrganizationContext";
+import { supabase } from "@/integrations/supabase/client";
 import DiscoveryGrid from "./DiscoveryGrid";
 import ObjectInspectionModal from "./ObjectInspectionModal";
+import SourceConnectionModal from "./SourceConnectionModal";
 import type { ProjectData } from "../wizard/WizardContainer";
 
 interface ExternalDiscoveryFlowProps {
@@ -26,6 +28,7 @@ const ExternalDiscoveryFlow = ({
 }: ExternalDiscoveryFlowProps) => {
   const { currentOrganization } = useOrganization();
   const [hasInitialized, setHasInitialized] = useState(false);
+  const [showSourceModal, setShowSourceModal] = useState(false);
 
   const {
     connections,
@@ -48,17 +51,12 @@ const ExternalDiscoveryFlow = ({
     setInspectingObjectId,
   } = useExternalDiscovery(projectData.id);
 
-  // Auto-create connection and run discovery on first mount
   useEffect(() => {
     if (hasInitialized || !projectData.id || !currentOrganization?.id) return;
     setHasInitialized(true);
-
     const init = async () => {
       const existing = connections.find(c => c.data_source_id === dataSourceId);
-      if (existing) {
-        setActiveConnectionId(existing.id);
-        return;
-      }
+      if (existing) { setActiveConnectionId(existing.id); return; }
       await createConnectionAndDiscover(dataSourceId, connectorType, connectionName, currentOrganization.id);
     };
     init();
@@ -66,25 +64,47 @@ const ExternalDiscoveryFlow = ({
 
   const handleImport = useCallback(async () => {
     const result = await importSelected(true);
-    if (result?.completed > 0) {
-      onDataReady();
-    }
+    if (result?.completed > 0) onDataReady();
   }, [importSelected, onDataReady]);
 
   const handleRediscover = useCallback(() => {
-    if (activeConnectionId) {
-      runDiscovery(activeConnectionId);
-    }
+    if (activeConnectionId) runDiscovery(activeConnectionId);
   }, [activeConnectionId, runDiscovery]);
+
+  const handleSourceCTAClick = useCallback(() => {
+    // Log event (best-effort)
+    try {
+      Promise.resolve(supabase.from("platform_events").insert({
+        event_type: "source_detected_cta_clicked",
+        project_id: projectData.id,
+        source: "connector_powerbi",
+        status: "info",
+        metadata: {
+          datasource_type: effectiveSourceTrace?.datasource_type,
+          datasource_server: effectiveSourceTrace?.datasource_server,
+        },
+      }));
+    } catch { /* best-effort */ }
+
+    setShowSourceModal(true);
+  }, [projectData.id]);
+
+  const handleConnectionCreated = useCallback((newDataSourceId: string) => {
+    // After creating a derived connection, trigger discovery on it
+    // The user will see the new source in the database connector tab
+    onDataReady();
+  }, [onDataReady]);
+
+  const handleFallbackAction = useCallback((action: "upload" | "manual_sql") => {
+    onDataReady();
+  }, [onDataReady]);
 
   const inspectedObject = objects.find(o => o.id === inspectingObjectId);
 
-  // Determine if we're in a fallback failure state (DAX failed, no objects)
   const isDiscoveryFallbackFailure = discoveryFallback && objects.length === 0;
   const isDiscoveryRunFallback = discoveryRun?.status === 'failed_with_fallback';
   const showFallbackUI = isDiscoveryFallbackFailure || isDiscoveryRunFallback;
 
-  // Source trace from hook or from discovery run evidence
   const effectiveSourceTrace = sourceTrace || discoveryRun?.evidence?.source_trace || null;
   const sourceDetected = effectiveSourceTrace?.detected === true;
 
@@ -179,7 +199,7 @@ const ExternalDiscoveryFlow = ({
                           <div className="col-span-full"><span className="font-medium text-foreground">Caminho:</span> {effectiveSourceTrace.datasource_path}</div>
                         )}
                       </div>
-                      <Button variant="default" size="sm" className="mt-2" onClick={onDataReady}>
+                      <Button variant="default" size="sm" className="mt-2" onClick={handleSourceCTAClick}>
                         <Link2 className="w-3 h-3 mr-1" />
                         Conectar fonte detectada
                         <ArrowRight className="w-3 h-3 ml-1" />
@@ -216,7 +236,7 @@ const ExternalDiscoveryFlow = ({
         </Card>
       )}
 
-      {/* Discovery grid — only show when NOT in fallback failure state */}
+      {/* Discovery grid */}
       {!isDiscoveryFallbackFailure && !isDiscoveryRunFallback && (
         <DiscoveryGrid
           objects={objects}
@@ -239,6 +259,18 @@ const ExternalDiscoveryFlow = ({
         rows={inspectionData?.rows || inspectedObject?.sample_rows || null}
         isLoading={!!inspectingObjectId && !inspectionData && !inspectedObject?.column_preview}
       />
+
+      {/* Source connection modal */}
+      {effectiveSourceTrace && (
+        <SourceConnectionModal
+          open={showSourceModal}
+          onClose={() => setShowSourceModal(false)}
+          sourceTrace={effectiveSourceTrace as any}
+          projectId={projectData.id}
+          onConnectionCreated={handleConnectionCreated}
+          onFallbackAction={handleFallbackAction}
+        />
+      )}
     </div>
   );
 };
