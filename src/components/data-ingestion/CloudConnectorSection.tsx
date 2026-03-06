@@ -697,12 +697,13 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                       </p>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
                     <Button
                       size="sm"
                       onClick={() => handleSelectConnection(conn)}
                     >
-                      {t("dataIngestion.cloud.useConnection")}
+                      <Radar className="w-4 h-4 mr-1" />
+                      Descobrir Objetos
                     </Button>
                     <Button
                       size="sm"
@@ -724,6 +725,17 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
             })}
           </div>
         </div>
+      )}
+
+      {/* Discovery Flow */}
+      {discoveryConnection && projectData.id && (
+        <ExternalDiscoveryFlow
+          projectData={projectData}
+          dataSourceId={discoveryConnection.id}
+          connectorType={discoveryConnection.connector_type}
+          connectionName={discoveryConnection.name}
+          onDataReady={onDataReady}
+        />
       )}
 
       {/* Connection form */}
