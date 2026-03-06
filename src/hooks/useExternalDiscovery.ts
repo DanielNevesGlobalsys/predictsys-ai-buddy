@@ -23,6 +23,16 @@ export interface DiscoveryRun {
   objects_found: number;
   error_message: string | null;
   created_at: string;
+  reasons?: string[] | null;
+  evidence?: Record<string, any> | null;
+}
+
+export interface DiscoveryFallback {
+  reason_code: string;
+  discovery_method: string;
+  fallback_used: boolean;
+  user_message: string;
+  fix_suggestion: string;
 }
 
 export interface ExternalConnection {
@@ -43,6 +53,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
   const [objects, setObjects] = useState<DiscoveryObject[]>([]);
   const [isDiscovering, setIsDiscovering] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [discoveryFallback, setDiscoveryFallback] = useState<DiscoveryFallback | null>(null);
   const [inspectingObjectId, setInspectingObjectId] = useState<string | null>(null);
   const [inspectionData, setInspectionData] = useState<{ columns: any[]; rows: any[] } | null>(null);
   const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set());
@@ -124,8 +135,22 @@ export function useExternalDiscovery(projectId: string | undefined) {
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Discovery failed");
 
+      // Handle fallback info from Power BI
+      if (data.fallback) {
+        setDiscoveryFallback(data.fallback as DiscoveryFallback);
+      } else {
+        setDiscoveryFallback(null);
+      }
+
       const connId = data.connection_id;
-      toast({ title: "Discovery concluído", description: `${data.objects_found} objetos encontrados` });
+      const toastDesc = data.fallback
+        ? data.fallback.user_message
+        : `${data.objects_found} objetos encontrados`;
+      toast({
+        title: data.fallback ? "Discovery parcial" : "Discovery concluído",
+        description: toastDesc,
+        variant: data.fallback ? "default" : "default",
+      });
 
       // Reload connections and discovery state
       await loadConnections();
@@ -161,7 +186,16 @@ export function useExternalDiscovery(projectId: string | undefined) {
       if (error) throw error;
       if (!data?.success) throw new Error(data?.error || "Discovery failed");
 
-      toast({ title: "Discovery concluído", description: `${data.objects_found} objetos encontrados` });
+      if (data.fallback) {
+        setDiscoveryFallback(data.fallback as DiscoveryFallback);
+      } else {
+        setDiscoveryFallback(null);
+      }
+
+      toast({
+        title: data.fallback ? "Discovery parcial" : "Discovery concluído",
+        description: data.fallback ? data.fallback.user_message : `${data.objects_found} objetos encontrados`,
+      });
       await loadDiscoveryState(connectionId);
     } catch (err: any) {
       toast({ title: "Erro no Discovery", description: err.message, variant: "destructive" });
@@ -233,6 +267,7 @@ export function useExternalDiscovery(projectId: string | undefined) {
     activeConnectionId,
     setActiveConnectionId,
     discoveryRun,
+    discoveryFallback,
     objects,
     isDiscovering,
     isImporting,
