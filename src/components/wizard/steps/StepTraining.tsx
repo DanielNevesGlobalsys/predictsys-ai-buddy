@@ -1460,18 +1460,6 @@ const StepTraining = ({
               {/* Pipeline Audit Panel */}
               <PipelineAuditPanel projectId={projectData.id || ""} pipelineStage="training" />
 
-              {/* Debug LYS — admin only, inside technical block */}
-              <UnifiedModelInsights
-                projectId={projectData.id || ""}
-                modelId={productionModel?.id || bestModel?.id}
-                modelName={productionModel?.algorithm_name || bestModel?.algorithm_name}
-                problemType={projectData.problem_type}
-                models={models}
-                bestModelId={bestModel?.id}
-                datasetRows={projectData.dataset_rows}
-                targetColumn={projectData.target_column}
-                showDebug={true}
-              />
             </CollapsibleContent>
           </Collapsible>
         )}
