@@ -350,6 +350,25 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             {projectData.id && edaReady && (
               <TDEProfileCard key={tdeRefreshKey} projectId={projectData.id} />
             )}
+
+            {/* Lys Synthesis — after EDA + TDE */}
+            {projectData.id && edaReady && (
+              <LysSynthesisPanel
+                synthesis={{
+                  narrative: lysSynthesis.narrative,
+                  recommendation: lysSynthesis.recommendation,
+                  confidence_score: lysSynthesis.confidence_score,
+                  synthesized_at: lysSynthesis.synthesized_at,
+                }}
+                loading={lysSynthesis.loading}
+                generating={lysSynthesis.generating}
+                error={lysSynthesis.error}
+                onGenerate={() => {
+                  lysSynthesisTriggered.current = false;
+                  lysSynthesis.generate(i18n.language);
+                }}
+              />
+            )}
           </>
         )}
 
