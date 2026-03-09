@@ -3725,6 +3725,10 @@ export type Database = {
           last_pipeline_meta: Json | null
           last_pipeline_stage: string | null
           last_pipeline_state: string | null
+          lys_confidence_score: number | null
+          lys_insight_text: string | null
+          lys_recommendation_json: Json | null
+          lys_synthesized_at: string | null
           modeling_dataset_meta: Json | null
           objective: string | null
           org_id: string | null
@@ -3808,6 +3812,10 @@ export type Database = {
           last_pipeline_meta?: Json | null
           last_pipeline_stage?: string | null
           last_pipeline_state?: string | null
+          lys_confidence_score?: number | null
+          lys_insight_text?: string | null
+          lys_recommendation_json?: Json | null
+          lys_synthesized_at?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null
@@ -3891,6 +3899,10 @@ export type Database = {
           last_pipeline_meta?: Json | null
           last_pipeline_stage?: string | null
           last_pipeline_state?: string | null
+          lys_confidence_score?: number | null
+          lys_insight_text?: string | null
+          lys_recommendation_json?: Json | null
+          lys_synthesized_at?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null

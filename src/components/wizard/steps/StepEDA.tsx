@@ -8,8 +8,10 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import TDEProfileCard from "./TDEProfileCard";
+import LysSynthesisPanel from "./LysSynthesisPanel";
 import { supabase } from "@/integrations/supabase/client";
 import { trackEvent } from "@/lib/platformTracking";
+import { useLysSynthesis } from "@/hooks/useLysSynthesis";
 
 interface StepEDAProps {
   projectData: ProjectData;
@@ -30,8 +32,11 @@ interface EdaSSOT {
 const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const { i18n } = useTranslation();
   const [tdeAutoTriggered, setTdeAutoTriggered] = useState<string | null>(null);
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
+  const lysSynthesis = useLysSynthesis(projectData.id);
+  const lysSynthesisTriggered = useRef(false);
 
   // Dataset state
   const [activeDataset, setActiveDataset] = useState<{ id: string; total_rows: number; columns_count: number; name: string } | null>(null);
@@ -95,6 +100,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   useEffect(() => {
     loadState();
     autoEdaTriggered.current = false;
+    lysSynthesis.load();
   }, [projectData.id]);
 
   // Auto-trigger EDA when dataset exists but EDA not yet succeeded
@@ -200,7 +206,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     } catch (err) {
       console.warn("[StepEDA] TDE auto-trigger failed (non-blocking):", err);
     }
-  }, [projectData.id, tdeAutoTriggered]);
+    // Auto-trigger Lys synthesis after TDE
+    if (!lysSynthesisTriggered.current) {
+      lysSynthesisTriggered.current = true;
+      lysSynthesis.generate(i18n.language);
+    }
+  }, [projectData.id, tdeAutoTriggered, i18n.language]);
 
   const edaReady = edaSSOT.eda_status === "succeeded" && !!edaSSOT.eda_profile_json;
   const edaRunning = edaSSOT.eda_status === "running" || edaCalculating;
@@ -338,6 +349,25 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             {/* TDE Profile */}
             {projectData.id && edaReady && (
               <TDEProfileCard key={tdeRefreshKey} projectId={projectData.id} />
+            )}
+
+            {/* Lys Synthesis — after EDA + TDE */}
+            {projectData.id && edaReady && (
+              <LysSynthesisPanel
+                synthesis={{
+                  narrative: lysSynthesis.narrative,
+                  recommendation: lysSynthesis.recommendation,
+                  confidence_score: lysSynthesis.confidence_score,
+                  synthesized_at: lysSynthesis.synthesized_at,
+                }}
+                loading={lysSynthesis.loading}
+                generating={lysSynthesis.generating}
+                error={lysSynthesis.error}
+                onGenerate={() => {
+                  lysSynthesisTriggered.current = false;
+                  lysSynthesis.generate(i18n.language);
+                }}
+              />
             )}
           </>
         )}
