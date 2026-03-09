@@ -387,8 +387,10 @@ Provide your analysis following the exact section structure. Be specific to THIS
 
   return (
     <div className="space-y-6">
-      {/* Debug Panel */}
-      <DebugLysPanel debugInfo={debugInfo} onRefresh={handleRefreshDebug} loading={loading} />
+      {/* Debug Panel - only rendered when explicitly requested via prop */}
+      {showDebug && (
+        <DebugLysPanel debugInfo={debugInfo} onRefresh={handleRefreshDebug} loading={loading} />
+      )}
 
       {/* Header Section */}
       <div className="flex items-center justify-between">
