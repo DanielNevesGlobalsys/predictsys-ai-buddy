@@ -1114,7 +1114,35 @@ const StepTargetFeatures = ({
           />
         )}
 
-        {/* Contract missing warning — only show if project has no business_objective */}
+        {/* ═══ Intent-Driven Target Resolution ═══ */}
+        {projectData.id && !isSegmentation && (
+          <IntentTargetSummary
+            projectId={projectData.id}
+            currentTarget={targetColumn || null}
+            onApplyTarget={(candidate: TargetCandidateResolved) => {
+              if (candidate.column) {
+                setTargetColumn(candidate.column);
+                setTargetSource("manual");
+                setAppliedTargetColumn(null);
+                if (candidate.problem_type) {
+                  setInferredProblemType(candidate.problem_type);
+                }
+              }
+            }}
+            onApplyEntityKey={(key: string) => setEntityKey(key)}
+            onApplyTimeAnchor={() => {}}
+            onApplyFeatures={(features: string[], blocked: { column: string; reason: string }[]) => {
+              if (features.length > 0) {
+                const validFeatures = features.filter(f => columns.some(c => c.name === f));
+                if (validFeatures.length > 0) setSelectedFeatures(validFeatures);
+              }
+              if (blocked.length > 0) {
+                const blockedCols = blocked.map(b => b.column).filter(c => columns.some(col => col.name === c));
+                if (blockedCols.length > 0) setExcludedColumns(prev => [...new Set([...prev, ...blockedCols])]);
+              }
+            }}
+          />
+        )
         {contractMissing && !businessContract && !projectData.business_objective && !modelingState?.project?.business_objective && (
           <Alert className="border-amber-500/30 bg-amber-500/5">
             <AlertTriangle className="w-4 h-4 text-amber-500" />
