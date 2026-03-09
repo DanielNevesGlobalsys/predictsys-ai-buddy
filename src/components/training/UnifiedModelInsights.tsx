@@ -45,6 +45,7 @@ interface UnifiedModelInsightsProps {
   bestModelId?: string;
   datasetRows?: number;
   targetColumn?: string;
+  showDebug?: boolean;
 }
 
 const UnifiedModelInsights = ({
