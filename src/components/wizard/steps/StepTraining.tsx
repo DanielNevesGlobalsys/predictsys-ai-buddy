@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import TrainingResultsPanel from "./TrainingResultsPanel";
-import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
+import DebugLysPanel from "@/components/training/DebugLysPanel";
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
