@@ -581,6 +581,58 @@ const StepTargetFeatures = ({
     }
   }, [settings, ssotLoaded, ssot, columns]);
 
+  // ═══ Lys synthesis pre-configuration ═══
+  // Apply Lys recommendations as defaults ONLY when no SSOT target exists
+  useEffect(() => {
+    if (lysAppliedRef.current) return;
+    if (!lysSynthesis.loaded || !ssotLoaded || columns.length === 0) return;
+    if (ssot.target_column || targetColumn) return; // Don't override user selection
+    
+    const rec = lysSynthesis.recommendation;
+    if (!rec?.suggested_target) return;
+
+    // Validate suggested target exists in columns
+    const targetExists = columns.some(c => c.name === rec.suggested_target);
+    if (!targetExists) return;
+
+    lysAppliedRef.current = true;
+
+    // Pre-fill target
+    setTargetColumn(rec.suggested_target!);
+    if (rec.suggested_problem_type) {
+      setInferredProblemType(rec.suggested_problem_type);
+    }
+
+    // Pre-fill entity key
+    if (rec.suggested_entity_key && columns.some(c => c.name === rec.suggested_entity_key)) {
+      setEntityKey(rec.suggested_entity_key);
+    }
+
+    // Pre-fill features (if Lys suggests them and no SSOT features)
+    if (rec.suggested_features && rec.suggested_features.length > 0 && ssot.feature_columns.length === 0) {
+      const validFeatures = rec.suggested_features.filter(f => columns.some(c => c.name === f));
+      if (validFeatures.length > 0) {
+        setSelectedFeatures(validFeatures);
+      }
+    }
+
+    // Pre-fill excluded (blocked features from Lys)
+    if (rec.blocked_features && rec.blocked_features.length > 0) {
+      const blockedCols = rec.blocked_features.map(f => f.column).filter(c => columns.some(col => col.name === c));
+      if (blockedCols.length > 0) {
+        setExcludedColumns(prev => [...new Set([...prev, ...blockedCols])]);
+      }
+    }
+
+    console.log("[StepTargetFeatures] Lys recommendations applied:", {
+      target: rec.suggested_target,
+      problem_type: rec.suggested_problem_type,
+      entity_key: rec.suggested_entity_key,
+      features: rec.suggested_features?.length,
+      blocked: rec.blocked_features?.length,
+    });
+  }, [lysSynthesis.loaded, lysSynthesis.recommendation, ssotLoaded, ssot.target_column, columns, targetColumn]);
+
   // NOTE: We intentionally do NOT pre-fill target from event_candidates.
   // event_candidate ≠ target. Target is often derived (e.g. "no purchase in 90 days").
   // We only pre-fill entity_key + time_anchor (structural keys), not the target.
