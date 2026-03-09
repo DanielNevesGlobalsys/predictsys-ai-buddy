@@ -634,6 +634,11 @@ function mergeResults(
 
   console.log(`[mergeResults] entity: ai=${ai?.suggested_entity_key} tde=${bestEntity} → ${suggestedEntityKey}, time: ai=${ai?.suggested_time_anchor} tde=${bestTime} → ${suggestedTimeAnchor}`);
 
+  // Auto-select features when AI doesn't provide them
+  let suggestedFeatures = ai?.suggested_features || [];
+  const blockedFeatures = ai?.blocked_features || [];
+  // (features populated by caller in resolve-target-intent if still empty)
+
   return {
     target_strategy_used: isInsufficient ? "insufficient" : mainCandidate.strategy,
     main_candidate: isInsufficient ? null : mainCandidate,
@@ -649,8 +654,8 @@ function mergeResults(
     business_fit_assessment: ai?.business_fit_assessment || "Avaliação pendente",
     blocked_targets: (ai?.blocked_targets || []).map((b: any) => b.column),
     blocked_target_reasons: ai?.blocked_targets || [],
-    suggested_features: ai?.suggested_features || [],
-    blocked_features: ai?.blocked_features || [],
+    suggested_features: suggestedFeatures,
+    blocked_features: blockedFeatures,
     target_reasoning_summary: ai?.reasoning_summary || mainCandidate?.reasoning || "Resolução determinística aplicada.",
     signals: {
       industry, objective, problemTypeExpected,
