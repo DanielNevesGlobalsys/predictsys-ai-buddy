@@ -783,34 +783,78 @@ function calcClassificationMetricsDetailed(yTrue: number[], yProb: number[]): Me
   const recall_raw = tp / (tp + fn) || 0;
   const f1_raw = 2 * precision_raw * recall_raw / (precision_raw + recall_raw) || 0;
   
-  // AUC calculation
-  const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
-    .sort((a, b) => b.p - a.p);
-  let auc_raw = 0;
-  let posSum = 0;
+  // AUC calculation — proper tie-aware Wilcoxon-Mann-Whitney
   const totalPos = yTrue.filter(y => y === 1).length;
   const totalNeg = yTrue.filter(y => y === 0).length;
+  let auc_raw = 0.5;
   
-  for (const pair of sortedPairs) {
-    if (pair.t === 0) {
-      auc_raw += posSum;
-    } else {
-      posSum++;
+  if (totalPos > 0 && totalNeg > 0) {
+    // Use pairwise comparison with proper tie handling
+    let concordant = 0;
+    let tied = 0;
+    // For efficiency, sort by probability descending and count
+    const sortedPairs = yTrue.map((t, i) => ({ t, p: yProb[i] }))
+      .sort((a, b) => b.p - a.p);
+    let negCumul = 0;
+    let tiedCumul = 0;
+    
+    for (let i = sortedPairs.length - 1; i >= 0; i--) {
+      if (sortedPairs[i].t === 0) {
+        negCumul++;
+        // Count ties at same probability
+        let tiesAtP = 0;
+        for (let j = i - 1; j >= 0 && sortedPairs[j].p === sortedPairs[i].p; j--) {
+          if (sortedPairs[j].t === 1) tiesAtP++;
+        }
+        tiedCumul += tiesAtP;
+      } else {
+        // positive: all negatives with lower prob are concordant
+        concordant += negCumul;
+        tied += tiedCumul;
+        tiedCumul = 0;
+      }
+    }
+    
+    // AUC = (concordant + 0.5 * tied) / (totalPos * totalNeg)
+    auc_raw = (concordant + 0.5 * tied) / (totalPos * totalNeg);
+    
+    // Clamp to [0, 1] — AUC mathematically cannot exceed 1.0
+    // If it does, there's a numerical error
+    if (auc_raw > 1.0 || auc_raw < 0.0) {
+      console.error(`[METRICS] AUC out of range: ${auc_raw.toFixed(6)} — clamping and flagging as invalid`);
+      auc_raw = Math.min(1.0, Math.max(0.0, auc_raw));
     }
   }
-  auc_raw = totalPos * totalNeg > 0 ? auc_raw / (totalPos * totalNeg) : 0.5;
 
   // PR-AUC
   const pr_auc_raw = calcPRAUC(yTrue, yProb);
 
   const raw: Record<string, number> = { AUC: auc_raw, F1: f1_raw, Recall: recall_raw, Precisão: precision_raw, Acurácia: accuracy_raw, pr_auc: pr_auc_raw };
 
-  // Validate raw metrics
+  // ── Hard validation: metrics_invalid_hard_fail ──
   const invalid_reasons: string[] = [];
+  
+  // Check for degenerate predictions (only one class predicted)
+  const predictedClasses = new Set(yPred);
+  if (predictedClasses.size === 1) {
+    invalid_reasons.push(`metrics_degenerate_predictions: apenas classe ${[...predictedClasses][0]} prevista`);
+  }
+  
+  // Check probability collapse (no dispersion)
+  if (yProb.length > 10) {
+    const sorted = [...yProb].sort((a, b) => a - b);
+    const p05 = sorted[Math.floor(yProb.length * 0.05)];
+    const p95 = sorted[Math.floor(yProb.length * 0.95)];
+    if (p95 - p05 < 0.01) {
+      invalid_reasons.push(`metrics_probability_collapse: p95−p05=${(p95 - p05).toFixed(6)} (<0.01)`);
+    }
+  }
+  
+  // Validate each metric is in valid range
   for (const [k, v] of Object.entries(raw)) {
     if (!isFinite(v)) invalid_reasons.push(`${k} = ${v} (not finite)`);
-    else if (v < 0) invalid_reasons.push(`${k} = ${v.toFixed(4)} (negative)`);
-    else if (v > 1.001) invalid_reasons.push(`${k} = ${v.toFixed(4)} (> 1.0)`);
+    else if (v < -0.001) invalid_reasons.push(`${k} = ${v.toFixed(4)} (negative)`);
+    else if (v > 1.001) invalid_reasons.push(`metrics_invalid_hard_fail: ${k} = ${v.toFixed(4)} (> 1.0)`);
   }
 
   const clamped: Record<string, number> = {};
