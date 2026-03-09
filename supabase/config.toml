@@ -188,3 +188,6 @@ verify_jwt = false
 
 [functions.lys-synthesize-insights]
 verify_jwt = false
+
+[functions.lys-pipeline-insights]
+verify_jwt = false

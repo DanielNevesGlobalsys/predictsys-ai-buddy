@@ -1,7 +1,7 @@
 import { useState, useEffect } from "react";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sparkles, Loader2, RefreshCw } from "lucide-react";
+import { Sparkles, Loader2, RefreshCw, TrendingUp, AlertTriangle, Lightbulb, Target } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -29,6 +29,14 @@ interface ModelInsightsAIProps {
   targetColumn?: string;
 }
 
+interface ModelInterpretationInsight {
+  narrative: string;
+  reliability_assessment: string;
+  key_drivers: string[];
+  limitations: string[];
+  recommended_usage: string;
+}
+
 const ModelInsightsAI = ({
   projectId,
   models,
@@ -39,7 +47,7 @@ const ModelInsightsAI = ({
   targetColumn
 }: ModelInsightsAIProps) => {
   const { t, i18n } = useTranslation();
-  const [insights, setInsights] = useState<string[]>([]);
+  const [insight, setInsight] = useState<ModelInterpretationInsight | null>(null);
   const [loading, setLoading] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(true);
 
@@ -50,26 +58,20 @@ const ModelInsightsAI = ({
   const loadExistingInsights = async () => {
     setLoadingExisting(true);
     try {
-      const { data, error } = await supabase
-        .from("project_eda_insights")
-        .select("*")
+      const { data } = await supabase
+        .from("project_model_insights")
+        .select("insights")
         .eq("project_id", projectId)
         .eq("language", i18n.language)
+        .eq("insight_type", "model_interpretation")
         .order("created_at", { ascending: false })
-        .limit(1);
+        .limit(1)
+        .maybeSingle();
 
-      if (!error && data && data.length > 0) {
-        const insightsData = data[0].insights;
-        if (Array.isArray(insightsData)) {
-          const stringInsights = insightsData.map((i) => String(i));
-          const modelInsights = stringInsights.filter((insight: string) => 
-            insight.includes("model") || insight.includes("modelo") || 
-            insight.includes("AUC") || insight.includes("RMSE") ||
-            insight.includes("algoritmo") || insight.includes("algorithm")
-          );
-          if (modelInsights.length > 0) {
-            setInsights(modelInsights);
-          }
+      if (data?.insights) {
+        const parsed = typeof data.insights === "string" ? JSON.parse(data.insights) : data.insights;
+        if (parsed?.narrative) {
+          setInsight(parsed as ModelInterpretationInsight);
         }
       }
     } catch (err) {
@@ -85,81 +87,35 @@ const ModelInsightsAI = ({
     setLoading(true);
     try {
       const bestModel = models.find(m => m.id === bestModelId);
-      const productionModel = models.find(m => m.id === productionModelId);
-      
       const primaryMetric = problemType === "classification" ? "AUC" : "R²";
-      
-      const modelsSummary = models
-        .filter(m => m.status === "trained")
-        .map(m => {
-          const metricValue = m.metrics.find(metric => metric.metric_name === primaryMetric)?.metric_value;
-          return `${m.algorithm_name}: ${primaryMetric}=${metricValue?.toFixed(4) || "N/A"}`;
-        })
-        .join("; ");
 
-      const prompt = `Analyze these ML model results and provide 4-5 short, actionable business insights in ${i18n.language === "pt" ? "Portuguese" : i18n.language === "es" ? "Spanish" : "English"}.
+      const extraContext = {
+        trained_models: models.filter(m => m.status === "trained").map(m => ({
+          algorithm: m.algorithm_name,
+          is_best: m.id === bestModelId,
+          is_production: m.id === productionModelId,
+          metrics: Object.fromEntries(m.metrics.map(met => [met.metric_name, met.metric_value])),
+        })),
+        best_model_algorithm: bestModel?.algorithm_name || null,
+        primary_metric: primaryMetric,
+        dataset_rows: datasetRows,
+        target_column: targetColumn,
+      };
 
-Problem type: ${problemType}
-Target variable: ${targetColumn || "unknown"}
-Dataset size: ${datasetRows || "unknown"} rows
-Models trained: ${modelsSummary}
-Best model: ${bestModel?.algorithm_name || "none"} (${primaryMetric}: ${bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value?.toFixed(4) || "N/A"})
-Production model: ${productionModel?.algorithm_name || "not selected"}
-
-Consider:
-1. Is the model performance good, medium, or weak for this type of problem?
-2. What are the strengths of the best model?
-3. What are the risks or limitations (overfitting, low recall, etc.)?
-4. Suggestions for improvement (different features, more data, class balancing, etc.)
-5. Business recommendations
-
-Return a JSON array of strings, each being a complete insight. Format: ["insight 1", "insight 2", ...]`;
-
-      const { data, error } = await supabase.functions.invoke("global-chat", {
-        body: { message: prompt, language: i18n.language }
+      const { data, error } = await supabase.functions.invoke("lys-pipeline-insights", {
+        body: {
+          project_id: projectId,
+          stage: "model_interpretation",
+          language: i18n.language,
+          extra_context: extraContext,
+        },
       });
 
       if (error) throw error;
+      if (!data?.success) throw new Error(data?.error || "Failed");
 
-      const responseText = data?.response || "";
-      
-      // Parse insights from response
-      let parsedInsights: string[] = [];
-      try {
-        const jsonMatch = responseText.match(/\[[\s\S]*?\]/);
-        if (jsonMatch) {
-          parsedInsights = JSON.parse(jsonMatch[0]);
-        } else {
-          // Fallback: split by newlines and clean
-          parsedInsights = responseText
-            .split(/\n/)
-            .filter((line: string) => line.trim().length > 10)
-            .slice(0, 5);
-        }
-      } catch {
-        parsedInsights = responseText
-          .split(/\n/)
-          .filter((line: string) => line.trim().length > 10)
-          .slice(0, 5);
-      }
-
-      if (parsedInsights.length > 0) {
-        setInsights(parsedInsights);
-        
-        // Save to database
-        await supabase
-          .from("project_eda_insights")
-          .upsert({
-            project_id: projectId,
-            language: i18n.language,
-            insights: parsedInsights,
-            updated_at: new Date().toISOString()
-          }, {
-            onConflict: "project_id,language"
-          });
-
-        toast.success(t("models.insights.generated"));
-      }
+      setInsight(data.insight as ModelInterpretationInsight);
+      toast.success(t("models.insights.generated"));
     } catch (err) {
       console.error("Error generating model insights:", err);
       toast.error(t("models.insights.error"));
@@ -202,7 +158,7 @@ Return a JSON array of strings, each being a complete insight. Format: ["insight
                 <Loader2 className="w-4 h-4 mr-2 animate-spin" />
                 {t("models.insights.generating")}
               </>
-            ) : insights.length > 0 ? (
+            ) : insight ? (
               <>
                 <RefreshCw className="w-4 h-4 mr-2" />
                 {t("models.insights.regenerate")}
@@ -217,15 +173,53 @@ Return a JSON array of strings, each being a complete insight. Format: ["insight
         </div>
       </CardHeader>
       <CardContent>
-        {insights.length > 0 ? (
-          <ul className="space-y-3">
-            {insights.map((insight, idx) => (
-              <li key={idx} className="flex gap-3 text-sm">
-                <span className="text-primary font-bold">{idx + 1}.</span>
-                <span className="text-foreground">{insight}</span>
-              </li>
-            ))}
-          </ul>
+        {insight ? (
+          <div className="space-y-4">
+            {insight.narrative && (
+              <p className="text-sm leading-relaxed whitespace-pre-line">{insight.narrative}</p>
+            )}
+
+            {insight.key_drivers?.length > 0 && (
+              <div className="p-3 rounded-lg bg-accent/5 border border-accent/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <TrendingUp className="w-4 h-4 text-accent" />
+                  <span className="text-sm font-medium">Fatores de influência</span>
+                </div>
+                <ul className="space-y-1">
+                  {insight.key_drivers.map((d, i) => (
+                    <li key={i} className="text-sm flex gap-2">
+                      <span className="text-accent font-bold">•</span>
+                      <span>{d}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {insight.limitations?.length > 0 && (
+              <div className="p-3 rounded-lg bg-destructive/5 border border-destructive/20">
+                <div className="flex items-center gap-2 mb-2">
+                  <AlertTriangle className="w-4 h-4 text-destructive" />
+                  <span className="text-sm font-medium">Limitações</span>
+                </div>
+                <ul className="space-y-1">
+                  {insight.limitations.map((l, i) => (
+                    <li key={i} className="text-sm flex gap-2">
+                      <span className="text-destructive font-bold">•</span>
+                      <span>{l}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {insight.recommended_usage && (
+              <div className="p-3 rounded-lg bg-muted/50 border border-border flex items-start gap-2">
+                <Target className="w-4 h-4 text-primary mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-muted-foreground">{insight.recommended_usage}</p>
+              </div>
+            )}
+          </div>
         ) : (
           <p className="text-sm text-muted-foreground text-center py-4">
             {t("models.insights.noInsights")}

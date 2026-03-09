@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Sparkles, Loader2, Lightbulb, AlertTriangle, TrendingUp, CheckSquare } from 'lucide-react';
+import { Sparkles, Loader2, Lightbulb, AlertTriangle, TrendingUp, CheckSquare, BookOpen, Shield } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import type { KPIData, SegmentationBand, GroupSegmentation, DashboardFilters } from './types';
@@ -17,9 +17,13 @@ interface BusinessAIInsightsProps {
   viewMode: DashboardFilters['viewMode'];
 }
 
-interface AIInsight {
-  type: 'summary' | 'opportunities' | 'risks' | 'actions';
-  content: string;
+interface BusinessStoryInsight {
+  executive_narrative: string;
+  summary: string;
+  opportunities: string[];
+  risk_segments: string[];
+  recommended_actions: string[];
+  confidence_statement: string;
 }
 
 export function BusinessAIInsights({ 
@@ -33,20 +37,20 @@ export function BusinessAIInsights({
 }: BusinessAIInsightsProps) {
   const { t, i18n } = useTranslation();
   const [loading, setLoading] = useState(false);
-  const [insights, setInsights] = useState<AIInsight[]>([]);
-  const [hasStoredInsights, setHasStoredInsights] = useState(false);
+  const [insight, setInsight] = useState<BusinessStoryInsight | null>(null);
+  const [hasStoredInsight, setHasStoredInsight] = useState(false);
   
   useEffect(() => {
-    loadStoredInsights();
+    loadStoredInsight();
   }, [projectId, i18n.language]);
   
-  const loadStoredInsights = async () => {
+  const loadStoredInsight = async () => {
     try {
       const { data } = await supabase
         .from('project_model_insights')
         .select('insights')
         .eq('project_id', projectId)
-        .eq('insight_type', 'dashboard')
+        .eq('insight_type', 'business_story')
         .eq('language', i18n.language)
         .order('created_at', { ascending: false })
         .limit(1)
@@ -57,276 +61,90 @@ export function BusinessAIInsights({
           ? JSON.parse(data.insights) 
           : data.insights;
         
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setInsights(parsed);
-          setHasStoredInsights(true);
+        if (parsed?.executive_narrative || parsed?.summary) {
+          setInsight(parsed as BusinessStoryInsight);
+          setHasStoredInsight(true);
         }
       }
     } catch (error) {
-      console.error('Error loading insights:', error);
+      console.error('Error loading business insights:', error);
     }
   };
 
-  // Gather cumulative project context for richer AI prompts
-  const gatherCumulativeContext = async (): Promise<string> => {
-    const parts: string[] = [];
-
-    try {
-      const [aiCtxRes, inferenceRes, settingsRes] = await Promise.all([
-        supabase
-          .from('project_ai_context')
-          .select('context')
-          .eq('project_id', projectId)
-          .maybeSingle(),
-        supabase
-          .from('project_problem_inference')
-          .select('problem_type, suggested_problem_labels, narrative, confidence')
-          .eq('project_id', projectId)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .maybeSingle(),
-        supabase
-          .from('project_settings')
-          .select('target_column, problem_type')
-          .eq('project_id', projectId)
-          .maybeSingle(),
-      ]);
-
-      const aiCtx = aiCtxRes.data?.context as Record<string, any> | null;
-
-      // Domain / industry
-      if (aiCtx?.eda?.business_segment?.segment) {
-        parts.push(`Domínio de negócio inferido: ${aiCtx.eda.business_segment.segment}`);
-      }
-
-      // Problem inference
-      if (inferenceRes.data) {
-        const inf = inferenceRes.data;
-        const labels = Array.isArray(inf.suggested_problem_labels)
-          ? (inf.suggested_problem_labels as { label: string }[])
-              .filter(l => !(l.label || '').startsWith('__'))
-              .map(l => l.label)
-          : [];
-        if (labels.length > 0) {
-          parts.push(`Problemas de negócio inferidos: ${labels.join(', ')}`);
-        }
-        if (inf.narrative) {
-          parts.push(`Narrativa da inferência: ${(inf.narrative as string).substring(0, 400)}`);
-        }
-      }
-
-      // Target
-      if (settingsRes.data?.target_column) {
-        parts.push(`Variável alvo: ${settingsRes.data.target_column} (${settingsRes.data.problem_type || problemType})`);
-      }
-
-      // Training insights (model quality)
-      if (aiCtx?.training?.metrics) {
-        const metricsStr = Object.entries(aiCtx.training.metrics)
-          .map(([k, v]) => `${k}: ${v}`)
-          .join(', ');
-        parts.push(`Métricas do modelo: ${metricsStr}`);
-      }
-      if (aiCtx?.training?.confidence_level) {
-        parts.push(`Nível de confiança do modelo: ${aiCtx.training.confidence_level}`);
-      }
-
-      // Storyline
-      if (aiCtx?.storyline?.executive_summary) {
-        parts.push(`Resumo executivo anterior: ${(aiCtx.storyline.executive_summary as string).substring(0, 300)}`);
-      }
-    } catch (err) {
-      console.error('[BusinessAIInsights] Error gathering context:', err);
-    }
-
-    return parts.length > 0 
-      ? `\n\nCONTEXTO CUMULATIVO DO PROJETO:\n${parts.join('\n')}` 
-      : '';
-  };
-  
   const generateInsights = async () => {
     setLoading(true);
     
     try {
-      // Gather cumulative context
-      const cumulativeContext = await gatherCumulativeContext();
-
-      // Build context for AI
-      const highBands = segmentationBands.filter(b => b.min >= 0.6);
-      const highCount = highBands.reduce((sum, b) => sum + b.count, 0);
-      const topGroups = groupSegmentation.slice(0, 5);
-      
-      const contextLabel = problemContext || 'generic';
-      const viewLabel = viewMode === 'risk' ? 'risco' : 'oportunidade';
-      
+      // Build extra context with current dashboard data
       const isRegression = problemType === 'regression';
-      
-      const kpiBlock = isRegression
-        ? `KPIs de Regressão:
-- Total de entidades: ${kpis.totalEntities}
-- Valor total projetado: R$ ${kpis.predictedTotalValue.toLocaleString()}
-- Valor médio previsto: R$ ${kpis.predictedAvgValue.toLocaleString()}
-- Impacto financeiro estimado: R$ ${kpis.financialImpact.toLocaleString()}`
-        : `KPIs de Classificação:
-- Total de entidades: ${kpis.totalEntities}
-- Alta probabilidade (>=70%): ${kpis.highProbabilityCount} (${kpis.highProbabilityPercent.toFixed(1)}%)
-- Eventos esperados: ${kpis.expectedEvents}
-- Impacto financeiro estimado: R$ ${kpis.financialImpact.toLocaleString()}`;
+      const extraContext = {
+        dashboard_kpis: {
+          total_entities: kpis.totalEntities,
+          high_probability_count: kpis.highProbabilityCount,
+          high_probability_pct: kpis.highProbabilityPercent,
+          financial_impact: kpis.financialImpact,
+          expected_events: kpis.expectedEvents,
+          predicted_total_value: kpis.predictedTotalValue,
+          predicted_avg_value: kpis.predictedAvgValue,
+        },
+        segmentation_bands: segmentationBands.map(b => ({
+          range: b.range,
+          count: b.count,
+          percent: b.percent,
+          total_value: b.totalValue,
+        })),
+        top_groups: groupSegmentation.slice(0, 8).map(g => ({
+          group: g.group,
+          count: g.count,
+          avg_probability: g.avgProbability,
+          high_probability_pct: g.highProbabilityPercent,
+          avg_value: g.avgValue,
+        })),
+        problem_context: problemContext,
+        view_mode: viewMode,
+        is_regression: isRegression,
+      };
 
-      const segBlock = isRegression
-        ? `Distribuição por faixas de valor previsto:\n${segmentationBands.map(b => `- ${b.range}: ${b.count} registros, total R$ ${(b.totalValue || 0).toLocaleString()}`).join('\n')}`
-        : `Distribuição por faixas de probabilidade:\n${segmentationBands.map(b => `- ${b.range}: ${b.count} registros (${b.percent.toFixed(1)}%)`).join('\n')}`;
-
-      const prompt = `Você é a Lys, analista de negócios da PredictSys. Analise os dados do dashboard preditivo e gere insights ESPECÍFICOS ao problema de negócio, NUNCA genéricos.
-
-Contexto: Pipeline de ${contextLabel} (${problemType})
-Visão: ${viewLabel}
-${cumulativeContext}
-
-${kpiBlock}
-
-${segBlock}
-
-Top 5 grupos por ${isRegression ? 'valor médio' : 'probabilidade média'}:
-${topGroups.map(g => isRegression
-  ? `- ${g.group}: R$ ${(g.avgValue || 0).toFixed(2)} média, ${g.count} registros`
-  : `- ${g.group}: ${((g.avgProbability || 0) * 100).toFixed(1)}% média, ${g.highProbabilityPercent.toFixed(1)}% alta prob`
-).join('\n')}
-
-REGRAS OBRIGATÓRIAS:
-- Use o contexto cumulativo do projeto para conectar insights à inferência de problema original
-- Para REGRESSÃO: foque em valores previstos, top/bottom entidades, erro esperado e drivers de valor
-- Para CLASSIFICAÇÃO: foque em probabilidades, faixas de risco, priorização e ações por segmento
-- NUNCA use valores default como "R$100" ou frases genéricas
-- Cada insight deve mencionar dados reais do dashboard
-
-Gere exatamente 4 insights no formato JSON:
-[
-  {"type": "summary", "content": "Resumo executivo conectado ao problema inferido em 2-3 frases"},
-  {"type": "opportunities", "content": "Oportunidades específicas baseadas nos dados em 2-3 frases"},
-  {"type": "risks", "content": "Riscos reais identificados nos dados em 2-3 frases"},
-  {"type": "actions", "content": "3-4 ações concretas baseadas nos segmentos, separadas por ponto e vírgula"}
-]
-
-Responda APENAS o JSON, sem markdown ou texto adicional.`;
-
-      const { data: responseData, error } = await supabase.functions.invoke('global-chat', {
+      const { data: responseData, error } = await supabase.functions.invoke('lys-pipeline-insights', {
         body: { 
-          message: prompt,
-          context: 'dashboard_insights'
+          project_id: projectId,
+          stage: 'business_story',
+          language: i18n.language,
+          extra_context: extraContext,
         }
       });
       
       if (error) throw error;
+      if (!responseData?.success) throw new Error(responseData?.error || 'Failed to generate insights');
       
-      let parsedInsights: AIInsight[] = [];
-      
-      const responseText = responseData?.response || responseData?.message || '';
-      
-      const jsonMatch = responseText.match(/\[[\s\S]*\]/);
-      if (jsonMatch) {
-        parsedInsights = JSON.parse(jsonMatch[0]);
-      } else {
-        throw new Error('Could not parse AI response');
-      }
-      
-      setInsights(parsedInsights);
-      
-      // Save to database
-      const { data: existing } = await supabase
-        .from('project_model_insights')
-        .select('id')
-        .eq('project_id', projectId)
-        .eq('insight_type', 'dashboard')
-        .eq('language', i18n.language)
-        .maybeSingle();
-      
-      const insightsJson = JSON.parse(JSON.stringify(parsedInsights));
-      
-      if (existing) {
-        await supabase
-          .from('project_model_insights')
-          .update({ 
-            insights: insightsJson,
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', existing.id);
-      } else {
-        await supabase
-          .from('project_model_insights')
-          .insert([{
-            project_id: projectId,
-            insight_type: 'dashboard',
-            language: i18n.language,
-            insights: insightsJson
-          }]);
-      }
+      const newInsight = responseData.insight as BusinessStoryInsight;
+      setInsight(newInsight);
+      setHasStoredInsight(true);
 
-      // Also update AI context with dashboard mapping
+      // Also update AI context with business stage
       try {
         await supabase.functions.invoke('append-project-context', {
           body: {
             project_id: projectId,
             stage: 'business',
             payload: {
-              kpis: {
-                total_entities: kpis.totalEntities,
-                financial_impact: kpis.financialImpact,
-                high_probability_pct: kpis.highProbabilityPercent,
-              },
-              risks: parsedInsights.find(i => i.type === 'risks')?.content || '',
-              opportunities: parsedInsights.find(i => i.type === 'opportunities')?.content || '',
+              kpis: extraContext.dashboard_kpis,
+              risks: newInsight.risk_segments || [],
+              opportunities: newInsight.opportunities || [],
+              recommended_actions: newInsight.recommended_actions || [],
               dashboard_type: problemType,
             },
           },
         });
       } catch { /* non-critical */ }
       
-      setHasStoredInsights(true);
       toast.success(t('businessDashboard.aiInsights.generated'));
       
     } catch (error) {
-      console.error('Error generating insights:', error);
+      console.error('Error generating business story:', error);
       toast.error(t('businessDashboard.aiInsights.error'));
-      
-      setInsights([
-        { type: 'summary', content: t('businessDashboard.aiInsights.fallbackSummary') },
-        { type: 'opportunities', content: t('businessDashboard.aiInsights.fallbackOpportunities') },
-        { type: 'risks', content: t('businessDashboard.aiInsights.fallbackRisks') },
-        { type: 'actions', content: t('businessDashboard.aiInsights.fallbackActions') }
-      ]);
     } finally {
       setLoading(false);
-    }
-  };
-  
-  const getInsightIcon = (type: string) => {
-    switch (type) {
-      case 'summary': return <Lightbulb className="w-5 h-5" />;
-      case 'opportunities': return <TrendingUp className="w-5 h-5" />;
-      case 'risks': return <AlertTriangle className="w-5 h-5" />;
-      case 'actions': return <CheckSquare className="w-5 h-5" />;
-      default: return <Sparkles className="w-5 h-5" />;
-    }
-  };
-  
-  const getInsightColor = (type: string) => {
-    switch (type) {
-      case 'summary': return 'bg-primary/10 text-primary border-primary/20';
-      case 'opportunities': return 'bg-green-500/10 text-green-600 border-green-500/20';
-      case 'risks': return 'bg-destructive/10 text-destructive border-destructive/20';
-      case 'actions': return 'bg-secondary/10 text-secondary border-secondary/20';
-      default: return 'bg-muted text-muted-foreground border-border';
-    }
-  };
-  
-  const getInsightTitle = (type: string) => {
-    switch (type) {
-      case 'summary': return t('businessDashboard.aiInsights.summary');
-      case 'opportunities': return t('businessDashboard.aiInsights.opportunities');
-      case 'risks': return t('businessDashboard.aiInsights.risks');
-      case 'actions': return t('businessDashboard.aiInsights.actions');
-      default: return '';
     }
   };
 
@@ -347,7 +165,7 @@ Responda APENAS o JSON, sem markdown ou texto adicional.`;
           <Button 
             onClick={generateInsights} 
             disabled={loading || kpis.totalEntities === 0}
-            variant={hasStoredInsights ? 'outline' : 'default'}
+            variant={hasStoredInsight ? 'outline' : 'default'}
           >
             {loading ? (
               <>
@@ -357,7 +175,7 @@ Responda APENAS o JSON, sem markdown ou texto adicional.`;
             ) : (
               <>
                 <Sparkles className="w-4 h-4 mr-2" />
-                {hasStoredInsights 
+                {hasStoredInsight 
                   ? t('businessDashboard.aiInsights.regenerate')
                   : t('businessDashboard.aiInsights.generate')
                 }
@@ -367,7 +185,7 @@ Responda APENAS o JSON, sem markdown ou texto adicional.`;
         </div>
       </CardHeader>
       <CardContent>
-        {insights.length === 0 ? (
+        {!insight ? (
           <div className="text-center py-8">
             <Sparkles className="w-12 h-12 text-muted-foreground/30 mx-auto mb-4" />
             <p className="text-muted-foreground">
@@ -378,21 +196,89 @@ Responda APENAS o JSON, sem markdown ou texto adicional.`;
             </p>
           </div>
         ) : (
-          <div className="grid md:grid-cols-2 gap-4">
-            {insights.map((insight, index) => (
-              <Card 
-                key={index} 
-                className={`p-4 border ${getInsightColor(insight.type)}`}
-              >
+          <div className="space-y-6">
+            {/* Executive Narrative */}
+            {insight.executive_narrative && (
+              <div className="p-4 rounded-lg border bg-card">
                 <div className="flex items-center gap-2 mb-3">
-                  {getInsightIcon(insight.type)}
-                  <h4 className="font-semibold">{getInsightTitle(insight.type)}</h4>
+                  <div className="p-2 rounded-lg bg-primary/10 text-primary">
+                    <BookOpen className="w-5 h-5" />
+                  </div>
+                  <h4 className="font-semibold">{t('businessDashboard.aiInsights.summary')}</h4>
                 </div>
-                <p className="text-sm leading-relaxed">
-                  {insight.content}
+                <p className="text-sm leading-relaxed whitespace-pre-line text-foreground">
+                  {insight.executive_narrative}
                 </p>
-              </Card>
-            ))}
+              </div>
+            )}
+
+            <div className="grid md:grid-cols-2 gap-4">
+              {/* Opportunities */}
+              {insight.opportunities?.length > 0 && (
+                <div className="p-4 rounded-lg border bg-green-500/5 border-green-500/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <TrendingUp className="w-5 h-5 text-green-600" />
+                    <h4 className="font-semibold text-green-700 dark:text-green-400">
+                      {t('businessDashboard.aiInsights.opportunities')}
+                    </h4>
+                  </div>
+                  <ul className="space-y-2">
+                    {insight.opportunities.map((opp, i) => (
+                      <li key={i} className="text-sm flex gap-2">
+                        <span className="text-green-600 font-bold mt-0.5">•</span>
+                        <span>{opp}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+
+              {/* Risk Segments */}
+              {insight.risk_segments?.length > 0 && (
+                <div className="p-4 rounded-lg border bg-destructive/5 border-destructive/20">
+                  <div className="flex items-center gap-2 mb-3">
+                    <AlertTriangle className="w-5 h-5 text-destructive" />
+                    <h4 className="font-semibold text-destructive">
+                      {t('businessDashboard.aiInsights.risks')}
+                    </h4>
+                  </div>
+                  <ul className="space-y-2">
+                    {insight.risk_segments.map((risk, i) => (
+                      <li key={i} className="text-sm flex gap-2">
+                        <span className="text-destructive font-bold mt-0.5">•</span>
+                        <span>{risk}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+
+            {/* Recommended Actions */}
+            {insight.recommended_actions?.length > 0 && (
+              <div className="p-4 rounded-lg border bg-secondary/5 border-secondary/20">
+                <div className="flex items-center gap-2 mb-3">
+                  <CheckSquare className="w-5 h-5 text-secondary" />
+                  <h4 className="font-semibold">{t('businessDashboard.aiInsights.actions')}</h4>
+                </div>
+                <ul className="space-y-2">
+                  {insight.recommended_actions.map((action, i) => (
+                    <li key={i} className="text-sm flex gap-2">
+                      <span className="text-secondary font-bold">{i + 1}.</span>
+                      <span>{action}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Confidence Statement */}
+            {insight.confidence_statement && (
+              <div className="p-3 rounded-lg bg-muted/50 border border-border flex items-start gap-2">
+                <Shield className="w-4 h-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                <p className="text-xs text-muted-foreground italic">{insight.confidence_statement}</p>
+              </div>
+            )}
           </div>
         )}
       </CardContent>
