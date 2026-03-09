@@ -355,10 +355,32 @@ serve(async (req: Request) => {
       const md = canonicalDataset as any;
       const isCurrent = md.is_current !== false;
       const isReady = md.status === "ready" || md.status === "warning";
+      const isBlocked = md.status === "blocked";
       const versionMismatch = selectionVersion > 0 && (builderSelVersion || 0) < selectionVersion;
 
-      if (!isCurrent || versionMismatch || !ssotVersionMatch) {
-        // Builder outdated — BLOCK (never "não executado" since builder ran)
+      // PRIORITY 1: Check if dataset is blocked FIRST (before version check)
+      // A blocked dataset with stale version should show "blocked" not "outdated"
+      if (isCurrent && isBlocked) {
+        const blockedReasons = (md.blocked_reasons as string[] || []);
+        const needsRebuild = versionMismatch;
+        gates.push({
+          gate: "builder",
+          status: "BLOCK",
+          message: needsRebuild
+            ? `Builder bloqueado e desatualizado (v${builderSelVersion || 0} → v${selectionVersion}). Regere o dataset modelável.`
+            : `Builder bloqueado: ${blockedReasons.length > 0 ? blockedReasons.join("; ") : "Motivo não especificado. Regere o dataset modelável."}`,
+          details: {
+            status: md.status,
+            blocked_reasons: blockedReasons,
+            selection_version_used: builderSelVersion,
+            current_version: selectionVersion,
+            needs_rebuild: needsRebuild,
+            action: "REBUILD_MODELING_DATASET",
+          },
+        });
+        canTrain = false;
+      } else if (!isCurrent || versionMismatch || !ssotVersionMatch) {
+        // PRIORITY 2: Builder outdated — version mismatch
         gates.push({
           gate: "builder",
           status: "BLOCK",
@@ -369,6 +391,7 @@ serve(async (req: Request) => {
             ssot_version_used: ssotSelVersionUsed,
             stale_reason: md.stale_reason || (versionMismatch ? "VERSION_MISMATCH" : "NOT_CURRENT"),
             builder_source: builderSource,
+            action: "REBUILD_MODELING_DATASET",
           },
         });
         canTrain = false;
@@ -379,14 +402,6 @@ serve(async (req: Request) => {
           message: `Builder atual (v${builderSelVersion}). ${md.row_count} linhas, ${md.column_count} colunas.`,
           details: { selection_version_used: builderSelVersion, status: md.status, builder_source: builderSource },
         });
-      } else if (isCurrent && !isReady) {
-        gates.push({
-          gate: "builder",
-          status: "BLOCK",
-          message: `Builder bloqueado: ${(md.blocked_reasons as string[] || []).join("; ")}`,
-          details: { status: md.status, blocked_reasons: md.blocked_reasons },
-        });
-        canTrain = false;
       }
     } else if (ssotBuilderDatasetId) {
       // SSOT has a builder_dataset_id but dataset not found — data integrity issue

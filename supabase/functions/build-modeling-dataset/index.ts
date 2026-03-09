@@ -1394,6 +1394,8 @@ serve(async (req: Request) => {
         target_source: "direct",
         status: "blocked",
         blocked_reasons: allBlockedReasons,
+        selection_version_used: selectionVersion,
+        is_current: true,
         build_log: { intent, timeCols, eventCols, enrichedColumnsCount: enrichedColumns.length },
       });
 
