@@ -185,3 +185,6 @@ verify_jwt = false
 
 [functions.get-project-modeling-state]
 verify_jwt = false
+
+[functions.lys-synthesize-insights]
+verify_jwt = false
