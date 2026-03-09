@@ -185,7 +185,7 @@ serve(async (req) => {
     }
 
     // ── 6. Merge deterministic + AI results ──
-    const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected);
+    const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected, entityCandidates, timeCandidates);
 
     // ── 7. Persist to SSOT ──
     // Persist the resolution JSON AND promote time_anchor_column directly
