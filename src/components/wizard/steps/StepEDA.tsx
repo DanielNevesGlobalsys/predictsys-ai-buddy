@@ -32,7 +32,11 @@ interface EdaSSOT {
 const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const { i18n } = useTranslation();
   const [tdeAutoTriggered, setTdeAutoTriggered] = useState<string | null>(null);
+  const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
+  const lysSynthesis = useLysSynthesis(projectData.id);
+  const lysSynthesisTriggered = useRef(false);
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
 
   // Dataset state
