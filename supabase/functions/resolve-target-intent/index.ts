@@ -129,12 +129,23 @@ serve(async (req) => {
     const domainAdapter = intentContract.domain_adapter || {};
     const lysRecommendation = settings.lys_recommendation_json || aiContext.lys_synthesis || {};
 
-    // ── 2. Extract key project metadata ──
-    const industry = (settings.industry || domainAdapter.industry || "generic") as string;
-    const objective = (settings.objective || "") as string;
-    const businessProblem = (settings.business_problem || settings.objective || intentBase.declared_objective || "") as string;
-    const problemTypeExpected = (intentBase.problem_type || settings.problem_type || "") as string;
+    // ── 2. Extract key project metadata (SSOT-first, never hallucinate) ──
+    // CRITICAL: Industry and objective MUST come from project_settings (SSOT).
+    // AI context / domain_adapter is ONLY used as fallback if SSOT is completely empty.
+    // This prevents hallucinated industry/objective from overriding user-confirmed values.
+    const ssotIndustry = settings.industry as string | null;
+    const ssotObjective = settings.objective as string | null;
+    const industry = ssotIndustry || domainAdapter.industry || "generic";
+    const objective = ssotObjective || "";
+    const businessProblem = (ssotObjective || settings.business_problem || intentBase.declared_objective || "") as string;
+    // Problem type: SSOT first, then intent contract
+    const problemTypeExpected = (settings.problem_type || intentBase.problem_type || "") as string;
     const entityKey = settings.entity_key || null;
+
+    // Log SSOT vs AI context divergence for debugging
+    if (ssotIndustry && domainAdapter.industry && ssotIndustry !== domainAdapter.industry) {
+      console.warn(`[resolve-target-intent] SSOT industry="${ssotIndustry}" differs from AI context="${domainAdapter.industry}". Using SSOT.`);
+    }
     const timeAnchor = settings.time_anchor_column || null;
     const activeSchema = schemaColumns.map((c: any) => c.name);
 

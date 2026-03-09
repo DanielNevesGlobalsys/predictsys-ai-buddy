@@ -273,11 +273,15 @@ export default function IntentTargetSummary({
                     {alt.confidence && <ConfidenceBadge score={alt.confidence} />}
                   </div>
                   <p className="text-xs text-muted-foreground">{alt.reasoning}</p>
-                  {onApplyTarget && (
-                    <Button
-                      variant="outline" size="sm" className="w-full h-6 text-[10px]"
-                      onClick={() => onApplyTarget(alt)}
-                    >
+                    {onApplyTarget && (
+                      <Button
+                        variant="outline" size="sm" className="w-full h-6 text-[10px]"
+                        disabled={persisting}
+                        onClick={() => {
+                          onApplyTarget(alt);
+                          persistAppliedToSSOT(alt, resolution.suggested_entity_key, resolution.suggested_time_anchor);
+                        }}
+                      >
                       Usar esta alternativa
                     </Button>
                   )}
