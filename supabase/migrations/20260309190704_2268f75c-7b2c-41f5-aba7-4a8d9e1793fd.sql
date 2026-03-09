@@ -1,0 +1,2 @@
+ALTER TABLE public.project_model_selection DROP CONSTRAINT project_model_selection_problem_type_check;
+ALTER TABLE public.project_model_selection ADD CONSTRAINT project_model_selection_problem_type_check CHECK (problem_type = ANY (ARRAY['classification'::text, 'regression'::text, 'multiclass'::text, 'segmentation'::text, 'ranking'::text]));
