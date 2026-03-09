@@ -622,18 +622,25 @@ serve(async (req: Request) => {
 
     // ===== 4.9.5 METRICS_PROFILE_RESOLVED GATE =====
     {
+      // Check SSOT fields FIRST (project_settings.industry, objective), then AI context
+      const ssotObjLower = String(ssotObjective || "").toLowerCase();
+      const ssotIndLower = String(ssotIndustry || "").toLowerCase();
       const intentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
       const intentBaseObj = intentContract.intent_base || intentContract;
       const domainAdapterObj = intentContract.domain_adapter || {};
-      const objective = String(intentBaseObj?.declared_objective || "").toLowerCase();
-      const industry = String(domainAdapterObj?.industry || "").toLowerCase();
-      const hasSpecificProfile = objective.includes("churn") || objective.includes("conversão") || objective.includes("receita") || objective.includes("no-show") || objective.includes("adesão") || industry.includes("saúde") || industry.includes("health");
+      const aiObjective = String(intentBaseObj?.declared_objective || "").toLowerCase();
+      const aiIndustry = String(domainAdapterObj?.industry || "").toLowerCase();
+      const objective = ssotObjLower || aiObjective;
+      const industry = ssotIndLower || aiIndustry;
+      const problemType = String(projectSettings?.problem_type || (selection as any)?.problem_type || "").toLowerCase();
+      const hasSpecificProfile = objective.includes("churn") || objective.includes("conversão") || objective.includes("receita") || objective.includes("no-show") || objective.includes("adesão") || objective.includes("inadimpl") || objective.includes("cancel") || objective.includes("evas") || industry.includes("saúde") || industry.includes("health") || industry.includes("food") || industry.includes("retail") || industry.includes("finance") || problemType === "regression";
       gates.push({
         gate: "metrics_profile",
         status: hasSpecificProfile ? "PASS" : "WARN",
         message: hasSpecificProfile
-          ? `Perfil de métricas resolvido a partir do objetivo/indústria.`
+          ? `Perfil de métricas resolvido (${ssotIndustry ? ssotIndustry + " / " : ""}${ssotObjective ? ssotObjective.substring(0, 40) : problemType}).`
           : `Perfil de métricas genérico (fallback). Defina o objetivo do projeto para otimizar a métrica principal.`,
+        details: { industry: ssotIndustry || aiIndustry, objective: ssotObjective || aiObjective, problem_type: problemType },
       });
     }
 
