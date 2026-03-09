@@ -245,19 +245,40 @@ const StepTraining = ({
         setBuilderOutdated(true);
         const currentV = result.selection_version_current || "?";
         const builtV = result.selection_version_used_by_builder ?? "?";
-        toast.warning(
-          `Seleção mudou para v${currentV} (builder em v${builtV}). Volte à Etapa 4 e Regere o Dataset Modelável.`,
-          { duration: 8000 }
+        // Auto-trigger builder rebuild instead of redirecting back
+        toast.info(
+          `Atualizando dataset modelável (v${builtV} → v${currentV})...`,
+          { duration: 5000 }
         );
-        // Auto-redirect to step 4
-        onBack();
+        try {
+          const rebuildRes = await supabase.functions.invoke("build-modeling-dataset", {
+            body: { project_id: projectData.id },
+          });
+          if (rebuildRes.data?.modeling_dataset_ready) {
+            toast.success("Dataset modelável atualizado com sucesso!");
+            setBuilderOutdated(false);
+            setPreflightRefreshKey(k => k + 1);
+          } else {
+            const reasons = rebuildRes.data?.blocked_reasons || [];
+            toast.warning(
+              reasons.length > 0
+                ? `Builder bloqueado: ${reasons[0]}`
+                : "Dataset modelável gerado mas com pendências. Verifique o Preflight.",
+              { duration: 8000 }
+            );
+            setPreflightRefreshKey(k => k + 1);
+          }
+        } catch (rebuildErr) {
+          console.error("[StepTraining] auto-rebuild failed:", rebuildErr);
+          toast.error("Erro ao reconstruir dataset. Use o botão no Preflight.");
+        }
       }
       setBuilderOutdatedChecked(true);
     } catch (err) {
       console.error("[StepTraining] preflight guard error:", err);
       setBuilderOutdatedChecked(true);
     }
-  }, [projectData.id, onBack]);
+  }, [projectData.id]);
 
   const checkTrainReadiness = async () => {
     if (!projectData.id) return;
