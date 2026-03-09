@@ -206,7 +206,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     } catch (err) {
       console.warn("[StepEDA] TDE auto-trigger failed (non-blocking):", err);
     }
-  }, [projectData.id, tdeAutoTriggered]);
+    // Auto-trigger Lys synthesis after TDE
+    if (!lysSynthesisTriggered.current) {
+      lysSynthesisTriggered.current = true;
+      lysSynthesis.generate(i18n.language);
+    }
+  }, [projectData.id, tdeAutoTriggered, i18n.language]);
 
   const edaReady = edaSSOT.eda_status === "succeeded" && !!edaSSOT.eda_profile_json;
   const edaRunning = edaSSOT.eda_status === "running" || edaCalculating;
