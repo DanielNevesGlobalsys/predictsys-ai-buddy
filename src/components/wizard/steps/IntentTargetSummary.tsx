@@ -43,19 +43,14 @@ export default function IntentTargetSummary({
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
   const [persisting, setPersisting] = useState(false);
+  const [builderStatus, setBuilderStatus] = useState<"idle" | "running" | "done" | "error">("idle");
 
   useEffect(() => {
     loadFromSSOT();
   }, [loadFromSSOT]);
 
   /**
-   * Persist the applied target, entity key, time anchor to BOTH project_settings (SSOT)
-   * AND project_model_selection (via upsert-model-selection edge function).
-   * This ensures preflight and downstream stages see the applied values from a single source.
-   */
-  /**
    * Auto-select minimum valid features from schema when AI returns none.
-   * Excludes target, entity key, time anchor, IDs, and leakage columns.
    */
   const autoSelectFeatures = async (
     targetCol: string,
@@ -71,75 +66,112 @@ export default function IntentTargetSummary({
         .eq("project_id", projectId)
         .limit(300);
 
-      if (!cols || cols.length === 0) return [];
+      if (!cols || cols.length === 0) {
+        // Fallback: try schema from project_dataset_state
+        const { data: dsState } = await supabase
+          .from("project_dataset_state")
+          .select("active_schema_json")
+          .eq("project_id", projectId)
+          .maybeSingle();
+        const schema = (dsState as any)?.active_schema_json;
+        if (schema && typeof schema === "object") {
+          const schemaKeys = Object.keys(schema).filter(k => !k.startsWith("_"));
+          return filterFeatureColumns(schemaKeys, targetCol, entityKey, timeAnchor, blockedFeatures);
+        }
+        return [];
+      }
 
-      const blockedSet = new Set<string>([
-        targetCol,
-        ...(entityKey ? [entityKey] : []),
-        ...(timeAnchor ? [timeAnchor] : []),
-        ...(blockedFeatures || []).map(b => b.column),
-      ].map(c => c.toLowerCase()));
-
-      const ID_PATTERNS = /^(id|_id$|uuid|pk_|fk_|idx_|index_|codigo|cod_|numero_|num_|chave_|key_)/i;
-      const LEAKAGE_PATTERNS = /^(target|label|resultado|result|status_final|outcome|predicted|prediction|y_true|y_pred)/i;
-
-      const validFeatures = cols
-        .filter((c: any) => {
-          const lower = c.column_name.toLowerCase();
-          if (blockedSet.has(lower)) return false;
-          if (ID_PATTERNS.test(lower)) return false;
-          if (LEAKAGE_PATTERNS.test(lower)) return false;
-          if (lower.endsWith("_id") || lower.endsWith("_key") || lower.endsWith("_uuid")) return false;
-          return true;
-        })
-        .map((c: any) => c.column_name);
-
-      return validFeatures;
+      return filterFeatureColumns(
+        cols.map((c: any) => c.column_name),
+        targetCol, entityKey, timeAnchor, blockedFeatures,
+      );
     } catch (err) {
       console.error("[IntentTargetSummary] autoSelectFeatures error:", err);
       return [];
     }
   };
 
-  const persistAppliedToSSOT = async (candidate: TargetCandidateResolved, entityKey?: string | null, timeAnchor?: string | null, features?: string[]) => {
+  const filterFeatureColumns = (
+    allColumns: string[],
+    targetCol: string,
+    entityKey?: string | null,
+    timeAnchor?: string | null,
+    blockedFeatures?: { column: string; reason: string }[],
+  ): string[] => {
+    const blockedSet = new Set<string>([
+      targetCol,
+      ...(entityKey ? [entityKey] : []),
+      ...(timeAnchor ? [timeAnchor] : []),
+      ...(blockedFeatures || []).map(b => b.column),
+    ].map(c => c.toLowerCase()));
+
+    const ID_PATTERNS = /^(id|_id$|uuid|pk_|fk_|idx_|index_|codigo|cod_|numero_|num_|chave_|key_)/i;
+    const LEAKAGE_PATTERNS = /^(target|label|resultado|result|status_final|outcome|predicted|prediction|y_true|y_pred)/i;
+
+    return allColumns.filter(col => {
+      const lower = col.toLowerCase();
+      if (blockedSet.has(lower)) return false;
+      if (ID_PATTERNS.test(lower)) return false;
+      if (LEAKAGE_PATTERNS.test(lower)) return false;
+      if (lower.endsWith("_id") || lower.endsWith("_key") || lower.endsWith("_uuid")) return false;
+      return true;
+    });
+  };
+
+  /**
+   * Persist the applied target, entity key, time anchor to BOTH project_settings (SSOT)
+   * AND project_model_selection. Accepts explicit resolution data to avoid stale state reads.
+   */
+  const persistAppliedToSSOT = async (
+    candidate: TargetCandidateResolved,
+    entityKey?: string | null,
+    timeAnchor?: string | null,
+    features?: string[],
+    blockedFeatures?: { column: string; reason: string }[],
+    objective?: string | null,
+  ) => {
     setPersisting(true);
+    setBuilderStatus("idle");
     try {
       const { supabase } = await import("@/integrations/supabase/client");
 
-      // CRITICAL FIX: For explicit targets (strategy !== "derived"), use "manual" + "column"
-      // For derived targets from intent resolution, use "manual" + "column" as well
-      // because there's no actual label_builder entry in project_label_builders.
-      // Only real label builders from the Target Builder UI should use "label_builder".
+      // For intent-resolved targets, always use "manual" + "column"
       const targetSource = "manual";
       const targetMode = "column";
 
-      // 1. Update project_settings SSOT
-      await supabase
-        .from("project_settings")
-        .update({
-          target_column: candidate.column,
-          problem_type: candidate.problem_type,
-          active_target_column: candidate.column,
-          active_target_mode: targetMode,
-          target_source: targetSource,
-          target_state: "ready",
-          ...(entityKey ? { entity_key: entityKey } : {}),
-          ...(timeAnchor ? { time_anchor_column: timeAnchor } : {}),
-          updated_at: new Date().toISOString(),
-        } as any)
-        .eq("project_id", projectId);
-
-      // 2. Ensure minimum valid features are selected
+      // 1. Ensure minimum valid features
       let selectedFeatures = features && features.length > 0 ? features : [];
       if (selectedFeatures.length === 0) {
-        // Auto-select from schema when AI returns no features
-        selectedFeatures = await autoSelectFeatures(candidate.column, entityKey, timeAnchor, resolution.blocked_features);
+        selectedFeatures = await autoSelectFeatures(candidate.column, entityKey, timeAnchor, blockedFeatures);
         console.log(`[IntentTargetSummary] Auto-selected ${selectedFeatures.length} features from schema`);
-        // Notify parent component of auto-selected features
-        if (selectedFeatures.length > 0) {
-          onApplyFeatures?.(selectedFeatures, resolution.blocked_features);
-        }
       }
+
+      // Notify parent component of features
+      if (selectedFeatures.length > 0) {
+        onApplyFeatures?.(selectedFeatures, blockedFeatures || []);
+      }
+
+      // 2. Update project_settings SSOT FIRST with all fields including target_source/mode
+      const settingsUpdate: Record<string, any> = {
+        target_column: candidate.column,
+        problem_type: candidate.problem_type,
+        active_target_column: candidate.column,
+        active_target_mode: targetMode,
+        target_source: targetSource,
+        target_state: "ready",
+        feature_columns: selectedFeatures,
+        updated_at: new Date().toISOString(),
+      };
+      if (entityKey) settingsUpdate.entity_key = entityKey;
+      if (timeAnchor) settingsUpdate.time_anchor_column = timeAnchor;
+      if (objective) settingsUpdate.objective = objective;
+
+      await supabase
+        .from("project_settings")
+        .update(settingsUpdate)
+        .eq("project_id", projectId);
+
+      console.log(`[IntentTargetSummary] SSOT updated: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}, features=${selectedFeatures.length}, target_source=${targetSource}, mode=${targetMode}`);
 
       // 3. Sync project_model_selection via atomic upsert
       const upsertRes = await supabase.functions.invoke("upsert-model-selection", {
@@ -152,23 +184,29 @@ export default function IntentTargetSummary({
         },
       });
 
-      console.log(`[IntentTargetSummary] Persisted to SSOT + model_selection: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}, features=${selectedFeatures.length}`);
+      console.log(`[IntentTargetSummary] model_selection upsert result:`, upsertRes.data);
 
       // 4. Auto-trigger builder if we have sufficient context
       if (selectedFeatures.length >= 3 && upsertRes.data?.success) {
-        console.log(`[IntentTargetSummary] Auto-triggering build-modeling-dataset...`);
+        setBuilderStatus("running");
+        console.log(`[IntentTargetSummary] Auto-triggering build-modeling-dataset with ${selectedFeatures.length} features...`);
         try {
           const builderRes = await supabase.functions.invoke("build-modeling-dataset", {
             body: { project_id: projectId },
           });
           if (builderRes.data?.success || builderRes.data?.status === "READY") {
+            setBuilderStatus("done");
             console.log(`[IntentTargetSummary] Builder completed successfully`);
           } else {
+            setBuilderStatus("error");
             console.warn(`[IntentTargetSummary] Builder returned:`, builderRes.data?.error || builderRes.data?.status);
           }
         } catch (builderErr) {
+          setBuilderStatus("error");
           console.warn("[IntentTargetSummary] Builder auto-trigger failed (non-blocking):", builderErr);
         }
+      } else if (selectedFeatures.length < 3) {
+        console.warn(`[IntentTargetSummary] Only ${selectedFeatures.length} features — skipping builder auto-trigger (min 3)`);
       }
     } catch (err) {
       console.error("[IntentTargetSummary] Failed to persist to SSOT:", err);
@@ -177,23 +215,47 @@ export default function IntentTargetSummary({
     }
   };
 
-  const applyFullSuggestion = (candidate: TargetCandidateResolved) => {
+  /**
+   * Apply the full suggestion using EXPLICIT resolution data (not stale state).
+   */
+  const applyFullSuggestionFromResult = (
+    candidate: TargetCandidateResolved,
+    res: IntentTargetResolution,
+  ) => {
     onApplyTarget?.(candidate);
-    if (resolution.suggested_entity_key) onApplyEntityKey?.(resolution.suggested_entity_key);
-    if (resolution.suggested_time_anchor) onApplyTimeAnchor?.(resolution.suggested_time_anchor);
-    if (resolution.suggested_features.length > 0) {
-      onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
+    if (res.suggested_entity_key) onApplyEntityKey?.(res.suggested_entity_key);
+    if (res.suggested_time_anchor) onApplyTimeAnchor?.(res.suggested_time_anchor);
+    if (res.suggested_features.length > 0) {
+      onApplyFeatures?.(res.suggested_features, res.blocked_features);
     }
+
+    // Derive objective from business_fit_assessment or problem_type
+    const objective = res.business_fit_assessment
+      ? res.business_fit_assessment.substring(0, 200)
+      : null;
+
     // Persist to SSOT + model_selection + auto-trigger builder
-    persistAppliedToSSOT(candidate, resolution.suggested_entity_key, resolution.suggested_time_anchor, resolution.suggested_features);
+    persistAppliedToSSOT(
+      candidate,
+      res.suggested_entity_key,
+      res.suggested_time_anchor,
+      res.suggested_features,
+      res.blocked_features,
+      objective,
+    );
+  };
+
+  const applyFullSuggestion = (candidate: TargetCandidateResolved) => {
+    // Use current resolution state (for button clicks after state is already updated)
+    applyFullSuggestionFromResult(candidate, resolution);
   };
 
   const handleResolve = async () => {
     const result = await resolve();
     if (result?.main_candidate && onApplyTarget) {
-      // Auto-apply if confidence is high enough
+      // Auto-apply if confidence is high enough — use RESULT directly, not stale state
       if (result.confidence_score >= 0.6) {
-        applyFullSuggestion(result.main_candidate);
+        applyFullSuggestionFromResult(result.main_candidate, result);
       }
     }
   };
@@ -296,7 +358,8 @@ export default function IntentTargetSummary({
             </div>
             {!isApplied && onApplyTarget && (
               <Button size="sm" disabled={persisting} onClick={() => applyFullSuggestion(main)}>
-                <Zap className="w-3 h-3 mr-1" /> Aplicar sugestão
+                {persisting ? <Loader2 className="w-3 h-3 mr-1 animate-spin" /> : <Zap className="w-3 h-3 mr-1" />}
+                Aplicar sugestão
               </Button>
             )}
           </div>
@@ -309,6 +372,28 @@ export default function IntentTargetSummary({
             <div className="p-2 bg-muted/30 rounded text-xs font-mono text-muted-foreground">
               {main.derivation_formula}
             </div>
+          )}
+        </div>
+      )}
+
+      {/* Builder status feedback */}
+      {(persisting || builderStatus !== "idle") && (
+        <div className={`flex items-center gap-2 p-3 rounded-lg text-xs ${
+          builderStatus === "running" || persisting ? "bg-primary/10 border border-primary/20" :
+          builderStatus === "done" ? "bg-accent/10 border border-accent/20" :
+          builderStatus === "error" ? "bg-amber-500/10 border border-amber-500/20" : ""
+        }`}>
+          {(persisting || builderStatus === "running") && (
+            <><Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+            <span>{persisting && builderStatus === "idle" ? "Persistindo seleção..." : "Gerando dataset modelável..."}</span></>
+          )}
+          {builderStatus === "done" && !persisting && (
+            <><CheckCircle className="w-3.5 h-3.5 text-accent" />
+            <span className="text-accent font-medium">Seleção aplicada e dataset modelável gerado com sucesso!</span></>
+          )}
+          {builderStatus === "error" && !persisting && (
+            <><AlertTriangle className="w-3.5 h-3.5 text-amber-500" />
+            <span>Seleção aplicada, mas o dataset modelável precisa ser gerado manualmente na Etapa 4.</span></>
           )}
         </div>
       )}
@@ -334,6 +419,15 @@ export default function IntentTargetSummary({
               Tempo sugerido: <strong className="ml-1">{resolution.suggested_time_anchor}</strong>
             </Badge>
           )}
+        </div>
+      )}
+
+      {/* Features summary */}
+      {resolution.suggested_features.length > 0 && (
+        <div className="text-xs text-muted-foreground">
+          <span className="font-medium">{resolution.suggested_features.length} features sugeridas:</span>{" "}
+          {resolution.suggested_features.slice(0, 5).join(", ")}
+          {resolution.suggested_features.length > 5 && ` (+${resolution.suggested_features.length - 5})`}
         </div>
       )}
 
@@ -378,7 +472,7 @@ export default function IntentTargetSummary({
                         disabled={persisting}
                         onClick={() => {
                           onApplyTarget(alt);
-                          persistAppliedToSSOT(alt, resolution.suggested_entity_key, resolution.suggested_time_anchor);
+                          persistAppliedToSSOT(alt, resolution.suggested_entity_key, resolution.suggested_time_anchor, resolution.suggested_features, resolution.blocked_features);
                         }}
                       >
                       Usar esta alternativa
@@ -399,11 +493,11 @@ export default function IntentTargetSummary({
             onClick={() => setShowReasoning(!showReasoning)}
           >
             {showReasoning ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}
-            {showReasoning ? "Ocultar raciocínio" : "Ver raciocínio completo"}
+            {showReasoning ? "Ocultar análise" : "Ver análise completa"}
           </button>
           {showReasoning && (
-            <div className="p-3 bg-muted/30 rounded-lg">
-              <p className="text-xs text-muted-foreground whitespace-pre-line">{resolution.target_reasoning_summary}</p>
+            <div className="p-3 bg-muted/30 rounded-lg text-xs text-muted-foreground whitespace-pre-wrap">
+              {resolution.target_reasoning_summary}
             </div>
           )}
         </div>
