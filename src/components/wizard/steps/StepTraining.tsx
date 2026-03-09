@@ -179,7 +179,9 @@ const StepTraining = ({
     objectiveLabel: string;
   } | null>(null);
 
-  const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
+  // primaryMetric is now resolved dynamically from training response or profile
+  const [resolvedPrimaryMetric, setResolvedPrimaryMetric] = useState<string | null>(null);
+  const primaryMetric = resolvedPrimaryMetric || (projectData.problem_type === "classification" ? "AUC" : "R²");
 
   const loadSelectionVersion = useCallback(async () => {
     if (!projectData.id) return;
@@ -555,9 +557,12 @@ const StepTraining = ({
           metrics_summary: d.metrics_summary?.model || d.metrics_summary || {},
           train_diagnostics: d.train_diagnostics || undefined,
         });
-        // Capture extended metrics and leakage report
+        // Capture extended metrics, leakage report, and resolved primary metric
         if (d.extended_metrics) setExtendedMetrics(d.extended_metrics);
         if (d.leakage_report) setLeakageReport(d.leakage_report);
+        // Resolve primary metric from backend profile
+        if (d.metrics_profile?.primary) setResolvedPrimaryMetric(d.metrics_profile.primary);
+        else if (d.metrics_summary?.primary_metric) setResolvedPrimaryMetric(d.metrics_summary.primary_metric);
       }
 
       toast.success(t("stepTraining.trainingSuccess"));
@@ -1423,6 +1428,8 @@ const StepTraining = ({
                   leakageReport={leakageReport}
                   warnings={qualityResult.training_warnings}
                   improvementVsBaseline={qualityResult.improvement_vs_baseline}
+                  problemType={projectData.problem_type}
+                  primaryMetricName={primaryMetric}
                 />
               )}
 

@@ -620,6 +620,8 @@ interface MetricsProfileDef {
   threshold_strategy: string;
   min_precision?: number;
   label: string;
+  problem_family: string;
+  valid_metrics: string[];
 }
 
 function resolveMetricsProfileEdge(
@@ -630,25 +632,49 @@ function resolveMetricsProfileEdge(
   const objective = String(intentBase?.declared_objective || "").toLowerCase();
   const industry = String(domainAdapter?.industry || "").toLowerCase();
 
-  if (objective.includes("churn") || objective.includes("retenção") || objective.includes("cancelamento")) {
-    return { profile: { id: "churn", primary: "pr_auc", secondary: ["AUC", "F1", "Recall"], calibration: "brier", threshold_strategy: "max_recall_min_precision", min_precision: 0.3, label: "Churn" }, source: "objective:churn" };
+  // Determine problem family
+  const pt = problemType.toLowerCase();
+  const isRegression = pt === "regression";
+  const isMulticlass = pt === "multiclass" || pt === "multi_class";
+  const isRanking = pt === "ranking" || pt === "propensity";
+
+  // Classification-specific profiles
+  if (!isRegression && !isMulticlass && !isRanking) {
+    if (objective.includes("churn") || objective.includes("retenção") || objective.includes("cancelamento")) {
+      return { profile: { id: "churn", primary: "pr_auc", secondary: ["AUC", "F1", "Recall"], calibration: "brier", threshold_strategy: "max_recall_min_precision", min_precision: 0.3, label: "Churn", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "objective:churn" };
+    }
+    if (objective.includes("conversão") || objective.includes("conversion") || objective.includes("lead")) {
+      return { profile: { id: "conversao", primary: "Precisão", secondary: ["AUC", "pr_auc"], calibration: "brier", threshold_strategy: "max_precision_at_k", min_precision: 0.5, label: "Conversão", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "objective:conversao" };
+    }
+    if (objective.includes("no-show") || objective.includes("adesão") || objective.includes("falta")) {
+      return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "objective:health" };
+    }
+    if (industry.includes("saúde") || industry.includes("health")) {
+      return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "industry:health" };
+    }
+    // Generic binary classification
+    return { profile: { id: "generic", primary: "AUC", secondary: ["F1", "Recall", "Precisão"], calibration: "brier", threshold_strategy: "max_f1", label: "Classificação Binária", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "fallback:generic" };
   }
-  if (objective.includes("conversão") || objective.includes("conversion") || objective.includes("lead")) {
-    return { profile: { id: "conversao", primary: "Precisão", secondary: ["AUC", "pr_auc"], calibration: "brier", threshold_strategy: "max_precision_at_k", min_precision: 0.5, label: "Conversão" }, source: "objective:conversao" };
+
+  // Regression profiles
+  if (isRegression) {
+    if (objective.includes("receita") || objective.includes("revenue") || objective.includes("valor") || objective.includes("ticket") || objective.includes("ltv")) {
+      return { profile: { id: "receita", primary: "MAE", secondary: ["RMSE", "R²", "MAPE"], threshold_strategy: "none", label: "Receita", problem_family: "regression", valid_metrics: ["MAE", "RMSE", "MSE", "R²", "MAPE"] }, source: "objective:receita" };
+    }
+    return { profile: { id: "generic_regression", primary: "R²", secondary: ["MAE", "RMSE"], threshold_strategy: "none", label: "Regressão", problem_family: "regression", valid_metrics: ["MAE", "RMSE", "MSE", "R²", "MAPE"] }, source: "fallback:regression" };
   }
-  if ((objective.includes("receita") || objective.includes("revenue") || objective.includes("valor")) && problemType === "regression") {
-    return { profile: { id: "receita", primary: "MAE", secondary: ["RMSE", "R²"], threshold_strategy: "none", label: "Receita" }, source: "objective:receita" };
+
+  // Multiclass
+  if (isMulticlass) {
+    return { profile: { id: "generic_multiclass", primary: "macro_f1", secondary: ["weighted_f1", "Acurácia"], threshold_strategy: "none", label: "Multiclasse", problem_family: "multiclass", valid_metrics: ["macro_f1", "weighted_f1", "Acurácia", "macro_precision", "macro_recall"] }, source: "fallback:multiclass" };
   }
-  if (objective.includes("no-show") || objective.includes("adesão") || objective.includes("falta")) {
-    return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde" }, source: "objective:health" };
+
+  // Ranking
+  if (isRanking) {
+    return { profile: { id: "ranking", primary: "lift_at_10", secondary: ["precision_at_10", "recall_at_10"], threshold_strategy: "none", label: "Ranking", problem_family: "ranking", valid_metrics: ["precision_at_5", "precision_at_10", "precision_at_20", "recall_at_10", "lift_at_10", "AUC", "pr_auc"] }, source: "fallback:ranking" };
   }
-  if (industry.includes("saúde") || industry.includes("health")) {
-    return { profile: { id: "health", primary: "Recall", secondary: ["F1", "pr_auc"], calibration: "brier", threshold_strategy: "max_recall", min_precision: 0.2, label: "Saúde" }, source: "industry:health" };
-  }
-  if (problemType === "regression") {
-    return { profile: { id: "generic_regression", primary: "R²", secondary: ["MAE", "RMSE"], threshold_strategy: "none", label: "Regressão" }, source: "fallback:regression" };
-  }
-  return { profile: { id: "generic", primary: "AUC", secondary: ["F1", "Recall", "Precisão"], calibration: "brier", threshold_strategy: "max_f1", label: "Genérico" }, source: "fallback:generic" };
+
+  return { profile: { id: "generic", primary: "AUC", secondary: ["F1", "Recall", "Precisão"], calibration: "brier", threshold_strategy: "max_f1", label: "Classificação Binária", problem_family: "binary_classification", valid_metrics: ["AUC", "pr_auc", "F1", "Recall", "Precisão", "Acurácia", "brier"] }, source: "fallback:generic" };
 }
 
 // ==================== PR-AUC ====================
@@ -870,6 +896,8 @@ function calcRegressionMetricsDetailed(yTrue: number[], yPred: number[]): Metric
   let sumSquaredError = 0, sumAbsError = 0;
   const yMean = mean(yTrue);
   let ssTot = 0, ssRes = 0;
+  let sumAbsPctError = 0;
+  let mapeCount = 0;
   
   for (let i = 0; i < n; i++) {
     const error = yTrue[i] - yPred[i];
@@ -877,14 +905,20 @@ function calcRegressionMetricsDetailed(yTrue: number[], yPred: number[]): Metric
     sumSquaredError += error * error;
     ssTot += Math.pow(yTrue[i] - yMean, 2);
     ssRes += error * error;
+    // MAPE — skip zeros to avoid division by zero
+    if (Math.abs(yTrue[i]) > 1e-10) {
+      sumAbsPctError += Math.abs(error / yTrue[i]);
+      mapeCount++;
+    }
   }
   
   const mae = sumAbsError / n;
   const mse = sumSquaredError / n;
   const rmse = Math.sqrt(mse);
   const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+  const mape = mapeCount > 0 ? (sumAbsPctError / mapeCount) * 100 : 0; // as percentage
 
-  const raw: Record<string, number> = { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
+  const raw: Record<string, number> = { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2, MAPE: mape };
 
   const invalid_reasons: string[] = [];
   for (const [k, v] of Object.entries(raw)) {
@@ -4279,7 +4313,7 @@ serve(async (req) => {
           // ── Etapa 6: Calibration + Threshold + Profile ──
           calibration: calibrationInfo,
           recommended_threshold: recommendedThreshold,
-          metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+          metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, problem_family: metricsProfile.problem_family, valid_metrics: metricsProfile.valid_metrics, source: profileSource },
           extended_metrics: extendedMetrics,
           leakage_report: {
             blocked: featureValidation.blocked,
@@ -4519,7 +4553,7 @@ serve(async (req) => {
       // ── Etapa 6: Calibration + Threshold + Profile + Ranking ──
       calibration: calibrationInfo,
       recommended_threshold: recommendedThreshold,
-      metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+      metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, problem_family: metricsProfile.problem_family, valid_metrics: metricsProfile.valid_metrics, source: profileSource },
       extended_metrics: extendedMetrics,
       leakage_report: {
         blocked: featureValidation.blocked,
