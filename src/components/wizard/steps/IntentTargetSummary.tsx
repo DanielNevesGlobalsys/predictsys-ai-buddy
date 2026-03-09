@@ -102,8 +102,8 @@ export default function IntentTargetSummary({
     if (resolution.suggested_features.length > 0) {
       onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
     }
-    // Persist to SSOT so preflight sees the applied values
-    persistAppliedToSSOT(candidate, resolution.suggested_entity_key, resolution.suggested_time_anchor);
+    // Persist to SSOT + model_selection so preflight sees the applied values
+    persistAppliedToSSOT(candidate, resolution.suggested_entity_key, resolution.suggested_time_anchor, resolution.suggested_features);
   };
 
   const handleResolve = async () => {

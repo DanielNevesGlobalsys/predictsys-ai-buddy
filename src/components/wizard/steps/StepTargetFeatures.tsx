@@ -1171,7 +1171,20 @@ const StepTargetFeatures = ({
               }
             }}
             onApplyEntityKey={(key: string) => setEntityKey(key)}
-            onApplyTimeAnchor={() => {}}
+            onApplyTimeAnchor={(col: string) => {
+              // Persist time anchor to SSOT immediately
+              supabase
+                .from("project_settings")
+                .update({ time_anchor_column: col, updated_at: new Date().toISOString() } as any)
+                .eq("project_id", projectData.id)
+                .then(({ error }) => {
+                  if (error) console.error("[StepTargetFeatures] Failed to persist time_anchor:", error);
+                  else {
+                    console.log(`[StepTargetFeatures] time_anchor_column persisted: ${col}`);
+                    loadSSOT(); // Reload SSOT to reflect new time anchor in UI
+                  }
+                });
+            }}
             onApplyFeatures={(features: string[], blocked: { column: string; reason: string }[]) => {
               if (features.length > 0) {
                 const validFeatures = features.filter(f => columns.some(c => c.name === f));
