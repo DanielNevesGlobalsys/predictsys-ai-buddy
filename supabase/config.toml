@@ -191,3 +191,6 @@ verify_jwt = false
 
 [functions.lys-pipeline-insights]
 verify_jwt = false
+
+[functions.resolve-target-intent]
+verify_jwt = false
