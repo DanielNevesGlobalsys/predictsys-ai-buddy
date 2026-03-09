@@ -100,6 +100,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   useEffect(() => {
     loadState();
     autoEdaTriggered.current = false;
+    lysSynthesis.load();
   }, [projectData.id]);
 
   // Auto-trigger EDA when dataset exists but EDA not yet succeeded
