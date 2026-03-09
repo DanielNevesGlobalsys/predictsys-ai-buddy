@@ -1974,6 +1974,64 @@ serve(async (req) => {
       });
     }
 
+    // ══════ TRAINING COHERENCE AUDIT ══════
+    // Log structured audit of contract_target vs selected_target vs target_used_in_training
+    {
+      const contractTargetDef = modelingContract?.target_definition as Record<string, any> | null;
+      const contractTarget = contractTargetDef?.base_column || contractTargetDef?.derived_target || null;
+      const contractProblemType = modelingContract?.problem_type || null;
+      const selectedTarget = selection?.target_column || null;
+      const selectedProblemType = selection?.problem_type || null;
+      const settingsTarget = (activeTargetSettings as any)?.active_target_column || null;
+      
+      const coherenceAudit = {
+        contract_target: contractTarget,
+        contract_problem_type: contractProblemType,
+        selected_target: selectedTarget,
+        selected_problem_type: selectedProblemType,
+        settings_target: settingsTarget,
+        target_used_in_training: target_column,
+        problem_type_used: problem_type,
+        active_target_mode: activeTarget.mode,
+        entity_key_used: entityKey,
+        selection_version: currentSelectionVersion,
+        target_hash: currentTargetHash,
+        builder_dataset_id: modelingDataset?.id || null,
+        builder_version_used: modelingDataset?.selection_version_used || null,
+        metrics_profile_id: null as string | null, // will be set after profile resolution
+        use_human_labels: useHumanLabelsAsTarget,
+      };
+      
+      // Check for critical divergences
+      const divergences: string[] = [];
+      if (contractTarget && contractTarget !== target_column && !useHumanLabelsAsTarget) {
+        divergences.push(`contract_target="${contractTarget}" ≠ target_used="${target_column}"`);
+      }
+      if (selectedTarget && selectedTarget !== target_column && !useHumanLabelsAsTarget) {
+        divergences.push(`selected_target="${selectedTarget}" ≠ target_used="${target_column}"`);
+      }
+      if (contractProblemType && contractProblemType !== problem_type) {
+        // Already blocked above, but log for audit
+        divergences.push(`contract_problem_type="${contractProblemType}" ≠ problem_type_used="${problem_type}"`);
+      }
+      
+      console.log(`\n=== Training Coherence Audit ===`);
+      console.log(JSON.stringify(coherenceAudit, null, 2));
+      if (divergences.length > 0) {
+        console.warn(`[Coherence] Divergences detected: ${divergences.join("; ")}`);
+      } else {
+        console.log(`[Coherence] ✅ All targets/problem_types consistent`);
+      }
+
+      safeFire(supabase.from("platform_events").insert({
+        event_type: "training_coherence_audit",
+        project_id: project_id,
+        status: divergences.length > 0 ? "warning" : "success",
+        source: "edge",
+        metadata: { ...coherenceAudit, divergences },
+      }));
+    }
+
     // ── Gate 3: Builder (must be current + matching selection_version) ──
     let builderDatasetId: string | null = null;
 
