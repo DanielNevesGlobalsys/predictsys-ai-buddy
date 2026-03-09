@@ -7,7 +7,6 @@ import DashboardPerformanceCharts from "./DashboardPerformanceCharts";
 import DashboardFeatureImportance from "./DashboardFeatureImportance";
 import DashboardSegmentation from "./DashboardSegmentation";
 import DashboardAIInsights from "./DashboardAIInsights";
-import DashboardFilters from "./DashboardFilters";
 import DashboardExportPDF from "./DashboardExportPDF";
 
 interface DashboardContentProps {
@@ -37,17 +36,14 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
   const { t } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [dashboardData, setDashboardData] = useState<DashboardData | null>(null);
-  const [selectedDataset, setSelectedDataset] = useState<string>("validation");
-  const [availableSplits, setAvailableSplits] = useState<string[]>(["training", "validation"]);
 
   useEffect(() => {
     loadDashboardData();
-  }, [projectId, selectedDataset]);
+  }, [projectId]);
 
   const loadDashboardData = async () => {
     setLoading(true);
     try {
-      // Load models with metrics
       const { data: modelsData } = await supabase
         .from("project_models")
         .select("*")
@@ -79,7 +75,6 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
           if (model.is_production) {
             productionModel = modelWithMetrics;
 
-            // Load feature importances for production model
             const { data: importances } = await supabase
               .from("project_feature_importances")
               .select("feature_name, importance_value")
@@ -93,21 +88,6 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
           }
         }
       }
-
-      // Check if test set exists (we'll check based on dataset_rows vs sample_rows ratio)
-      // For now, we assume validation is always available, test may or may not be
-      // In a real implementation, this would come from the training output
-      const { data: project } = await supabase
-        .from("projects")
-        .select("sample_rows, total_rows")
-        .eq("id", projectId)
-        .single();
-      
-      // If sample size is significantly less than total, assume we have a test set
-      const hasTestSet = project?.sample_rows && project?.total_rows && 
-        project.sample_rows < project.total_rows * 0.9;
-      
-      setAvailableSplits(hasTestSet ? ["training", "validation", "test"] : ["training", "validation"]);
 
       setDashboardData({
         models,
@@ -140,13 +120,8 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
 
   return (
     <div className="space-y-6">
-      {/* Filters and Export */}
-      <div className="flex flex-wrap items-center justify-between gap-4">
-        <DashboardFilters
-          selectedDataset={selectedDataset}
-          onDatasetChange={setSelectedDataset}
-          availableSplits={availableSplits}
-        />
+      {/* Export */}
+      <div className="flex justify-end">
         <DashboardExportPDF
           projectId={projectId}
           projectName={projectName}
@@ -155,7 +130,7 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
         />
       </div>
 
-      {/* KPI Cards */}
+      {/* 1. Business KPI Cards (translated from ML metrics) */}
       <DashboardKPICards
         problemType={problemType}
         productionModel={dashboardData.productionModel}
@@ -163,29 +138,30 @@ const DashboardContent = ({ projectId, problemType, targetColumn, projectName }:
         lastPredictionAt={dashboardData.lastPredictionAt}
       />
 
-      {/* Performance Charts */}
-      <DashboardPerformanceCharts
+      {/* 2. AI Insights — Lys Narrative (business story) */}
+      <DashboardAIInsights
+        projectId={projectId}
+        modelId={dashboardData.productionModel.id}
         problemType={problemType}
-        models={dashboardData.models}
-        productionModel={dashboardData.productionModel}
       />
 
-      {/* Feature Importance */}
-      <DashboardFeatureImportance
-        featureImportances={dashboardData.featureImportances}
-      />
-
-      {/* Segmentation */}
+      {/* 3. Segmentation (business language) */}
       <DashboardSegmentation
         problemType={problemType}
         productionModelId={dashboardData.productionModel.id}
       />
 
-      {/* AI Insights */}
-      <DashboardAIInsights
+      {/* 4. Feature Importance (business-translated) */}
+      <DashboardFeatureImportance
+        featureImportances={dashboardData.featureImportances}
         projectId={projectId}
-        modelId={dashboardData.productionModel.id}
+      />
+
+      {/* 5. Technical Audit (collapsed by default) */}
+      <DashboardPerformanceCharts
         problemType={problemType}
+        models={dashboardData.models}
+        productionModel={dashboardData.productionModel}
       />
     </div>
   );

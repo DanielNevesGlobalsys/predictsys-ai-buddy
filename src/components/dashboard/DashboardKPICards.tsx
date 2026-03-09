@@ -7,15 +7,13 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import {
-  TrendingUp,
-  Target,
-  Crosshair,
-  Eye,
-  CheckCircle,
-  BarChart3,
-  Calculator,
+  Users,
+  ShieldAlert,
+  DollarSign,
   Clock,
   Activity,
+  TrendingUp,
+  BarChart3,
 } from "lucide-react";
 
 interface ModelData {
@@ -33,145 +31,126 @@ interface DashboardKPICardsProps {
   lastPredictionAt: string | null;
 }
 
+/**
+ * Business-oriented KPI translations.
+ * Maps raw ML metrics to executive-friendly labels.
+ */
+const getBusinessMetric = (
+  metrics: { metric_name: string; metric_value: number }[],
+  metricName: string
+): number | null => {
+  const m = metrics.find(m => m.metric_name === metricName);
+  return m?.metric_value ?? null;
+};
+
 const DashboardKPICards = ({
   problemType,
   productionModel,
   totalPredictions,
   lastPredictionAt,
 }: DashboardKPICardsProps) => {
-  const { t, i18n } = useTranslation();
-
-  const getMetricValue = (metricName: string): number | null => {
-    const metric = productionModel.metrics.find(m => m.metric_name === metricName);
-    return metric?.metric_value ?? null;
-  };
-
-  const formatValue = (value: number | null, decimals = 2): string => {
-    if (value === null) return "-";
-    return value.toFixed(decimals);
-  };
+  const { i18n } = useTranslation();
 
   const formatDate = (dateStr: string | null): string => {
-    if (!dateStr) return "-";
+    if (!dateStr) return "—";
     const locale = i18n.language === "en" ? "en-US" : i18n.language === "es" ? "es-ES" : "pt-BR";
     return new Date(dateStr).toLocaleDateString(locale, {
       day: "2-digit",
       month: "short",
       year: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
     });
   };
 
-  const classificationKPIs = [
-    { key: "AUC", icon: TrendingUp, color: "text-primary" },
-    { key: "F1", icon: Target, color: "text-accent" },
-    { key: "Precision", icon: Crosshair, color: "text-secondary" },
-    { key: "Recall", icon: Eye, color: "text-primary" },
-    { key: "Accuracy", icon: CheckCircle, color: "text-accent" },
-  ];
+  // Translate ML metrics into business KPIs
+  const auc = getBusinessMetric(productionModel.metrics, "AUC");
+  const f1 = getBusinessMetric(productionModel.metrics, "F1");
+  const recall = getBusinessMetric(productionModel.metrics, "Recall");
+  const r2 = getBusinessMetric(productionModel.metrics, "R²");
 
-  const regressionKPIs = [
-    { key: "R²", icon: TrendingUp, color: "text-primary" },
-    { key: "RMSE", icon: Calculator, color: "text-accent" },
-    { key: "MAE", icon: BarChart3, color: "text-secondary" },
-    { key: "MAPE", icon: Activity, color: "text-primary" },
-  ];
+  const isClassification = problemType === "classification";
 
-  const kpis = problemType === "classification" ? classificationKPIs : regressionKPIs;
+  // Business KPI: detection capability (based on AUC or R²)
+  const detectionCapability = isClassification
+    ? auc != null ? Math.round(auc * 100) : null
+    : r2 != null ? Math.round(r2 * 100) : null;
+
+  // Business KPI: event capture rate (based on Recall)
+  const captureRate = recall != null ? Math.round(recall * 100) : null;
+
+  // Business KPI: prediction reliability (based on F1 or R²)
+  const reliability = isClassification
+    ? f1 != null ? Math.round(f1 * 100) : null
+    : r2 != null ? Math.round(Math.max(0, r2) * 100) : null;
+
+  const businessKPIs = [
+    {
+      label: isClassification
+        ? "Capacidade de Detecção"
+        : "Poder Preditivo",
+      tooltip: isClassification
+        ? "Capacidade do modelo de distinguir corretamente entre os cenários previstos"
+        : "Quanto da variabilidade dos resultados o modelo consegue explicar",
+      value: detectionCapability != null ? `${detectionCapability}%` : "—",
+      icon: ShieldAlert,
+      colorClass: "text-primary",
+    },
+    {
+      label: isClassification
+        ? "Captura de Eventos"
+        : "Confiabilidade",
+      tooltip: isClassification
+        ? "Percentual dos eventos reais que o modelo consegue identificar"
+        : "Consistência das previsões do modelo em relação aos resultados reais",
+      value: captureRate != null ? `${captureRate}%` : (reliability != null ? `${reliability}%` : "—"),
+      icon: TrendingUp,
+      colorClass: "text-accent",
+    },
+    {
+      label: "Confiabilidade Geral",
+      tooltip: "Equilíbrio entre detectar eventos corretamente e evitar falsos alertas",
+      value: reliability != null ? `${reliability}%` : "—",
+      icon: Activity,
+      colorClass: "text-secondary",
+    },
+    {
+      label: "Entidades Analisadas",
+      tooltip: "Total de entidades que receberam previsões do modelo",
+      value: totalPredictions > 0 ? totalPredictions.toLocaleString() : "—",
+      icon: Users,
+      colorClass: "text-primary",
+    },
+    {
+      label: "Último Treinamento",
+      tooltip: "Data do último treinamento do modelo em produção",
+      value: formatDate(productionModel.trained_at),
+      icon: Clock,
+      colorClass: "text-muted-foreground",
+    },
+  ];
 
   return (
     <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
       <TooltipProvider>
-        {kpis.map(({ key, icon: Icon, color }) => {
-          const value = getMetricValue(key);
-          return (
-            <Tooltip key={key}>
-              <TooltipTrigger asChild>
-                <Card className="bg-gradient-card shadow-card p-4 hover:shadow-hover transition-all cursor-help">
-                  <div className="flex items-start justify-between">
-                    <div className="space-y-1">
-                      <p className="text-sm text-muted-foreground font-medium">{key}</p>
-                      <p className="text-2xl font-bold">{formatValue(value)}</p>
-                    </div>
-                    <div className={`p-2 rounded-lg bg-muted/50 ${color}`}>
-                      <Icon className="w-5 h-5" />
-                    </div>
+        {businessKPIs.map(({ label, tooltip, value, icon: Icon, colorClass }) => (
+          <Tooltip key={label}>
+            <TooltipTrigger asChild>
+              <Card className="bg-gradient-card shadow-card p-4 hover:shadow-hover transition-all cursor-help">
+                <div className="flex items-start justify-between">
+                  <div className="space-y-1">
+                    <p className="text-xs text-muted-foreground font-medium leading-tight">{label}</p>
+                    <p className="text-2xl font-bold">{value}</p>
                   </div>
-                </Card>
-              </TooltipTrigger>
-              <TooltipContent side="bottom" className="max-w-xs">
-                <p>{t(`modelDashboard.kpi.${key}.tooltip`)}</p>
-              </TooltipContent>
-            </Tooltip>
-          );
-        })}
-
-        {/* Total Predictions */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Card className="bg-gradient-card shadow-card p-4 hover:shadow-hover transition-all cursor-help">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground font-medium">
-                    {t("modelDashboard.kpi.predictions.label")}
-                  </p>
-                  <p className="text-2xl font-bold">{totalPredictions.toLocaleString()}</p>
+                  <div className={`p-2 rounded-lg bg-muted/50 ${colorClass}`}>
+                    <Icon className="w-5 h-5" />
+                  </div>
                 </div>
-                <div className="p-2 rounded-lg bg-muted/50 text-accent">
-                  <BarChart3 className="w-5 h-5" />
-                </div>
-              </div>
-            </Card>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <p>{t("modelDashboard.kpi.predictions.tooltip")}</p>
-          </TooltipContent>
-        </Tooltip>
-
-        {/* Last Training */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Card className="bg-gradient-card shadow-card p-4 hover:shadow-hover transition-all cursor-help">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground font-medium">
-                    {t("modelDashboard.kpi.lastTrain.label")}
-                  </p>
-                  <p className="text-sm font-medium">{formatDate(productionModel.trained_at)}</p>
-                </div>
-                <div className="p-2 rounded-lg bg-muted/50 text-primary">
-                  <Clock className="w-5 h-5" />
-                </div>
-              </div>
-            </Card>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <p>{t("modelDashboard.kpi.lastTrain.tooltip")}</p>
-          </TooltipContent>
-        </Tooltip>
-
-        {/* Last Prediction */}
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Card className="bg-gradient-card shadow-card p-4 hover:shadow-hover transition-all cursor-help">
-              <div className="flex items-start justify-between">
-                <div className="space-y-1">
-                  <p className="text-sm text-muted-foreground font-medium">
-                    {t("modelDashboard.kpi.lastPredict.label")}
-                  </p>
-                  <p className="text-sm font-medium">{formatDate(lastPredictionAt)}</p>
-                </div>
-                <div className="p-2 rounded-lg bg-muted/50 text-secondary">
-                  <Activity className="w-5 h-5" />
-                </div>
-              </div>
-            </Card>
-          </TooltipTrigger>
-          <TooltipContent side="bottom" className="max-w-xs">
-            <p>{t("modelDashboard.kpi.lastPredict.tooltip")}</p>
-          </TooltipContent>
-        </Tooltip>
+              </Card>
+            </TooltipTrigger>
+            <TooltipContent side="bottom" className="max-w-xs">
+              <p className="text-sm">{tooltip}</p>
+            </TooltipContent>
+          </Tooltip>
+        ))}
       </TooltipProvider>
     </div>
   );
