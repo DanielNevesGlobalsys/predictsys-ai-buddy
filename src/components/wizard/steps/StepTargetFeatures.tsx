@@ -1142,7 +1142,9 @@ const StepTargetFeatures = ({
               }
             }}
           />
-        )
+        )}
+
+        {/* Contract missing warning */}
         {contractMissing && !businessContract && !projectData.business_objective && !modelingState?.project?.business_objective && (
           <Alert className="border-amber-500/30 bg-amber-500/5">
             <AlertTriangle className="w-4 h-4 text-amber-500" />
