@@ -75,6 +75,24 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
   const [loading, setLoading] = useState(false);
   const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [autoRebuildAttempted, setAutoRebuildAttempted] = useState(false);
+
+  const triggerRebuild = useCallback(async () => {
+    if (!projectId || rebuilding) return false;
+    setRebuilding(true);
+    try {
+      const res = await supabase.functions.invoke("build-modeling-dataset", {
+        body: { project_id: projectId },
+      });
+      console.log("[TrainingPreflight] Rebuild result:", res.data);
+      return res.data?.modeling_dataset_ready === true;
+    } catch (err) {
+      console.error("[TrainingPreflight] Rebuild failed:", err);
+      return false;
+    } finally {
+      setRebuilding(false);
+    }
+  }, [projectId, rebuilding]);
 
   const runPreflight = useCallback(async () => {
     if (!projectId) return;
@@ -91,18 +109,41 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
         return;
       }
 
-      setResult(response.data as PreflightResult);
+      const preflightData = response.data as PreflightResult;
+      setResult(preflightData);
+
+      // Auto-rebuild: if only issue is version mismatch, auto-trigger once
+      if (!autoRebuildAttempted && !preflightData.builder_is_current && preflightData.can_build) {
+        const builderGate = preflightData.gates.find(g => g.gate === "builder");
+        const isVersionMismatchOnly = builderGate?.status === "BLOCK" && 
+          (builderGate.details as any)?.action === "REBUILD_MODELING_DATASET" &&
+          !preflightData.gates.some(g => g.gate !== "builder" && g.status === "BLOCK");
+        
+        if (isVersionMismatchOnly) {
+          setAutoRebuildAttempted(true);
+          console.log("[TrainingPreflight] Auto-triggering rebuild for version mismatch");
+          const success = await triggerRebuild();
+          // Re-run preflight after rebuild
+          const recheck = await supabase.functions.invoke("run-training-preflight", {
+            body: { project_id: projectId },
+          });
+          if (!recheck.error && recheck.data) {
+            setResult(recheck.data as PreflightResult);
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Erro desconhecido");
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, autoRebuildAttempted, triggerRebuild]);
 
   // Auto-run on mount and when refreshKey changes
   useEffect(() => {
+    setAutoRebuildAttempted(false);
     runPreflight();
-  }, [runPreflight, refreshKey]);
+  }, [refreshKey, projectId]);
 
   const statusColor = (s: string) =>
     s === "PASS" ? "text-accent" : s === "WARN" ? "text-amber-500" : "text-destructive";
@@ -210,20 +251,8 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
               variant="default"
               disabled={rebuilding}
               onClick={async () => {
-                if (!projectId) return;
-                setRebuilding(true);
-                try {
-                  const res = await supabase.functions.invoke("build-modeling-dataset", {
-                    body: { project_id: projectId },
-                  });
-                  console.log("[TrainingPreflight] Rebuild result:", res.data);
-                  // Re-run preflight after rebuild
-                  await runPreflight();
-                } catch (err) {
-                  console.error("[TrainingPreflight] Rebuild failed:", err);
-                } finally {
-                  setRebuilding(false);
-                }
+                await triggerRebuild();
+                await runPreflight();
               }}
               className="w-full text-xs"
             >
