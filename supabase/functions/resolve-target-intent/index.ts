@@ -220,20 +220,22 @@ serve(async (req) => {
     }
 
     // Log event
-    serviceClient.from("platform_events").insert({
-      event_type: "target_intent_resolved",
-      project_id,
-      status: "success",
-      source: "edge",
-      metadata: {
-        main_candidate: finalResult.main_candidate?.column || null,
-        strategy: finalResult.target_strategy_used,
-        confidence: finalResult.confidence_score,
-        is_explicit: finalResult.is_explicit,
-        is_derived: finalResult.is_derived,
-        ai_used: !!aiEnriched,
-      },
-    }).catch(() => {});
+    try {
+      await serviceClient.from("platform_events").insert({
+        event_type: "target_intent_resolved",
+        project_id,
+        status: "success",
+        source: "edge",
+        metadata: {
+          main_candidate: finalResult.main_candidate?.column || null,
+          strategy: finalResult.target_strategy_used,
+          confidence: finalResult.confidence_score,
+          is_explicit: finalResult.is_explicit,
+          is_derived: finalResult.is_derived,
+          ai_used: !!aiEnriched,
+        },
+      });
+    } catch (_) { /* best-effort logging */ }
 
     return new Response(JSON.stringify({ success: true, ...finalResult }), {
       status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" },
