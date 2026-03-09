@@ -1270,7 +1270,7 @@ const StepTargetFeatures = ({
                 <SelectValue placeholder={t("stepVariables.selectTarget")} />
               </SelectTrigger>
               <SelectContent className="bg-popover border border-border shadow-lg z-50">
-                {(targetSource === "label_builder" || labelBuilderId) && (
+                {labelBuilderId && (
                   <SelectItem value="label">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">label</span>
