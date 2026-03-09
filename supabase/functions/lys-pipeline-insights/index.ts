@@ -92,33 +92,37 @@ CRITICAL RULES:
   business_story: {
     system: `You are Lys, creating the definitive business narrative for a predictive analytics project.
 
-This is the FINAL insight layer — the Business Dashboard narrative. You must synthesize EVERYTHING:
-- The original business intent
-- What the data revealed (EDA)
-- How the model performs
-- What the predictions mean for the business
+This narrative has FOUR fixed blocks. You MUST fill ALL four:
+
+A) BUSINESS CONTEXT — Explain what the dataset represents, which business problem the project solves, and why it matters. Ground this in the intent contract.
+
+B) MODEL DISCOVERIES — Interpret what the model learned about entity behavior. What patterns did it find? What drives the outcome? Translate feature importance into business language.
+
+C) RISKS OR OPPORTUNITIES — Highlight specific segments, proportions, or patterns the model found. Use real numbers (entities at risk, financial exposure, concentration in segments).
+
+D) RECOMMENDED ACTIONS — Suggest 3-4 concrete strategic actions based on the patterns detected. Each action should be specific and actionable.
 
 CRITICAL RULES:
 - This is for C-level executives. Zero technical jargon.
-- Structure as: situation → findings → impact → recommended actions
-- Use real numbers from the predictions (entities at risk, financial impact, segments)
-- Identify specific segments that need attention
-- Suggest 3-4 concrete business actions
-- NEVER say "the model shows AUC of 0.85". SAY "o modelo identifica corretamente ~85% dos casos de risco, o que permite priorizar ações preventivas"
-- Reference the business objective throughout`,
+- NEVER say "AUC", "F1", "precision", "recall", "RMSE". Translate:
+  - AUC 0.85 → "o modelo identifica corretamente ~85% dos casos de risco"
+  - High feature importance → "o fator que mais influencia o resultado é..."
+- Use real numbers from predictions (entities, financial impact, segments)
+- Reference the business objective throughout
+- Each block should be 2-4 sentences, clear and direct`,
     toolName: "business_story",
-    toolDesc: "Complete business narrative for the dashboard",
+    toolDesc: "Four-block structured business narrative for the dashboard",
     toolSchema: {
       type: "object",
       properties: {
-        executive_narrative: { type: "string", description: "4-6 paragraph executive narrative connecting intent → data → model → impact" },
-        summary: { type: "string", description: "2-3 sentence executive summary" },
-        opportunities: { type: "array", items: { type: "string" }, description: "3-4 specific business opportunities identified" },
-        risk_segments: { type: "array", items: { type: "string" }, description: "2-3 segments or groups that need urgent attention" },
+        business_context: { type: "string", description: "2-4 sentences: what the dataset represents, which problem the project solves, why it matters" },
+        model_discoveries: { type: "string", description: "2-4 sentences: what the model learned about entity behavior, key drivers in business language" },
+        risk_or_opportunity: { type: "string", description: "2-4 sentences: specific segments, proportions, or patterns found, with real numbers" },
         recommended_actions: { type: "array", items: { type: "string" }, description: "3-4 concrete, actionable business recommendations" },
-        confidence_statement: { type: "string", description: "Statement about how confident the business can be in these predictions" },
+        confidence_statement: { type: "string", description: "1-2 sentences about prediction reliability in business terms" },
+        dashboard_business_story: { type: "string", description: "Consolidated 1-paragraph executive summary combining all blocks" },
       },
-      required: ["executive_narrative", "summary", "opportunities", "risk_segments", "recommended_actions", "confidence_statement"],
+      required: ["business_context", "model_discoveries", "risk_or_opportunity", "recommended_actions", "confidence_statement", "dashboard_business_story"],
     },
   },
 };
@@ -279,6 +283,19 @@ serve(async (req) => {
         },
       };
 
+      // For business_story, also store the storyline for executive narrative
+      if (validStage === "business_story") {
+        updatedCtx.storyline = {
+          executive_summary: insight.dashboard_business_story || "",
+          business_context: insight.business_context || "",
+          model_discoveries: insight.model_discoveries || "",
+          risk_or_opportunity: insight.risk_or_opportunity || "",
+          recommended_actions: insight.recommended_actions || [],
+          confidence_statement: insight.confidence_statement || "",
+          generated_at: new Date().toISOString(),
+        };
+      }
+
       await serviceClient.from("project_ai_context").upsert({
         project_id,
         context: updatedCtx,
@@ -287,6 +304,26 @@ serve(async (req) => {
       } as any, { onConflict: "project_id" });
     } catch (e) {
       console.warn("[lys-pipeline-insights] Failed to update AI context:", e);
+    }
+
+    // Persist business_story blocks to SSOT (project_settings)
+    if (validStage === "business_story") {
+      try {
+        await serviceClient.from("project_settings").update({
+          lys_insight_text: insight.dashboard_business_story || "",
+          lys_recommendation_json: {
+            business_context: insight.business_context,
+            model_discoveries: insight.model_discoveries,
+            risk_or_opportunity: insight.risk_or_opportunity,
+            recommended_actions: insight.recommended_actions,
+            confidence_statement: insight.confidence_statement,
+            generated_at: new Date().toISOString(),
+          },
+          lys_synthesized_at: new Date().toISOString(),
+        }).eq("project_id", project_id);
+      } catch (e) {
+        console.warn("[lys-pipeline-insights] Failed to persist to SSOT:", e);
+      }
     }
 
     // Log event
