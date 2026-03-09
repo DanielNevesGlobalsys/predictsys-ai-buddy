@@ -454,34 +454,51 @@ serve(async (req: Request) => {
     }
 
     // ===== 4.5b LABEL BUILD RESULT GATE (from project_settings SSOT) =====
+    // Only check label_build if target_source is ACTUALLY "label_builder" AND a label builder entry exists
     if (projectSettings?.target_source === "label_builder") {
-      const lbr = projectSettings.label_build_result as Record<string, any> | null;
-      if (lbr && lbr.gates && Array.isArray(lbr.gates)) {
-        const hasBlock = (lbr.gates as any[]).some((g: any) => g.status === "BLOCK");
-        const hasWarn = (lbr.gates as any[]).some((g: any) => g.status === "WARN");
-        gates.push({
-          gate: "label_build",
-          status: hasBlock ? "BLOCK" : hasWarn ? "WARN" : "PASS",
-          message: hasBlock
-            ? `Label bloqueado: ${(lbr.gates as any[]).filter((g: any) => g.status === "BLOCK").map((g: any) => g.message).join("; ")}`
-            : `Label OK: ${(lbr.positive_rate * 100).toFixed(1)}% positivos, ${lbr.eligible_entities} entidades, template "${lbr.template_id}"`,
-          details: {
-            template_id: lbr.template_id,
-            positive_rate: lbr.positive_rate,
-            classes: lbr.classes,
-            dominant_rate: lbr.dominant_rate,
-            eligible_entities: lbr.eligible_entities,
-            gates: lbr.gates,
-          },
-        });
-        if (hasBlock) canTrain = false;
-      } else if (!lbr) {
-        gates.push({
-          gate: "label_build",
-          status: "WARN",
-          message: "Label builder ativo mas sem resultado de geração. Reconstrua o dataset modelável.",
-          details: { label_build_result_missing: true },
-        });
+      // First verify a real label builder entry exists
+      const { data: realLabelBuilder } = await supabase
+        .from("project_label_builders")
+        .select("id, status")
+        .eq("project_id", project_id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (realLabelBuilder) {
+        const lbr = projectSettings.label_build_result as Record<string, any> | null;
+        if (lbr && lbr.gates && Array.isArray(lbr.gates)) {
+          const hasBlock = (lbr.gates as any[]).some((g: any) => g.status === "BLOCK");
+          const hasWarn = (lbr.gates as any[]).some((g: any) => g.status === "WARN");
+          gates.push({
+            gate: "label_build",
+            status: hasBlock ? "BLOCK" : hasWarn ? "WARN" : "PASS",
+            message: hasBlock
+              ? `Label bloqueado: ${(lbr.gates as any[]).filter((g: any) => g.status === "BLOCK").map((g: any) => g.message).join("; ")}`
+              : `Label OK: ${(lbr.positive_rate * 100).toFixed(1)}% positivos, ${lbr.eligible_entities} entidades, template "${lbr.template_id}"`,
+            details: {
+              template_id: lbr.template_id,
+              positive_rate: lbr.positive_rate,
+              classes: lbr.classes,
+              dominant_rate: lbr.dominant_rate,
+              eligible_entities: lbr.eligible_entities,
+              gates: lbr.gates,
+            },
+          });
+          if (hasBlock) canTrain = false;
+        } else if (!lbr) {
+          gates.push({
+            gate: "label_build",
+            status: "WARN",
+            message: "Label builder ativo mas sem resultado de geração. Reconstrua o dataset modelável.",
+            details: { label_build_result_missing: true },
+          });
+        }
+      } else {
+        // target_source says "label_builder" but no actual label builder exists
+        // This is a stale/inconsistent state — auto-correct to "manual"
+        console.warn(`[preflight] target_source=label_builder but no label_builder entry found. Stale state.`);
+        // Don't add a blocking gate for this — it's a metadata inconsistency, not a real block
       }
     }
 
