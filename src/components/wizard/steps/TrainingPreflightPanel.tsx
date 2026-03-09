@@ -54,6 +54,13 @@ const GATE_LABELS: Record<string, string> = {
   weak_label_health: "Assistido",
   human_label_health: "Rotulagem",
   target_lifecycle: "Ciclo de Vida",
+  label_build: "Label",
+  metrics_profile: "Métricas",
+  mvp_soft_features: "Features",
+  mvp_soft_sampling: "Amostra",
+  split_policy: "Split",
+  leakage_guard: "Leakage",
+  class_balance: "Balanço",
 };
 
 interface Props {

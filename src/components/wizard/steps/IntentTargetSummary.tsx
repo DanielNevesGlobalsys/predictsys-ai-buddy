@@ -53,20 +53,75 @@ export default function IntentTargetSummary({
    * AND project_model_selection (via upsert-model-selection edge function).
    * This ensures preflight and downstream stages see the applied values from a single source.
    */
+  /**
+   * Auto-select minimum valid features from schema when AI returns none.
+   * Excludes target, entity key, time anchor, IDs, and leakage columns.
+   */
+  const autoSelectFeatures = async (
+    targetCol: string,
+    entityKey?: string | null,
+    timeAnchor?: string | null,
+    blockedFeatures?: { column: string; reason: string }[],
+  ): Promise<string[]> => {
+    try {
+      const { supabase } = await import("@/integrations/supabase/client");
+      const { data: cols } = await supabase
+        .from("project_columns")
+        .select("column_name, inferred_type")
+        .eq("project_id", projectId)
+        .limit(300);
+
+      if (!cols || cols.length === 0) return [];
+
+      const blockedSet = new Set<string>([
+        targetCol,
+        ...(entityKey ? [entityKey] : []),
+        ...(timeAnchor ? [timeAnchor] : []),
+        ...(blockedFeatures || []).map(b => b.column),
+      ].map(c => c.toLowerCase()));
+
+      const ID_PATTERNS = /^(id|_id$|uuid|pk_|fk_|idx_|index_|codigo|cod_|numero_|num_|chave_|key_)/i;
+      const LEAKAGE_PATTERNS = /^(target|label|resultado|result|status_final|outcome|predicted|prediction|y_true|y_pred)/i;
+
+      const validFeatures = cols
+        .filter((c: any) => {
+          const lower = c.column_name.toLowerCase();
+          if (blockedSet.has(lower)) return false;
+          if (ID_PATTERNS.test(lower)) return false;
+          if (LEAKAGE_PATTERNS.test(lower)) return false;
+          if (lower.endsWith("_id") || lower.endsWith("_key") || lower.endsWith("_uuid")) return false;
+          return true;
+        })
+        .map((c: any) => c.column_name);
+
+      return validFeatures;
+    } catch (err) {
+      console.error("[IntentTargetSummary] autoSelectFeatures error:", err);
+      return [];
+    }
+  };
+
   const persistAppliedToSSOT = async (candidate: TargetCandidateResolved, entityKey?: string | null, timeAnchor?: string | null, features?: string[]) => {
     setPersisting(true);
     try {
       const { supabase } = await import("@/integrations/supabase/client");
 
-      // 1. Update project_settings SSOT (entity_key, time_anchor, target_state, etc.)
+      // CRITICAL FIX: For explicit targets (strategy !== "derived"), use "manual" + "column"
+      // For derived targets from intent resolution, use "manual" + "column" as well
+      // because there's no actual label_builder entry in project_label_builders.
+      // Only real label builders from the Target Builder UI should use "label_builder".
+      const targetSource = "manual";
+      const targetMode = "column";
+
+      // 1. Update project_settings SSOT
       await supabase
         .from("project_settings")
         .update({
           target_column: candidate.column,
           problem_type: candidate.problem_type,
           active_target_column: candidate.column,
-          active_target_mode: candidate.strategy === "derived" ? "template" : "column",
-          target_source: candidate.strategy === "derived" ? "label_builder" : "manual",
+          active_target_mode: targetMode,
+          target_source: targetSource,
           target_state: "ready",
           ...(entityKey ? { entity_key: entityKey } : {}),
           ...(timeAnchor ? { time_anchor_column: timeAnchor } : {}),
@@ -74,10 +129,20 @@ export default function IntentTargetSummary({
         } as any)
         .eq("project_id", projectId);
 
-      // 2. CRITICAL: Also sync project_model_selection via the atomic upsert function.
-      // This is what the preflight's selection gate reads as primary source.
-      const selectedFeatures = features && features.length > 0 ? features : [];
-      await supabase.functions.invoke("upsert-model-selection", {
+      // 2. Ensure minimum valid features are selected
+      let selectedFeatures = features && features.length > 0 ? features : [];
+      if (selectedFeatures.length === 0) {
+        // Auto-select from schema when AI returns no features
+        selectedFeatures = await autoSelectFeatures(candidate.column, entityKey, timeAnchor, resolution.blocked_features);
+        console.log(`[IntentTargetSummary] Auto-selected ${selectedFeatures.length} features from schema`);
+        // Notify parent component of auto-selected features
+        if (selectedFeatures.length > 0) {
+          onApplyFeatures?.(selectedFeatures, resolution.blocked_features);
+        }
+      }
+
+      // 3. Sync project_model_selection via atomic upsert
+      const upsertRes = await supabase.functions.invoke("upsert-model-selection", {
         body: {
           project_id: projectId,
           target_column: candidate.column,
@@ -88,6 +153,23 @@ export default function IntentTargetSummary({
       });
 
       console.log(`[IntentTargetSummary] Persisted to SSOT + model_selection: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}, features=${selectedFeatures.length}`);
+
+      // 4. Auto-trigger builder if we have sufficient context
+      if (selectedFeatures.length >= 3 && upsertRes.data?.success) {
+        console.log(`[IntentTargetSummary] Auto-triggering build-modeling-dataset...`);
+        try {
+          const builderRes = await supabase.functions.invoke("build-modeling-dataset", {
+            body: { project_id: projectId },
+          });
+          if (builderRes.data?.success || builderRes.data?.status === "READY") {
+            console.log(`[IntentTargetSummary] Builder completed successfully`);
+          } else {
+            console.warn(`[IntentTargetSummary] Builder returned:`, builderRes.data?.error || builderRes.data?.status);
+          }
+        } catch (builderErr) {
+          console.warn("[IntentTargetSummary] Builder auto-trigger failed (non-blocking):", builderErr);
+        }
+      }
     } catch (err) {
       console.error("[IntentTargetSummary] Failed to persist to SSOT:", err);
     } finally {
@@ -102,7 +184,7 @@ export default function IntentTargetSummary({
     if (resolution.suggested_features.length > 0) {
       onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
     }
-    // Persist to SSOT + model_selection so preflight sees the applied values
+    // Persist to SSOT + model_selection + auto-trigger builder
     persistAppliedToSSOT(candidate, resolution.suggested_entity_key, resolution.suggested_time_anchor, resolution.suggested_features);
   };
 

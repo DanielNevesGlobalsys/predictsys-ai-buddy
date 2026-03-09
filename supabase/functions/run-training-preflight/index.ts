@@ -398,57 +398,107 @@ serve(async (req: Request) => {
       });
       canTrain = false;
     } else {
-      // Check SSOT builder_state before declaring "not executed"
-      // The builder_state in project_settings may indicate readiness even without a modeling_datasets row
+      // No builder dataset found — diagnose WHY
       const ssotBuilderState = projectSettings?.builder_state || null;
-      if (ssotBuilderState === "ready") {
+      const featCount = (selection as any)?.selected_features?.length || 0;
+      const hasTarget = !!resolvedTargetCol;
+
+      // Determine specific root cause for builder not running
+      let builderRootCause = "UNKNOWN";
+      let builderMessage = "Feature Builder ainda não foi executado.";
+      const builderDetails: Record<string, unknown> = {
+        builder_state_ssot: ssotBuilderState,
+        has_target: hasTarget,
+        features_count: featCount,
+        selection_version: selectionVersion,
+      };
+
+      if (!hasTarget) {
+        builderRootCause = "NO_TARGET";
+        builderMessage = "Builder não pode executar: nenhum target definido. Selecione o alvo na Etapa 3.";
+      } else if (featCount === 0) {
+        builderRootCause = "NO_FEATURES";
+        builderMessage = "Builder não pode executar: 0 features selecionadas. Selecione as variáveis preditivas ou use a resolução automática.";
+      } else if (ssotBuilderState === "ready") {
+        // SSOT says ready but no dataset row — likely stale
         gates.push({
           gate: "builder",
           status: "WARN",
-          message: "Builder marcado como pronto no SSOT, mas dataset modelável não encontrado na tabela. Considere regerar.",
-          details: { builder_state_ssot: ssotBuilderState, source: "project_settings_fallback" },
+          message: "Builder marcado como pronto no SSOT, mas dataset modelável não encontrado. Considere regerar.",
+          details: { ...builderDetails, source: "project_settings_fallback" },
         });
-        // Don't block — SSOT says ready, just warn about missing row
+        // Don't block — just warn
+        builderRootCause = "SSOT_READY_NO_DATASET";
+      } else if (ssotBuilderState === "building") {
+        builderRootCause = "BUILDING_IN_PROGRESS";
+        builderMessage = "Builder em execução. Aguarde a conclusão.";
       } else {
+        builderRootCause = "NOT_EXECUTED";
+        builderMessage = `Builder pendente (v${selectionVersion}, ${featCount} features). Gere o dataset modelável para desbloquear o treino.`;
+      }
+
+      builderDetails.root_cause = builderRootCause;
+
+      if (builderRootCause !== "SSOT_READY_NO_DATASET") {
         gates.push({
           gate: "builder",
-          status: "BLOCK",
-          message: "Feature Builder ainda não foi executado. Gere o dataset modelável.",
+          status: builderRootCause === "BUILDING_IN_PROGRESS" ? "WARN" : "BLOCK",
+          message: builderMessage,
+          details: builderDetails,
         });
-        canBuild = true;
-        canTrain = false;
+        if (builderRootCause !== "BUILDING_IN_PROGRESS") {
+          canBuild = true;
+          canTrain = false;
+        }
       }
     }
 
     // ===== 4.5b LABEL BUILD RESULT GATE (from project_settings SSOT) =====
+    // Only check label_build if target_source is ACTUALLY "label_builder" AND a label builder entry exists
     if (projectSettings?.target_source === "label_builder") {
-      const lbr = projectSettings.label_build_result as Record<string, any> | null;
-      if (lbr && lbr.gates && Array.isArray(lbr.gates)) {
-        const hasBlock = (lbr.gates as any[]).some((g: any) => g.status === "BLOCK");
-        const hasWarn = (lbr.gates as any[]).some((g: any) => g.status === "WARN");
-        gates.push({
-          gate: "label_build",
-          status: hasBlock ? "BLOCK" : hasWarn ? "WARN" : "PASS",
-          message: hasBlock
-            ? `Label bloqueado: ${(lbr.gates as any[]).filter((g: any) => g.status === "BLOCK").map((g: any) => g.message).join("; ")}`
-            : `Label OK: ${(lbr.positive_rate * 100).toFixed(1)}% positivos, ${lbr.eligible_entities} entidades, template "${lbr.template_id}"`,
-          details: {
-            template_id: lbr.template_id,
-            positive_rate: lbr.positive_rate,
-            classes: lbr.classes,
-            dominant_rate: lbr.dominant_rate,
-            eligible_entities: lbr.eligible_entities,
-            gates: lbr.gates,
-          },
-        });
-        if (hasBlock) canTrain = false;
-      } else if (!lbr) {
-        gates.push({
-          gate: "label_build",
-          status: "WARN",
-          message: "Label builder ativo mas sem resultado de geração. Reconstrua o dataset modelável.",
-          details: { label_build_result_missing: true },
-        });
+      // First verify a real label builder entry exists
+      const { data: realLabelBuilder } = await supabase
+        .from("project_label_builders")
+        .select("id, status")
+        .eq("project_id", project_id)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (realLabelBuilder) {
+        const lbr = projectSettings.label_build_result as Record<string, any> | null;
+        if (lbr && lbr.gates && Array.isArray(lbr.gates)) {
+          const hasBlock = (lbr.gates as any[]).some((g: any) => g.status === "BLOCK");
+          const hasWarn = (lbr.gates as any[]).some((g: any) => g.status === "WARN");
+          gates.push({
+            gate: "label_build",
+            status: hasBlock ? "BLOCK" : hasWarn ? "WARN" : "PASS",
+            message: hasBlock
+              ? `Label bloqueado: ${(lbr.gates as any[]).filter((g: any) => g.status === "BLOCK").map((g: any) => g.message).join("; ")}`
+              : `Label OK: ${(lbr.positive_rate * 100).toFixed(1)}% positivos, ${lbr.eligible_entities} entidades, template "${lbr.template_id}"`,
+            details: {
+              template_id: lbr.template_id,
+              positive_rate: lbr.positive_rate,
+              classes: lbr.classes,
+              dominant_rate: lbr.dominant_rate,
+              eligible_entities: lbr.eligible_entities,
+              gates: lbr.gates,
+            },
+          });
+          if (hasBlock) canTrain = false;
+        } else if (!lbr) {
+          gates.push({
+            gate: "label_build",
+            status: "WARN",
+            message: "Label builder ativo mas sem resultado de geração. Reconstrua o dataset modelável.",
+            details: { label_build_result_missing: true },
+          });
+        }
+      } else {
+        // target_source says "label_builder" but no actual label builder exists
+        // This is a stale/inconsistent state — auto-correct to "manual"
+        console.warn(`[preflight] target_source=label_builder but no label_builder entry found. Stale state.`);
+        // Don't add a blocking gate for this — it's a metadata inconsistency, not a real block
       }
     }
 
@@ -572,18 +622,25 @@ serve(async (req: Request) => {
 
     // ===== 4.9.5 METRICS_PROFILE_RESOLVED GATE =====
     {
+      // Check SSOT fields FIRST (project_settings.industry, objective), then AI context
+      const ssotObjLower = String(ssotObjective || "").toLowerCase();
+      const ssotIndLower = String(ssotIndustry || "").toLowerCase();
       const intentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
       const intentBaseObj = intentContract.intent_base || intentContract;
       const domainAdapterObj = intentContract.domain_adapter || {};
-      const objective = String(intentBaseObj?.declared_objective || "").toLowerCase();
-      const industry = String(domainAdapterObj?.industry || "").toLowerCase();
-      const hasSpecificProfile = objective.includes("churn") || objective.includes("conversão") || objective.includes("receita") || objective.includes("no-show") || objective.includes("adesão") || industry.includes("saúde") || industry.includes("health");
+      const aiObjective = String(intentBaseObj?.declared_objective || "").toLowerCase();
+      const aiIndustry = String(domainAdapterObj?.industry || "").toLowerCase();
+      const objective = ssotObjLower || aiObjective;
+      const industry = ssotIndLower || aiIndustry;
+      const problemType = String(projectSettings?.problem_type || (selection as any)?.problem_type || "").toLowerCase();
+      const hasSpecificProfile = objective.includes("churn") || objective.includes("conversão") || objective.includes("receita") || objective.includes("no-show") || objective.includes("adesão") || objective.includes("inadimpl") || objective.includes("cancel") || objective.includes("evas") || industry.includes("saúde") || industry.includes("health") || industry.includes("food") || industry.includes("retail") || industry.includes("finance") || problemType === "regression";
       gates.push({
         gate: "metrics_profile",
         status: hasSpecificProfile ? "PASS" : "WARN",
         message: hasSpecificProfile
-          ? `Perfil de métricas resolvido a partir do objetivo/indústria.`
+          ? `Perfil de métricas resolvido (${ssotIndustry ? ssotIndustry + " / " : ""}${ssotObjective ? ssotObjective.substring(0, 40) : problemType}).`
           : `Perfil de métricas genérico (fallback). Defina o objetivo do projeto para otimizar a métrica principal.`,
+        details: { industry: ssotIndustry || aiIndustry, objective: ssotObjective || aiObjective, problem_type: problemType },
       });
     }
 
