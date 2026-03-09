@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import TrainingResultsPanel from "./TrainingResultsPanel";
-import DebugLysPanel from "@/components/training/DebugLysPanel";
+// SmartTrainingPanel removed — unified into "Modelo Selecionado" card
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
