@@ -36,6 +36,8 @@ import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
 import AuditContractPanel from "./AuditContractPanel";
+import IntentTargetSummary from "./IntentTargetSummary";
+import type { TargetCandidateResolved } from "@/hooks/useIntentDrivenTarget";
 import TargetQualityCard from "./TargetQualityCard";
 import WeakLabelBuilderCard from "./WeakLabelBuilderCard";
 import HumanLabelingCard from "./HumanLabelingCard";
