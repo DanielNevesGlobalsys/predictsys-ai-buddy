@@ -896,6 +896,8 @@ function calcRegressionMetricsDetailed(yTrue: number[], yPred: number[]): Metric
   let sumSquaredError = 0, sumAbsError = 0;
   const yMean = mean(yTrue);
   let ssTot = 0, ssRes = 0;
+  let sumAbsPctError = 0;
+  let mapeCount = 0;
   
   for (let i = 0; i < n; i++) {
     const error = yTrue[i] - yPred[i];
@@ -903,14 +905,20 @@ function calcRegressionMetricsDetailed(yTrue: number[], yPred: number[]): Metric
     sumSquaredError += error * error;
     ssTot += Math.pow(yTrue[i] - yMean, 2);
     ssRes += error * error;
+    // MAPE — skip zeros to avoid division by zero
+    if (Math.abs(yTrue[i]) > 1e-10) {
+      sumAbsPctError += Math.abs(error / yTrue[i]);
+      mapeCount++;
+    }
   }
   
   const mae = sumAbsError / n;
   const mse = sumSquaredError / n;
   const rmse = Math.sqrt(mse);
   const r2 = ssTot > 0 ? 1 - ssRes / ssTot : 0;
+  const mape = mapeCount > 0 ? (sumAbsPctError / mapeCount) * 100 : 0; // as percentage
 
-  const raw: Record<string, number> = { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2 };
+  const raw: Record<string, number> = { MAE: mae, MSE: mse, RMSE: rmse, "R²": r2, MAPE: mape };
 
   const invalid_reasons: string[] = [];
   for (const [k, v] of Object.entries(raw)) {
