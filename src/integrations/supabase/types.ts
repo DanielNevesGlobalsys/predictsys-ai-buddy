@@ -3748,6 +3748,7 @@ export type Database = {
           split_validation_log: Json
           staleness_flags: Json
           target_column: string | null
+          target_intent_resolution: Json | null
           target_last_validated_at: string | null
           target_lifecycle_state: Json | null
           target_mode_selected: string | null
@@ -3835,6 +3836,7 @@ export type Database = {
           split_validation_log?: Json
           staleness_flags?: Json
           target_column?: string | null
+          target_intent_resolution?: Json | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
           target_mode_selected?: string | null
@@ -3922,6 +3924,7 @@ export type Database = {
           split_validation_log?: Json
           staleness_flags?: Json
           target_column?: string | null
+          target_intent_resolution?: Json | null
           target_last_validated_at?: string | null
           target_lifecycle_state?: Json | null
           target_mode_selected?: string | null

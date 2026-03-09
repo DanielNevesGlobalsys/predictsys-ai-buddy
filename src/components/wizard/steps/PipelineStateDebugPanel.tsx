@@ -63,7 +63,7 @@ export default function PipelineStateDebugPanel({ projectId }: Props) {
       const [{ data: settings }, { data: selection }] = await Promise.all([
         supabase
           .from("project_settings")
-          .select("industry, objective, business_intent_contract, active_intent_contract_id, target_column, active_target_column, active_target_mode, target_source, target_state, problem_type, entity_key, time_anchor_column, selection_version, dataset_version, training_version, scoring_version, dashboard_version, ingestion_state, eda_state, builder_state, split_state, training_state, scoring_state, dashboard_state, staleness_flags, target_intent_resolution")
+           .select("industry, objective, business_intent_contract, active_intent_contract_id, target_column, active_target_column, active_target_mode, target_source, target_state, problem_type, entity_key, time_anchor_column, selection_version, dataset_version, training_version, scoring_version, dashboard_version, ingestion_state, eda_state, builder_state, split_state, training_state, scoring_state, dashboard_state, staleness_flags, target_intent_resolution")
           .eq("project_id", projectId)
           .maybeSingle(),
         supabase

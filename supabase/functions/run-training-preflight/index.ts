@@ -398,13 +398,26 @@ serve(async (req: Request) => {
       });
       canTrain = false;
     } else {
-      gates.push({
-        gate: "builder",
-        status: "BLOCK",
-        message: "Feature Builder ainda não foi executado. Gere o dataset modelável.",
-      });
-      canBuild = true;
-      canTrain = false;
+      // Check SSOT builder_state before declaring "not executed"
+      // The builder_state in project_settings may indicate readiness even without a modeling_datasets row
+      const ssotBuilderState = projectSettings?.builder_state || (ssotSettings as any)?.builder_state || null;
+      if (ssotBuilderState === "ready") {
+        gates.push({
+          gate: "builder",
+          status: "WARN",
+          message: "Builder marcado como pronto no SSOT, mas dataset modelável não encontrado na tabela. Considere regerar.",
+          details: { builder_state_ssot: ssotBuilderState, source: "project_settings_fallback" },
+        });
+        // Don't block — SSOT says ready, just warn about missing row
+      } else {
+        gates.push({
+          gate: "builder",
+          status: "BLOCK",
+          message: "Feature Builder ainda não foi executado. Gere o dataset modelável.",
+        });
+        canBuild = true;
+        canTrain = false;
+      }
     }
 
     // ===== 4.5b LABEL BUILD RESULT GATE (from project_settings SSOT) =====
