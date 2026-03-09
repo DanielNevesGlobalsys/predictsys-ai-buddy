@@ -1786,6 +1786,11 @@ const StepTargetFeatures = ({
           )}
         </TargetExpertPanel>
 
+        {/* Pipeline State Debug (admin only) */}
+        {advancedMode && (
+          <PipelineStateDebugPanel projectId={projectData.id} />
+        )}
+
         {/* Advanced Mode Toggle (compact, bottom) */}
         <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border border-border/30">
           <div className="flex items-center gap-2">
