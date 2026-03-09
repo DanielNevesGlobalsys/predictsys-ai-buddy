@@ -400,7 +400,7 @@ serve(async (req: Request) => {
     } else {
       // Check SSOT builder_state before declaring "not executed"
       // The builder_state in project_settings may indicate readiness even without a modeling_datasets row
-      const ssotBuilderState = projectSettings?.builder_state || (ssotSettings as any)?.builder_state || null;
+      const ssotBuilderState = projectSettings?.builder_state || null;
       if (ssotBuilderState === "ready") {
         gates.push({
           gate: "builder",
