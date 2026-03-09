@@ -42,22 +42,59 @@ export default function IntentTargetSummary({
   const { resolution, loading, loaded, error, loadFromSSOT, resolve, hasCandidate } = useIntentDrivenTarget(projectId);
   const [showAlternatives, setShowAlternatives] = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [persisting, setPersisting] = useState(false);
 
   useEffect(() => {
     loadFromSSOT();
   }, [loadFromSSOT]);
+
+  /**
+   * Persist the applied target, entity key, time anchor to project_settings SSOT.
+   * This ensures preflight and downstream stages see the applied values.
+   */
+  const persistAppliedToSSOT = async (candidate: TargetCandidateResolved, entityKey?: string | null, timeAnchor?: string | null) => {
+    setPersisting(true);
+    try {
+      const { supabase } = await import("@/integrations/supabase/client");
+      await supabase
+        .from("project_settings")
+        .update({
+          target_column: candidate.column,
+          problem_type: candidate.problem_type,
+          active_target_column: candidate.column,
+          active_target_mode: candidate.strategy === "derived" ? "template" : "column",
+          target_source: candidate.strategy === "derived" ? "label_builder" : "manual",
+          target_state: "ready",
+          ...(entityKey ? { entity_key: entityKey } : {}),
+          ...(timeAnchor ? { time_anchor_column: timeAnchor } : {}),
+          updated_at: new Date().toISOString(),
+        } as any)
+        .eq("project_id", projectId);
+      console.log(`[IntentTargetSummary] Persisted to SSOT: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}`);
+    } catch (err) {
+      console.error("[IntentTargetSummary] Failed to persist to SSOT:", err);
+    } finally {
+      setPersisting(false);
+    }
+  };
+
+  const applyFullSuggestion = (candidate: TargetCandidateResolved) => {
+    onApplyTarget?.(candidate);
+    if (resolution.suggested_entity_key) onApplyEntityKey?.(resolution.suggested_entity_key);
+    if (resolution.suggested_time_anchor) onApplyTimeAnchor?.(resolution.suggested_time_anchor);
+    if (resolution.suggested_features.length > 0) {
+      onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
+    }
+    // Persist to SSOT so preflight sees the applied values
+    persistAppliedToSSOT(candidate, resolution.suggested_entity_key, resolution.suggested_time_anchor);
+  };
 
   const handleResolve = async () => {
     const result = await resolve();
     if (result?.main_candidate && onApplyTarget) {
       // Auto-apply if confidence is high enough
       if (result.confidence_score >= 0.6) {
-        onApplyTarget(result.main_candidate);
-        if (result.suggested_entity_key) onApplyEntityKey?.(result.suggested_entity_key);
-        if (result.suggested_time_anchor) onApplyTimeAnchor?.(result.suggested_time_anchor);
-        if (result.suggested_features.length > 0) {
-          onApplyFeatures?.(result.suggested_features, result.blocked_features);
-        }
+        applyFullSuggestion(result.main_candidate);
       }
     }
   };
@@ -159,14 +196,7 @@ export default function IntentTargetSummary({
               </p>
             </div>
             {!isApplied && onApplyTarget && (
-              <Button size="sm" onClick={() => {
-                onApplyTarget(main);
-                if (resolution.suggested_entity_key) onApplyEntityKey?.(resolution.suggested_entity_key);
-                if (resolution.suggested_time_anchor) onApplyTimeAnchor?.(resolution.suggested_time_anchor);
-                if (resolution.suggested_features.length > 0) {
-                  onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
-                }
-              }}>
+              <Button size="sm" disabled={persisting} onClick={() => applyFullSuggestion(main)}>
                 <Zap className="w-3 h-3 mr-1" /> Aplicar sugestão
               </Button>
             )}
@@ -243,11 +273,15 @@ export default function IntentTargetSummary({
                     {alt.confidence && <ConfidenceBadge score={alt.confidence} />}
                   </div>
                   <p className="text-xs text-muted-foreground">{alt.reasoning}</p>
-                  {onApplyTarget && (
-                    <Button
-                      variant="outline" size="sm" className="w-full h-6 text-[10px]"
-                      onClick={() => onApplyTarget(alt)}
-                    >
+                    {onApplyTarget && (
+                      <Button
+                        variant="outline" size="sm" className="w-full h-6 text-[10px]"
+                        disabled={persisting}
+                        onClick={() => {
+                          onApplyTarget(alt);
+                          persistAppliedToSSOT(alt, resolution.suggested_entity_key, resolution.suggested_time_anchor);
+                        }}
+                      >
                       Usar esta alternativa
                     </Button>
                   )}

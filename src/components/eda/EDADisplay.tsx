@@ -11,7 +11,6 @@ import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
 import EDAMissingSection from "./EDAMissingSection";
 import EDACorrelationSection from "./EDACorrelationSection";
-import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
 import { ExportCSVModal, ExportJobsModal } from "@/components/export";
 import { FeatureEngineeringSection } from "@/components/feature-engineering";
@@ -56,7 +55,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null; sampledRows?: number; filesCount?: number; sourceType?: string }>({
     rows: 0, columns: 0, target: null
   });
-  const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const [aiInsights] = useState<string[]>([]);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
   const [manifestOpen, setManifestOpen] = useState(false);
@@ -409,16 +408,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       {/* Correlation */}
       {numericStats.length > 1 && <EDACorrelationSection stats={numericStats} targetColumn={projectInfo.target || undefined} />}
 
-      {/* AI Insights */}
-      <EDAInsightsSection
-        projectId={projectId}
-        numericStats={numericStats}
-        categoricalStats={categoricalStats}
-        totalRows={projectInfo.rows}
-        targetColumn={projectInfo.target || undefined}
-        projectName={projectName}
-        onInsightsChange={setAiInsights}
-      />
+      {/* AI Insights moved to LysSynthesisPanel in StepEDA to avoid duplication */}
       
       {/* Export Modals */}
       <ExportCSVModal
