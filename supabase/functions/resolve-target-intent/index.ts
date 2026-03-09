@@ -188,7 +188,9 @@ serve(async (req) => {
     const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected);
 
     // ── 7. Persist to SSOT ──
-    const ssotPayload = {
+    // Persist the resolution JSON AND promote time_anchor_column directly
+    // so downstream stages (preflight, builder) can read it without parsing the JSON.
+    const ssotPayload: Record<string, any> = {
       target_intent_resolution: {
         target_strategy_used: finalResult.target_strategy_used,
         target_main_candidate: finalResult.main_candidate,
@@ -211,6 +213,12 @@ serve(async (req) => {
       },
       updated_at: new Date().toISOString(),
     };
+
+    // CRITICAL: Promote time_anchor_column to top-level SSOT field if resolved
+    // This ensures preflight/builder can read it directly without parsing resolution JSON
+    if (finalResult.suggested_time_anchor) {
+      ssotPayload.time_anchor_column = finalResult.suggested_time_anchor;
+    }
 
     await serviceClient.from("project_settings").update(ssotPayload as any).eq("project_id", project_id);
 

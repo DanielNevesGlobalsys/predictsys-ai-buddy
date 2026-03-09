@@ -32,6 +32,7 @@ import { LABEL_TEMPLATES } from "@/config/labelTemplates";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
+import PipelineStateDebugPanel from "./PipelineStateDebugPanel";
 
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
@@ -951,14 +952,20 @@ const StepTargetFeatures = ({
     });
 
     if (saved) {
-      // Persist entity_key to project_settings (separate from model selection)
+      // Persist entity_key and time_anchor_column to project_settings (separate from model selection)
+      const settingsUpdate: Record<string, any> = { entity_key: entityKey };
+      // Also persist time_anchor if known from SSOT or contract hints
+      const resolvedTimeAnchor = ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+      if (resolvedTimeAnchor) {
+        settingsUpdate.time_anchor_column = resolvedTimeAnchor;
+      }
       supabase
         .from("project_settings")
-        .update({ entity_key: entityKey } as any)
+        .update(settingsUpdate as any)
         .eq("project_id", projectData.id)
         .then(({ error }) => {
-          if (error) console.error("[StepTargetFeatures] Failed to persist entity_key:", error);
-          else console.log(`[StepTargetFeatures] entity_key persisted: ${entityKey}`);
+          if (error) console.error("[StepTargetFeatures] Failed to persist entity_key/time_anchor:", error);
+          else console.log(`[StepTargetFeatures] entity_key=${entityKey}, time_anchor=${resolvedTimeAnchor} persisted`);
         });
 
       // Fire observability event for entity_key selection
@@ -1171,7 +1178,20 @@ const StepTargetFeatures = ({
               }
             }}
             onApplyEntityKey={(key: string) => setEntityKey(key)}
-            onApplyTimeAnchor={() => {}}
+            onApplyTimeAnchor={(col: string) => {
+              // Persist time anchor to SSOT immediately
+              supabase
+                .from("project_settings")
+                .update({ time_anchor_column: col, updated_at: new Date().toISOString() } as any)
+                .eq("project_id", projectData.id)
+                .then(({ error }) => {
+                  if (error) console.error("[StepTargetFeatures] Failed to persist time_anchor:", error);
+                  else {
+                    console.log(`[StepTargetFeatures] time_anchor_column persisted: ${col}`);
+                    loadSSOT(); // Reload SSOT to reflect new time anchor in UI
+                  }
+                });
+            }}
             onApplyFeatures={(features: string[], blocked: { column: string; reason: string }[]) => {
               if (features.length > 0) {
                 const validFeatures = features.filter(f => columns.some(c => c.name === f));
@@ -1771,6 +1791,11 @@ const StepTargetFeatures = ({
             </Alert>
           )}
         </TargetExpertPanel>
+
+        {/* Pipeline State Debug (admin only) */}
+        {advancedMode && (
+          <PipelineStateDebugPanel projectId={projectData.id} />
+        )}
 
         {/* Advanced Mode Toggle (compact, bottom) */}
         <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border border-border/30">
