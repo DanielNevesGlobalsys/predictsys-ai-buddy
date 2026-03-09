@@ -137,9 +137,20 @@ serve(async (req: Request) => {
 
     if (rpcErr || !rpcData || (Array.isArray(rpcData) && rpcData.length === 0)) {
       console.error("[upsert-model-selection] RPC error:", rpcErr);
+      const isConstraintViolation = rpcErr?.code === "23514";
       return new Response(
-        JSON.stringify({ error: "Erro ao salvar seleção (RPC)", details: rpcErr?.message }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        JSON.stringify({
+          success: false,
+          error: isConstraintViolation ? "invalid_problem_type" : "rpc_error",
+          message: isConstraintViolation
+            ? `Valor de problem_type inválido: "${rawProblemType}" (normalizado: "${problem_type}"). Valores aceitos: ${ALLOWED_PROBLEM_TYPES.join(", ")}`
+            : "Erro ao salvar seleção (RPC)",
+          details: rpcErr?.message,
+          incoming_value: rawProblemType,
+          normalized_value: problem_type,
+          allowed_values: ALLOWED_PROBLEM_TYPES,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
