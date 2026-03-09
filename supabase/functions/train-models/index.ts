@@ -4053,10 +4053,11 @@ serve(async (req) => {
       console.warn(`Invalid reasons: ${detailedMetrics.invalid_reasons.join("; ")}`);
     }
 
-    // ==================== IMPROVEMENT VS BASELINE (use RAW metrics) ====================
-    const primaryMetricKey = isClassification ? "AUC" : "R²";
-    const modelPrimaryMetricRaw = detailedMetrics.raw[primaryMetricKey] ?? 0;
-    const baselinePrimaryMetric = baselineMetrics[primaryMetricKey] ?? 0;
+    // ==================== IMPROVEMENT VS BASELINE (use profile-aware primary metric) ====================
+    // Use the metrics profile primary metric, not hardcoded AUC/R²
+    const primaryMetricKey = metricsProfile.primary || (isClassification ? "AUC" : "R²");
+    const modelPrimaryMetricRaw = detailedMetrics.raw[primaryMetricKey] ?? detailedMetrics.raw[isClassification ? "AUC" : "R²"] ?? 0;
+    const baselinePrimaryMetric = baselineMetrics[primaryMetricKey] ?? baselineMetrics[isClassification ? "AUC" : "R²"] ?? 0;
     const improvementVsBaseline = modelPrimaryMetricRaw - baselinePrimaryMetric;
 
     console.log(`\n=== Improvement vs Baseline ===`);
