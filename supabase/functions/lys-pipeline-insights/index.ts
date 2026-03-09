@@ -283,6 +283,19 @@ serve(async (req) => {
         },
       };
 
+      // For business_story, also store the storyline for executive narrative
+      if (validStage === "business_story") {
+        updatedCtx.storyline = {
+          executive_summary: insight.dashboard_business_story || "",
+          business_context: insight.business_context || "",
+          model_discoveries: insight.model_discoveries || "",
+          risk_or_opportunity: insight.risk_or_opportunity || "",
+          recommended_actions: insight.recommended_actions || [],
+          confidence_statement: insight.confidence_statement || "",
+          generated_at: new Date().toISOString(),
+        };
+      }
+
       await serviceClient.from("project_ai_context").upsert({
         project_id,
         context: updatedCtx,
@@ -291,6 +304,26 @@ serve(async (req) => {
       } as any, { onConflict: "project_id" });
     } catch (e) {
       console.warn("[lys-pipeline-insights] Failed to update AI context:", e);
+    }
+
+    // Persist business_story blocks to SSOT (project_settings)
+    if (validStage === "business_story") {
+      try {
+        await serviceClient.from("project_settings").update({
+          lys_insight_text: insight.dashboard_business_story || "",
+          lys_recommendation_json: {
+            business_context: insight.business_context,
+            model_discoveries: insight.model_discoveries,
+            risk_or_opportunity: insight.risk_or_opportunity,
+            recommended_actions: insight.recommended_actions,
+            confidence_statement: insight.confidence_statement,
+            generated_at: new Date().toISOString(),
+          },
+          lys_synthesized_at: new Date().toISOString(),
+        }).eq("project_id", project_id);
+      } catch (e) {
+        console.warn("[lys-pipeline-insights] Failed to persist to SSOT:", e);
+      }
     }
 
     // Log event
