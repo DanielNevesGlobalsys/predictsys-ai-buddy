@@ -11,7 +11,6 @@ import EDANumericSection from "./EDANumericSection";
 import EDACategoricalSection from "./EDACategoricalSection";
 import EDAMissingSection from "./EDAMissingSection";
 import EDACorrelationSection from "./EDACorrelationSection";
-import EDAInsightsSection from "./EDAInsightsSection";
 import EDAExportPDF from "./EDAExportPDF";
 import { ExportCSVModal, ExportJobsModal } from "@/components/export";
 import { FeatureEngineeringSection } from "@/components/feature-engineering";
