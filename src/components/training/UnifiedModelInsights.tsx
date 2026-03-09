@@ -57,6 +57,7 @@ const UnifiedModelInsights = ({
   bestModelId,
   datasetRows,
   targetColumn,
+  showDebug = false,
 }: UnifiedModelInsightsProps) => {
   const { t, i18n } = useTranslation();
   const [featureImportances, setFeatureImportances] = useState<FeatureImportanceItem[]>([]);
