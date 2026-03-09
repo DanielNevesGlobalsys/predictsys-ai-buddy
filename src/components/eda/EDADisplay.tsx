@@ -408,16 +408,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
       {/* Correlation */}
       {numericStats.length > 1 && <EDACorrelationSection stats={numericStats} targetColumn={projectInfo.target || undefined} />}
 
-      {/* AI Insights */}
-      <EDAInsightsSection
-        projectId={projectId}
-        numericStats={numericStats}
-        categoricalStats={categoricalStats}
-        totalRows={projectInfo.rows}
-        targetColumn={projectInfo.target || undefined}
-        projectName={projectName}
-        onInsightsChange={setAiInsights}
-      />
+      {/* AI Insights moved to LysSynthesisPanel in StepEDA to avoid duplication */}
       
       {/* Export Modals */}
       <ExportCSVModal
