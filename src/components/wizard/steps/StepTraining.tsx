@@ -179,7 +179,9 @@ const StepTraining = ({
     objectiveLabel: string;
   } | null>(null);
 
-  const primaryMetric = projectData.problem_type === "classification" ? "AUC" : "R²";
+  // primaryMetric is now resolved dynamically from training response or profile
+  const [resolvedPrimaryMetric, setResolvedPrimaryMetric] = useState<string | null>(null);
+  const primaryMetric = resolvedPrimaryMetric || (projectData.problem_type === "classification" ? "AUC" : "R²");
 
   const loadSelectionVersion = useCallback(async () => {
     if (!projectData.id) return;
