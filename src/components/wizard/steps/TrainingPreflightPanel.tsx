@@ -251,20 +251,8 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
               variant="default"
               disabled={rebuilding}
               onClick={async () => {
-                if (!projectId) return;
-                setRebuilding(true);
-                try {
-                  const res = await supabase.functions.invoke("build-modeling-dataset", {
-                    body: { project_id: projectId },
-                  });
-                  console.log("[TrainingPreflight] Rebuild result:", res.data);
-                  // Re-run preflight after rebuild
-                  await runPreflight();
-                } catch (err) {
-                  console.error("[TrainingPreflight] Rebuild failed:", err);
-                } finally {
-                  setRebuilding(false);
-                }
+                await triggerRebuild();
+                await runPreflight();
               }}
               className="w-full text-xs"
             >
