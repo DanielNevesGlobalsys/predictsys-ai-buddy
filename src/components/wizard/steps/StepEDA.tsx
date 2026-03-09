@@ -37,7 +37,6 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
   const lysSynthesis = useLysSynthesis(projectData.id);
   const lysSynthesisTriggered = useRef(false);
-  const [tdeRefreshKey, setTdeRefreshKey] = useState(0);
 
   // Dataset state
   const [activeDataset, setActiveDataset] = useState<{ id: string; total_rows: number; columns_count: number; name: string } | null>(null);
