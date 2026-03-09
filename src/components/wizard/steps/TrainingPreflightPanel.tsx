@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Shield, Loader2, CheckCircle, AlertTriangle, XCircle,
-  Database, Target, Package, Cpu, FileText, RefreshCw
+  Database, Target, Package, Cpu, FileText, RefreshCw, Hammer
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
@@ -73,6 +73,7 @@ interface Props {
 const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: Props) => {
   const [result, setResult] = useState<PreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const runPreflight = useCallback(async () => {
@@ -202,7 +203,36 @@ const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: P
             {result.can_train ? "✅ Pronto para treinar" : `❌ ${result.human_message}`}
           </div>
 
-          {/* CTA */}
+          {/* CTA: Rebuild dataset directly */}
+          {!result.can_train && result.gates.some(g => g.gate === "builder" && g.status === "BLOCK" && (g.details as any)?.action === "REBUILD_MODELING_DATASET") && (
+            <Button
+              size="sm"
+              variant="default"
+              disabled={rebuilding}
+              onClick={async () => {
+                if (!projectId) return;
+                setRebuilding(true);
+                try {
+                  const res = await supabase.functions.invoke("build-modeling-dataset", {
+                    body: { project_id: projectId },
+                  });
+                  console.log("[TrainingPreflight] Rebuild result:", res.data);
+                  // Re-run preflight after rebuild
+                  await runPreflight();
+                } catch (err) {
+                  console.error("[TrainingPreflight] Rebuild failed:", err);
+                } finally {
+                  setRebuilding(false);
+                }
+              }}
+              className="w-full text-xs"
+            >
+              {rebuilding ? <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" /> : <Hammer className="w-3.5 h-3.5 mr-1.5" />}
+              {rebuilding ? "Gerando dataset modelável..." : "Gerar Dataset Modelável Agora"}
+            </Button>
+          )}
+
+          {/* CTA: Navigate back */}
           {result.action_cta && !result.can_train && (
             <Button size="sm" variant="outline" onClick={onNavigateBack} className="w-full text-xs">
               {result.action_cta}
