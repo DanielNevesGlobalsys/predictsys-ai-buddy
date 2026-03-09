@@ -355,6 +355,7 @@ const StepTargetFeatures = ({
         loadSettings();
         loadBusinessContract();
         loadModelingState();
+        lysSynthesis.load();
       });
     }
   }, [projectData.id]);
