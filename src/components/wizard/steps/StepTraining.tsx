@@ -1320,8 +1320,14 @@ const StepTraining = ({
           />
         )}
 
-        {/* Churn Simulator */}
-        {trainingComplete && extendedMetrics && projectData.problem_type === "classification" && (
+        {/* Churn Simulator — only show when objective is churn/retention */}
+        {trainingComplete && extendedMetrics && projectData.problem_type === "classification" && 
+         contractSummary && (
+           contractSummary.objective === "churn" || 
+           contractSummary.objective === "retention" ||
+           contractSummary.objectiveLabel?.toLowerCase().includes("churn") ||
+           contractSummary.objectiveLabel?.toLowerCase().includes("retenção")
+         ) && (
           <ChurnSimulator
             extendedMetrics={extendedMetrics}
             totalEntities={trainReadiness?.totalRows || projectData.total_rows || 0}
