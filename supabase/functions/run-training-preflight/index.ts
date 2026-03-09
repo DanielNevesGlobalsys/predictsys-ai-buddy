@@ -398,25 +398,58 @@ serve(async (req: Request) => {
       });
       canTrain = false;
     } else {
-      // Check SSOT builder_state before declaring "not executed"
-      // The builder_state in project_settings may indicate readiness even without a modeling_datasets row
+      // No builder dataset found — diagnose WHY
       const ssotBuilderState = projectSettings?.builder_state || null;
-      if (ssotBuilderState === "ready") {
+      const featCount = (selection as any)?.selected_features?.length || 0;
+      const hasTarget = !!resolvedTargetCol;
+
+      // Determine specific root cause for builder not running
+      let builderRootCause = "UNKNOWN";
+      let builderMessage = "Feature Builder ainda não foi executado.";
+      const builderDetails: Record<string, unknown> = {
+        builder_state_ssot: ssotBuilderState,
+        has_target: hasTarget,
+        features_count: featCount,
+        selection_version: selectionVersion,
+      };
+
+      if (!hasTarget) {
+        builderRootCause = "NO_TARGET";
+        builderMessage = "Builder não pode executar: nenhum target definido. Selecione o alvo na Etapa 3.";
+      } else if (featCount === 0) {
+        builderRootCause = "NO_FEATURES";
+        builderMessage = "Builder não pode executar: 0 features selecionadas. Selecione as variáveis preditivas ou use a resolução automática.";
+      } else if (ssotBuilderState === "ready") {
+        // SSOT says ready but no dataset row — likely stale
         gates.push({
           gate: "builder",
           status: "WARN",
-          message: "Builder marcado como pronto no SSOT, mas dataset modelável não encontrado na tabela. Considere regerar.",
-          details: { builder_state_ssot: ssotBuilderState, source: "project_settings_fallback" },
+          message: "Builder marcado como pronto no SSOT, mas dataset modelável não encontrado. Considere regerar.",
+          details: { ...builderDetails, source: "project_settings_fallback" },
         });
-        // Don't block — SSOT says ready, just warn about missing row
+        // Don't block — just warn
+        builderRootCause = "SSOT_READY_NO_DATASET";
+      } else if (ssotBuilderState === "building") {
+        builderRootCause = "BUILDING_IN_PROGRESS";
+        builderMessage = "Builder em execução. Aguarde a conclusão.";
       } else {
+        builderRootCause = "NOT_EXECUTED";
+        builderMessage = `Builder pendente (v${selectionVersion}, ${featCount} features). Gere o dataset modelável para desbloquear o treino.`;
+      }
+
+      builderDetails.root_cause = builderRootCause;
+
+      if (builderRootCause !== "SSOT_READY_NO_DATASET") {
         gates.push({
           gate: "builder",
-          status: "BLOCK",
-          message: "Feature Builder ainda não foi executado. Gere o dataset modelável.",
+          status: builderRootCause === "BUILDING_IN_PROGRESS" ? "WARN" : "BLOCK",
+          message: builderMessage,
+          details: builderDetails,
         });
-        canBuild = true;
-        canTrain = false;
+        if (builderRootCause !== "BUILDING_IN_PROGRESS") {
+          canBuild = true;
+          canTrain = false;
+        }
       }
     }
 
