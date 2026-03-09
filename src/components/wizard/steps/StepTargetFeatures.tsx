@@ -1097,6 +1097,21 @@ const StepTargetFeatures = ({
           </p>
         </div>
 
+        {/* Hidden: load column inference data for target selector enrichment */}
+        {projectData.id && !advancedMode && (
+          <div className="hidden">
+            <ColumnInferenceMatrix
+              projectId={projectData.id}
+              onDataLoaded={(data) => {
+                setColumnInference(data);
+                const map = new Map<string, ColumnInferenceRow>();
+                data.forEach((d) => map.set(d.column_name, d));
+                columnInferenceMap.current = map;
+              }}
+            />
+          </div>
+        )}
+
         {/* ═══ BLOCK 1: Problema de negócio ═══ */}
         <TargetBusinessContext
           contract={businessContract}
