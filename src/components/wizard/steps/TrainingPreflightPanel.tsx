@@ -73,6 +73,7 @@ interface Props {
 const TrainingPreflightPanel = ({ projectId, onNavigateBack, refreshKey = 0 }: Props) => {
   const [result, setResult] = useState<PreflightResult | null>(null);
   const [loading, setLoading] = useState(false);
+  const [rebuilding, setRebuilding] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const runPreflight = useCallback(async () => {
