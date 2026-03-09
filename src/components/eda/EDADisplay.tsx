@@ -55,7 +55,7 @@ const EDADisplay = ({ projectId, projectName = "Project", datasetFilename, onEDA
   const [projectInfo, setProjectInfo] = useState<{ rows: number; columns: number; target: string | null; sampledRows?: number; filesCount?: number; sourceType?: string }>({
     rows: 0, columns: 0, target: null
   });
-  const [aiInsights, setAiInsights] = useState<string[]>([]);
+  const [aiInsights] = useState<string[]>([]);
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
   const [manifestOpen, setManifestOpen] = useState(false);
