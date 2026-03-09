@@ -191,12 +191,17 @@ serve(async (req: Request) => {
         : "Intent Contract não definido. Recomendado: gere na Etapa 1.",
     });
 
-    // ===== 4.3 SELECTION GATE =====
-    if (selection && (selection as any).target_column) {
-      const sv = (selection as any).selection_version || 1;
-      const feats = (selection as any).selected_features as string[] || [];
-      const targetCol = (selection as any).target_column as string;
-      const isLabelBuilder = targetCol === "_label_" || targetCol === "label";
+    // ===== 4.3 SELECTION GATE (SSOT-consolidated) =====
+    // Priority: project_model_selection > project_settings.target_column > project_settings.active_target_column
+    const selectionTargetCol = (selection as any)?.target_column || null;
+    const settingsTargetCol = projectSettings?.target_column || projectSettings?.active_target_column || null;
+    const resolvedTargetCol = selectionTargetCol || settingsTargetCol;
+    const resolvedTargetState = projectSettings?.target_state || null;
+
+    if (resolvedTargetCol) {
+      const sv = (selection as any)?.selection_version || 1;
+      const feats = (selection as any)?.selected_features as string[] || [];
+      const isLabelBuilder = resolvedTargetCol === "_label_" || resolvedTargetCol === "label";
 
       // If _label_, verify label builder exists and is ready
       let labelBuilderOk = true;
@@ -215,7 +220,7 @@ serve(async (req: Request) => {
             gate: "selection",
             status: "BLOCK",
             message: "Target derivado (_label_) selecionado, mas nenhum Label Builder com status 'ready' encontrado. Execute o Target Builder.",
-            details: { target_column: targetCol, label_builder_missing: true },
+            details: { target_column: resolvedTargetCol, label_builder_missing: true },
           });
           canBuild = false;
           canTrain = false;
@@ -224,45 +229,49 @@ serve(async (req: Request) => {
             gate: "selection",
             status: feats.length === 0 ? "WARN" : "PASS",
             message: `Target derivado via template "${lblBuilder.template_id}" (v${sv}), ${feats.length} features`,
-            details: { target_column: targetCol, selection_version: sv, features_count: feats.length, label_builder_id: lblBuilder.id },
+            details: { target_column: resolvedTargetCol, selection_version: sv, features_count: feats.length, label_builder_id: lblBuilder.id },
           });
         }
       }
 
       if (!isLabelBuilder || labelBuilderOk) {
         if (!isLabelBuilder) {
+          // Determine source label for the gate message
+          const sourceLabel = selectionTargetCol ? `model_selection v${sv}` : "project_settings SSOT";
           gates.push({
             gate: "selection",
-            status: feats.length === 0 ? "WARN" : "PASS",
-            message: `Target: "${targetCol}" (v${sv}), ${feats.length} features`,
-            details: { target_column: targetCol, selection_version: sv, features_count: feats.length },
+            status: feats.length === 0 && !settingsTargetCol ? "WARN" : "PASS",
+            message: `Target: "${resolvedTargetCol}" (via ${sourceLabel}), ${feats.length} features`,
+            details: { target_column: resolvedTargetCol, selection_version: sv, features_count: feats.length, source: selectionTargetCol ? "model_selection" : "project_settings" },
           });
         }
       }
     } else {
-      // Fallback: check project_settings
-      const { data: settings } = await supabase
-        .from("project_settings")
-        .select("target_column, feature_columns")
-        .eq("project_id", project_id)
-        .maybeSingle();
+      gates.push({
+        gate: "selection",
+        status: "BLOCK",
+        message: "Nenhum target selecionado. Volte à Etapa 3 e selecione o target.",
+      });
+      canBuild = false;
+      canTrain = false;
+    }
 
-      if (settings?.target_column) {
-        gates.push({
-          gate: "selection",
-          status: "WARN",
-          message: `Target via settings: "${settings.target_column}" (sem versionamento)`,
-          details: { target_column: settings.target_column, legacy: true },
+    // Log SSOT divergence for diagnostics
+    if (selectionTargetCol && settingsTargetCol && selectionTargetCol !== settingsTargetCol) {
+      console.warn(`[preflight] SSOT divergence: model_selection.target="${selectionTargetCol}" vs settings.target="${settingsTargetCol}". Using model_selection.`);
+      try {
+        await supabase.from("platform_events").insert({
+          event_type: "preflight_state_divergence",
+          project_id,
+          status: "warn",
+          source: "edge",
+          metadata: {
+            model_selection_target: selectionTargetCol,
+            settings_target: settingsTargetCol,
+            resolved_to: resolvedTargetCol,
+          },
         });
-      } else {
-        gates.push({
-          gate: "selection",
-          status: "BLOCK",
-          message: "Nenhum target selecionado. Volte à Etapa 3 e selecione o target.",
-        });
-        canBuild = false;
-        canTrain = false;
-      }
+      } catch (_) { /* best-effort */ }
     }
 
     // ===== 4.3b MVP-SOFT FEATURE FILTER GATE =====
