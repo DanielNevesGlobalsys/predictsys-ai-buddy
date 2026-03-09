@@ -177,17 +177,19 @@ serve(async (req: Request) => {
     }
 
     // ===== 4.2 INTENT/CONTRACT GATE =====
-    // Check multiple possible field names for backward compat
+    // Check SSOT first (project_settings.industry + objective), then AI context
+    const ssotIndustry = projectSettings?.industry || null;
+    const ssotObjective = projectSettings?.objective || null;
     const intentObj = aiCtx?.intent || {};
     const intentContract = aiCtx?.intent_contract || {};
     const intentBase = intentContract?.intent_base || {};
-    const intentDeclaredObj = intentObj.declared_objective || intentBase.declared_objective || intentObj.objective || "";
+    const intentDeclaredObj = ssotObjective || intentObj.declared_objective || intentBase.declared_objective || intentObj.objective || "";
     const hasIntent = !!intentDeclaredObj;
     gates.push({
       gate: "intent",
       status: hasIntent ? "PASS" : "WARN",
       message: hasIntent
-        ? `Intent definido: ${intentDeclaredObj.substring(0, 60)}`
+        ? `Intent definido: ${intentDeclaredObj.substring(0, 60)}${ssotIndustry ? ` (${ssotIndustry})` : ""}`
         : "Intent Contract não definido. Recomendado: gere na Etapa 1.",
     });
 
