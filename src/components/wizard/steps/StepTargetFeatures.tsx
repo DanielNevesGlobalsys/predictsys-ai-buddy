@@ -32,6 +32,7 @@ import { LABEL_TEMPLATES } from "@/config/labelTemplates";
 import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
+import PipelineStateDebugPanel from "./PipelineStateDebugPanel";
 
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
