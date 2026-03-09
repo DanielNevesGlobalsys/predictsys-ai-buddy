@@ -185,7 +185,7 @@ serve(async (req) => {
     }
 
     // ── 6. Merge deterministic + AI results ──
-    const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected);
+    const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected, entityCandidates, timeCandidates);
 
     // ── 7. Persist to SSOT ──
     // Persist the resolution JSON AND promote time_anchor_column directly
@@ -601,6 +601,8 @@ function mergeResults(
   industry: string,
   objective: string,
   problemTypeExpected: string,
+  entityCandidates: any[] = [],
+  timeCandidates: any[] = [],
 ) {
   const mainCandidate = ai?.recommended_target || (deterministic.length > 0 ? {
     column: deterministic[0].column,
@@ -623,6 +625,15 @@ function mergeResults(
   const isDerived = mainCandidate?.strategy === "derived";
   const isInsufficient = !mainCandidate || mainCandidate.strategy === "insufficient";
 
+  // Fallback entity/time from TDE candidates when AI doesn't return them
+  const bestEntity = entityCandidates.length > 0 ? entityCandidates[0]?.column || entityCandidates[0]?.name : null;
+  const bestTime = timeCandidates.length > 0 ? timeCandidates[0]?.column || timeCandidates[0]?.name : null;
+
+  const suggestedEntityKey = ai?.suggested_entity_key || bestEntity || null;
+  const suggestedTimeAnchor = ai?.suggested_time_anchor || bestTime || null;
+
+  console.log(`[mergeResults] entity: ai=${ai?.suggested_entity_key} tde=${bestEntity} → ${suggestedEntityKey}, time: ai=${ai?.suggested_time_anchor} tde=${bestTime} → ${suggestedTimeAnchor}`);
+
   return {
     target_strategy_used: isInsufficient ? "insufficient" : mainCandidate.strategy,
     main_candidate: isInsufficient ? null : mainCandidate,
@@ -632,8 +643,8 @@ function mergeResults(
     is_insufficient: isInsufficient,
     derivation_formula: isDerived ? mainCandidate?.derivation_formula : null,
     confidence_score: mainCandidate?.confidence || 0,
-    suggested_entity_key: ai?.suggested_entity_key || null,
-    suggested_time_anchor: ai?.suggested_time_anchor || null,
+    suggested_entity_key: suggestedEntityKey,
+    suggested_time_anchor: suggestedTimeAnchor,
     problem_type_inferred: mainCandidate?.problem_type || problemTypeExpected || "classification",
     business_fit_assessment: ai?.business_fit_assessment || "Avaliação pendente",
     blocked_targets: (ai?.blocked_targets || []).map((b: any) => b.column),

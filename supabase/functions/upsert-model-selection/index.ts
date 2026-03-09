@@ -42,14 +42,54 @@ serve(async (req: Request) => {
       });
     }
 
+    // ═══ Canonical problem_type normalization ═══════════════════════
+    const ALLOWED_PROBLEM_TYPES = ["classification", "regression", "multiclass", "segmentation", "ranking"] as const;
+    type CanonicalProblemType = typeof ALLOWED_PROBLEM_TYPES[number];
+
+    const PROBLEM_TYPE_ALIASES: Record<string, CanonicalProblemType> = {
+      // Portuguese labels
+      "classificação binária": "classification",
+      "classificação": "classification",
+      "classificacao binaria": "classification",
+      "classificacao": "classification",
+      "regressão": "regression",
+      "regressao": "regression",
+      "classificação multiclasse": "multiclass",
+      "classificacao multiclasse": "multiclass",
+      "segmentação": "segmentation",
+      "segmentacao": "segmentation",
+      "segmentação / agrupamento": "segmentation",
+      "ranking / priorização": "ranking",
+      "ranking": "ranking",
+      // English aliases
+      "binary": "classification",
+      "binary_classification": "classification",
+      "multiclass_classification": "multiclass",
+      "multiclass": "multiclass",
+      "classification": "classification",
+      "regression": "regression",
+      "segmentation": "segmentation",
+      "continuous": "regression",
+      "clustering": "segmentation",
+    };
+
+    function normalizeProblemType(raw: string | null | undefined): CanonicalProblemType {
+      if (!raw) return "classification";
+      const key = raw.trim().toLowerCase();
+      if (ALLOWED_PROBLEM_TYPES.includes(key as CanonicalProblemType)) return key as CanonicalProblemType;
+      return PROBLEM_TYPE_ALIASES[key] || "classification";
+    }
+
     const body = await req.json();
     const {
       project_id,
       target_column,
-      problem_type,
+      problem_type: rawProblemType,
       selected_features,
       excluded_features,
     } = body;
+
+    const problem_type = normalizeProblemType(rawProblemType);
 
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id obrigatório" }), {
@@ -79,7 +119,7 @@ serve(async (req: Request) => {
     }
 
     console.log(
-      `[upsert-model-selection] project=${project_id}, target=${target_column}, user=${user.id}`,
+      `[upsert-model-selection] project=${project_id}, target=${target_column}, problem_type_raw="${rawProblemType}" → normalized="${problem_type}", user=${user.id}`,
     );
 
     const { data: rpcData, error: rpcErr } = await supabase.rpc(
@@ -89,7 +129,7 @@ serve(async (req: Request) => {
         p_organization_id: project.organization_id,
         p_user_id: user.id,
         p_target_column: target_column,
-        p_problem_type: problem_type || "",
+        p_problem_type: problem_type,
         p_selected_features: selected_features || [],
         p_excluded_features: excluded_features || [],
       },
@@ -97,9 +137,20 @@ serve(async (req: Request) => {
 
     if (rpcErr || !rpcData || (Array.isArray(rpcData) && rpcData.length === 0)) {
       console.error("[upsert-model-selection] RPC error:", rpcErr);
+      const isConstraintViolation = rpcErr?.code === "23514";
       return new Response(
-        JSON.stringify({ error: "Erro ao salvar seleção (RPC)", details: rpcErr?.message }),
-        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        JSON.stringify({
+          success: false,
+          error: isConstraintViolation ? "invalid_problem_type" : "rpc_error",
+          message: isConstraintViolation
+            ? `Valor de problem_type inválido: "${rawProblemType}" (normalizado: "${problem_type}"). Valores aceitos: ${ALLOWED_PROBLEM_TYPES.join(", ")}`
+            : "Erro ao salvar seleção (RPC)",
+          details: rpcErr?.message,
+          incoming_value: rawProblemType,
+          normalized_value: problem_type,
+          allowed_values: ALLOWED_PROBLEM_TYPES,
+        }),
+        { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
       );
     }
 
