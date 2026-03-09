@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import type { ProjectData } from "../WizardContainer";
 import ModelResultsTable from "@/components/training/ModelResultsTable";
 import TrainingResultsPanel from "./TrainingResultsPanel";
-import SmartTrainingPanel from "@/components/training/SmartTrainingPanel";
+// SmartTrainingPanel removed — unified into "Modelo Selecionado" card
 import UnifiedModelInsights from "@/components/training/UnifiedModelInsights";
 import PipelineAuditPanel from "@/components/training/PipelineAuditPanel";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
@@ -1215,78 +1215,83 @@ const StepTraining = ({
           )}
         </div>
 
-        {/* Quality Gate Panel — shows after training */}
-        {trainingComplete && qualityResult && (
-          <div className={`p-4 rounded-lg border space-y-3 ${
-            qualityResult.model_quality_flag === "ok"
-              ? "bg-accent/5 border-accent/20"
-              : qualityResult.model_quality_flag === "weak_model"
-              ? "bg-amber-500/5 border-amber-500/20"
-              : "bg-destructive/5 border-destructive/20"
-          }`}>
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <p className="text-sm font-semibold">Avaliação de Qualidade do Modelo</p>
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <Badge className={qualityResult.metrics_valid
-                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
-                  : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
-                  {qualityResult.metrics_valid ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
-                  MÉTRICAS
-                </Badge>
-                <Badge className={qualityResult.can_promote_to_production
-                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
-                  : "bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]"}>
-                  {qualityResult.can_promote_to_production ? <CheckCircle className="w-3 h-3 mr-1" /> : <AlertTriangle className="w-3 h-3 mr-1" />}
-                  PRODUÇÃO
-                </Badge>
-                <Badge className={qualityResult.dashboard_allowed
-                  ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
-                  : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
-                  {qualityResult.dashboard_allowed ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
-                  DASHBOARD
-                </Badge>
-              </div>
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* BLOCO A — Resultado do Treino                          */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {trainingComplete && models.length > 0 && (
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Trophy className="w-5 h-5 text-primary" />
+              <h3 className="font-display font-semibold text-lg">Resultado do Treino</h3>
             </div>
 
-            {/* Baseline comparison */}
-            <div className="grid grid-cols-2 gap-3 text-xs">
-              <div className="p-2 bg-muted/50 rounded">
-                <p className="font-medium text-muted-foreground mb-1">Baseline</p>
-                {Object.entries(qualityResult.baseline_summary).slice(0, 3).map(([k, v]) => (
-                  <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
-                ))}
-              </div>
-              <div className="p-2 bg-muted/50 rounded">
-                <p className="font-medium text-muted-foreground mb-1">Modelo</p>
-                {Object.entries(qualityResult.metrics_summary).slice(0, 3).map(([k, v]) => (
-                  <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
-                ))}
-              </div>
-            </div>
-
-            {qualityResult.train_diagnostics && (
-              <div className="p-2 bg-muted/30 rounded text-[11px] space-y-0.5">
-                <p className="font-medium text-muted-foreground mb-1">Diagnóstico do Treino</p>
-                <p>Métrica primária: <span className="font-semibold">{qualityResult.train_diagnostics.primary_metric}</span> = {qualityResult.train_diagnostics.primary_metric_value_raw.toFixed(4)} (raw) / {qualityResult.train_diagnostics.primary_metric_value_clamped.toFixed(4)} (clamped)</p>
-                <p>Baseline: {qualityResult.train_diagnostics.baseline_primary_metric.toFixed(4)}</p>
-                <p className={qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "text-accent font-medium" : "text-destructive font-medium"}>
-                  Melhoria: {qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "+" : ""}{qualityResult.train_diagnostics.improvement_vs_baseline.toFixed(4)}
-                </p>
-                <p>Sanity: {qualityResult.train_diagnostics.sanity_checks_passed ? "✅ OK" : `❌ ${qualityResult.train_diagnostics.sanity_fail_reasons.join("; ")}`}</p>
-                <p>Dashboard: {qualityResult.train_diagnostics.dashboard_allowed ? "✅ Liberado" : `❌ ${qualityResult.train_diagnostics.dashboard_allowed_reason}`}</p>
-                {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.length > 0 && (
-                  <p className="text-destructive">Métricas inválidas: {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.join("; ")}</p>
-                )}
-              </div>
+            {/* Unified "Modelo Selecionado" card — merges champion + recommended */}
+            {bestModel && (
+              <Card className="bg-gradient-to-br from-primary/5 to-primary/10 border-primary/20 p-6">
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 bg-gradient-primary rounded-xl flex items-center justify-center flex-shrink-0">
+                    <Trophy className="w-7 h-7 text-primary-foreground" />
+                  </div>
+                  <div className="flex-1 space-y-3">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-display font-bold text-lg">Modelo Selecionado</h3>
+                      {bestModel.is_production && (
+                        <Badge className="bg-accent/20 text-accent border-accent/30 text-xs">Em produção</Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 flex-wrap">
+                      <div className="flex items-center gap-2 bg-card px-3 py-2 rounded-lg">
+                        <Cpu className="w-4 h-4 text-primary" />
+                        <span className="font-semibold">{bestModel.algorithm_name}</span>
+                      </div>
+                      <div className="flex items-center gap-1 bg-accent/20 px-3 py-2 rounded-lg">
+                        <span className="font-semibold">{primaryMetric}:</span>
+                        <span className="text-accent font-bold">
+                          {bestModel.metrics.find(m => m.metric_name === primaryMetric)?.metric_value.toFixed(4) || "—"}
+                        </span>
+                      </div>
+                    </div>
+                    {/* Reason for selection */}
+                    {recommendedInfo && (
+                      <p className="text-sm text-muted-foreground">
+                        <strong className="text-foreground">Por que este modelo:</strong>{" "}
+                        {recommendedInfo.reason}
+                      </p>
+                    )}
+                    {/* Quality status */}
+                    {qualityResult && (
+                      <div className="flex items-center gap-2 flex-wrap pt-2 border-t border-border/50">
+                        <Badge className={qualityResult.can_promote_to_production
+                          ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                          : "bg-amber-500/20 text-amber-600 border-amber-500/30 text-[10px]"}>
+                          {qualityResult.can_promote_to_production ? <CheckCircle className="w-3 h-3 mr-1" /> : <AlertTriangle className="w-3 h-3 mr-1" />}
+                          {qualityResult.can_promote_to_production ? "Apto para produção" : "Revisão necessária"}
+                        </Badge>
+                        <Badge className={qualityResult.metrics_valid
+                          ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                          : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                          {qualityResult.metrics_valid ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                          Métricas {qualityResult.metrics_valid ? "válidas" : "inválidas"}
+                        </Badge>
+                        <Badge className={qualityResult.dashboard_allowed
+                          ? "bg-accent/20 text-accent border-accent/30 text-[10px]"
+                          : "bg-destructive/20 text-destructive border-destructive/30 text-[10px]"}>
+                          {qualityResult.dashboard_allowed ? <CheckCircle className="w-3 h-3 mr-1" /> : <XCircle className="w-3 h-3 mr-1" />}
+                          Dashboard {qualityResult.dashboard_allowed ? "liberado" : "bloqueado"}
+                        </Badge>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </Card>
             )}
 
             {/* Zombie model warning */}
-            {!qualityResult.dashboard_allowed && (
+            {qualityResult && !qualityResult.dashboard_allowed && (
               <Alert className="bg-destructive/10 border-destructive/30">
                 <AlertTriangle className="w-4 h-4 text-destructive" />
                 <AlertDescription className="text-xs">
                   ⚠️ Modelo treinado, porém não atingiu qualidade mínima para produção. 
-                  O dashboard executivo está bloqueado. 
                   {qualityResult.dashboard_allowed_reason && (
                     <span className="font-medium"> Motivo: {qualityResult.dashboard_allowed_reason}.</span>
                   )}
@@ -1295,9 +1300,10 @@ const StepTraining = ({
               </Alert>
             )}
 
-            {qualityResult.training_warnings.length > 0 && qualityResult.dashboard_allowed && (
-              <div className="space-y-1">
-                {qualityResult.training_warnings.slice(0, 5).map((w, i) => (
+            {/* Training warnings */}
+            {qualityResult && qualityResult.training_warnings.length > 0 && qualityResult.dashboard_allowed && (
+              <div className="space-y-1 p-3 bg-amber-500/5 border border-amber-500/20 rounded-lg">
+                {qualityResult.training_warnings.slice(0, 3).map((w, i) => (
                   <p key={i} className="text-[11px] text-amber-600 flex items-start gap-1.5">
                     <AlertTriangle className="w-3 h-3 mt-0.5 flex-shrink-0" />
                     {w}
@@ -1305,84 +1311,40 @@ const StepTraining = ({
                 ))}
               </div>
             )}
+
+            {/* Comparação de modelos — collapsible */}
+            {models.length > 1 && (
+              <Collapsible>
+                <CollapsibleTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-between text-xs">
+                    <span className="flex items-center gap-1.5">
+                      <Activity className="w-3.5 h-3.5" />
+                      Comparar todos os modelos ({models.filter(m => m.status === "trained").length})
+                    </span>
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent className="pt-3">
+                  <ModelResultsTable 
+                    models={models} 
+                    problemType={projectData.problem_type} 
+                    bestModelId={bestModel?.id}
+                  />
+                </CollapsibleContent>
+              </Collapsible>
+            )}
           </div>
         )}
 
-        {/* Extended Metrics Report */}
-        {trainingComplete && qualityResult && extendedMetrics && (
-          <TrainingMetricsReport
-            metrics={qualityResult.metrics_summary}
-            baselineMetrics={qualityResult.baseline_summary}
-            extended={extendedMetrics}
-            leakageReport={leakageReport}
-            warnings={qualityResult.training_warnings}
-            improvementVsBaseline={qualityResult.improvement_vs_baseline}
-          />
-        )}
-
-        {/* Churn Simulator — only show when objective is churn/retention */}
-        {trainingComplete && extendedMetrics && projectData.problem_type === "classification" && 
-         contractSummary && (
-           contractSummary.objective === "churn" || 
-           contractSummary.objective === "retention" ||
-           contractSummary.objectiveLabel?.toLowerCase().includes("churn") ||
-           contractSummary.objectiveLabel?.toLowerCase().includes("retenção")
-         ) && (
-          <ChurnSimulator
-            extendedMetrics={extendedMetrics}
-            totalEntities={trainReadiness?.totalRows || projectData.total_rows || 0}
-          />
-        )}
-
-        {/* Training Results Panel — champion/challenger + calibration + threshold */}
-        {trainingComplete && qualityResult && (
-          <TrainingResultsPanel
-            projectId={projectData.id}
-            problemType={projectData.problem_type}
-            models={(qualityResult as any).ranking || [
-              { model_id: bestModel?.id || "", name: bestModel?.algorithm_name || "", score: bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel?.metrics.map(m => [m.metric_name, m.metric_value]) || []) },
-            ]}
-            champion={(qualityResult as any).champion || (bestModel ? { model_id: bestModel.id, name: bestModel.algorithm_name, score: bestModel.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel.metrics.map(m => [m.metric_name, m.metric_value])) } : null)}
-            calibration={(qualityResult as any).calibration || null}
-            recommendedThreshold={(qualityResult as any).recommended_threshold || null}
-            profile={(qualityResult as any).metrics_profile || null}
-            profileSource={(qualityResult as any).metrics_profile?.source || null}
-            canDeploy={qualityResult.can_promote_to_production}
-          />
-        )}
-
-        {/* Results section */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* BLOCO B — Interpretação (Lys Insights)                 */}
+        {/* ═══════════════════════════════════════════════════════ */}
         {trainingComplete && models.length > 0 && (
-          <div className="space-y-6">
-            {/* Smart Training Panel - Recommended Model */}
-            {recommendedInfo && (
-              <SmartTrainingPanel
-                recommendedModel={recommendedInfo}
-                problemType={projectData.problem_type}
-                detectedProblemType={detectedProblemType}
-                userProblemType={projectData.problem_type}
-              />
-            )}
-
-            {/* Model Comparison Table */}
-            <div className="space-y-4">
-              <div className="flex items-center gap-2">
-                <Trophy className="w-5 h-5 text-primary" />
-                <h3 className="font-semibold">{t("stepTraining.modelComparison")}</h3>
-              </div>
-              
-              <p className="text-sm text-muted-foreground">
-                {t("stepTraining.modelComparisonDesc", { metric: primaryMetric })}
-              </p>
-
-              <ModelResultsTable 
-                models={models} 
-                problemType={projectData.problem_type} 
-                bestModelId={bestModel?.id}
-              />
+          <div className="space-y-4">
+            <div className="flex items-center gap-2">
+              <Sparkles className="w-5 h-5 text-secondary" />
+              <h3 className="font-display font-semibold text-lg">Interpretação do Modelo</h3>
             </div>
 
-            {/* Unified AI Insights Section */}
             <UnifiedModelInsights
               projectId={projectData.id || ""}
               modelId={productionModel?.id || bestModel?.id}
@@ -1392,11 +1354,114 @@ const StepTraining = ({
               bestModelId={bestModel?.id}
               datasetRows={projectData.dataset_rows}
               targetColumn={projectData.target_column}
+              showDebug={false}
             />
-
-            {/* Pipeline Audit Panel (admin only) */}
-            <PipelineAuditPanel projectId={projectData.id || ""} pipelineStage="training" />
           </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════ */}
+        {/* BLOCO C — Técnico Avançado (colapsável)                */}
+        {/* ═══════════════════════════════════════════════════════ */}
+        {trainingComplete && models.length > 0 && (
+          <Collapsible>
+            <CollapsibleTrigger asChild>
+              <Button variant="ghost" size="sm" className="w-full justify-between text-xs text-muted-foreground border border-border/50">
+                <span className="flex items-center gap-1.5">
+                  <Settings2 className="w-3.5 h-3.5" />
+                  Detalhes Técnicos &amp; Auditoria
+                </span>
+              </Button>
+            </CollapsibleTrigger>
+            <CollapsibleContent className="pt-4 space-y-4">
+              {/* Quality Gate raw diagnostics */}
+              {qualityResult && (
+                <div className={`p-4 rounded-lg border space-y-3 ${
+                  qualityResult.model_quality_flag === "ok"
+                    ? "bg-accent/5 border-accent/20"
+                    : qualityResult.model_quality_flag === "weak_model"
+                    ? "bg-amber-500/5 border-amber-500/20"
+                    : "bg-destructive/5 border-destructive/20"
+                }`}>
+                  <p className="text-sm font-semibold">Diagnóstico de Qualidade</p>
+                  <div className="grid grid-cols-2 gap-3 text-xs">
+                    <div className="p-2 bg-muted/50 rounded">
+                      <p className="font-medium text-muted-foreground mb-1">Baseline</p>
+                      {Object.entries(qualityResult.baseline_summary).slice(0, 3).map(([k, v]) => (
+                        <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
+                      ))}
+                    </div>
+                    <div className="p-2 bg-muted/50 rounded">
+                      <p className="font-medium text-muted-foreground mb-1">Modelo</p>
+                      {Object.entries(qualityResult.metrics_summary).slice(0, 3).map(([k, v]) => (
+                        <p key={k}>{k}: {typeof v === "number" ? v.toFixed(4) : v}</p>
+                      ))}
+                    </div>
+                  </div>
+                  {qualityResult.train_diagnostics && (
+                    <div className="p-2 bg-muted/30 rounded text-[11px] space-y-0.5">
+                      <p className="font-medium text-muted-foreground mb-1">Diagnóstico do Treino</p>
+                      <p>Métrica primária: <span className="font-semibold">{qualityResult.train_diagnostics.primary_metric}</span> = {qualityResult.train_diagnostics.primary_metric_value_raw.toFixed(4)} (raw) / {qualityResult.train_diagnostics.primary_metric_value_clamped.toFixed(4)} (clamped)</p>
+                      <p>Baseline: {qualityResult.train_diagnostics.baseline_primary_metric.toFixed(4)}</p>
+                      <p className={qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "text-accent font-medium" : "text-destructive font-medium"}>
+                        Melhoria: {qualityResult.train_diagnostics.improvement_vs_baseline > 0 ? "+" : ""}{qualityResult.train_diagnostics.improvement_vs_baseline.toFixed(4)}
+                      </p>
+                      <p>Sanity: {qualityResult.train_diagnostics.sanity_checks_passed ? "✅ OK" : `❌ ${qualityResult.train_diagnostics.sanity_fail_reasons.join("; ")}`}</p>
+                      {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.length > 0 && (
+                        <p className="text-destructive">Métricas inválidas: {qualityResult.train_diagnostics.raw_metrics_invalid_reasons.join("; ")}</p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Extended Metrics Report (confusion matrix, threshold curve, etc) */}
+              {qualityResult && extendedMetrics && (
+                <TrainingMetricsReport
+                  metrics={qualityResult.metrics_summary}
+                  baselineMetrics={qualityResult.baseline_summary}
+                  extended={extendedMetrics}
+                  leakageReport={leakageReport}
+                  warnings={qualityResult.training_warnings}
+                  improvementVsBaseline={qualityResult.improvement_vs_baseline}
+                />
+              )}
+
+              {/* Training Results Panel — champion/challenger technical view */}
+              {qualityResult && (
+                <TrainingResultsPanel
+                  projectId={projectData.id}
+                  problemType={projectData.problem_type}
+                  models={(qualityResult as any).ranking || [
+                    { model_id: bestModel?.id || "", name: bestModel?.algorithm_name || "", score: bestModel?.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel?.metrics.map(m => [m.metric_name, m.metric_value]) || []) },
+                  ]}
+                  champion={(qualityResult as any).champion || (bestModel ? { model_id: bestModel.id, name: bestModel.algorithm_name, score: bestModel.metrics.find(m => m.metric_name === primaryMetric)?.metric_value || 0, sanity: true, is_champion: true, metrics: Object.fromEntries(bestModel.metrics.map(m => [m.metric_name, m.metric_value])) } : null)}
+                  calibration={(qualityResult as any).calibration || null}
+                  recommendedThreshold={(qualityResult as any).recommended_threshold || null}
+                  profile={(qualityResult as any).metrics_profile || null}
+                  profileSource={(qualityResult as any).metrics_profile?.source || null}
+                  canDeploy={qualityResult.can_promote_to_production}
+                />
+              )}
+
+              {/* Churn Simulator — only in advanced block when objective is churn/retention */}
+              {extendedMetrics && projectData.problem_type === "classification" && 
+               contractSummary && (
+                 contractSummary.objective === "churn" || 
+                 contractSummary.objective === "retention" ||
+                 contractSummary.objectiveLabel?.toLowerCase().includes("churn") ||
+                 contractSummary.objectiveLabel?.toLowerCase().includes("retenção")
+               ) && (
+                <ChurnSimulator
+                  extendedMetrics={extendedMetrics}
+                  totalEntities={trainReadiness?.totalRows || projectData.total_rows || 0}
+                />
+              )}
+
+              {/* Pipeline Audit Panel */}
+              <PipelineAuditPanel projectId={projectData.id || ""} pipelineStage="training" />
+
+            </CollapsibleContent>
+          </Collapsible>
         )}
 
         {/* Actions */}
