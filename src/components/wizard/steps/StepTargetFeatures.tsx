@@ -952,14 +952,20 @@ const StepTargetFeatures = ({
     });
 
     if (saved) {
-      // Persist entity_key to project_settings (separate from model selection)
+      // Persist entity_key and time_anchor_column to project_settings (separate from model selection)
+      const settingsUpdate: Record<string, any> = { entity_key: entityKey };
+      // Also persist time_anchor if known from SSOT or contract hints
+      const resolvedTimeAnchor = ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+      if (resolvedTimeAnchor) {
+        settingsUpdate.time_anchor_column = resolvedTimeAnchor;
+      }
       supabase
         .from("project_settings")
-        .update({ entity_key: entityKey } as any)
+        .update(settingsUpdate as any)
         .eq("project_id", projectData.id)
         .then(({ error }) => {
-          if (error) console.error("[StepTargetFeatures] Failed to persist entity_key:", error);
-          else console.log(`[StepTargetFeatures] entity_key persisted: ${entityKey}`);
+          if (error) console.error("[StepTargetFeatures] Failed to persist entity_key/time_anchor:", error);
+          else console.log(`[StepTargetFeatures] entity_key=${entityKey}, time_anchor=${resolvedTimeAnchor} persisted`);
         });
 
       // Fire observability event for entity_key selection
