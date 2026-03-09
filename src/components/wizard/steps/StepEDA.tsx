@@ -8,8 +8,10 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../WizardContainer";
 import EDADisplay from "@/components/eda/EDADisplay";
 import TDEProfileCard from "./TDEProfileCard";
+import LysSynthesisPanel from "./LysSynthesisPanel";
 import { supabase } from "@/integrations/supabase/client";
 import { trackEvent } from "@/lib/platformTracking";
+import { useLysSynthesis } from "@/hooks/useLysSynthesis";
 
 interface StepEDAProps {
   projectData: ProjectData;
