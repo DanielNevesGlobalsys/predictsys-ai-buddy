@@ -196,14 +196,7 @@ export default function IntentTargetSummary({
               </p>
             </div>
             {!isApplied && onApplyTarget && (
-              <Button size="sm" onClick={() => {
-                onApplyTarget(main);
-                if (resolution.suggested_entity_key) onApplyEntityKey?.(resolution.suggested_entity_key);
-                if (resolution.suggested_time_anchor) onApplyTimeAnchor?.(resolution.suggested_time_anchor);
-                if (resolution.suggested_features.length > 0) {
-                  onApplyFeatures?.(resolution.suggested_features, resolution.blocked_features);
-                }
-              }}>
+              <Button size="sm" disabled={persisting} onClick={() => applyFullSuggestion(main)}>
                 <Zap className="w-3 h-3 mr-1" /> Aplicar sugestão
               </Button>
             )}
