@@ -1428,6 +1428,8 @@ const StepTraining = ({
                   leakageReport={leakageReport}
                   warnings={qualityResult.training_warnings}
                   improvementVsBaseline={qualityResult.improvement_vs_baseline}
+                  problemType={projectData.problem_type}
+                  primaryMetricName={primaryMetric}
                 />
               )}
 
