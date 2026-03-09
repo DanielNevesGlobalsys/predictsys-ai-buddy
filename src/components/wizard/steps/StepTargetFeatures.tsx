@@ -112,6 +112,10 @@ const StepTargetFeatures = ({
   // Schema SSOT — consolidated column list
   const schemaSSOT = useProjectSchemaSSOT(projectData.id);
 
+  // Lys synthesis — structured recommendations from EDA + TDE + Intent
+  const lysSynthesis = useLysSynthesis(projectData.id);
+  const lysAppliedRef = useRef(false);
+
   // Unified modeling state from backend
   const [modelingState, setModelingState] = useState<{
     eda: { status: string };
