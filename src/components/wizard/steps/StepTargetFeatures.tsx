@@ -42,6 +42,10 @@ import TargetQualityCard from "./TargetQualityCard";
 import WeakLabelBuilderCard from "./WeakLabelBuilderCard";
 import HumanLabelingCard from "./HumanLabelingCard";
 import TargetLifecycleCard from "./TargetLifecycleCard";
+import TargetBusinessContext from "./TargetBusinessContext";
+import TargetExpertPanel from "./TargetExpertPanel";
+import TargetTrainingReadiness from "./TargetTrainingReadiness";
+import TargetLysSuggestion from "./TargetLysSuggestion";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference } from "@/hooks/useProblemInference";
@@ -1067,54 +1071,91 @@ const StepTargetFeatures = ({
     { label: "Modelo pronto", ok: ds.modelReady, detail: ds.modelReady ? "OK" : (ds.fallback?.blockedReasonModel || "BLOCKED") },
   ];
 
+  // Readiness checks for Block 5
+  const readinessChecks = [
+    { label: "Dataset ativo", ok: !!(modelingState?.active_dataset || ds.hasManifest), detail: modelingState?.active_dataset ? `dataset ok` : ds.isVirtual ? "virtual" : ds.fallback?.manifestId ? "manifest ok" : "Sem manifest" },
+    { label: "Linhas consolidadas", ok: ds.rowCount > 0, detail: `${ds.rowCount.toLocaleString()} linhas` },
+    { label: "Alvo definido", ok: !!targetColumn, detail: targetColumn || "—" },
+    { label: "Entidade definida", ok: !!entityKey, detail: entityKey || "—" },
+    { label: "Features selecionadas", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} features` },
+    { label: "EDA processado", ok: unifiedEdaOk, detail: unifiedEdaOk ? "OK" : "Pendente" },
+  ];
+
   return (
     <Card className="bg-gradient-card shadow-card p-8">
       <div className="space-y-6">
-        <div className="text-center mb-8">
-          <div className="w-16 h-16 bg-gradient-primary rounded-2xl flex items-center justify-center mx-auto mb-4">
-            <Target className="w-8 h-8 text-primary-foreground" />
+        {/* Header */}
+        <div className="text-center mb-4">
+          <div className="w-14 h-14 bg-gradient-primary rounded-2xl flex items-center justify-center mx-auto mb-3">
+            <Target className="w-7 h-7 text-primary-foreground" />
           </div>
-          <h2 className="text-2xl font-display font-bold mb-2">
+          <h2 className="text-2xl font-display font-bold mb-1">
             {t("stepVariables.title")}
           </h2>
-          <p className="text-muted-foreground">
-            {t("stepVariables.subtitle")}
+          <p className="text-sm text-muted-foreground">
+            Configure o alvo e as variáveis com base no objetivo do seu projeto.
           </p>
         </div>
 
-        {/* ═══ Advanced Mode Toggle ═══ */}
-        <div className="flex items-center justify-between p-3 bg-muted/30 rounded-lg border border-border/50">
-          <div className="flex items-center gap-2">
-            <Settings2 className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm font-medium">Modo avançado</span>
-            {advancedMode && <Badge className="bg-accent/20 text-accent border-accent/30 text-[9px]">Ativo</Badge>}
+        {/* Hidden: load column inference data for target selector enrichment */}
+        {projectData.id && !advancedMode && (
+          <div className="hidden">
+            <ColumnInferenceMatrix
+              projectId={projectData.id}
+              onDataLoaded={(data) => {
+                setColumnInference(data);
+                const map = new Map<string, ColumnInferenceRow>();
+                data.forEach((d) => map.set(d.column_name, d));
+                columnInferenceMap.current = map;
+              }}
+            />
           </div>
-          <Switch checked={advancedMode} onCheckedChange={handleAdvancedModeToggle} />
-        </div>
-
-        {/* ═══ Business Guidance Panel with Suggestion Cards ═══ */}
-        {businessContract && (
-          <BusinessGuidancePanel
-            contract={businessContract}
-            objectiveLabel={
-              INDUSTRY_OBJECTIVE_MATRIX[businessContract.industry]?.objectives.find(
-                o => o.key === businessContract.objective
-              )?.label_pt || businessContract.objective
-            }
-            industryLabel={
-              businessContract.industry === "retail" ? "Varejo" :
-              businessContract.industry === "health" ? "Saúde" :
-              businessContract.industry === "finance" ? "Finanças" :
-              businessContract.industry === "education" ? "Educação" :
-              businessContract.industry === "logistics" ? "Logística" : "Geral"
-            }
-            schemaColumns={columns.map(c => c.name)}
-            advancedMode={advancedMode}
-            onApplySuggestion={handleApplySuggestion}
-          />
         )}
 
-        {/* ═══ Intent-Driven Target Resolution ═══ */}
+        {/* ═══ BLOCK 1: Problema de negócio ═══ */}
+        <TargetBusinessContext
+          contract={businessContract}
+          industry={businessIndustry}
+          objective={businessObjective}
+          problemType={inferredProblemType || effectiveProblemType}
+          industryLabel={
+            businessContract?.industry === "retail" ? "Varejo" :
+            businessContract?.industry === "health" ? "Saúde" :
+            businessContract?.industry === "finance" ? "Finanças" :
+            businessContract?.industry === "education" ? "Educação" :
+            businessContract?.industry === "logistics" ? "Logística" : 
+            businessIndustry || "—"
+          }
+          objectiveLabel={
+            businessContract
+              ? (INDUSTRY_OBJECTIVE_MATRIX[businessContract.industry]?.objectives.find(
+                  o => o.key === businessContract.objective
+                )?.label_pt || businessContract.objective)
+              : businessObjective || "—"
+          }
+        />
+
+        {/* Contract missing warning */}
+        {contractMissing && !businessContract && !projectData.business_objective && !modelingState?.project?.business_objective && (
+          <Alert className="border-amber-500/30 bg-amber-500/5">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <AlertDescription className="text-sm">
+              Objetivo de negócio não definido — volte na Etapa 1 e preencha o objetivo para receber orientações de alvo.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Segmentation mode — no target needed */}
+        {isSegmentation && (
+          <Alert className="border-primary/30 bg-primary/5">
+            <Info className="w-4 h-4 text-primary" />
+            <AlertDescription className="text-sm">
+              Para <strong>segmentação</strong>, não existe "alvo". O sistema agrupa perfis parecidos automaticamente. Foque na seleção do Entity Key e das features.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* ═══ BLOCK 2: Target sugerido (Intent-Driven) ═══ */}
         {projectData.id && !isSegmentation && (
           <IntentTargetSummary
             projectId={projectData.id}
@@ -1144,102 +1185,21 @@ const StepTargetFeatures = ({
           />
         )}
 
-        {/* Contract missing warning */}
-        {contractMissing && !businessContract && !projectData.business_objective && !modelingState?.project?.business_objective && (
-          <Alert className="border-amber-500/30 bg-amber-500/5">
-            <AlertTriangle className="w-4 h-4 text-amber-500" />
-            <AlertDescription className="text-sm">
-              Objetivo de negócio não definido — volte na Etapa 1 e preencha o objetivo para receber orientações de alvo.
-            </AlertDescription>
-          </Alert>
-        )}
+        {/* Lys suggestion block */}
+        <TargetLysSuggestion
+          synthesis={lysSynthesis}
+          loaded={lysSynthesis.loaded}
+        />
 
-        {/* Segmentation mode — no target needed */}
-        {isSegmentation && (
-          <Alert className="border-primary/30 bg-primary/5">
-            <Info className="w-4 h-4 text-primary" />
-            <AlertDescription className="text-sm">
-              Para <strong>segmentação</strong>, não existe "alvo". O sistema agrupa perfis parecidos automaticamente. Foque na seleção do Entity Key e das features.
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* ID blocked alert (PROMPT 11) */}
+        {/* ID blocked alert */}
         {blockedIdTarget && (
           <Alert className="border-destructive/30 bg-destructive/5">
             <Ban className="w-4 h-4 text-destructive" />
             <AlertDescription className="text-sm">
-              <strong>Esse campo parece ser um identificador</strong> ("{blockedIdTarget}"). Identificadores não são um bom alvo — eles não contêm informação preditiva.
+              <strong>Esse campo parece ser um identificador</strong> ("{blockedIdTarget}"). Identificadores não contêm informação preditiva.
               <div className="mt-2 flex gap-2">
                 <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setBlockedIdTarget(null)}>
-                  Entendi, quero escolher outro alvo
-                </Button>
-                {!advancedMode && (
-                  <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => { handleAdvancedModeToggle(true); setBlockedIdTarget(null); }}>
-                    Ativar modo avançado
-                  </Button>
-                )}
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
-
-        {/* State→Event conversion panel (PROMPT 11) */}
-        {showStateToEvent && stateToEventCol && (
-          <Alert className="border-primary/30 bg-primary/5">
-            <AlertTriangle className="w-4 h-4 text-primary" />
-            <AlertDescription className="text-sm space-y-2">
-              <p>
-                Você escolheu <strong>"{stateToEventCol}"</strong>, que é um campo de estado.
-                Para previsão, o ideal é prever uma <strong>mudança</strong> nesse estado dentro de uma janela de tempo.
-              </p>
-              <div className="flex flex-wrap gap-2 mt-2">
-                <Button size="sm" variant="default" className="h-7 text-xs" onClick={async () => {
-                  const plan = {
-                    type: "state_to_event",
-                    base_column: stateToEventCol,
-                    window_days: 30,
-                    anchor_time_col: businessContract?.time_anchor_candidates?.[0] || null,
-                    event_definition: "mudou_status_30d",
-                  };
-                  setShowStateToEvent(false);
-                  // Persist derived_target_plan
-                  if (projectData.id) {
-                    await supabase.from("project_settings").update({ derived_target_plan: plan as any } as any).eq("project_id", projectData.id);
-                    trackEvent({
-                      event_type: "project_created",
-                      project_id: projectData.id,
-                      metadata: { sub_event: "derived_target_plan_set", plan },
-                    });
-                  }
-                  // Switch to assisted build mode
-                  document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
-                }}>
-                  Criar alvo: mudou de status em 30 dias
-                </Button>
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={async () => {
-                  const plan = {
-                    type: "state_to_event",
-                    base_column: stateToEventCol,
-                    window_days: 30,
-                    anchor_time_col: businessContract?.time_anchor_candidates?.[0] || null,
-                    event_definition: "atraso_30d",
-                  };
-                  setShowStateToEvent(false);
-                  if (projectData.id) {
-                    await supabase.from("project_settings").update({ derived_target_plan: plan as any } as any).eq("project_id", projectData.id);
-                    trackEvent({
-                      event_type: "project_created",
-                      project_id: projectData.id,
-                      metadata: { sub_event: "derived_target_plan_set", plan },
-                    });
-                  }
-                  document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
-                }}>
-                  Criar alvo: ficou inadimplente em 30 dias
-                </Button>
-                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => setShowStateToEvent(false)}>
-                  Usar como está (manual)
+                  Escolher outro alvo
                 </Button>
               </div>
             </AlertDescription>
@@ -1260,292 +1220,17 @@ const StepTargetFeatures = ({
             <Ban className="w-4 h-4 text-destructive" />
             <AlertDescription className="text-sm text-destructive">
               {leakageBlock}
-              {!advancedMode && <span className="block text-xs text-muted-foreground mt-1">Ative o "Modo avançado" para permitir essa escolha.</span>}
             </AlertDescription>
           </Alert>
         )}
 
-        {ds.loaded && ds.rowCount > 0 && (
-          <div className={`p-4 rounded-lg border space-y-3 ${
-            hasModelWarning
-              ? "bg-amber-500/5 border-amber-500/30"
-              : "bg-primary/5 border-primary/20"
-          }`}>
-            <div className="flex items-center justify-between flex-wrap gap-2">
-              <div className="flex items-center gap-3">
-                <Database className={`w-5 h-5 ${hasModelWarning ? "text-amber-500" : "text-primary"}`} />
-                <div>
-                  <p className="text-sm font-semibold">
-                    Coverage do Consolidado
-                    {ds.isVirtual && <Badge variant="outline" className="ml-2 text-[10px]">virtual</Badge>}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    {ds.rowCount.toLocaleString()} linhas • {ds.colCount} colunas
-                    {!ds.isVirtual && ds.fallback?.totalFiles ? ` • ${ds.fallback.totalFiles} arquivo(s)` : ""}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                {unifiedEdaOk ? (
-                  <Badge className="bg-accent/20 text-accent border-accent/30">EDA: OK</Badge>
-                ) : (
-                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    EDA: {modelingState?.eda?.status === "blocked" ? "Pendente" : "Verificando…"}
-                  </Badge>
-                )}
-                {ds.modelReady ? (
-                  <Badge className="bg-accent/20 text-accent border-accent/30">MODEL: OK</Badge>
-                ) : (
-                  <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30">
-                    <AlertTriangle className="w-3 h-3 mr-1" />
-                    MODEL: WARN
-                  </Badge>
-                )}
-              </div>
-            </div>
-
-            {/* Coverage stats */}
-            {coverageStats && (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                <div className="p-2 bg-muted/30 rounded text-center">
-                  <p className={`text-lg font-bold ${coverageStats.critical_columns_pct > 30 ? "text-destructive" : coverageStats.critical_columns_pct > 10 ? "text-amber-500" : ""}`}>
-                    {coverageStats.critical_columns_pct}%
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Colunas 🔴 (&gt;50% NULL)</p>
-                </div>
-                <div className="p-2 bg-muted/30 rounded text-center">
-                  <p className={`text-lg font-bold ${coverageStats.global_null_pct > 30 ? "text-destructive" : coverageStats.global_null_pct > 15 ? "text-amber-500" : ""}`}>
-                    {coverageStats.global_null_pct}%
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">Nulos global</p>
-                </div>
-                <div className="p-2 bg-muted/30 rounded text-center col-span-2">
-                  <div className="flex flex-wrap gap-1 justify-center">
-                    {(Array.isArray(coverageStats.file_contribution) ? coverageStats.file_contribution : []).map((fc, i) => (
-                      <Badge key={i} variant={fc.contribution_type === "data" ? "default" : "outline"} className="text-[10px]">
-                        {fc.file.length > 15 ? fc.file.slice(0, 15) + "…" : fc.file}
-                        {fc.contribution_type === "mostly_null" && " ⚠️"}
-                      </Badge>
-                    ))}
-                  </div>
-                  <p className="text-[10px] text-muted-foreground mt-1">Contribuição por arquivo</p>
-                </div>
-              </div>
-            )}
-
-            {/* Model warning */}
-            {hasModelWarning && ds.fallback?.blockedReasonModel && (
-              <div className="flex items-start gap-2 text-xs text-amber-600 bg-amber-500/5 p-2 rounded border border-amber-500/20">
-                <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-                <span>
-                  <strong>Atenção:</strong> {ds.fallback.blockedReasonModel}
-                  {" "}Você pode configurar target e features, mas o treino pode ser bloqueado até os dados serem corrigidos.
-                </span>
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Schema SSOT divergence info */}
-        {schemaSSOT.loaded && schemaSSOT.schema_columns_count > 0 && (
-          <div className="flex items-center gap-2 flex-wrap">
-            <Badge variant="outline" className="text-xs gap-1">
-              <Database className="w-3 h-3" />
-              Colunas (schema): {schemaSSOT.schema_columns_count}
-            </Badge>
-            {schemaSSOT.detected_columns_count != null && schemaSSOT.detected_columns_count !== schemaSSOT.schema_columns_count && (
-              <TooltipProvider delayDuration={100}>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <Badge className="bg-amber-500/20 text-amber-600 border-amber-500/30 text-xs gap-1 cursor-help">
-                      <AlertTriangle className="w-3 h-3" />
-                      Amostra: {schemaSSOT.detected_columns_count} colunas
-                    </Badge>
-                  </TooltipTrigger>
-                  <TooltipContent className="max-w-xs">
-                    <p className="text-xs">A amostra é parcial (arquivo particionado). O treino usa o schema consolidado com {schemaSSOT.schema_columns_count} colunas.</p>
-                  </TooltipContent>
-                </Tooltip>
-              </TooltipProvider>
-            )}
-            {schemaSSOT.source !== "active_schema_json" && schemaSSOT.source !== "unknown" && (
-              <Badge variant="outline" className="text-xs text-muted-foreground border-border gap-1">
-                <Info className="w-3 h-3" />
-                Schema: {schemaSSOT.source}
-              </Badge>
-            )}
-          </div>
-        )}
-
-
-        {/* ═══ Target Mode Panels (filtered by contract) ═══ */}
-        {(() => {
-          const allowed = businessContract?.target_modes_allowed;
-          const showAll = advancedMode || !allowed || allowed.length === 0;
-          const canAssisted = showAll || allowed?.includes("assisted_build");
-          const canQuickLabel = showAll || allowed?.includes("quick_label");
-          const canManual = showAll || allowed?.includes("manual");
-
-          return (
-            <>
-              {/* ═══ Unified Strategy Panel (assisted_build) ═══ */}
-              {projectData.id && canAssisted && !isSegmentation && (
-                <div id="target-builder-panel">
-                  <TargetStrategyPanel
-                    projectId={projectData.id}
-                    industry={intentInfo.industry}
-                    onBuilderReady={(builderId, templateId, templateParams) => {
-                      setLabelBuilderId(builderId);
-                      setLabelTemplateId(templateId);
-                      setTargetColumn("label");
-                      setTargetSource("label_builder");
-                      setSelectedTemplateId(templateId);
-                      setAppliedTargetColumn("label");
-                      const tmpl = LABEL_TEMPLATES[templateId];
-                      setInferredProblemType(tmpl?.problem_type || "classification");
-                      autoPopulateFeatures("label");
-                      setPreflightRefreshKey(k => k + 1);
-                      persistTargetSourceToSSOT("label_builder", templateId);
-                      // Track mode selection
-                      trackEvent({
-                        event_type: "project_created",
-                        project_id: projectData.id,
-                        metadata: { sub_event: "target_mode_selected", mode: "assisted_build", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
-                      });
-                    }}
-                  />
-                </div>
-              )}
-
-              {/* Weak Supervision / Quick Label (Etapa E) */}
-              {projectData.id && canQuickLabel && !isSegmentation && (
-                <WeakLabelBuilderCard
-                  projectId={projectData.id}
-                  onActivated={() => {
-                    setTargetColumn("label");
-                    setTargetSource("weak_supervision");
-                    setSelectedTemplateId("weak_supervision_assisted");
-                    setAppliedTargetColumn("label");
-                    setInferredProblemType("classification");
-                    autoPopulateFeatures("label");
-                    setPreflightRefreshKey(k => k + 1);
-                    persistTargetSourceToSSOT("weak_supervision", "weak_supervision_assisted");
-                    trackEvent({
-                      event_type: "project_created",
-                      project_id: projectData.id,
-                      metadata: { sub_event: "target_mode_selected", mode: "quick_label", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
-                    });
-                  }}
-                />
-              )}
-
-              {/* Human Labeling Card (Etapa F — manual) */}
-              {projectData.id && canManual && !isSegmentation && (
-                <HumanLabelingCard
-                  projectId={projectData.id}
-                  onActivated={() => {
-                    setTargetColumn("label");
-                    setTargetSource("human_labeling");
-                    setSelectedTemplateId("human_labeling_assisted");
-                    setAppliedTargetColumn("label");
-                    setInferredProblemType("classification");
-                    autoPopulateFeatures("label");
-                    setPreflightRefreshKey(k => k + 1);
-                    persistTargetSourceToSSOT("human_labeling", "human_labeling_assisted");
-                    trackEvent({
-                      event_type: "project_created",
-                      project_id: projectData.id,
-                      metadata: { sub_event: "target_mode_selected", mode: "manual", advanced: advancedMode, objective: businessObjective, industry: businessIndustry },
-                    });
-                  }}
-                />
-              )}
-            </>
-          );
-        })()}
-
-        {/* Column Inference Matrix (collapsible) */}
-        {projectData.id && (
-          <ColumnInferenceMatrix
-            projectId={projectData.id}
-            onDataLoaded={(data) => {
-              setColumnInference(data);
-              const map = new Map<string, ColumnInferenceRow>();
-              data.forEach((d) => map.set(d.column_name, d));
-              columnInferenceMap.current = map;
-            }}
-          />
-        )}
-
-        {/* Blocked target candidates */}
-        {columnInference.length > 0 && (
-          <BlockedTargetCandidates columnInference={columnInference} />
-        )}
-
-        {/* Inferred problem type badge */}
-        {inferredProblemType && (
-          <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
-            <Info className="w-4 h-4 text-accent" />
-            <span className="text-sm">
-              {t("inference.inferredType", "Tipo detectado pela Lys")}:{" "}
-              <strong>
-                {inferredProblemType === "classification"
-                  ? t("project.classification", "Classificação")
-                  : t("project.regression", "Regressão")}
-              </strong>
-            </span>
-          </div>
-        )}
-
-        {/* Regression / categorical target mismatch warning */}
-        {inferredProblemType === "regression" && targetColumn && (() => {
-          const colInfo = columns.find(c => c.name === targetColumn);
-          const colInf = columnInferenceMap.current.get(targetColumn);
-          const isCategorical = colInfo?.type === "categórico" || colInfo?.type === "text" || colInf?.inferred_type === "categorical";
-          const isBinary = colInf && colInf.semantic_role?.includes("EVENTO");
-          if (isCategorical || isBinary) {
-            return (
-              <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
-                <AlertTriangle className="w-4 h-4 text-destructive flex-shrink-0 mt-0.5" />
-                <div className="text-sm">
-                  <p className="font-medium text-destructive">Tipo de problema incompatível</p>
-                  <p className="text-muted-foreground">
-                    O alvo "<strong>{targetColumn}</strong>" parece ser categórico/binário, mas o tipo selecionado é Regressão.
-                    Considere trocar para <strong>Classificação</strong> ou escolher um alvo numérico contínuo.
-                  </p>
-                </div>
-              </div>
-            );
-          }
-          return null;
-        })()}
-
-        {/* Target Quality Card */}
-        {projectData.id && targetColumn && appliedTargetColumn && (
-          <div id="target-quality-card">
-          <TargetQualityCard
-            projectId={projectData.id}
-            refreshKey={preflightRefreshKey}
-          />
-          </div>
-        )}
-
-        {/* Target Lifecycle Card (Etapa G) */}
-        {projectData.id && targetColumn && appliedTargetColumn && (
-          <TargetLifecycleCard
-            projectId={projectData.id}
-            refreshKey={preflightRefreshKey}
-          />
-        )}
-
-        {/* Target source badge */}
+        {/* Target source badge (when using label builder / weak / human) */}
         {targetSource === "label_builder" && targetColumn === "label" && (
           <div className="flex items-center gap-2 p-3 bg-accent/10 border border-accent/20 rounded-lg">
             <Sparkles className="w-4 h-4 text-accent" />
             <div className="flex-1">
               <p className="text-sm font-medium">
-                <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] mr-2">Alvo gerado automaticamente</Badge>
+                <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] mr-2">Alvo gerado</Badge>
                 <strong>label</strong>
               </p>
               {selectedTemplateId && LABEL_TEMPLATES[selectedTemplateId] && (
@@ -1554,17 +1239,8 @@ const StepTargetFeatures = ({
                 </p>
               )}
             </div>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs h-7"
-              onClick={() => {
-                setTargetSource("manual");
-                setTargetColumn("");
-                setAppliedTargetColumn(null);
-              }}
-            >
-              Trocar para manual
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => { setTargetSource("manual"); setTargetColumn(""); setAppliedTargetColumn(null); }}>
+              Trocar
             </Button>
           </div>
         )}
@@ -1578,7 +1254,7 @@ const StepTargetFeatures = ({
               </p>
             </div>
             <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => { setTargetSource("manual"); setTargetColumn(""); setAppliedTargetColumn(null); }}>
-              Trocar para manual
+              Trocar
             </Button>
           </div>
         )}
@@ -1587,28 +1263,18 @@ const StepTargetFeatures = ({
             <Sparkles className="w-4 h-4 text-primary" />
             <div className="flex-1">
               <p className="text-sm font-medium">
-                <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] mr-2">Alvo definido manualmente com rotulagem</Badge>
+                <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] mr-2">Alvo por rotulagem</Badge>
                 <strong>label</strong>
               </p>
             </div>
             <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => { setTargetSource("manual"); setTargetColumn(""); setAppliedTargetColumn(null); }}>
-              Trocar para manual
+              Trocar
             </Button>
           </div>
         )}
 
-        {/* Target selection */}
-        <div className="space-y-4">
-          <div className="flex items-start gap-3 p-4 bg-primary/5 border border-primary/20 rounded-lg">
-            <Info className="w-5 h-5 text-primary flex-shrink-0 mt-0.5" />
-            <div className="text-sm">
-              <p className="font-medium text-primary mb-1">{t("stepVariables.whatIsTarget")}</p>
-              <p className="text-muted-foreground">
-                {t("stepVariables.whatIsTargetDesc")}
-              </p>
-            </div>
-          </div>
-
+        {/* Target selection (manual) */}
+        {targetSource === "manual" && (
           <div className="space-y-2">
             <Label className="text-base font-medium flex items-center gap-2">
               <Target className="w-4 h-4 text-primary" />
@@ -1619,14 +1285,11 @@ const StepTargetFeatures = ({
                 <SelectValue placeholder={t("stepVariables.selectTarget")} />
               </SelectTrigger>
               <SelectContent className="bg-popover border border-border shadow-lg z-50">
-                {/* Virtual "label" option for label builder */}
-                {(targetSource === "label_builder" || labelBuilderId) && (
+                {labelBuilderId && (
                   <SelectItem value="label">
                     <div className="flex items-center gap-2">
                       <span className="font-medium">label</span>
-                      <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">
-                        Target gerado automaticamente
-                      </Badge>
+                      <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">gerado</Badge>
                     </div>
                   </SelectItem>
                 )}
@@ -1651,9 +1314,7 @@ const StepTargetFeatures = ({
                           {col.type}
                         </span>
                         {col.isFeature && (
-                          <Badge variant="secondary" className="text-[10px] py-0">
-                            {col.featureLabel?.includes("materializado") ? "derivado ✓" : "derivado"}
-                          </Badge>
+                          <Badge variant="secondary" className="text-[10px] py-0">derivado</Badge>
                         )}
                         {roleBadge && ROLE_SHORT[roleBadge] && (
                           <Badge
@@ -1683,78 +1344,105 @@ const StepTargetFeatures = ({
                 })}
               </SelectContent>
             </Select>
-            <p className="text-sm text-muted-foreground">
-              {effectiveProblemType === "classification"
-                ? t("stepVariables.classificationHint")
-                : t("stepVariables.regressionHint")}
-            </p>
+          </div>
+        )}
+
+        {/* State→Event conversion panel */}
+        {showStateToEvent && stateToEventCol && (
+          <Alert className="border-primary/30 bg-primary/5">
+            <AlertTriangle className="w-4 h-4 text-primary" />
+            <AlertDescription className="text-sm space-y-2">
+              <p>
+                <strong>"{stateToEventCol}"</strong> é um campo de estado. Para previsão, o ideal é prever uma <strong>mudança</strong> nesse estado.
+              </p>
+              <div className="flex flex-wrap gap-2 mt-2">
+                <Button size="sm" variant="default" className="h-7 text-xs" onClick={async () => {
+                  const plan = { type: "state_to_event", base_column: stateToEventCol, window_days: 30, anchor_time_col: businessContract?.time_anchor_candidates?.[0] || null, event_definition: "mudou_status_30d" };
+                  setShowStateToEvent(false);
+                  if (projectData.id) {
+                    await supabase.from("project_settings").update({ derived_target_plan: plan as any } as any).eq("project_id", projectData.id);
+                  }
+                  document.getElementById("target-builder-panel")?.scrollIntoView({ behavior: "smooth" });
+                }}>
+                  Criar alvo: mudou em 30 dias
+                </Button>
+                <Button size="sm" variant="ghost" className="h-7 text-xs text-muted-foreground" onClick={() => setShowStateToEvent(false)}>
+                  Usar como está
+                </Button>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* ═══ BLOCK 3: Entity Key e Tempo ═══ */}
+        <div className="p-5 rounded-xl border border-border bg-muted/10 space-y-4">
+          <div className="flex items-center gap-2">
+            <KeyRound className="w-5 h-5 text-secondary" />
+            <h3 className="text-base font-semibold">Entidade e tempo</h3>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {/* Entity Key */}
+            <div className="space-y-2">
+              <Label className="text-sm font-medium flex items-center gap-2">
+                Entity Key
+                <Badge variant="destructive" className="text-[10px] py-0">obrigatório</Badge>
+              </Label>
+              <Select value={entityKey} onValueChange={setEntityKey}>
+                <SelectTrigger className={`bg-background ${!entityKey ? "border-destructive/50" : ""}`}>
+                  <SelectValue placeholder="Selecione a entidade..." />
+                </SelectTrigger>
+                <SelectContent className="bg-popover border border-border shadow-lg z-50">
+                  {columns.map((col) => {
+                    const inf = columnInferenceMap.current.get(col.name);
+                    const isId = inf?.semantic_role === "ID_TECNICO";
+                    return (
+                      <SelectItem key={col.name} value={col.name}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{col.name}</span>
+                          <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">{col.type}</span>
+                          {isId && <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">ID</Badge>}
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
+              {!entityKey && targetColumn && (
+                <p className="text-xs text-destructive flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3" />
+                  Selecione a Entity Key para poder avançar.
+                </p>
+              )}
+            </div>
+
+            {/* Time Anchor (info only) */}
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">Coluna temporal</Label>
+              <div className="p-3 bg-background rounded-lg border border-border/50 text-sm">
+                {ssot.time_anchor_column ? (
+                  <div className="flex items-center gap-2">
+                    <CheckCircle className="w-4 h-4 text-accent" />
+                    <span className="font-medium">{ssot.time_anchor_column}</span>
+                  </div>
+                ) : contractHints?.time_anchor_column ? (
+                  <div className="flex items-center gap-2">
+                    <Info className="w-4 h-4 text-muted-foreground" />
+                    <span className="text-muted-foreground">Sugerida: {contractHints.time_anchor_column}</span>
+                  </div>
+                ) : (
+                  <span className="text-muted-foreground">Não detectada</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
 
-        {/* Entity Key selection (mandatory) */}
-        <div className="space-y-2">
-          <Label className="text-base font-medium flex items-center gap-2">
-            <KeyRound className="w-4 h-4 text-secondary" />
-            Entity Key (chave da entidade)
-            <Badge variant="destructive" className="text-[10px] py-0">obrigatório</Badge>
-          </Label>
-          <TooltipProvider delayDuration={100}>
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <p className="text-sm text-muted-foreground cursor-help inline-flex items-center gap-1">
-                  <Info className="w-3 h-3" />
-                  Coluna que identifica unicamente a entidade (ex: id_cliente, cpf, email).
-                </p>
-              </TooltipTrigger>
-              <TooltipContent className="max-w-xs">
-                <p className="text-xs">EntityKey é usada para agrupar previsões por entidade e garantir split correto. Deve ser uma coluna com alta cardinalidade (muitos valores únicos).</p>
-              </TooltipContent>
-            </Tooltip>
-          </TooltipProvider>
-          <Select value={entityKey} onValueChange={setEntityKey}>
-            <SelectTrigger className={`bg-background ${!entityKey ? "border-destructive/50" : ""}`}>
-              <SelectValue placeholder="Selecione a coluna de entidade..." />
-            </SelectTrigger>
-            <SelectContent className="bg-popover border border-border shadow-lg z-50">
-              {columns.map((col) => {
-                const inf = columnInferenceMap.current.get(col.name);
-                const isId = inf?.semantic_role === "ID_TECNICO";
-                const notInSample = schemaSSOT.detected_columns_count != null &&
-                  schemaSSOT.detected_columns_count < schemaSSOT.schema_columns_count &&
-                  !columns.slice(0, schemaSSOT.detected_columns_count).some(c => c.name === col.name);
-                return (
-                  <SelectItem key={col.name} value={col.name}>
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium">{col.name}</span>
-                      <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">{col.type}</span>
-                      {isId && <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px] py-0">ID</Badge>}
-                      {notInSample && (
-                        <Badge variant="outline" className="text-[10px] py-0">só no schema</Badge>
-                      )}
-                    </div>
-                  </SelectItem>
-                );
-              })}
-            </SelectContent>
-          </Select>
-          {!entityKey && targetColumn && (
-            <p className="text-xs text-destructive flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" />
-              Selecione a Entity Key para poder avançar.
-            </p>
-          )}
-        </div>
-
-        {/* Target Presence Scan */}
-        {projectData.id && targetColumn && (
-          <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} targetSource={targetSource} />
-        )}
-
-        {/* Features selection */}
+        {/* ═══ BLOCK 4: Variáveis preditoras ═══ */}
         <div className="space-y-4">
           <Label className="text-base font-medium flex items-center gap-2">
             <Layers className="w-4 h-4 text-secondary" />
-            {t("stepVariables.features")}
+            Variáveis preditoras
           </Label>
           <p className="text-sm text-muted-foreground">
             {t("stepVariables.featuresDesc")}
@@ -1763,7 +1451,6 @@ const StepTargetFeatures = ({
           <div className="bg-muted/30 rounded-xl p-4 space-y-3 max-h-64 overflow-y-auto">
             {availableFeatures.length > 0 ? (
               <>
-                {/* Original columns first */}
                 {availableFeatures.filter(col => !col.isFeature).map((col) => {
                   const inf = columnInferenceMap.current.get(col.name);
                   const isBlockedFeature = inf && !inf.can_be_feature && inf.block_reasons.length > 0;
@@ -1803,9 +1490,6 @@ const StepTargetFeatures = ({
                             {badge.label}
                           </Badge>
                         )}
-                        {inf?.temporal_role === "POS_EVENTO" && (
-                          <Badge variant="destructive" className="text-xs py-0">PÓS-EVENTO</Badge>
-                        )}
                       </div>
                       <div className="flex items-center gap-2">
                         <span className="text-xs text-muted-foreground px-2 py-1 bg-muted rounded">
@@ -1830,14 +1514,12 @@ const StepTargetFeatures = ({
                   );
                 })}
 
-                {/* Engineered features section */}
+                {/* Engineered features */}
                 {availableFeatures.filter(col => col.isFeature).length > 0 && (
                   <>
                     <div className="flex items-center gap-2 pt-2 pb-1 px-1">
                       <Sparkles className="w-4 h-4 text-secondary" />
-                      <span className="text-sm font-medium text-secondary">
-                        {t("stepVariables.engineeredFeatures", "Features criadas")}
-                      </span>
+                      <span className="text-sm font-medium text-secondary">Features criadas</span>
                     </div>
                     {availableFeatures.filter(col => col.isFeature).map((col) => (
                       <div
@@ -1856,28 +1538,17 @@ const StepTargetFeatures = ({
                             disabled={col.featureHasError}
                           />
                           <div className="flex flex-col">
-                            <label
-                              htmlFor={col.name}
-                              className={`font-medium cursor-pointer ${col.featureHasError ? "text-muted-foreground" : ""}`}
-                            >
+                            <label htmlFor={col.name} className={`font-medium cursor-pointer ${col.featureHasError ? "text-muted-foreground" : ""}`}>
                               {col.featureLabel || col.name}
                             </label>
-                            <span className="text-xs text-muted-foreground font-mono">
-                              {col.name}
-                            </span>
+                            <span className="text-xs text-muted-foreground font-mono">{col.name}</span>
                           </div>
                         </div>
                         <div className="flex items-center gap-2">
                           {col.featureHasError ? (
-                            <Badge variant="destructive" className="text-xs">
-                              <AlertCircle className="w-3 h-3 mr-1" />
-                              {t("stepVariables.featureError", "Erro")}
-                            </Badge>
+                            <Badge variant="destructive" className="text-xs">Erro</Badge>
                           ) : (
-                            <Badge variant="secondary" className="text-xs">
-                              <Sparkles className="w-3 h-3 mr-1" />
-                              {t("stepVariables.createdFeature", "Feature")}
-                            </Badge>
+                            <Badge variant="secondary" className="text-xs">Feature</Badge>
                           )}
                         </div>
                       </div>
@@ -1892,7 +1563,6 @@ const StepTargetFeatures = ({
             )}
           </div>
 
-          {/* Excluded features collapsible */}
           {excludedColumns.length > 0 && (
             <ExcludedFeaturesList excludedColumns={excludedColumns} />
           )}
@@ -1904,88 +1574,212 @@ const StepTargetFeatures = ({
           )}
         </div>
 
-        {/* Selection Version Badge */}
-        {selectionVersion !== null && (
-          <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg text-xs text-muted-foreground">
-            <Save className="w-3.5 h-3.5" />
-            <span>Seleção <strong>v{selectionVersion}</strong> salva</span>
-          </div>
+        {/* ═══ BLOCK 5: Prontidão do treino ═══ */}
+        {targetColumn && (
+          <TargetTrainingReadiness checks={readinessChecks} />
         )}
 
-        {/* Builder Version Mismatch Banner */}
-        {selectionVersion !== null && builderVersionUsed !== null && selectionVersion !== builderVersionUsed && (
-          <div className="p-4 rounded-lg border border-destructive/30 bg-destructive/5 space-y-2">
-            <div className="flex items-center gap-2">
-              <AlertTriangle className="w-5 h-5 text-destructive" />
-              <p className="text-sm font-semibold text-destructive">
-                Builder desatualizado (built v{builderVersionUsed}, current v{selectionVersion})
-              </p>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              A seleção de target/features mudou desde o último build. Regere o Dataset Modelável abaixo para poder treinar.
-            </p>
-          </div>
+        {/* Target Quality Card (compact) */}
+        {projectData.id && targetColumn && appliedTargetColumn && (
+          <TargetQualityCard projectId={projectData.id} refreshKey={preflightRefreshKey} />
         )}
 
-        {/* Split & Leakage Guard Panel */}
-        {projectData.id && targetColumn && (
-          <SplitAndLeakagePanel projectId={projectData.id} />
-        )}
-
-        {/* === Dataset Modelável Section === */}
-        <ModelingDatasetSection
-          projectId={projectData.id}
-          targetColumn={targetColumn}
-          onSaveBeforeBuild={handleSaveSettings}
-          onBuildComplete={async () => {
-            // Full cache bust: reload SSOT, selection version, builder version, THEN bump preflight
-            await Promise.all([
-              ds.load(),
-              loadSelectionVersion(),
-              loadBuilderVersion(),
-              loadSSOT(),
-            ]);
-            onSSOTChanged?.();
-            // Bump preflight AFTER fresh data is loaded
-            setPreflightRefreshKey(k => k + 1);
-          }}
-        />
-
-        {/* === Training Preflight Panel === */}
+        {/* Training Preflight Panel */}
         <TrainingPreflightPanel projectId={projectData.id} onNavigateBack={onBack} refreshKey={preflightRefreshKey} />
 
-        {/* Preflight Checklist */}
-        {targetColumn && (
-          <div className="p-4 rounded-lg border border-border bg-muted/10 space-y-2">
-            <h4 className="text-sm font-semibold flex items-center gap-2">
-              <CheckCircle className="w-4 h-4 text-primary" />
-              Checklist Técnico — Pré-modelagem
-            </h4>
-            <div className="grid gap-1">
-              {preflightChecks.map((check, i) => (
-                <div key={i} className="flex items-center justify-between text-xs py-1">
-                  <div className="flex items-center gap-2">
-                    {check.ok ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-accent" />
-                    ) : (
-                      <XCircle className="w-3.5 h-3.5 text-destructive" />
-                    )}
-                    <span className={check.ok ? "" : "text-destructive"}>{check.label}</span>
-                  </div>
-                  <span className="text-muted-foreground font-mono truncate max-w-[200px]">{check.detail}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
+        {/* ═══ EXPERT MODE: Technical tools ═══ */}
+        <TargetExpertPanel advancedMode={advancedMode}>
+          {/* Business Guidance Panel */}
+          {businessContract && (
+            <BusinessGuidancePanel
+              contract={businessContract}
+              objectiveLabel={
+                INDUSTRY_OBJECTIVE_MATRIX[businessContract.industry]?.objectives.find(
+                  o => o.key === businessContract.objective
+                )?.label_pt || businessContract.objective
+              }
+              industryLabel={
+                businessContract.industry === "retail" ? "Varejo" :
+                businessContract.industry === "health" ? "Saúde" :
+                businessContract.industry === "finance" ? "Finanças" :
+                businessContract.industry === "education" ? "Educação" :
+                businessContract.industry === "logistics" ? "Logística" : "Geral"
+              }
+              schemaColumns={columns.map(c => c.name)}
+              advancedMode={advancedMode}
+              onApplySuggestion={handleApplySuggestion}
+            />
+          )}
 
-        {/* Audit Contract Panel */}
-        {targetColumn && selectionVersion && (
-          <AuditContractPanel
+          {/* Target Mode Panels */}
+          {(() => {
+            const allowed = businessContract?.target_modes_allowed;
+            const showAll = advancedMode || !allowed || allowed.length === 0;
+            const canAssisted = showAll || allowed?.includes("assisted_build");
+            const canQuickLabel = showAll || allowed?.includes("quick_label");
+            const canManual = showAll || allowed?.includes("manual");
+
+            return (
+              <>
+                {projectData.id && canAssisted && !isSegmentation && (
+                  <div id="target-builder-panel">
+                    <TargetStrategyPanel
+                      projectId={projectData.id}
+                      industry={intentInfo.industry}
+                      onBuilderReady={(builderId, templateId, templateParams) => {
+                        setLabelBuilderId(builderId);
+                        setLabelTemplateId(templateId);
+                        setTargetColumn("label");
+                        setTargetSource("label_builder");
+                        setSelectedTemplateId(templateId);
+                        setAppliedTargetColumn("label");
+                        const tmpl = LABEL_TEMPLATES[templateId];
+                        setInferredProblemType(tmpl?.problem_type || "classification");
+                        autoPopulateFeatures("label");
+                        setPreflightRefreshKey(k => k + 1);
+                        persistTargetSourceToSSOT("label_builder", templateId);
+                      }}
+                    />
+                  </div>
+                )}
+
+                {projectData.id && canQuickLabel && !isSegmentation && (
+                  <WeakLabelBuilderCard
+                    projectId={projectData.id}
+                    onActivated={() => {
+                      setTargetColumn("label");
+                      setTargetSource("weak_supervision");
+                      setSelectedTemplateId("weak_supervision_assisted");
+                      setAppliedTargetColumn("label");
+                      setInferredProblemType("classification");
+                      autoPopulateFeatures("label");
+                      setPreflightRefreshKey(k => k + 1);
+                      persistTargetSourceToSSOT("weak_supervision", "weak_supervision_assisted");
+                    }}
+                  />
+                )}
+
+                {projectData.id && canManual && !isSegmentation && (
+                  <HumanLabelingCard
+                    projectId={projectData.id}
+                    onActivated={() => {
+                      setTargetColumn("label");
+                      setTargetSource("human_labeling");
+                      setSelectedTemplateId("human_labeling_assisted");
+                      setAppliedTargetColumn("label");
+                      setInferredProblemType("classification");
+                      autoPopulateFeatures("label");
+                      setPreflightRefreshKey(k => k + 1);
+                      persistTargetSourceToSSOT("human_labeling", "human_labeling_assisted");
+                    }}
+                  />
+                )}
+              </>
+            );
+          })()}
+
+          {/* Column Inference Matrix */}
+          {projectData.id && (
+            <ColumnInferenceMatrix
+              projectId={projectData.id}
+              onDataLoaded={(data) => {
+                setColumnInference(data);
+                const map = new Map<string, ColumnInferenceRow>();
+                data.forEach((d) => map.set(d.column_name, d));
+                columnInferenceMap.current = map;
+              }}
+            />
+          )}
+
+          {/* Blocked target candidates */}
+          {columnInference.length > 0 && (
+            <BlockedTargetCandidates columnInference={columnInference} />
+          )}
+
+          {/* Target Presence Scan */}
+          {projectData.id && targetColumn && (
+            <TargetPresenceScan projectId={projectData.id} targetColumn={targetColumn} targetSource={targetSource} />
+          )}
+
+          {/* Target Lifecycle */}
+          {projectData.id && targetColumn && appliedTargetColumn && (
+            <TargetLifecycleCard projectId={projectData.id} refreshKey={preflightRefreshKey} />
+          )}
+
+          {/* Split & Leakage */}
+          {projectData.id && targetColumn && (
+            <SplitAndLeakagePanel projectId={projectData.id} />
+          )}
+
+          {/* Dataset Modelável */}
+          <ModelingDatasetSection
             projectId={projectData.id}
-            selectionVersion={selectionVersion}
+            targetColumn={targetColumn}
+            onSaveBeforeBuild={handleSaveSettings}
+            onBuildComplete={async () => {
+              await Promise.all([ds.load(), loadSelectionVersion(), loadBuilderVersion(), loadSSOT()]);
+              onSSOTChanged?.();
+              setPreflightRefreshKey(k => k + 1);
+            }}
           />
-        )}
+
+          {/* Audit Contract Panel */}
+          {targetColumn && selectionVersion && (
+            <AuditContractPanel projectId={projectData.id} selectionVersion={selectionVersion} />
+          )}
+
+          {/* Coverage stats */}
+          {ds.loaded && ds.rowCount > 0 && (
+            <div className="p-4 rounded-lg border border-border bg-muted/10 space-y-3">
+              <div className="flex items-center gap-3">
+                <Database className="w-5 h-5 text-muted-foreground" />
+                <div>
+                  <p className="text-sm font-semibold">Coverage do Consolidado</p>
+                  <p className="text-xs text-muted-foreground">
+                    {ds.rowCount.toLocaleString()} linhas • {ds.colCount} colunas
+                  </p>
+                </div>
+              </div>
+              {coverageStats && (
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="p-2 bg-muted/30 rounded text-center">
+                    <p className="text-lg font-bold">{coverageStats.critical_columns_pct}%</p>
+                    <p className="text-[10px] text-muted-foreground">Colunas críticas</p>
+                  </div>
+                  <div className="p-2 bg-muted/30 rounded text-center">
+                    <p className="text-lg font-bold">{coverageStats.global_null_pct}%</p>
+                    <p className="text-[10px] text-muted-foreground">Nulos global</p>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Selection & Builder Version */}
+          {selectionVersion !== null && (
+            <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-lg text-xs text-muted-foreground">
+              <Save className="w-3.5 h-3.5" />
+              <span>Seleção <strong>v{selectionVersion}</strong></span>
+            </div>
+          )}
+          {selectionVersion !== null && builderVersionUsed !== null && selectionVersion !== builderVersionUsed && (
+            <Alert className="border-destructive/30 bg-destructive/5">
+              <AlertTriangle className="w-4 h-4 text-destructive" />
+              <AlertDescription className="text-sm">
+                Builder desatualizado (v{builderVersionUsed} → v{selectionVersion}). Regere o Dataset Modelável.
+              </AlertDescription>
+            </Alert>
+          )}
+        </TargetExpertPanel>
+
+        {/* Advanced Mode Toggle (compact, bottom) */}
+        <div className="flex items-center justify-between p-3 bg-muted/20 rounded-lg border border-border/30">
+          <div className="flex items-center gap-2">
+            <Settings2 className="w-4 h-4 text-muted-foreground" />
+            <span className="text-sm text-muted-foreground">Modo especialista</span>
+          </div>
+          <Switch checked={advancedMode} onCheckedChange={handleAdvancedModeToggle} />
+        </div>
 
         {/* Actions */}
         <div className="flex justify-between pt-6 border-t border-border">
