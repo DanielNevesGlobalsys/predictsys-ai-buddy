@@ -69,8 +69,8 @@ export default function TargetBusinessContext({
         </div>
       </div>
 
-      {contract?.guardrails?.description_pt && (
-        <p className="text-xs text-muted-foreground">{contract.guardrails.description_pt}</p>
+      {contract?.guardrails && (contract.guardrails as Record<string, any>).description_pt && (
+        <p className="text-xs text-muted-foreground">{(contract.guardrails as Record<string, any>).description_pt}</p>
       )}
     </div>
   );
