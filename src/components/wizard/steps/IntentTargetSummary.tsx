@@ -49,13 +49,16 @@ export default function IntentTargetSummary({
   }, [loadFromSSOT]);
 
   /**
-   * Persist the applied target, entity key, time anchor to project_settings SSOT.
-   * This ensures preflight and downstream stages see the applied values.
+   * Persist the applied target, entity key, time anchor to BOTH project_settings (SSOT)
+   * AND project_model_selection (via upsert-model-selection edge function).
+   * This ensures preflight and downstream stages see the applied values from a single source.
    */
-  const persistAppliedToSSOT = async (candidate: TargetCandidateResolved, entityKey?: string | null, timeAnchor?: string | null) => {
+  const persistAppliedToSSOT = async (candidate: TargetCandidateResolved, entityKey?: string | null, timeAnchor?: string | null, features?: string[]) => {
     setPersisting(true);
     try {
       const { supabase } = await import("@/integrations/supabase/client");
+
+      // 1. Update project_settings SSOT (entity_key, time_anchor, target_state, etc.)
       await supabase
         .from("project_settings")
         .update({
@@ -70,7 +73,21 @@ export default function IntentTargetSummary({
           updated_at: new Date().toISOString(),
         } as any)
         .eq("project_id", projectId);
-      console.log(`[IntentTargetSummary] Persisted to SSOT: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}`);
+
+      // 2. CRITICAL: Also sync project_model_selection via the atomic upsert function.
+      // This is what the preflight's selection gate reads as primary source.
+      const selectedFeatures = features && features.length > 0 ? features : [];
+      await supabase.functions.invoke("upsert-model-selection", {
+        body: {
+          project_id: projectId,
+          target_column: candidate.column,
+          problem_type: candidate.problem_type || "classification",
+          selected_features: selectedFeatures,
+          excluded_features: [],
+        },
+      });
+
+      console.log(`[IntentTargetSummary] Persisted to SSOT + model_selection: target=${candidate.column}, entity=${entityKey}, time=${timeAnchor}, features=${selectedFeatures.length}`);
     } catch (err) {
       console.error("[IntentTargetSummary] Failed to persist to SSOT:", err);
     } finally {
