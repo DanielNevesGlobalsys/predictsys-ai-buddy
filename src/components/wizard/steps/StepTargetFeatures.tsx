@@ -51,6 +51,7 @@ import { trackEvent } from "@/lib/platformTracking";
 import type { BusinessIntentContract, ObjectiveKey, IndustryKey } from "@/lib/industryRules";
 import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
 import BusinessGuidancePanel, { type TargetSuggestionCard } from "../shared/BusinessGuidancePanel";
+import { useLysSynthesis, type LysRecommendation } from "@/hooks/useLysSynthesis";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
