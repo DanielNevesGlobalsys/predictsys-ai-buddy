@@ -4313,7 +4313,7 @@ serve(async (req) => {
           // ── Etapa 6: Calibration + Threshold + Profile ──
           calibration: calibrationInfo,
           recommended_threshold: recommendedThreshold,
-          metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, source: profileSource },
+          metrics_profile: { id: metricsProfile.id, label: metricsProfile.label, primary: metricsProfile.primary, problem_family: metricsProfile.problem_family, valid_metrics: metricsProfile.valid_metrics, source: profileSource },
           extended_metrics: extendedMetrics,
           leakage_report: {
             blocked: featureValidation.blocked,
