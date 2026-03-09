@@ -185,7 +185,38 @@ serve(async (req) => {
     }
 
     // ── 6. Merge deterministic + AI results ──
-    const finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected, entityCandidates, timeCandidates);
+    let finalResult = mergeResults(deterministicCandidates, aiEnriched, industry, objective, problemTypeExpected, entityCandidates, timeCandidates);
+
+    // ── 6b. Auto-populate suggested_features if AI returned none ──
+    if (finalResult.suggested_features.length === 0 && !finalResult.is_insufficient && schemaColumns.length > 0) {
+      const targetCol = finalResult.main_candidate?.column || "";
+      const entityCol = finalResult.suggested_entity_key || "";
+      const timeCol = finalResult.suggested_time_anchor || "";
+      const blockedSet = new Set([
+        targetCol.toLowerCase(),
+        entityCol.toLowerCase(),
+        timeCol.toLowerCase(),
+        ...finalResult.blocked_features.map((b: any) => (b.column || b).toLowerCase()),
+      ]);
+
+      const ID_RE = /^(id|_id$|uuid|pk_|fk_|idx_|index_|codigo|cod_|numero_|num_|chave_|key_)/i;
+      const LEAK_RE = /^(target|label|resultado|result|status_final|outcome|predicted|prediction|y_true|y_pred)/i;
+
+      const autoFeatures = schemaColumns
+        .map((c: any) => c.name)
+        .filter((name: string) => {
+          const lower = name.toLowerCase();
+          if (blockedSet.has(lower)) return false;
+          if (ID_RE.test(lower)) return false;
+          if (LEAK_RE.test(lower)) return false;
+          if (lower.endsWith("_id") || lower.endsWith("_key") || lower.endsWith("_uuid")) return false;
+          if (/^(created_at|updated_at|deleted_at|row_num)$/i.test(lower)) return false;
+          return true;
+        });
+
+      finalResult = { ...finalResult, suggested_features: autoFeatures };
+      console.log(`[resolve-target-intent] Auto-selected ${autoFeatures.length} features from schema`);
+    }
 
     // ── 7. Persist to SSOT ──
     // Persist the resolution JSON AND promote time_anchor_column directly
