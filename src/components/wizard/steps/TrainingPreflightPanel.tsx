@@ -4,7 +4,7 @@ import { Badge } from "@/components/ui/badge";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import {
   Shield, Loader2, CheckCircle, AlertTriangle, XCircle,
-  Database, Target, Package, Cpu, FileText, RefreshCw
+  Database, Target, Package, Cpu, FileText, RefreshCw, Hammer
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 
