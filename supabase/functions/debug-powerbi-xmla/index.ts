@@ -250,39 +250,53 @@ serve(async (req) => {
       }
     }
 
+    // Helper: escape table name for DAX (handles spaces, special chars)
+    function daxTable(name: string): string {
+      // If name contains spaces or special chars, wrap in single quotes
+      if (/[^a-zA-Z0-9_]/.test(name)) return `'${name}'`;
+      return `'${name}'`;
+    }
+
     // ═══════════════════════════════════════════
-    // STEP C1: DMV TMSCHEMA_TABLES
+    // STEP C1: Tables Discovery (DAX-native first, DMV fallback)
     // ═══════════════════════════════════════════
     const stepC1 = Date.now();
     let tables: Array<{ name: string; id?: number; tableType?: string }> = [];
-    const dmvTableQueries = [
-      `SELECT [ID], [Name], [SystemFlags], [Description] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]`,
-      `EVALUATE INFO.TABLES()`,
-      `SELECT [TABLE_NAME] FROM $SYSTEM.DBSCHEMA_TABLES WHERE [TABLE_TYPE] = 'TABLE'`,
+
+    // Priority order: DAX-native functions first (work via executeQueries), DMV last
+    const tableQueries = [
+      { q: `EVALUATE FILTER(INFO.TABLES(), [IsHidden] = FALSE())`, method: 'INFO.TABLES' },
+      { q: `SELECT [TABLE_NAME] FROM $SYSTEM.DBSCHEMA_TABLES WHERE [TABLE_TYPE] = 'TABLE'`, method: 'DBSCHEMA_TABLES' },
+      { q: `SELECT [ID], [Name], [SystemFlags] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]`, method: 'TMSCHEMA_TABLES' },
     ];
 
     let tablesMethod = 'none';
-    for (const q of dmvTableQueries) {
+    let tableErrors: string[] = [];
+    for (const { q, method } of tableQueries) {
       const result = await executeDax(q);
       if (result.ok && result.rows.length > 0) {
-        tables = result.rows.map((r: any) => ({
-          name: r['[Name]'] || r['Name'] || r['[TABLE_NAME]'] || r['TABLE_NAME'] || Object.values(r)[0] as string,
-          id: r['[ID]'] || r['ID'],
-          tableType: r['[SystemFlags]'] || r['SystemFlags'],
-        })).filter(t => t.name && !String(t.name).startsWith('DateTable') && !String(t.name).startsWith('LocalDateTable'));
-        tablesMethod = q.includes('TMSCHEMA') ? 'TMSCHEMA_TABLES' : q.includes('INFO') ? 'INFO.TABLES' : 'DBSCHEMA_TABLES';
+        tables = result.rows.map((r: any) => {
+          // INFO.TABLES returns [Name], [ID], etc. — keys may have brackets
+          const name = r['[Name]'] || r['Name'] || r['[TABLE_NAME]'] || r['TABLE_NAME'] || Object.values(r)[0] as string;
+          const id = r['[ID]'] || r['ID'];
+          return { name: String(name), id: typeof id === 'number' ? id : undefined, tableType: r['[SystemFlags]'] || r['SystemFlags'] };
+        }).filter(t => t.name && !t.name.startsWith('DateTable') && !t.name.startsWith('LocalDateTable'));
+        tablesMethod = method;
         break;
+      } else {
+        tableErrors.push(`${method}: ${result.error?.substring(0, 120) || 'empty'}`);
       }
     }
 
     if (tables.length > 0) {
       steps.push({ step: 'C1', label: 'Tabelas (DMV)', status: 'ok',
         detail: `${tables.length} tabela(s) encontrada(s) via ${tablesMethod}.`,
-        data: { tables: tables.map(t => t.name), method: tablesMethod },
+        data: { tables: tables.map(t => t.name), method: tablesMethod, ids: tables.map(t => ({ name: t.name, id: t.id })) },
         duration_ms: Date.now() - stepC1 });
     } else {
       steps.push({ step: 'C1', label: 'Tabelas (DMV)', status: 'fail',
-        detail: 'Nenhuma tabela retornada por DMV. O semantic model pode não suportar executeQueries.',
+        detail: 'Nenhuma tabela retornada. Métodos tentados: ' + tableErrors.join(' | '),
+        data: { errors: tableErrors },
         duration_ms: Date.now() - stepC1 });
     }
 
@@ -292,18 +306,18 @@ serve(async (req) => {
         event_type: 'powerbi_xmla_tables', project_id, source: 'connector_powerbi',
         status: tables.length > 0 ? 'info' : 'error',
         metadata: { connection_id, workspace_id, dataset_id, method: tablesMethod,
-          tables_found: tables.length, table_names: tables.map(t => t.name).slice(0, 50) },
+          tables_found: tables.length, table_names: tables.map(t => t.name).slice(0, 50),
+          table_ids: tables.slice(0, 50).map(t => ({ name: t.name, id: t.id })) },
       });
     } catch { /* best-effort */ }
 
     // ═══════════════════════════════════════════
-    // STEP C2: DMV TMSCHEMA_COLUMNS
+    // STEP C2: Columns Discovery (multi-method cascade)
     // ═══════════════════════════════════════════
     const stepC2 = Date.now();
     interface ColumnInfo { table_name: string; column_name: string; data_type: string; table_id?: number; }
     let allColumns: ColumnInfo[] = [];
 
-    // Determine target tables for column extraction
     const targetTableName = table_name?.trim();
     const tablesToInspect = targetTableName
       ? tables.filter(t => t.name.toLowerCase() === targetTableName.toLowerCase()).length > 0
@@ -311,46 +325,111 @@ serve(async (req) => {
         : [targetTableName, ...tables.slice(0, 3).map(t => t.name)]
       : tables.slice(0, 10).map(t => t.name);
 
-    // Try TMSCHEMA_COLUMNS first (global query)
-    const colDmvQueries = [
-      `SELECT [TableID], [ExplicitName], [InferredName], [ExplicitDataType], [DataType], [IsHidden] FROM $SYSTEM.TMSCHEMA_COLUMNS WHERE NOT [IsHidden]`,
-      `EVALUATE INFO.COLUMNS()`,
-    ];
-
     let columnsMethod = 'none';
-    for (const q of colDmvQueries) {
-      const result = await executeDax(q);
+    let columnErrors: string[] = [];
+
+    // ── Method 1: INFO.COLUMNS() (DAX-native, most reliable via REST)
+    {
+      const result = await executeDax(`EVALUATE INFO.COLUMNS()`);
       if (result.ok && result.rows.length > 0) {
-        // Map columns to table names using table IDs
+        // INFO.COLUMNS() returns [TableID], [Name], [DataType], [IsHidden], etc.
         const tableIdMap = new Map(tables.map(t => [t.id, t.name]));
-        allColumns = result.rows.map((r: any) => {
-          const tableId = r['[TableID]'] || r['TableID'];
-          const tName = tableIdMap.get(tableId) || '';
-          return {
-            table_name: tName,
-            column_name: r['[ExplicitName]'] || r['ExplicitName'] || r['[InferredName]'] || r['InferredName'] || r['[Name]'] || r['Name'] || '',
-            data_type: String(r['[ExplicitDataType]'] || r['ExplicitDataType'] || r['[DataType]'] || r['DataType'] || 'unknown'),
-            table_id: tableId,
-          };
-        }).filter(c => c.column_name && c.table_name);
-        columnsMethod = q.includes('TMSCHEMA') ? 'TMSCHEMA_COLUMNS' : 'INFO.COLUMNS';
-        break;
+        // Also build name-based lookup from INFO.TABLES if IDs don't match
+        const tableNameSet = new Set(tables.map(t => t.name.toLowerCase()));
+
+        for (const r of result.rows) {
+          const isHidden = r['[IsHidden]'] ?? r['IsHidden'] ?? false;
+          if (isHidden === true || isHidden === 'TRUE') continue;
+
+          const tableId = r['[TableID]'] ?? r['TableID'];
+          const tableName = tableIdMap.get(tableId);
+          if (!tableName) continue;
+
+          const colName = r['[Name]'] || r['Name'] || r['[ExplicitName]'] || r['ExplicitName'] || '';
+          if (!colName) continue;
+
+          const dataType = String(r['[DataType]'] ?? r['DataType'] ?? r['[ExplicitDataType]'] ?? r['ExplicitDataType'] ?? 'unknown');
+          allColumns.push({ table_name: tableName, column_name: String(colName), data_type: dataType, table_id: tableId });
+        }
+
+        if (allColumns.length > 0) columnsMethod = 'INFO.COLUMNS';
+      } else {
+        columnErrors.push(`INFO.COLUMNS: ${result.error?.substring(0, 120) || 'empty'}`);
       }
     }
 
-    // Fallback: per-table DAX TOPN(1) for column names
+    // ── Method 2: TMSCHEMA_COLUMNS filtered by TableID (DMV, may work on some endpoints)
+    if (allColumns.length === 0 && tables.length > 0) {
+      // Try global query first
+      const result = await executeDax(
+        `SELECT [TableID], [ExplicitName], [InferredName], [ExplicitDataType], [DataType], [IsHidden] FROM $SYSTEM.TMSCHEMA_COLUMNS WHERE NOT [IsHidden]`
+      );
+      if (result.ok && result.rows.length > 0) {
+        const tableIdMap = new Map(tables.map(t => [t.id, t.name]));
+        allColumns = result.rows
+          .map((r: any) => {
+            const tableId = r['[TableID]'] || r['TableID'];
+            return {
+              table_name: tableIdMap.get(tableId) || '',
+              column_name: r['[ExplicitName]'] || r['ExplicitName'] || r['[InferredName]'] || r['InferredName'] || '',
+              data_type: String(r['[ExplicitDataType]'] || r['ExplicitDataType'] || r['[DataType]'] || r['DataType'] || 'unknown'),
+              table_id: tableId,
+            };
+          })
+          .filter(c => c.column_name && c.table_name);
+        if (allColumns.length > 0) columnsMethod = 'TMSCHEMA_COLUMNS';
+      } else {
+        columnErrors.push(`TMSCHEMA_COLUMNS: ${result.error?.substring(0, 120) || 'empty'}`);
+      }
+    }
+
+    // ── Method 3: DISCOVER_CSDL_METADATA via DBSCHEMA_COLUMNS (DMV fallback)
+    if (allColumns.length === 0) {
+      const result = await executeDax(
+        `SELECT [TABLE_NAME], [COLUMN_NAME], [DATA_TYPE] FROM $SYSTEM.DBSCHEMA_COLUMNS`
+      );
+      if (result.ok && result.rows.length > 0) {
+        const tableNameSet = new Set(tables.map(t => t.name.toLowerCase()));
+        allColumns = result.rows
+          .map((r: any) => ({
+            table_name: r['[TABLE_NAME]'] || r['TABLE_NAME'] || '',
+            column_name: r['[COLUMN_NAME]'] || r['COLUMN_NAME'] || '',
+            data_type: String(r['[DATA_TYPE]'] || r['DATA_TYPE'] || 'unknown'),
+          }))
+          .filter(c => c.column_name && c.table_name && tableNameSet.has(c.table_name.toLowerCase()));
+        if (allColumns.length > 0) columnsMethod = 'DBSCHEMA_COLUMNS';
+      } else {
+        columnErrors.push(`DBSCHEMA_COLUMNS: ${result.error?.substring(0, 120) || 'empty'}`);
+      }
+    }
+
+    // ── Method 4: Per-table DAX TOPN(1) to extract column names from actual data
     if (allColumns.length === 0 && tablesToInspect.length > 0) {
-      columnsMethod = 'DAX_TOPN_FALLBACK';
       for (const tbl of tablesToInspect) {
-        const result = await executeDax(`EVALUATE TOPN(1, '${tbl}')`);
-        if (result.ok && result.rows.length > 0) {
-          const keys = Object.keys(result.rows[0]);
+        const escaped = daxTable(tbl);
+        // Try SELECTCOLUMNS approach first (extracts column names even with complex models)
+        const scResult = await executeDax(`EVALUATE TOPN(1, ${escaped})`);
+        if (scResult.ok && scResult.rows.length > 0) {
+          const keys = Object.keys(scResult.rows[0]);
           for (const k of keys) {
-            const cleanName = k.replace(/^\[/, '').replace(/\]$/, '').replace(/^.*\[/, '');
+            // Keys come as "[TableName][ColumnName]" — extract column name
+            const match = k.match(/\[([^\]]+)\]$/);
+            const cleanName = match ? match[1] : k.replace(/^\[/, '').replace(/\]$/, '');
             allColumns.push({ table_name: tbl, column_name: cleanName, data_type: 'unknown' });
+          }
+        } else {
+          columnErrors.push(`TOPN(1,${tbl}): ${scResult.error?.substring(0, 80) || 'empty'}`);
+          // Last resort: SELECTCOLUMNS with dummy column to enumerate
+          const altResult = await executeDax(
+            `EVALUATE SAMPLE(1, SELECTCOLUMNS(${escaped}, "___probe", 1), [___probe])`
+          );
+          // This won't give us column names but confirms table access
+          if (altResult.ok) {
+            columnErrors.push(`SAMPLE(1,${tbl}): accessible but columns not extractable`);
           }
         }
       }
+      if (allColumns.length > 0) columnsMethod = 'DAX_TOPN_FALLBACK';
     }
 
     if (allColumns.length > 0) {
@@ -360,11 +439,14 @@ serve(async (req) => {
         data: { method: columnsMethod, total_columns: allColumns.length,
           by_table: Object.fromEntries([...uniqueTables].map(t =>
             [t, allColumns.filter(c => c.table_name === t).map(c => ({ name: c.column_name, type: c.data_type }))]
-          )) },
+          )),
+          errors_from_previous_methods: columnErrors.length > 0 ? columnErrors : undefined },
         duration_ms: Date.now() - stepC2 });
     } else {
       steps.push({ step: 'C2', label: 'Colunas (DMV)', status: 'fail',
-        detail: 'Nenhuma coluna extraída.', duration_ms: Date.now() - stepC2 });
+        detail: 'Nenhuma coluna extraída. Métodos tentados: ' + columnErrors.join(' | '),
+        data: { errors: columnErrors },
+        duration_ms: Date.now() - stepC2 });
     }
 
     // Log columns event
@@ -373,7 +455,8 @@ serve(async (req) => {
         event_type: 'powerbi_xmla_columns', project_id, source: 'connector_powerbi',
         status: allColumns.length > 0 ? 'info' : 'error',
         metadata: { connection_id, workspace_id, dataset_id, method: columnsMethod,
-          columns_found: allColumns.length, tables_with_columns: [...new Set(allColumns.map(c => c.table_name))].length },
+          columns_found: allColumns.length, tables_with_columns: [...new Set(allColumns.map(c => c.table_name))].length,
+          errors: columnErrors.slice(0, 5) },
       });
     } catch { /* best-effort */ }
 
@@ -386,21 +469,39 @@ serve(async (req) => {
     let sampleColumns: string[] = [];
 
     if (sampleTable) {
-      const result = await executeDax(`EVALUATE TOPN(10, '${sampleTable}')`);
+      const escaped = daxTable(sampleTable);
+      const result = await executeDax(`EVALUATE TOPN(10, ${escaped})`);
       if (result.ok && result.rows.length > 0) {
         sampleRows = result.rows;
-        sampleColumns = Object.keys(result.rows[0]).map(k =>
-          k.replace(/^\[/, '').replace(/\]$/, '').replace(/^.*\[/, '')
-        );
+        sampleColumns = Object.keys(result.rows[0]).map(k => {
+          const match = k.match(/\[([^\]]+)\]$/);
+          return match ? match[1] : k.replace(/^\[/, '').replace(/\]$/, '');
+        });
         steps.push({ step: 'D', label: 'Amostra de dados', status: 'ok',
           detail: `${result.rows.length} linha(s) retornada(s) de "${sampleTable}" com ${sampleColumns.length} colunas.`,
           data: { table: sampleTable, row_count: result.rows.length, columns: sampleColumns,
             sample_preview: result.rows.slice(0, 3) },
           duration_ms: Date.now() - stepD });
+
+        // If columns weren't extracted earlier, populate from sample
+        if (allColumns.filter(c => c.table_name.toLowerCase() === sampleTable.toLowerCase()).length === 0) {
+          for (const col of sampleColumns) {
+            allColumns.push({ table_name: sampleTable, column_name: col, data_type: 'unknown' });
+          }
+          if (columnsMethod === 'none') columnsMethod = 'DAX_SAMPLE_EXTRACT';
+          // Update C2 step if it was a fail
+          const c2Step = steps.find(s => s.step === 'C2');
+          if (c2Step && c2Step.status === 'fail') {
+            c2Step.status = 'ok';
+            c2Step.detail = `${sampleColumns.length} coluna(s) extraídas da amostra de "${sampleTable}" via DAX_SAMPLE_EXTRACT.`;
+            c2Step.data = { method: 'DAX_SAMPLE_EXTRACT', total_columns: sampleColumns.length,
+              by_table: { [sampleTable]: sampleColumns.map(c => ({ name: c, type: 'unknown' })) } };
+          }
+        }
       } else {
         steps.push({ step: 'D', label: 'Amostra de dados', status: 'fail',
           detail: `DAX TOPN falhou para "${sampleTable}": ${result.error || 'sem dados'}`,
-          data: { table: sampleTable, error: result.error },
+          data: { table: sampleTable, error: result.error, dax_query: `EVALUATE TOPN(10, ${escaped})` },
           duration_ms: Date.now() - stepD });
       }
     } else {
@@ -425,7 +526,8 @@ serve(async (req) => {
     let rowCount = 0;
 
     if (sampleTable) {
-      const result = await executeDax(`EVALUATE ROW("count", COUNTROWS('${sampleTable}'))`);
+      const escaped = daxTable(sampleTable);
+      const result = await executeDax(`EVALUATE ROW("count", COUNTROWS(${escaped}))`);
       if (result.ok && result.rows.length > 0) {
         const val = result.rows[0]?.['[count]'] ?? result.rows[0]?.count;
         rowCount = typeof val === 'number' ? val : parseInt(String(val), 10) || 0;
@@ -434,9 +536,19 @@ serve(async (req) => {
           data: { table: sampleTable, row_count: rowCount },
           duration_ms: Date.now() - stepE });
       } else {
-        steps.push({ step: 'E', label: 'Contagem de linhas', status: 'fail',
-          detail: `COUNTROWS falhou para "${sampleTable}": ${result.error || 'sem resultado'}`,
-          duration_ms: Date.now() - stepE });
+        // If sample worked, use sample count as fallback
+        if (sampleRows.length > 0) {
+          rowCount = sampleRows.length;
+          steps.push({ step: 'E', label: 'Contagem de linhas', status: 'ok',
+            detail: `COUNTROWS falhou, usando contagem da amostra: ${rowCount} linhas (mínimo).`,
+            data: { table: sampleTable, row_count: rowCount, source: 'sample_fallback', error: result.error },
+            duration_ms: Date.now() - stepE });
+        } else {
+          steps.push({ step: 'E', label: 'Contagem de linhas', status: 'fail',
+            detail: `COUNTROWS falhou para "${sampleTable}": ${result.error || 'sem resultado'}`,
+            data: { error: result.error, dax_query: `EVALUATE ROW("count", COUNTROWS(${escaped}))` },
+            duration_ms: Date.now() - stepE });
+        }
       }
     } else {
       steps.push({ step: 'E', label: 'Contagem de linhas', status: 'skip',
