@@ -1068,8 +1068,8 @@ serve(async (req) => {
         });
       } else {
         const connectionMode = ["TMSCHEMA_COLUMNS_TABLEID", "DISCOVER_CSDL_METADATA"].includes(columnsMethod)
-          ? "powerbi_xmla"
-          : "powerbi_executequeries";
+          ? "xmla"
+          : "executequeries";
 
         const schemaJson = finalColumns.map((col, index) => ({
           name: col.column_name,
