@@ -310,6 +310,7 @@ async function traceUnderlyingSource(
     datasource_database: null, datasource_path: null,
     lineage_available: false, source_trace_status: 'not_available',
     source_trace_reason_code: 'no_datasource_info', confidence: 'low',
+    source_role: 'auxiliary',
     raw_datasources: [], semantic_model_type: null,
   };
 
