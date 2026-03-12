@@ -176,8 +176,41 @@ serve(async (req) => {
       validationSkipped = true;
     }
 
-    // Use extracted data or fallback minimums
-    const finalColCount = extractedColumns.length > 0 ? extractedColumns.length : 1;
+    // Prevent fake "1 row / 1 col" activation when schema was not materialized
+    if (!tableValidated || extractedColumns.length === 0) {
+      try {
+        await supabaseAdmin.from('platform_events').insert({
+          event_type: 'powerbi_manual_table_selected',
+          project_id,
+          source: 'connector_powerbi',
+          status: 'error',
+          metadata: {
+            connection_id,
+            workspace_id,
+            dataset_id,
+            manual_table_name: tableName,
+            error_code: 'schema_not_materialized',
+            table_validated: tableValidated,
+            validation_skipped: validationSkipped,
+            message: 'Manual table selection could not extract schema metadata.',
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
+
+      const guidance = validationSkipped
+        ? 'Credenciais/IDs do workspace e dataset não foram resolvidos para validar a tabela.'
+        : 'A tabela foi informada, mas o Power BI não retornou colunas via DAX TOPN(1).';
+
+      return new Response(JSON.stringify({
+        success: false,
+        error_code: 'schema_not_materialized',
+        message: `${guidance} Conecte a fonte detectada (SQL/Lake) ou informe um dataset com schema acessível para continuar.`,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 422 });
+    }
+
+    const finalColCount = extractedColumns.length;
     const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 1;
 
     // Log submission event
