@@ -9,6 +9,7 @@ import {
   Server, ArrowRight, Loader2, TableProperties, Link2, FileDown,
   ShieldCheck, Globe, Database as DatabaseIcon,
 } from "lucide-react";
+import PowerBIXMLADiagnosticPanel from "./PowerBIXMLADiagnosticPanel";
 
 interface SourceTraceInfo {
   datasource_type: string | null;
@@ -40,6 +41,10 @@ interface PowerBIManualAssistedPanelProps {
   authValid?: boolean;
   workspaceValid?: boolean;
   datasetValid?: boolean;
+  projectId?: string;
+  connectionId?: string;
+  workspaceId?: string;
+  datasetId?: string;
 }
 
 const confidenceLabel: Record<string, string> = {
@@ -68,6 +73,10 @@ const PowerBIManualAssistedPanel = ({
   authValid = true,
   workspaceValid = true,
   datasetValid = true,
+  projectId,
+  connectionId,
+  workspaceId,
+  datasetId,
 }: PowerBIManualAssistedPanelProps) => {
   const isPartial = connectionStatus === "connected_partial_discovery";
   const isFull = connectionStatus === "connected_full_discovery";
@@ -231,6 +240,18 @@ const PowerBIManualAssistedPanel = ({
           </Badge>
         )}
       </div>
+
+      {/* XMLA Diagnostic Panel */}
+      {projectId && (
+        <PowerBIXMLADiagnosticPanel
+          projectId={projectId}
+          connectionId={connectionId}
+          workspaceId={workspaceId}
+          datasetId={datasetId}
+          tableName={manualTableName || undefined}
+          onMaterializationSuccess={onContinuePartial}
+        />
+      )}
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
