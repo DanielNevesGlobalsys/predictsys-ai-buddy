@@ -601,7 +601,357 @@ serve(async (req) => {
       });
     }
 
-    // Resolve effective table name for query context
+    // Sort candidate tables by business relevance (facts first, calendars last)
+    const sortedCandidates = [...discoveredTables].sort(
+      (a, b) => tableBusinessScore(b.effective_name) - tableBusinessScore(a.effective_name),
+    );
+
+    // ── MULTI-TABLE PROCESSING ──
+    if (requested_table_names.length > 1) {
+      interface MultiTableDetail {
+        table_name: string;
+        columns: ColumnInfo[];
+        columns_method: string;
+        sample_rows: Record<string, unknown>[];
+        row_count: number;
+        row_count_method: string;
+      }
+
+      const tableDetails: MultiTableDetail[] = [];
+
+      for (const tblName of requested_table_names) {
+        let cols: ColumnInfo[] = [];
+        let colMethod = "none";
+
+        // Try INFO.COLUMNS filter
+        const infoResult = await executeDax(
+          `EVALUATE SELECTCOLUMNS(FILTER(INFO.COLUMNS(), LOWER([Table]) = LOWER(${escapeDaxString(tblName)})), "table_name", [Table], "column_name", [Name], "data_type", [DataType] & "", "is_hidden", [IsHidden])`,
+        );
+        if (infoResult.ok) {
+          const parsed = infoResult.rows
+            .filter((r) => !parseBool(pickRowValue(r, ["is_hidden", "IsHidden"])))
+            .map((r) => ({
+              table_name: tblName,
+              column_name: String(pickRowValue(r, ["column_name", "Name"]) ?? "").trim(),
+              data_type: String(pickRowValue(r, ["data_type", "DataType"]) ?? "unknown").trim(),
+            }))
+            .filter((c) => c.column_name.length > 0);
+          if (parsed.length > 0) {
+            cols = uniqueBy(parsed, (c) => c.column_name);
+            colMethod = "INFO.COLUMNS_TABLE";
+          }
+        }
+
+        // Fallback: TOPN keys
+        if (cols.length === 0) {
+          const topn = await executeDax(`EVALUATE TOPN(1, ${escapeDaxTable(tblName)})`);
+          if (topn.ok && topn.rows.length > 0) {
+            cols = Object.keys(topn.rows[0])
+              .map((k) => cleanupColumnKey(k))
+              .filter(Boolean)
+              .map((name) => ({ table_name: tblName, column_name: name, data_type: "unknown" }));
+            cols = uniqueBy(cols, (c) => c.column_name);
+            colMethod = "TOPN_KEYS";
+          }
+        }
+
+        // Get row count
+        let tblRowCount = 0;
+        let rcMethod = "none";
+        const rcResult = await executeDax(`EVALUATE ROW("cnt", COUNTROWS(${escapeDaxTable(tblName)}))`);
+        if (rcResult.ok && rcResult.rows.length > 0) {
+          const v = Object.values(rcResult.rows[0])[0];
+          tblRowCount = typeof v === "number" ? v : parseInt(String(v), 10) || 0;
+          rcMethod = "COUNTROWS";
+        }
+
+        // Get sample (5 rows)
+        let tblSample: Record<string, unknown>[] = [];
+        const sampleResult = await executeDax(`EVALUATE TOPN(5, ${escapeDaxTable(tblName)})`);
+        if (sampleResult.ok) {
+          tblSample = sampleResult.rows;
+        }
+
+        tableDetails.push({
+          table_name: tblName,
+          columns: cols,
+          columns_method: colMethod,
+          sample_rows: tblSample,
+          row_count: tblRowCount,
+          row_count_method: rcMethod,
+        });
+      }
+
+      const allTablesOk = tableDetails.every((t) => t.columns.length > 0);
+      steps.push({
+        step: "C2_MULTI",
+        label: "Colunas (multi-tabela)",
+        status: allTablesOk ? "ok" : "fail",
+        detail: `${tableDetails.length} tabela(s): ${tableDetails.map((t) => `${t.table_name} (${t.columns.length} cols, ${t.row_count} rows)`).join(", ")}`,
+        data: {
+          tables: tableDetails.map((t) => ({
+            name: t.table_name,
+            columns: t.columns.length,
+            row_count: t.row_count,
+            method: t.columns_method,
+          })),
+        },
+      });
+
+      // MULTI-TABLE MATERIALIZATION
+      let multiMaterialized = false;
+      const canMultiMaterialize = allTablesOk && tableDetails.every((t) => t.row_count > 0);
+
+      if (materialize && canMultiMaterialize) {
+        const started = Date.now();
+        const usePrefix = tableDetails.length > 1;
+        const allColumns: Array<ColumnInfo & { source_table: string }> = [];
+        let totalRows = 0;
+        const allSampleRows: Record<string, unknown>[] = [];
+
+        for (const td of tableDetails) {
+          for (const col of td.columns) {
+            allColumns.push({
+              table_name: td.table_name,
+              column_name: usePrefix ? `${td.table_name}.${col.column_name}` : col.column_name,
+              data_type: col.data_type,
+              source_table: td.table_name,
+            });
+          }
+          totalRows += td.row_count;
+          for (const row of td.sample_rows) {
+            const prefixed: Record<string, unknown> = {};
+            for (const [k, v] of Object.entries(row)) {
+              const cleanKey = cleanupColumnKey(k);
+              prefixed[usePrefix ? `${td.table_name}.${cleanKey}` : cleanKey] = v;
+            }
+            allSampleRows.push(prefixed);
+          }
+        }
+
+        const schemaJson = allColumns.map((col, index) => ({
+          name: col.column_name,
+          type: col.data_type || "unknown",
+          index,
+          source_table: col.source_table,
+        }));
+
+        const tableNames = tableDetails.map((t) => t.table_name);
+        const combinedName = tableNames.join(" + ");
+
+        try {
+          // Deactivate existing datasets
+          await supabaseAdmin
+            .from("project_datasets")
+            .update({ is_active: false, updated_at: new Date().toISOString() })
+            .eq("project_id", project_id)
+            .eq("is_active", true);
+
+          const { data: datasetRow, error: datasetErr } = await supabaseAdmin
+            .from("project_datasets")
+            .insert({
+              project_id,
+              user_id: user.id,
+              name: `Power BI: ${combinedName}`,
+              storage_path: `powerbi_materialized/${project_id}/${tableNames[0]}`,
+              file_size_bytes: 0,
+              total_rows: totalRows,
+              sample_rows: allSampleRows.length,
+              columns_count: allColumns.length,
+              is_active: true,
+              source_type: PBI_SOURCE_TYPE,
+              source_metadata: {
+                connector_type: "powerbi",
+                connection_mode: "executequeries",
+                materialized_tables: tableDetails.map((t) => ({
+                  table_name: t.table_name,
+                  columns: t.columns.length,
+                  row_count: t.row_count,
+                  columns_method: t.columns_method,
+                })),
+                workspace_id,
+                dataset_id,
+                connection_id,
+              },
+            })
+            .select("id")
+            .single();
+
+          if (datasetErr) throw datasetErr;
+
+          // Delete existing columns and insert new
+          await supabaseAdmin.from("project_columns").delete().eq("project_id", project_id);
+
+          const { error: colErr } = await supabaseAdmin.from("project_columns").insert(
+            allColumns.map((col, index) => ({
+              project_id,
+              column_name: col.column_name,
+              column_index: index,
+              inferred_type: typeToInferred(col.data_type),
+            })),
+          );
+          if (colErr) throw colErr;
+
+          // Update dataset state
+          await supabaseAdmin.from("project_dataset_state").upsert(
+            {
+              project_id,
+              source_type: PBI_SOURCE_TYPE,
+              row_count: totalRows,
+              col_count: allColumns.length,
+              active_schema_json: schemaJson,
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: "project_id" },
+          );
+
+          // Persist sample
+          if (allSampleRows.length > 0) {
+            await supabaseAdmin.from("project_dataset_sample").upsert(
+              {
+                project_id,
+                sample_json: {
+                  rows: allSampleRows,
+                  columns: allColumns.map((c) => ({ name: c.column_name, type: c.data_type })),
+                },
+                updated_at: new Date().toISOString(),
+              },
+              { onConflict: "project_id" },
+            );
+          }
+
+          // Update connection
+          if (connection_id) {
+            const { data: connData } = await supabaseAdmin
+              .from("external_connections")
+              .select("metadata")
+              .eq("id", connection_id)
+              .maybeSingle();
+            const oldMeta = (connData?.metadata as Record<string, unknown> | null) || {};
+
+            await supabaseAdmin
+              .from("external_connections")
+              .update({
+                connection_status: "connected_full_discovery",
+                validation_message: `Materializado: ${combinedName} (${allColumns.length} colunas, ${totalRows} linhas total)`,
+                last_validated_at: new Date().toISOString(),
+                metadata: {
+                  ...oldMeta,
+                  source_mode: "powerbi_materialized",
+                  materialized_tables: tableNames,
+                },
+              })
+              .eq("id", connection_id);
+          }
+
+          multiMaterialized = true;
+          steps.push({
+            step: "F",
+            label: "Materialização multi-tabela",
+            status: "ok",
+            detail: `${tableDetails.length} tabela(s) materializadas: ${allColumns.length} colunas, ${totalRows} linhas total.`,
+            data: {
+              project_dataset_id: datasetRow?.id,
+              tables: tableNames,
+              source_type: PBI_SOURCE_TYPE,
+            },
+            duration_ms: Date.now() - started,
+          });
+
+          await insertEvent("powerbi_xmla_multi_materialization_success", "info", {
+            project_id,
+            connection_id,
+            workspace_id,
+            dataset_id,
+            tables: tableNames,
+            total_columns: allColumns.length,
+            total_rows: totalRows,
+          });
+        } catch (error) {
+          steps.push({
+            step: "F",
+            label: "Materialização multi-tabela",
+            status: "fail",
+            detail: `Erro: ${(error as Error).message}`,
+            data: { error: truncate(error) },
+            duration_ms: Date.now() - started,
+          });
+
+          await insertEvent("powerbi_xmla_multi_materialization_failed", "error", {
+            project_id,
+            connection_id,
+            workspace_id,
+            dataset_id,
+            error_message: (error as Error).message,
+          });
+        }
+      }
+
+      // Return multi-table response
+      const xmlaEndpoint = workspaceName
+        ? `powerbi://api.powerbi.com/v1.0/myorg/${encodeURIComponent(workspaceName)}`
+        : `powerbi://api.powerbi.com/v1.0/myorg/${workspace_id}`;
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          diagnostic: {
+            xmla_endpoint: xmlaEndpoint,
+            steps,
+            summary: {
+              auth_ok: steps.find((s) => s.step === "A")?.status === "ok",
+              workspace_ok: workspaceOk,
+              dataset_ok: datasetOk,
+              tables_found: discoveredTables.length,
+              columns_found: tableDetails.reduce((sum, t) => sum + t.columns.length, 0),
+              sample_ok: tableDetails.some((t) => t.sample_rows.length > 0),
+              row_count: tableDetails.reduce((sum, t) => sum + t.row_count, 0),
+              all_ok: steps.every((s) => s.status === "ok" || s.status === "skip"),
+            },
+            ignored_internal_tables: ignoredTables,
+            candidate_tables: sortedCandidates.map((t) => ({
+              discovered_name: t.discovered_name,
+              effective_name: t.effective_name,
+              source_method: t.source_method,
+              business_score: tableBusinessScore(t.effective_name),
+            })),
+            tables_detail: Object.fromEntries(
+              tableDetails.map((t) => [
+                t.table_name,
+                {
+                  columns_count: t.columns.length,
+                  row_count: t.row_count,
+                  columns: t.columns.map((c) => ({ name: c.column_name, type: c.data_type })),
+                },
+              ]),
+            ),
+            source_type_persisted: PBI_SOURCE_TYPE,
+            tables: discoveredTables.map((t) => t.effective_name),
+            columns_by_table: Object.fromEntries(
+              tableDetails.map((t) => [
+                t.table_name,
+                t.columns.map((c) => ({ name: c.column_name, type: c.data_type })),
+              ]),
+            ),
+            raw_errors: {},
+          },
+          can_materialize: canMultiMaterialize,
+          materialized: multiMaterialized,
+          tables_detail: Object.fromEntries(
+            tableDetails.map((t) => [
+              t.table_name,
+              { columns_count: t.columns.length, row_count: t.row_count },
+            ]),
+          ),
+        }),
+        {
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+          status: 200,
+        },
+      );
+    }
+    // ── END MULTI-TABLE ──
+
     let discoveredTableName: string | null = null;
     let effectiveTableName: string | null = null;
     let effectiveTableSource = "none";
