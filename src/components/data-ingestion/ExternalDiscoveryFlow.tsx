@@ -209,7 +209,7 @@ const ExternalDiscoveryFlow = ({
             confidence: effectiveSourceTrace.confidence || undefined,
           } : null}
           discoveredTables={
-            objects.length > 0 ? objects.map(o => o.object_name || o.name).filter(Boolean) : undefined
+            objects.length > 0 ? objects.map(o => o.object_name).filter(Boolean) : undefined
           }
           manualTableName={manualTableName}
           onManualTableNameChange={setManualTableName}
