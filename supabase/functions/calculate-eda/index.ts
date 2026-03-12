@@ -1178,29 +1178,184 @@ Deno.serve(async (req) => {
 
     const virtualDatasetContext = await resolveVirtualDatasetContext(supabase, project_id);
 
+    // ─── EARLY EXIT: Power BI / external materialized datasets ───
+    // These have project_columns populated but NO physical file in storage.
+    // We must build EDA from persisted metadata, not from CSV/Parquet files.
+    if (virtualDatasetContext.isVirtualDataset) {
+      console.log(`[calculate-eda] eda_detected_powerbi_materialized source_type=${virtualDatasetContext.sourceType}`);
+
+      // Check if project_columns are already populated (materialized schema)
+      const { data: pbiColumns } = await supabase
+        .from("project_columns")
+        .select("column_name, inferred_type, column_index")
+        .eq("project_id", project_id)
+        .order("column_index");
+
+      const colCount = pbiColumns?.length ?? 0;
+      const rowCount = virtualDatasetContext.rowCount ?? 0;
+
+      if (colCount > 0 && rowCount > 0) {
+        console.log(`[calculate-eda] eda_skipped_file_parsing_for_powerbi cols=${colCount} rows=${rowCount}`);
+
+        // Build basic stats from project_columns metadata
+        const numericStats: NumericStats[] = [];
+        const categoricalStats: CategoricalStats[] = [];
+
+        for (const col of pbiColumns!) {
+          if (col.inferred_type === "numérico") {
+            numericStats.push({
+              project_id: project_id,
+              column_name: col.column_name,
+              min_value: null,
+              max_value: null,
+              mean_value: null,
+              median_value: null,
+              std_value: null,
+              null_count: 0,
+            });
+          } else {
+            categoricalStats.push({
+              project_id: project_id,
+              column_name: col.column_name,
+              distinct_count: 0,
+              top_categories: [],
+            });
+          }
+        }
+
+        // Try to enrich stats from project_dataset_sample if available
+        const { data: sampleRows } = await supabase
+          .from("project_dataset_sample")
+          .select("sample_json")
+          .eq("project_id", project_id)
+          .maybeSingle();
+
+        if (sampleRows?.sample_json && Array.isArray(sampleRows.sample_json)) {
+          const rows = sampleRows.sample_json as Record<string, unknown>[];
+          console.log(`[calculate-eda] Enriching Power BI EDA from ${rows.length} sample rows`);
+
+          // Enrich numeric stats
+          for (const ns of numericStats) {
+            const values = rows
+              .map(r => r[ns.column_name])
+              .filter(v => v !== null && v !== undefined && v !== "")
+              .map(v => Number(v))
+              .filter(v => !isNaN(v));
+
+            if (values.length > 0) {
+              ns.min_value = Math.min(...values);
+              ns.max_value = Math.max(...values);
+              ns.mean_value = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10000) / 10000;
+              const sorted = [...values].sort((a, b) => a - b);
+              const mid = Math.floor(sorted.length / 2);
+              ns.median_value = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+              ns.null_count = rows.length - values.length;
+            }
+          }
+
+          // Enrich categorical stats
+          for (const cs of categoricalStats) {
+            const values = rows.map(r => String(r[cs.column_name] ?? "(vazio)"));
+            const counts = new Map<string, number>();
+            for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+            cs.distinct_count = counts.size;
+            cs.top_categories = [...counts.entries()]
+              .sort((a, b) => b[1] - a[1])
+              .slice(0, 10)
+              .map(([category, count]) => ({ category, count }));
+          }
+        }
+
+        // Persist stats
+        await supabase.from("project_numeric_stats").delete().eq("project_id", project_id);
+        await supabase.from("project_categorical_stats").delete().eq("project_id", project_id);
+
+        if (numericStats.length > 0) {
+          await supabase.from("project_numeric_stats").insert(numericStats);
+        }
+        if (categoricalStats.length > 0) {
+          await supabase.from("project_categorical_stats").insert(categoricalStats);
+        }
+
+        // Mark EDA as done
+        const profile = {
+          rows_total: rowCount,
+          columns_count: colCount,
+          numeric_columns: numericStats.length,
+          categorical_columns: categoricalStats.length,
+          computed_at: new Date().toISOString(),
+          virtual_dataset: true,
+          source_type: virtualDatasetContext.sourceType,
+          eda_status: "completed_external_materialized",
+        };
+
+        await supabase
+          .from("project_settings")
+          .update({
+            eda_status: "succeeded",
+            eda_error: null,
+            eda_state: "done",
+            eda_profile_json: profile,
+            eda_profile_created_at: new Date().toISOString(),
+          } as any)
+          .eq("project_id", project_id);
+
+        await supabase.from("projects").update({ status: "eda_complete" }).eq("id", project_id);
+
+        // Update project_dataset_state
+        await supabase
+          .from("project_dataset_state")
+          .update({ eda_ready: true, updated_at: new Date().toISOString() })
+          .eq("project_id", project_id);
+
+        await logVirtualEdaEvent(supabase, project_id, {
+          stage: "eda_completed_external_materialized",
+          source_type: virtualDatasetContext.sourceType,
+          row_count: rowCount,
+          column_count: colCount,
+          numeric_columns: numericStats.length,
+          categorical_columns: categoricalStats.length,
+          sample_rows_used: sampleRows?.sample_json ? (sampleRows.sample_json as unknown[]).length : 0,
+        });
+
+        console.log(`[calculate-eda] eda_completed_external_materialized numeric=${numericStats.length} categorical=${categoricalStats.length}`);
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: "Dataset Power BI materializado com schema real. EDA calculado com sucesso.",
+            is_virtual_dataset: true,
+            eda_status: "completed_external_materialized",
+            rows_total: rowCount,
+            columns_count: colCount,
+            numeric_columns: numericStats.length,
+            categorical_columns: categoricalStats.length,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Power BI but no columns — use virtual fallback
+      console.log(`[calculate-eda] Power BI dataset but no columns populated, using virtual fallback`);
+      const virtualPayload = buildVirtualDatasetPayload({
+        rowCount: virtualDatasetContext.rowCount,
+        columnCount: virtualDatasetContext.columnCount,
+      });
+      await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
+      await logVirtualEdaEvent(supabase, project_id, {
+        stage: "virtual_fallback_no_columns",
+        source_type: virtualDatasetContext.sourceType,
+      });
+
+      return new Response(JSON.stringify(virtualPayload), {
+        status: 200,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const { paths: filePaths, delimiter, encoding, fileType } = await resolveDatasetFilePaths(supabase, project);
     
     if (filePaths.length === 0) {
-      if (virtualDatasetContext.isVirtualDataset) {
-        const virtualPayload = buildVirtualDatasetPayload({
-          rowCount: virtualDatasetContext.rowCount,
-          columnCount: virtualDatasetContext.columnCount,
-        });
-
-        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
-        await logVirtualEdaEvent(supabase, project_id, {
-          stage: "file_resolution",
-          source_type: virtualDatasetContext.sourceType,
-          row_count: virtualPayload.row_count,
-          column_count: virtualPayload.column_count,
-        });
-
-        return new Response(JSON.stringify(virtualPayload), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
       console.error("[calculate-eda] Nenhum arquivo de dataset encontrado");
       return new Response(
         JSON.stringify({ error: "Nenhum dataset carregado para este projeto. Faça upload de dados primeiro." }),
@@ -1346,26 +1501,6 @@ Deno.serve(async (req) => {
     }
 
     if (columnsToProcess.length === 0) {
-      if (virtualDatasetContext.isVirtualDataset) {
-        const virtualPayload = buildVirtualDatasetPayload({
-          rowCount: virtualDatasetContext.rowCount,
-          columnCount: virtualDatasetContext.columnCount,
-        });
-
-        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
-        await logVirtualEdaEvent(supabase, project_id, {
-          stage: "column_metadata",
-          source_type: virtualDatasetContext.sourceType,
-          row_count: virtualPayload.row_count,
-          column_count: virtualPayload.column_count,
-        });
-
-        return new Response(JSON.stringify(virtualPayload), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
       return new Response(
         JSON.stringify({
           error:

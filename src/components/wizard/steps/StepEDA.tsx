@@ -62,7 +62,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       const [dsResult, settingsResult] = await Promise.all([
         supabase
           .from("project_datasets")
-          .select("id, total_rows, columns_count, name")
+          .select("id, total_rows, columns_count, name, source_type")
           .eq("project_id", projectData.id)
           .eq("is_active", true)
           .order("created_at", { ascending: false })
@@ -78,9 +78,9 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (dsResult.data) {
         setActiveDataset(dsResult.data);
         setNoDataset(false);
-        // Check if this is a virtual/external dataset (Power BI assisted)
-        const srcType = dsResult.data.name?.toLowerCase() || "";
-        setIsVirtualDataset(srcType.includes("power bi") || srcType.includes("powerbi"));
+        // Check if this is a virtual/external dataset (Power BI)
+        const srcType = (dsResult.data.source_type || dsResult.data.name || "").toLowerCase();
+        setIsVirtualDataset(srcType.includes("power") || srcType.includes("powerbi") || srcType === "powerbi" || srcType === "external");
       } else {
         // Fallback: check project_settings ingestion_state for assisted/external datasets
         const settings = settingsResult.data as any;
@@ -146,10 +146,16 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     setEdaSSOT(prev => ({ ...prev, eda_status: "running", eda_error: null }));
 
     try {
-      const { error } = await supabase.functions.invoke("calculate-eda", {
+      const { data: responseData, error } = await supabase.functions.invoke("calculate-eda", {
         body: { project_id: projectData.id },
       });
       if (error) throw error;
+
+      // If the response indicates a virtual/external dataset EDA was completed, use it directly
+      const isExternalEda = responseData?.is_virtual_dataset || responseData?.eda_status === "completed_external_materialized";
+      if (isExternalEda) {
+        setIsVirtualDataset(true);
+      }
 
       // Build profile from stats
       const [numResult, catResult] = await Promise.all([
@@ -335,8 +341,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* EDA failed — show retry (but not for virtual datasets since they'll handle it via calculate-eda) */}
-            {edaSSOT.eda_status === "failed" && !edaRunning && !isVirtualDataset && (
+            {/* EDA failed — show retry */}
+            {edaSSOT.eda_status === "failed" && !edaRunning && (
               <div className="p-4 rounded-lg border bg-destructive/10 border-destructive/30 space-y-3">
                 <div className="flex items-center gap-3">
                   <AlertTriangle className="w-5 h-5 text-destructive" />
@@ -370,7 +376,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             )}
 
             {/* EDA succeeded — show EDADisplay */}
-            {edaReady && projectData.id && !isVirtualDataset && (
+            {edaReady && projectData.id && (
               <>
                 <div className="flex items-center justify-end">
                   <Button variant="outline" size="sm" onClick={handleRecalculate} disabled={edaCalculating}>
