@@ -78,9 +78,9 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (dsResult.data) {
         setActiveDataset(dsResult.data);
         setNoDataset(false);
-        // Check if this is a virtual/external dataset (Power BI assisted)
-        const srcType = dsResult.data.name?.toLowerCase() || "";
-        setIsVirtualDataset(srcType.includes("power bi") || srcType.includes("powerbi"));
+        // Check if this is a virtual/external dataset (Power BI)
+        const srcType = (dsResult.data.source_type || dsResult.data.name || "").toLowerCase();
+        setIsVirtualDataset(srcType.includes("power") || srcType.includes("powerbi") || srcType === "powerbi" || srcType === "external");
       } else {
         // Fallback: check project_settings ingestion_state for assisted/external datasets
         const settings = settingsResult.data as any;
