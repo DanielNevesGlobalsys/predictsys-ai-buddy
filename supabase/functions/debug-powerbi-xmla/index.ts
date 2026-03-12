@@ -1252,7 +1252,7 @@ serve(async (req) => {
                 row_count_method: rowCountMethod,
               },
               response_summary: {
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 connection_mode: connectionMode,
                 columns: finalColumns.length,
                 row_count: finalRowCount,
