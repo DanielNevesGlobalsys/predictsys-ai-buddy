@@ -21,8 +21,8 @@ interface NumericStats {
 interface CategoricalStats {
   project_id: string;
   column_name: string;
-  distinct_count: number;
-  top_categories: { category: string; count: number }[];
+  distinct_count: number | null;
+  top_categories: { category: string; count: number; ratio?: number }[];
 }
 
 // Conservative limits to avoid WORKER_LIMIT in serverless runtime
