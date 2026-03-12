@@ -237,6 +237,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const edaReady = edaSSOT.eda_status === "succeeded" && !!edaSSOT.eda_profile_json;
   const edaRunning = edaSSOT.eda_status === "running" || edaCalculating;
   const canAdvance = edaReady || isVirtualDataset;
+  const showTdeAndLys = edaReady || isVirtualDataset;
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -394,12 +395,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             </div>
 
             {/* TDE Profile */}
-            {projectData.id && edaReady && (
+            {projectData.id && showTdeAndLys && (
               <TDEProfileCard key={tdeRefreshKey} projectId={projectData.id} />
             )}
 
             {/* Lys Synthesis — after EDA + TDE */}
-            {projectData.id && edaReady && (
+            {projectData.id && showTdeAndLys && (
               <LysSynthesisPanel
                 synthesis={{
                   narrative: lysSynthesis.narrative,
