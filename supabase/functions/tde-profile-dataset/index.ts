@@ -306,6 +306,149 @@ const SHAPE_LABELS: Record<DatasetShape, string> = {
   timeseries: "Série Temporal",
 };
 
+const VIRTUAL_PROFILE_NOTES = [
+  "Dataset proveniente de conexão assistida Power BI.",
+  "Profiling estatístico completo não disponível nesta etapa.",
+];
+
+function isVirtualSourceType(sourceType: string | null | undefined): boolean {
+  const normalized = String(sourceType || "").toLowerCase();
+  return ["powerbi", "external", "virtual"].includes(normalized);
+}
+
+function buildVirtualTdePayload(params: {
+  sourceType: string | null;
+  rowCount: number | null;
+  columnCount: number | null;
+  datasetName?: string | null;
+}) {
+  const nowIso = new Date().toISOString();
+  const simplifiedMessage = "Este dataset veio de conexão externa assistida. A detecção automática completa de colunas pode ser limitada nesta etapa.";
+
+  const tdeProfile = {
+    dataset_shape: "snapshot",
+    dataset_shape_label: "Dataset externo / virtual",
+    dataset_profile_type: "external_virtual",
+    is_virtual_dataset: true,
+    candidates: {
+      entity_candidates: [],
+      time_candidates: [],
+      value_candidates: [],
+      status_candidates: [],
+      text_candidates: [],
+    },
+    summary: [simplifiedMessage],
+    gates: [{ gate: "virtual_dataset_simplified", status: "WARN", message: simplifiedMessage }],
+    profiled_at: nowIso,
+    total_rows: params.rowCount ?? 0,
+    total_cols: params.columnCount ?? 0,
+    notes: VIRTUAL_PROFILE_NOTES,
+    source_type: params.sourceType,
+    dataset_name: params.datasetName ?? null,
+  };
+
+  return {
+    success: true,
+    is_virtual_dataset: true,
+    virtual_dataset: true,
+    eda_ready: true,
+    dataset_shape_label: "Dataset externo / virtual",
+    dataset_profile_type: "external_virtual",
+    row_count: params.rowCount ?? null,
+    column_count: params.columnCount ?? null,
+    columns: [],
+    numeric_summary: [],
+    categorical_summary: [],
+    missing_summary: [],
+    target_candidates: [],
+    entity_candidates: [],
+    time_candidates: [],
+    notes: VIRTUAL_PROFILE_NOTES,
+    source_type: params.sourceType,
+    dataset_name: params.datasetName ?? null,
+    tde_profile: tdeProfile,
+  };
+}
+
+async function persistVirtualTdeProfile(
+  supabase: any,
+  projectId: string,
+  payload: ReturnType<typeof buildVirtualTdePayload>,
+  aiContextRow: any,
+  datasetRef: string | null,
+  manifestId: string | null,
+) {
+  const currentCtx = (aiContextRow?.context as Record<string, any>) || {};
+  const prevProfiles: any[] = Array.isArray(currentCtx.tde_profile_history) ? currentCtx.tde_profile_history : [];
+  const prevProfile = currentCtx.tde_profile;
+  const newHistory = prevProfile
+    ? [{ ...prevProfile, _saved_at: new Date().toISOString() }, ...prevProfiles].slice(0, 5)
+    : prevProfiles;
+
+  const existingHints = currentCtx.contract_hints || {};
+
+  const tdeSlim = {
+    dataset_shape: payload.tde_profile.dataset_shape,
+    entity: null,
+    time: null,
+    value: null,
+    status: null,
+    profiled_at: payload.tde_profile.profiled_at,
+    dataset_ref: datasetRef,
+    manifest_id: manifestId,
+    is_virtual_dataset: true,
+  };
+
+  const contextPayload = {
+    ...currentCtx,
+    tde_profile: payload.tde_profile,
+    tde_profile_history: newHistory,
+    contract_hints: { ...existingHints, tde: tdeSlim },
+  };
+
+  if (aiContextRow?.id) {
+    await supabase.from("project_ai_context").update({
+      context: contextPayload,
+      last_updated_at: new Date().toISOString(),
+    }).eq("id", aiContextRow.id);
+  } else {
+    await supabase.from("project_ai_context").insert({
+      project_id: projectId,
+      context: contextPayload,
+      status: "active",
+      last_updated_at: new Date().toISOString(),
+    } as any);
+  }
+
+  await supabase.from("project_settings").update({
+    tde_profile_result: payload.tde_profile,
+    updated_at: new Date().toISOString(),
+  } as any).eq("project_id", projectId);
+}
+
+async function logVirtualTdeEvents(supabase: any, projectId: string, metadata: Record<string, unknown>) {
+  try {
+    await supabase.from("platform_events").insert([
+      {
+        event_type: "powerbi_virtual_profile_fallback_used",
+        project_id: projectId,
+        status: "success",
+        source: "edge",
+        metadata,
+      },
+      {
+        event_type: "powerbi_virtual_target_discovery_simplified",
+        project_id: projectId,
+        status: "success",
+        source: "edge",
+        metadata,
+      },
+    ]);
+  } catch (err) {
+    console.warn("[tde-profile-dataset] Non-blocking telemetry error:", err);
+  }
+}
+
 // ═══ Main ══════════════════════════════════════════════════════
 
 serve(async (req) => {
