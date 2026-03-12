@@ -133,6 +133,17 @@ function scoreTime(
   let score = 0;
   const reasons: string[] = [];
 
+  // Block technical/measure columns from being time candidates
+  if (isTechnicalOrMeasureColumn(col.column_name)) {
+    console.log(`[tde-profile-dataset] tde_rejected_technical_measure_candidate time="${col.column_name}"`);
+    return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada como âncora temporal"] };
+  }
+
+  // Block calendar/lookup table names used as column names
+  if (/^(calend[aá]rio|calendar|localdate|dimdate|dimcalendar|datatable)$/i.test(name)) {
+    return { column: col.column_name, score: -5, reasons: ["Nome de tabela calendário, não é âncora temporal"] };
+  }
+
   const dateTypes = ["data", "date", "datetime", "timestamp"];
   if (dateTypes.some(dt => col.inferred_type.toLowerCase().includes(dt))) {
     score += 5;
