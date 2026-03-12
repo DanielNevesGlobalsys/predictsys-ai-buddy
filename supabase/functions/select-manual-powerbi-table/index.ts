@@ -37,6 +37,10 @@ serve(async (req) => {
       dataset_id,
       manual_table_name,
       organization_id,
+      // Optional: validate table via DAX
+      client_id,
+      client_secret,
+      tenant_id,
     } = body;
 
     // Validate required fields
@@ -53,14 +57,62 @@ serve(async (req) => {
 
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
+    // Optional: Validate table exists in semantic model via DAX TOPN(1)
+    let tableValidated = false;
+    let validationSkipped = false;
+    if (client_id && client_secret && tenant_id && workspace_id && dataset_id) {
+      try {
+        const tokenUrl = `https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token`;
+        const params = new URLSearchParams({
+          grant_type: 'client_credentials',
+          client_id,
+          client_secret,
+          scope: 'https://analysis.windows.net/powerbi/api/.default',
+        });
+        const tokenResp = await fetch(tokenUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: params.toString(),
+        });
+        if (tokenResp.ok) {
+          const { access_token } = await tokenResp.json();
+          const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
+          const daxResp = await fetch(executeUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              queries: [{ query: `EVALUATE TOPN(1, '${tableName}')` }],
+              serializerSettings: { includeNulls: true },
+            }),
+          });
+          if (daxResp.ok) {
+            tableValidated = true;
+          } else {
+            // DAX failed - table may not exist or DAX is restricted
+            // Don't block - this is best-effort validation
+            console.warn(`[select-manual-pbi] DAX validation failed for table '${tableName}', proceeding anyway`);
+          }
+        }
+      } catch (err) {
+        console.warn(`[select-manual-pbi] Table validation error:`, err);
+      }
+    } else {
+      validationSkipped = true;
+    }
+
     // Log submission event
     try {
       await supabaseAdmin.from('platform_events').insert({
-        event_type: 'powerbi_manual_selection_submitted',
+        event_type: 'powerbi_manual_table_selected',
         project_id,
         source: 'connector_powerbi',
         status: 'info',
-        metadata: { connection_id, workspace_id, dataset_id, manual_table_name: tableName },
+        metadata: {
+          connection_id, workspace_id, dataset_id,
+          manual_table_name: tableName,
+          table_validated: tableValidated,
+          validation_skipped: validationSkipped,
+        },
       });
     } catch { /* best-effort */ }
 
@@ -122,6 +174,9 @@ serve(async (req) => {
         dataset_id: dataset_id || null,
         manual_table_name: tableName,
         connection_id: connection_id || null,
+        connection_mode: 'assisted',
+        discovery_status: 'partial',
+        table_validated: tableValidated,
       },
       p_schema_json: schemaJson,
       p_row_count: 1,
@@ -137,7 +192,7 @@ serve(async (req) => {
       // Log failure
       try {
         await supabaseAdmin.from('platform_events').insert({
-          event_type: 'powerbi_manual_selection_failed',
+          event_type: 'powerbi_manual_table_selected',
           project_id,
           source: 'connector_powerbi',
           status: 'error',
@@ -157,7 +212,7 @@ serve(async (req) => {
     // Log success
     try {
       await supabaseAdmin.from('platform_events').insert({
-        event_type: 'powerbi_manual_selection_saved',
+        event_type: 'powerbi_dataset_active',
         project_id,
         source: 'connector_powerbi',
         status: 'info',
@@ -167,6 +222,8 @@ serve(async (req) => {
           manifest_id: result?.manifest_id,
           dataset_version: result?.dataset_version,
           dataset_status: 'active',
+          connection_mode: 'assisted',
+          discovery_status: 'partial',
         },
       });
     } catch { /* best-effort */ }
@@ -181,6 +238,7 @@ serve(async (req) => {
       manual_table_name: tableName,
       manifest_id: result?.manifest_id,
       dataset_version: result?.dataset_version,
+      table_validated: tableValidated,
       message: 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
