@@ -106,6 +106,25 @@ const ignoredReasonForTable = (name: string, isHidden?: boolean): string | null 
   return null;
 };
 
+/** Score a table name for business relevance (higher = more likely business table). */
+const tableBusinessScore = (name: string): number => {
+  const lower = name.toLowerCase();
+  // Strong negative signals — calendar / date / dimension-date / measures
+  if (/^d?_?calend[aá]rio$|^d?_?calendar$|^dim_?date$|^dim_?calendar/i.test(lower)) return -10;
+  if (/calend[aá]rio|calendar|localdate|datetable/i.test(lower)) return -5;
+  if (/^_?(medidas?|measures?)$/i.test(lower)) return -8;
+  // Positive signals — fact / transactional tables
+  if (/^fat[oa]?_|^fato_|^fact_|^f_/i.test(lower)) return 20;
+  if (/vendas|sales|orders|pedidos|transac|receita|revenue|faturamento/i.test(lower)) return 15;
+  if (/clientes?|customers?|leads?|contacts?|accounts?/i.test(lower)) return 10;
+  if (/^dim_/i.test(lower)) return 2; // dimensions are ok but lower priority than facts
+  // Neutral
+  return 5;
+};
+
+/** Canonical source_type for Power BI (matches project_dataset_state check constraint). */
+const PBI_SOURCE_TYPE = "powerbi";
+
 const pickRowValue = (row: Record<string, unknown>, keys: string[]): unknown => {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
