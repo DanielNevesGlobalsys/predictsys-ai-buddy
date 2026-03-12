@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DatabricksSourceModeSelector from "./DatabricksSourceModeSelector";
 import ExternalDiscoveryFlow from "./ExternalDiscoveryFlow";
+import PowerBIManualAssistedPanel from "./PowerBIManualAssistedPanel";
 
 interface CloudConnectorSectionProps {
   projectData: ProjectData;
