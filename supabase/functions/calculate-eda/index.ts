@@ -43,13 +43,27 @@ function isVirtualSourceType(sourceType: string | null | undefined): boolean {
   return ["powerbi", "external", "virtual"].includes(normalized);
 }
 
+function normalizePowerBIConnectionMode(rawMode: unknown): "powerbi_executequeries" | "powerbi_xmla" | null {
+  const mode = String(rawMode || "").toLowerCase().trim();
+  if (["powerbi_executequeries", "executequeries", "pbi_executequeries"].includes(mode)) {
+    return "powerbi_executequeries";
+  }
+  if (["powerbi_xmla", "xmla", "pbi_xmla"].includes(mode)) {
+    return "powerbi_xmla";
+  }
+  return null;
+}
+
 async function resolveVirtualDatasetContext(supabase: any, projectId: string): Promise<{
   isVirtualDataset: boolean;
   sourceType: string | null;
   rowCount: number | null;
   columnCount: number | null;
+  connectionMode: "powerbi_executequeries" | "powerbi_xmla" | null;
+  sourceMetadata: Record<string, unknown>;
+  sourcePointer: Record<string, unknown>;
 }> {
-  const [{ data: settings }, { data: activeDataset }] = await Promise.all([
+  const [{ data: settings }, { data: activeDataset }, { data: datasetState }, { data: ingestionManifest }] = await Promise.all([
     supabase
       .from("project_settings")
       .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
@@ -57,24 +71,58 @@ async function resolveVirtualDatasetContext(supabase: any, projectId: string): P
       .maybeSingle(),
     supabase
       .from("project_datasets")
-      .select("source_type, total_rows, columns_count")
+      .select("source_type, total_rows, columns_count, source_metadata")
       .eq("project_id", projectId)
       .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("project_dataset_state")
+      .select("row_count, col_count")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+    supabase
+      .from("project_ingestion_manifests")
+      .select("source_pointer")
+      .eq("project_id", projectId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
   ]);
 
   const sourceType = (settings?.ingestion_source_type || activeDataset?.source_type || null) as string | null;
+  const normalizedSourceType = String(sourceType || "").toLowerCase();
+  const sourceMetadata = ((activeDataset?.source_metadata as Record<string, unknown> | null) || {}) as Record<string, unknown>;
+  const sourcePointer = ((ingestionManifest?.source_pointer as Record<string, unknown> | null) || {}) as Record<string, unknown>;
+
+  const rowCount = activeDataset?.total_rows ?? datasetState?.row_count ?? settings?.ingestion_rows_detected ?? null;
+  const columnCount = activeDataset?.columns_count ?? datasetState?.col_count ?? settings?.ingestion_cols_detected ?? null;
+
+  const connectionMode = normalizePowerBIConnectionMode(
+    sourceMetadata.connection_mode ?? sourcePointer.connection_mode ?? null,
+  );
+
+  const isPowerBIMaterialized =
+    normalizedSourceType === "powerbi" &&
+    Boolean(activeDataset) &&
+    connectionMode !== null &&
+    Number(rowCount || 0) > 0 &&
+    Number(columnCount || 0) > 0;
+
   const isVirtualDataset =
+    isPowerBIMaterialized ||
     (settings?.ingestion_state === "done" && isVirtualSourceType(sourceType)) ||
     isVirtualSourceType(activeDataset?.source_type);
 
   return {
     isVirtualDataset,
     sourceType,
-    rowCount: activeDataset?.total_rows ?? settings?.ingestion_rows_detected ?? null,
-    columnCount: activeDataset?.columns_count ?? settings?.ingestion_cols_detected ?? null,
+    rowCount,
+    columnCount,
+    connectionMode,
+    sourceMetadata,
+    sourcePointer,
   };
 }
 
