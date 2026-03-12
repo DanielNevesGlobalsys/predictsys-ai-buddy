@@ -95,12 +95,35 @@ serve(async (req) => {
 
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
-    // Validate table exists AND extract actual columns via DAX TOPN(1)
+    // Validate table exists AND extract actual columns via multi-method fallback
     let tableValidated = false;
     let validationSkipped = false;
     let extractedColumns: string[] = [];
+    let extractedColumnTypes: string[] = [];
     let extractedRowCount = 0;
     let daxAccessToken: string | null = null;
+    let discoveryMethod = 'none';
+
+    // Helper to execute DAX query
+    async function executeDax(executeUrl: string, token: string, query: string): Promise<{ ok: boolean; rows: any[]; error?: string }> {
+      try {
+        const resp = await fetch(executeUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ queries: [{ query }], serializerSettings: { includeNulls: true } }),
+        });
+        if (!resp.ok) {
+          const errText = await resp.text();
+          return { ok: false, rows: [], error: `HTTP ${resp.status}: ${errText.substring(0, 300)}` };
+        }
+        const result = await resp.json();
+        const error = result.results?.[0]?.error;
+        if (error) return { ok: false, rows: [], error: JSON.stringify(error).substring(0, 300) };
+        return { ok: true, rows: result.results?.[0]?.tables?.[0]?.rows || [] };
+      } catch (err) {
+        return { ok: false, rows: [], error: (err as Error).message };
+      }
+    }
 
     if (client_id && client_secret && tenant_id && workspace_id && dataset_id) {
       try {
@@ -121,51 +144,98 @@ serve(async (req) => {
           daxAccessToken = tokenData.access_token;
           const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
-          // Step 1: Get columns + sample via TOPN(1)
-          const daxResp = await fetch(executeUrl, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              queries: [{ query: `EVALUATE TOPN(1, '${tableName}')` }],
-              serializerSettings: { includeNulls: true },
-            }),
-          });
-          if (daxResp.ok) {
+          // ── Method 1: TOPN(1) for column names ──
+          const topnResult = await executeDax(executeUrl, daxAccessToken, `EVALUATE TOPN(1, '${tableName}')`);
+          if (topnResult.ok && topnResult.rows.length > 0) {
             tableValidated = true;
-            const daxResult = await daxResp.json();
-            const rawRows = daxResult.results?.[0]?.tables?.[0]?.rows || [];
-            if (rawRows.length > 0) {
-              // Extract column names - Power BI wraps them in [brackets]
-              const rawKeys = Object.keys(rawRows[0]);
-              extractedColumns = rawKeys.map(k => k.replace(/^\[/, '').replace(/\]$/, ''));
-              console.log(`[select-manual-pbi] Extracted ${extractedColumns.length} columns from DAX TOPN(1)`);
-            }
+            discoveryMethod = 'DAX_TOPN';
+            const rawKeys = Object.keys(topnResult.rows[0]);
+            extractedColumns = rawKeys.map(k => k.replace(/^\[/, '').replace(/\]$/, '').replace(/^.*\[/, ''));
+            console.log(`[select-manual-pbi] Method 1 (TOPN): ${extractedColumns.length} columns`);
           } else {
-            console.warn(`[select-manual-pbi] DAX validation failed for table '${tableName}', proceeding anyway`);
+            console.warn(`[select-manual-pbi] TOPN failed: ${topnResult.error || 'no rows'}`);
           }
 
-          // Step 2: Try to get approximate row count via COUNTROWS
-          if (daxAccessToken && tableValidated) {
-            try {
-              const countResp = await fetch(executeUrl, {
-                method: 'POST',
-                headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  queries: [{ query: `EVALUATE ROW("cnt", COUNTROWS('${tableName}'))` }],
-                  serializerSettings: { includeNulls: true },
-                }),
-              });
-              if (countResp.ok) {
-                const countResult = await countResp.json();
-                const countRows = countResult.results?.[0]?.tables?.[0]?.rows || [];
-                if (countRows.length > 0) {
-                  const cntVal = countRows[0]?.['[cnt]'] ?? countRows[0]?.cnt;
-                  extractedRowCount = typeof cntVal === 'number' ? cntVal : parseInt(String(cntVal), 10) || 0;
-                  console.log(`[select-manual-pbi] COUNTROWS = ${extractedRowCount}`);
+          // ── Method 2: TMSCHEMA_COLUMNS + TMSCHEMA_TABLES (DMV) ──
+          if (extractedColumns.length === 0) {
+            // First get table ID
+            const tablesResult = await executeDax(executeUrl, daxAccessToken,
+              `SELECT [ID], [Name] FROM $SYSTEM.TMSCHEMA_TABLES WHERE [Name] = '${tableName}'`);
+
+            if (tablesResult.ok && tablesResult.rows.length > 0) {
+              tableValidated = true;
+              const tableId = tablesResult.rows[0]?.['[ID]'] || tablesResult.rows[0]?.['ID'];
+              if (tableId !== undefined) {
+                const colsResult = await executeDax(executeUrl, daxAccessToken,
+                  `SELECT [ExplicitName], [InferredName], [ExplicitDataType], [DataType] FROM $SYSTEM.TMSCHEMA_COLUMNS WHERE [TableID] = ${tableId} AND NOT [IsHidden]`);
+
+                if (colsResult.ok && colsResult.rows.length > 0) {
+                  discoveryMethod = 'TMSCHEMA_COLUMNS';
+                  extractedColumns = colsResult.rows.map((r: any) =>
+                    r['[ExplicitName]'] || r['ExplicitName'] || r['[InferredName]'] || r['InferredName'] || ''
+                  ).filter(Boolean);
+                  extractedColumnTypes = colsResult.rows.map((r: any) =>
+                    String(r['[ExplicitDataType]'] || r['ExplicitDataType'] || r['[DataType]'] || r['DataType'] || 'unknown')
+                  );
+                  console.log(`[select-manual-pbi] Method 2 (TMSCHEMA): ${extractedColumns.length} columns`);
                 }
               }
-            } catch (cntErr) {
-              console.warn('[select-manual-pbi] COUNTROWS failed:', cntErr);
+            } else {
+              // Try without WHERE filter and match by name
+              const allTablesResult = await executeDax(executeUrl, daxAccessToken,
+                `SELECT [ID], [Name] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]`);
+              if (allTablesResult.ok) {
+                const matchedTable = allTablesResult.rows.find((r: any) => {
+                  const name = r['[Name]'] || r['Name'] || '';
+                  return name.toLowerCase() === tableName.toLowerCase();
+                });
+                if (matchedTable) {
+                  tableValidated = true;
+                  const tableId = matchedTable['[ID]'] || matchedTable['ID'];
+                  if (tableId !== undefined) {
+                    const colsResult = await executeDax(executeUrl, daxAccessToken,
+                      `SELECT [ExplicitName], [InferredName], [ExplicitDataType] FROM $SYSTEM.TMSCHEMA_COLUMNS WHERE [TableID] = ${tableId} AND NOT [IsHidden]`);
+                    if (colsResult.ok && colsResult.rows.length > 0) {
+                      discoveryMethod = 'TMSCHEMA_COLUMNS_FUZZY';
+                      extractedColumns = colsResult.rows.map((r: any) =>
+                        r['[ExplicitName]'] || r['ExplicitName'] || r['[InferredName]'] || r['InferredName'] || ''
+                      ).filter(Boolean);
+                      console.log(`[select-manual-pbi] Method 2b (TMSCHEMA fuzzy): ${extractedColumns.length} columns`);
+                    }
+                  }
+                }
+              }
+            }
+          }
+
+          // ── Method 3: INFO.COLUMNS() ──
+          if (extractedColumns.length === 0) {
+            const infoResult = await executeDax(executeUrl, daxAccessToken, `EVALUATE INFO.COLUMNS()`);
+            if (infoResult.ok && infoResult.rows.length > 0) {
+              // Filter by table name
+              const tableRows = infoResult.rows.filter((r: any) => {
+                const tName = r['[TableName]'] || r['TableName'] || '';
+                return tName.toLowerCase() === tableName.toLowerCase();
+              });
+              if (tableRows.length > 0) {
+                tableValidated = true;
+                discoveryMethod = 'INFO_COLUMNS';
+                extractedColumns = tableRows.map((r: any) =>
+                  r['[Name]'] || r['Name'] || r['[ColumnName]'] || r['ColumnName'] || ''
+                ).filter(Boolean);
+                console.log(`[select-manual-pbi] Method 3 (INFO.COLUMNS): ${extractedColumns.length} columns`);
+              }
+            }
+          }
+
+          // ── Row count via COUNTROWS ──
+          if (tableValidated) {
+            const countResult = await executeDax(executeUrl, daxAccessToken,
+              `EVALUATE ROW("cnt", COUNTROWS('${tableName}'))`);
+            if (countResult.ok && countResult.rows.length > 0) {
+              const cntVal = countResult.rows[0]?.['[cnt]'] ?? countResult.rows[0]?.cnt;
+              extractedRowCount = typeof cntVal === 'number' ? cntVal : parseInt(String(cntVal), 10) || 0;
+              console.log(`[select-manual-pbi] COUNTROWS = ${extractedRowCount}`);
             }
           }
         }
