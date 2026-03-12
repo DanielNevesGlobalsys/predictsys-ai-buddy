@@ -203,9 +203,19 @@ interface SourceTraceResult {
   source_trace_status: 'detected' | 'partial' | 'not_available';
   source_trace_reason_code: string;
   confidence: 'high' | 'medium' | 'low';
+  source_role: 'primary' | 'auxiliary';
   raw_datasources: any[];
   semantic_model_type: string | null;
 }
+
+const PRIMARY_SOURCE_TYPES_SET = new Set([
+  'sql', 'sqlserver', 'azure_sql', 'azuresqldw', 'azure_synapse',
+  'databricks', 'synapse', 'postgresql', 'mysql', 'oracle',
+  'snowflake', 'bigquery', 'amazonredshift', 'aws_redshift',
+  'microsoftfabricwarehouse', 'microsoftfabriclakehouse',
+  'fabric_warehouse', 'fabric_lakehouse', 'sql_server',
+  'analysisservices', 'analysis_services',
+]);
 
 interface PowerBIDiscoveryResult {
   objects: DiscoveredObject[];
