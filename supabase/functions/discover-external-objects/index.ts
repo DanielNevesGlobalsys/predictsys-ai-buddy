@@ -360,6 +360,7 @@ async function traceUnderlyingSource(
     const primary = sqlLike || datasources[0];
     const classified = classifyDatasource(primary);
 
+    const sourceRole = PRIMARY_SOURCE_TYPES_SET.has(classified.type.toLowerCase()) ? 'primary' as const : 'auxiliary' as const;
     const result: SourceTraceResult = {
       detected: true,
       datasource_type: classified.type,
@@ -369,7 +370,8 @@ async function traceUnderlyingSource(
       lineage_available: true,
       source_trace_status: classified.server ? 'detected' : 'partial',
       source_trace_reason_code: 'datasource_api_ok',
-      confidence: classified.server && classified.database ? 'high' : classified.server ? 'medium' : 'low',
+      confidence: sourceRole === 'primary' && classified.server && classified.database ? 'high' : classified.server ? 'medium' : 'low',
+      source_role: sourceRole,
       raw_datasources: datasources,
       semantic_model_type: null,
     };
