@@ -30,6 +30,7 @@ const ExternalDiscoveryFlow = ({
   const { currentOrganization } = useOrganization();
   const [hasInitialized, setHasInitialized] = useState(false);
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [manualTableName, setManualTableName] = useState("");
 
   const {
     connections,
