@@ -78,11 +78,15 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (dsResult.data) {
         setActiveDataset(dsResult.data);
         setNoDataset(false);
+        // Check if this is a virtual/external dataset (Power BI assisted)
+        const srcType = dsResult.data.name?.toLowerCase() || "";
+        setIsVirtualDataset(srcType.includes("power bi") || srcType.includes("powerbi"));
       } else {
         // Fallback: check project_settings ingestion_state for assisted/external datasets
         const settings = settingsResult.data as any;
         if (settings?.ingestion_state === 'done' && (settings?.ingestion_rows_detected > 0 || settings?.ingestion_source_type === 'powerbi')) {
           // Dataset was materialized via assisted mode or external connector
+          const isVirtual = ['powerbi', 'external'].includes(settings?.ingestion_source_type || '');
           setActiveDataset({
             id: projectData.id,
             total_rows: settings.ingestion_rows_detected || 1,
@@ -90,10 +94,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             name: `Dataset (${settings.ingestion_source_type || 'external'})`,
           });
           setNoDataset(false);
-          console.log("[StepEDA] Using fallback dataset from project_settings ingestion_state=done");
+          setIsVirtualDataset(isVirtual);
+          console.log("[StepEDA] Using fallback dataset from project_settings ingestion_state=done, virtual=", isVirtual);
         } else {
           setActiveDataset(null);
           setNoDataset(true);
+          setIsVirtualDataset(false);
         }
       }
 
