@@ -41,6 +41,10 @@ interface PowerBIManualAssistedPanelProps {
   authValid?: boolean;
   workspaceValid?: boolean;
   datasetValid?: boolean;
+  projectId?: string;
+  connectionId?: string;
+  workspaceId?: string;
+  datasetId?: string;
 }
 
 const confidenceLabel: Record<string, string> = {
