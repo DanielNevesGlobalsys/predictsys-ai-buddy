@@ -66,6 +66,19 @@ const GENERIC_ADAPTER = {
 
 // ═══ Scoring heuristics ════════════════════════════════════════
 
+// ── Technical column filters ──────────────────────────────────
+
+/** Returns true if the column is a technical/measure/aggregate column that should be deprioritized */
+function isTechnicalOrMeasureColumn(name: string): boolean {
+  const lower = name.toLowerCase();
+  // __ prefixed columns (Power BI internal measures)
+  if (name.startsWith("__")) return true;
+  // Aggregate measure patterns
+  if (/^(count|sum|avg|average|total|measure|medida|qtd|quantidade)[\s_]?/i.test(lower)) return true;
+  if (/[\s_](count|sum|avg|average|total|measure)$/i.test(lower)) return true;
+  return false;
+}
+
 function scoreEntity(
   col: ColumnRow,
   adapterCandidates: string[],
@@ -76,6 +89,11 @@ function scoreEntity(
   const name = col.column_name.toLowerCase();
   let score = 0;
   const reasons: string[] = [];
+
+  // Block technical/measure columns
+  if (isTechnicalOrMeasureColumn(col.column_name)) {
+    return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada"] };
+  }
 
   if (adapterCandidates.some(c => c.toLowerCase() === name)) {
     score += 5;
