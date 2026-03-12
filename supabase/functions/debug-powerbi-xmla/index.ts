@@ -526,7 +526,8 @@ serve(async (req) => {
     let rowCount = 0;
 
     if (sampleTable) {
-      const result = await executeDax(`EVALUATE ROW("count", COUNTROWS('${sampleTable}'))`);
+      const escaped = daxTable(sampleTable);
+      const result = await executeDax(`EVALUATE ROW("count", COUNTROWS(${escaped}))`);
       if (result.ok && result.rows.length > 0) {
         const val = result.rows[0]?.['[count]'] ?? result.rows[0]?.count;
         rowCount = typeof val === 'number' ? val : parseInt(String(val), 10) || 0;
@@ -535,9 +536,19 @@ serve(async (req) => {
           data: { table: sampleTable, row_count: rowCount },
           duration_ms: Date.now() - stepE });
       } else {
-        steps.push({ step: 'E', label: 'Contagem de linhas', status: 'fail',
-          detail: `COUNTROWS falhou para "${sampleTable}": ${result.error || 'sem resultado'}`,
-          duration_ms: Date.now() - stepE });
+        // If sample worked, use sample count as fallback
+        if (sampleRows.length > 0) {
+          rowCount = sampleRows.length;
+          steps.push({ step: 'E', label: 'Contagem de linhas', status: 'ok',
+            detail: `COUNTROWS falhou, usando contagem da amostra: ${rowCount} linhas (mínimo).`,
+            data: { table: sampleTable, row_count: rowCount, source: 'sample_fallback', error: result.error },
+            duration_ms: Date.now() - stepE });
+        } else {
+          steps.push({ step: 'E', label: 'Contagem de linhas', status: 'fail',
+            detail: `COUNTROWS falhou para "${sampleTable}": ${result.error || 'sem resultado'}`,
+            data: { error: result.error, dax_query: `EVALUATE ROW("count", COUNTROWS(${escaped}))` },
+            duration_ms: Date.now() - stepE });
+        }
       }
     } else {
       steps.push({ step: 'E', label: 'Contagem de linhas', status: 'skip',
