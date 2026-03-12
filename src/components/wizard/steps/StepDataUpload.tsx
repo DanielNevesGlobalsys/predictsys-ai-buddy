@@ -100,7 +100,7 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
   useEffect(() => {
     if (!projectData.id || isDataReady) return;
     let isMounted = true;
-    let intervalId: NodeJS.Timeout | null = null;
+    let intervalId: ReturnType<typeof setInterval> | null = null;
 
     const pollForCompletion = async () => {
       if (!isMounted) return;

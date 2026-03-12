@@ -15,6 +15,8 @@ interface SourceTraceInfo {
   datasource_database: string | null;
 }
 
+type SubmissionStatus = "idle" | "submitting" | "success" | "error";
+
 interface PowerBIManualAssistedPanelProps {
   connectionStatus: string;
   message: string;
@@ -27,8 +29,10 @@ interface PowerBIManualAssistedPanelProps {
   onUseDetectedSource: () => void;
   onImportFile: () => void;
   onContinuePartial: () => void;
-  onSelectTableManually: () => void;
+  onSelectTableManually: () => Promise<void> | void;
   isRetrying: boolean;
+  submissionStatus?: SubmissionStatus;
+  submissionError?: string | null;
 }
 
 const PowerBIManualAssistedPanel = ({
@@ -45,10 +49,14 @@ const PowerBIManualAssistedPanel = ({
   onContinuePartial,
   onSelectTableManually,
   isRetrying,
+  submissionStatus = "idle",
+  submissionError,
 }: PowerBIManualAssistedPanelProps) => {
   const isPartial = connectionStatus === "connected_partial_discovery";
   const isFull = connectionStatus === "connected_full_discovery";
   const hasSourceTrace = sourceTrace && sourceTrace.datasource_type;
+  const isSubmitting = submissionStatus === "submitting";
+  const isSuccess = submissionStatus === "success";
 
   if (!isPartial && !isFull) return null;
 
@@ -87,6 +95,22 @@ const PowerBIManualAssistedPanel = ({
         </div>
       </Card>
 
+      {/* Success banner */}
+      {isSuccess && (
+        <Card className="p-4 bg-accent/10 border-accent/30">
+          <div className="flex items-start gap-3">
+            <CheckCircle className="w-5 h-5 text-accent mt-0.5 flex-shrink-0" />
+            <div>
+              <p className="font-medium text-sm text-accent">Tabela manual selecionada com sucesso</p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Dataset ativo registrado para o projeto. Você pode avançar para a próxima etapa.
+              </p>
+              <Badge variant="default" className="mt-2 text-xs">Dataset manual ativo</Badge>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {/* Source trace card */}
       {hasSourceTrace && (
         <Card className="p-4 border-primary/20 bg-primary/5">
@@ -118,12 +142,37 @@ const PowerBIManualAssistedPanel = ({
             value={manualTableName}
             onChange={(e) => onManualTableNameChange(e.target.value)}
             placeholder="Ex: FactSales, DimCustomer, vw_churn_base"
+            disabled={isSubmitting}
           />
           <p className="text-xs text-muted-foreground">
             Informe o nome da tabela ou view que deseja usar do dataset Power BI. Este nome será usado para tentar extrair dados via DAX ou como referência para importação.
           </p>
+          {/* Inline error */}
+          {submissionStatus === "error" && submissionError && (
+            <p className="text-xs text-destructive font-medium">
+              {submissionError}
+            </p>
+          )}
+          {/* Field validation error */}
+          {submissionStatus === "error" && !submissionError && (
+            <p className="text-xs text-destructive font-medium">
+              Informe o nome da tabela manualmente antes de continuar.
+            </p>
+          )}
         </div>
       </Card>
+
+      {/* Connection status badges */}
+      <div className="flex items-center gap-2 flex-wrap">
+        <Badge variant="outline" className="text-xs">
+          Conexão parcial utilizável
+        </Badge>
+        {isSuccess && (
+          <Badge variant="default" className="text-xs bg-accent text-accent-foreground">
+            Dataset manual ativo
+          </Badge>
+        )}
+      </div>
 
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
@@ -131,30 +180,34 @@ const PowerBIManualAssistedPanel = ({
           variant="default"
           size="sm"
           onClick={onSelectTableManually}
-          disabled={!manualTableName.trim()}
+          disabled={!manualTableName.trim() || isSubmitting}
         >
-          <TableProperties className="w-4 h-4 mr-1" />
-          Selecionar tabela manualmente
+          {isSubmitting ? (
+            <Loader2 className="w-4 h-4 mr-1 animate-spin" />
+          ) : (
+            <TableProperties className="w-4 h-4 mr-1" />
+          )}
+          {isSubmitting ? "Salvando..." : "Selecionar tabela manualmente"}
         </Button>
 
-        <Button variant="outline" size="sm" onClick={onRetryDiscovery} disabled={isRetrying}>
+        <Button variant="outline" size="sm" onClick={onRetryDiscovery} disabled={isRetrying || isSubmitting}>
           {isRetrying ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-1" />}
           Tentar discovery novamente
         </Button>
 
         {hasSourceTrace && (
-          <Button variant="outline" size="sm" onClick={onUseDetectedSource}>
+          <Button variant="outline" size="sm" onClick={onUseDetectedSource} disabled={isSubmitting}>
             <Link2 className="w-4 h-4 mr-1" />
             Usar fonte detectada
           </Button>
         )}
 
-        <Button variant="outline" size="sm" onClick={onImportFile}>
+        <Button variant="outline" size="sm" onClick={onImportFile} disabled={isSubmitting}>
           <FileDown className="w-4 h-4 mr-1" />
           Importar metadados/exportação
         </Button>
 
-        <Button variant="ghost" size="sm" onClick={onContinuePartial}>
+        <Button variant="ghost" size="sm" onClick={onContinuePartial} disabled={isSubmitting}>
           <ArrowRight className="w-4 h-4 mr-1" />
           Continuar com conexão parcial
         </Button>

@@ -194,3 +194,6 @@ verify_jwt = false
 
 [functions.resolve-target-intent]
 verify_jwt = false
+
+[functions.select-manual-powerbi-table]
+verify_jwt = false

@@ -113,7 +113,7 @@ const ImportJobsModal = ({
   const [loading, setLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [expandedBatches, setExpandedBatches] = useState<Set<string>>(new Set());
-  const pollingRef = useRef<NodeJS.Timeout | null>(null);
+  const pollingRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const previousJobsRef = useRef<ImportJob[]>([]);
 
   const getDateLocale = () => {
