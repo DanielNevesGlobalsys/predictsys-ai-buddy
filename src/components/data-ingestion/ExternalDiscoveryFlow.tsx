@@ -279,6 +279,8 @@ const ExternalDiscoveryFlow = ({
           isRetrying={isDiscovering}
           submissionStatus={manualSubmissionStatus}
           submissionError={manualSubmissionError}
+          projectId={projectData.id}
+          connectionId={activeConnectionId || undefined}
         />
       )}
 

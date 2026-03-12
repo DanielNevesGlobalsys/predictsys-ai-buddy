@@ -841,6 +841,10 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                   }
                 }}
                 isRetrying={false}
+                projectId={projectData.id}
+                connectionId={editingConnectionId || undefined}
+                workspaceId={formData.workspace_id}
+                datasetId={formData.dataset_id}
               />
             )}
 
