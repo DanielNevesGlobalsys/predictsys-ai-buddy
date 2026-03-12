@@ -170,6 +170,7 @@ serve(async (req) => {
       project_name,
       project_description,
       declared_objective,
+      custom_objective_text,
       organization_id,
       industry, // NEW: explicit industry selection from UI
     } = await req.json();
