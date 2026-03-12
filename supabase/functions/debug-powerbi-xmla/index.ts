@@ -711,16 +711,17 @@ serve(async (req) => {
 
         for (const td of tableDetails) {
           for (const col of td.columns) {
+            const cleanCol = cleanupColumnKey(col.column_name);
             allColumns.push({
               table_name: td.table_name,
-              column_name: usePrefix ? `${td.table_name}.${col.column_name}` : col.column_name,
+              column_name: usePrefix ? `${td.table_name}.${cleanCol}` : cleanCol,
               data_type: col.data_type,
               source_table: td.table_name,
             });
           }
           totalRows += td.row_count;
           for (const row of td.sample_rows) {
-            const prefixed: Record<string, unknown> = {};
+            const prefixed: Record<string, unknown> = { __source_table: td.table_name };
             for (const [k, v] of Object.entries(row)) {
               const cleanKey = cleanupColumnKey(k);
               prefixed[usePrefix ? `${td.table_name}.${cleanKey}` : cleanKey] = v;
@@ -792,14 +793,24 @@ serve(async (req) => {
           );
           if (colErr) throw colErr;
 
+          // Resolve org_id for dataset state
+          const { data: projRow } = await supabaseAdmin
+            .from("projects")
+            .select("organization_id")
+            .eq("id", project_id)
+            .single();
+          const orgId = projRow?.organization_id || "b0000000-0000-0000-0000-000000000001";
+
           // Update dataset state
           await supabaseAdmin.from("project_dataset_state").upsert(
             {
               project_id,
+              organization_id: orgId,
               source_type: PBI_SOURCE_TYPE,
               row_count: totalRows,
               col_count: allColumns.length,
               active_schema_json: schemaJson,
+              active_dataset_ref: datasetRow?.id || project_id,
               updated_at: new Date().toISOString(),
             },
             { onConflict: "project_id" },
@@ -812,8 +823,9 @@ serve(async (req) => {
                 project_id,
                 sample_json: {
                   rows: allSampleRows,
-                  columns: allColumns.map((c) => ({ name: c.column_name, type: c.data_type })),
+                  columns: allColumns.map((c) => c.column_name),
                 },
+                sample_rows: allSampleRows.length,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "project_id" },
