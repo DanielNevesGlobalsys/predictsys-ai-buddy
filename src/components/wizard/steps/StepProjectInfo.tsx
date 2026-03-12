@@ -283,7 +283,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
       : effectiveProblemType;
 
     // Build custom_objective_text for "outro"
-    const customObjectiveText = objectiveKey === "outro" || formData.declared_objective === "outro"
+    const customObjectiveText = (objectiveKey as string) === "outro" || formData.declared_objective === "outro"
       ? formData.business_objective.trim() || null
       : null;
 
