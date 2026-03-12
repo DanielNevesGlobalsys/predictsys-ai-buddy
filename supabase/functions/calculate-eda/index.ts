@@ -21,8 +21,8 @@ interface NumericStats {
 interface CategoricalStats {
   project_id: string;
   column_name: string;
-  distinct_count: number;
-  top_categories: { category: string; count: number }[];
+  distinct_count: number | null;
+  top_categories: { category: string; count: number; ratio?: number }[];
 }
 
 // Conservative limits to avoid WORKER_LIMIT in serverless runtime
@@ -43,13 +43,27 @@ function isVirtualSourceType(sourceType: string | null | undefined): boolean {
   return ["powerbi", "external", "virtual"].includes(normalized);
 }
 
+function normalizePowerBIConnectionMode(rawMode: unknown): "powerbi_executequeries" | "powerbi_xmla" | null {
+  const mode = String(rawMode || "").toLowerCase().trim();
+  if (["powerbi_executequeries", "executequeries", "pbi_executequeries"].includes(mode)) {
+    return "powerbi_executequeries";
+  }
+  if (["powerbi_xmla", "xmla", "pbi_xmla"].includes(mode)) {
+    return "powerbi_xmla";
+  }
+  return null;
+}
+
 async function resolveVirtualDatasetContext(supabase: any, projectId: string): Promise<{
   isVirtualDataset: boolean;
   sourceType: string | null;
   rowCount: number | null;
   columnCount: number | null;
+  connectionMode: "powerbi_executequeries" | "powerbi_xmla" | null;
+  sourceMetadata: Record<string, unknown>;
+  sourcePointer: Record<string, unknown>;
 }> {
-  const [{ data: settings }, { data: activeDataset }] = await Promise.all([
+  const [{ data: settings }, { data: activeDataset }, { data: datasetState }, { data: ingestionManifest }] = await Promise.all([
     supabase
       .from("project_settings")
       .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
@@ -57,24 +71,58 @@ async function resolveVirtualDatasetContext(supabase: any, projectId: string): P
       .maybeSingle(),
     supabase
       .from("project_datasets")
-      .select("source_type, total_rows, columns_count")
+      .select("source_type, total_rows, columns_count, source_metadata")
       .eq("project_id", projectId)
       .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    supabase
+      .from("project_dataset_state")
+      .select("row_count, col_count")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+    supabase
+      .from("project_ingestion_manifests")
+      .select("source_pointer")
+      .eq("project_id", projectId)
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle(),
   ]);
 
   const sourceType = (settings?.ingestion_source_type || activeDataset?.source_type || null) as string | null;
+  const normalizedSourceType = String(sourceType || "").toLowerCase();
+  const sourceMetadata = ((activeDataset?.source_metadata as Record<string, unknown> | null) || {}) as Record<string, unknown>;
+  const sourcePointer = ((ingestionManifest?.source_pointer as Record<string, unknown> | null) || {}) as Record<string, unknown>;
+
+  const rowCount = activeDataset?.total_rows ?? datasetState?.row_count ?? settings?.ingestion_rows_detected ?? null;
+  const columnCount = activeDataset?.columns_count ?? datasetState?.col_count ?? settings?.ingestion_cols_detected ?? null;
+
+  const connectionMode = normalizePowerBIConnectionMode(
+    sourceMetadata.connection_mode ?? sourcePointer.connection_mode ?? null,
+  );
+
+  const isPowerBIMaterialized =
+    normalizedSourceType === "powerbi" &&
+    Boolean(activeDataset) &&
+    connectionMode !== null &&
+    Number(rowCount || 0) > 0 &&
+    Number(columnCount || 0) > 0;
+
   const isVirtualDataset =
+    isPowerBIMaterialized ||
     (settings?.ingestion_state === "done" && isVirtualSourceType(sourceType)) ||
     isVirtualSourceType(activeDataset?.source_type);
 
   return {
     isVirtualDataset,
     sourceType,
-    rowCount: activeDataset?.total_rows ?? settings?.ingestion_rows_detected ?? null,
-    columnCount: activeDataset?.columns_count ?? settings?.ingestion_cols_detected ?? null,
+    rowCount,
+    columnCount,
+    connectionMode,
+    sourceMetadata,
+    sourcePointer,
   };
 }
 
@@ -141,6 +189,243 @@ async function logVirtualEdaEvent(supabase: any, projectId: string, metadata: Re
     });
   } catch (err) {
     console.warn("[calculate-eda] Non-blocking telemetry error:", err);
+  }
+}
+
+function normalizeStringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function mapPbiTypeToCanonical(rawType: string): string {
+  const t = (rawType || "").toLowerCase().trim();
+  if (/^(int16|int32|int64|double|decimal|currency|number|float|single|numeric|numérico|inteiro|decimal)$/.test(t)) {
+    return "numérico";
+  }
+  if (/^(percentage|percent)$/.test(t)) return "numérico";
+  if (/^(date|datetime|datetimezone|datetimeoffset|time|timestamp|data)$/.test(t)) return "data";
+  if (/^(boolean|bool|booleano)$/.test(t)) return "categórico";
+  if (/^(string|text|texto|varchar|nvarchar|char)$/.test(t)) return "texto";
+  if (t === "categórico") return "categórico";
+  return "texto";
+}
+
+function cleanupPowerBIColumnKey(key: string): string {
+  const matches = key.match(/\[([^\]]+)\]/g);
+  if (matches && matches.length > 0) {
+    return matches[matches.length - 1].replace(/^\[/, "").replace(/\]$/, "").trim();
+  }
+
+  const noQuotes = key.replace(/^'+|'+$/g, "").replace(/^\[|\]$/g, "");
+  const dotParts = noQuotes.split(".");
+  return (dotParts[dotParts.length - 1] || noQuotes).trim();
+}
+
+function escapeDaxTable(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+
+function parseNumericCandidate(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+  if (typeof value !== "string") return null;
+
+  let s = value.trim();
+  if (!s) return null;
+
+  s = s.replace(/\s+/g, "");
+  if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s)) {
+    s = s.replace(/\./g, "").replace(/,/g, ".");
+  } else if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
+    s = s.replace(/,/g, "");
+  } else {
+    s = s.replace(/,/g, ".");
+  }
+
+  const parsed = Number(s);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseDateCandidate(value: unknown): Date | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value !== "string") return null;
+
+  const s = value.trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(s) || /^\d{2}\/\d{2}\/\d{4}/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  return null;
+}
+
+function parseBooleanCandidate(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (["true", "false", "0", "1", "sim", "não", "nao", "yes", "no"].includes(v)) {
+    return ["true", "1", "sim", "yes"].includes(v);
+  }
+  return null;
+}
+
+function inferPowerBICanonicalType(columnName: string, rawType: string, sampleValues: unknown[]): string {
+  const mapped = mapPbiTypeToCanonical(rawType);
+  if (mapped !== "texto") return mapped;
+
+  const cleanName = columnName.toLowerCase();
+  const nonNull = sampleValues.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
+
+  const isLikelyDateName = /(date|data|dt_|_dt|time|timestamp|created|updated|shipped|required|delivery|due)/i.test(cleanName);
+  const isLikelyIdName = /(^|[_\s])(id|codigo|code|key)($|[_\s])/i.test(cleanName);
+  const isLikelyNumericName = /(amount|valor|price|pre[cç]o|cost|custo|total|sum|avg|mean|count|qty|quant|freight|discount|unit|score|tax|rate|revenue|saldo|number)/i.test(cleanName);
+
+  if (nonNull.length === 0) {
+    if (isLikelyDateName) return "data";
+    if (isLikelyIdName) return "categórico";
+    if (isLikelyNumericName) return "numérico";
+    return "texto";
+  }
+
+  const numericCount = nonNull.filter((v) => parseNumericCandidate(v) !== null).length;
+  const dateCount = nonNull.filter((v) => parseDateCandidate(v) !== null).length;
+  const boolCount = nonNull.filter((v) => parseBooleanCandidate(v) !== null).length;
+
+  const numericRatio = numericCount / nonNull.length;
+  const dateRatio = dateCount / nonNull.length;
+  const boolRatio = boolCount / nonNull.length;
+
+  if (dateRatio >= 0.6 || (isLikelyDateName && dateRatio >= 0.3)) return "data";
+  if (isLikelyIdName) return "categórico";
+  if (numericRatio >= 0.75 || (isLikelyNumericName && numericRatio >= 0.4)) return "numérico";
+  if (boolRatio >= 0.7) return "categórico";
+
+  const uniqueCount = new Set(nonNull.map((v) => String(v))).size;
+  if (uniqueCount <= Math.min(30, Math.ceil(nonNull.length * 0.25))) return "categórico";
+
+  return "texto";
+}
+
+async function fetchPowerBISampleRowsFromConnection(
+  supabase: any,
+  context: {
+    sourceMetadata: Record<string, unknown>;
+    sourcePointer: Record<string, unknown>;
+  },
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string }> {
+  try {
+    const merged = { ...(context.sourcePointer || {}), ...(context.sourceMetadata || {}) };
+
+    const connectionId = normalizeStringValue(merged.connection_id);
+    const workspaceId = normalizeStringValue(merged.workspace_id);
+    const datasetId = normalizeStringValue(merged.dataset_id);
+    const tableNameRaw =
+      normalizeStringValue(merged.effective_query_table_name) ||
+      normalizeStringValue(merged.discovered_table_name) ||
+      normalizeStringValue(merged.table_name);
+
+    if (!connectionId || !workspaceId || !datasetId || !tableNameRaw) {
+      return { rows: [], source: "none", error: "missing_connection_metadata" };
+    }
+
+    const tableName = tableNameRaw.replace(/^\$+/, "").trim();
+    if (!tableName) {
+      return { rows: [], source: "none", error: "missing_table_name" };
+    }
+
+    const { data: conn, error: connError } = await supabase
+      .from("external_connections")
+      .select("metadata, data_sources!external_connections_data_source_id_fkey(connection_config)")
+      .eq("id", connectionId)
+      .maybeSingle();
+
+    if (connError || !conn) {
+      return { rows: [], source: "none", error: `connection_lookup_failed:${connError?.message || "not_found"}` };
+    }
+
+    const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
+    const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
+    const connMetadata = (conn.metadata as Record<string, unknown> | null) || {};
+
+    const clientId = normalizeStringValue(cfg.client_id);
+    const clientSecret = normalizeStringValue(cfg.client_secret);
+    const tenantId = normalizeStringValue(cfg.tenant_id);
+
+    if (!clientId || !clientSecret || !tenantId) {
+      return { rows: [], source: "none", error: "missing_powerbi_credentials" };
+    }
+
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://analysis.windows.net/powerbi/api/.default",
+      }).toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const tokenError = await tokenResp.text();
+      return { rows: [], source: "none", error: `token_failed:${tokenResp.status}:${tokenError.slice(0, 200)}` };
+    }
+
+    const tokenJson = await tokenResp.json();
+    const accessToken = tokenJson?.access_token as string | undefined;
+    if (!accessToken) {
+      return { rows: [], source: "none", error: "token_missing_access_token" };
+    }
+
+    const mode = normalizePowerBIConnectionMode(merged.connection_mode ?? connMetadata.connection_mode);
+    const query = `EVALUATE TOPN(500, ${escapeDaxTable(tableName)})`;
+    const executeResp = await fetch(
+      `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          queries: [{ query }],
+          serializerSettings: { includeNulls: true },
+        }),
+      },
+    );
+
+    const rawBody = await executeResp.text();
+    if (!executeResp.ok) {
+      return { rows: [], source: mode || "powerbi_executequeries", error: `execute_failed:${executeResp.status}:${rawBody.slice(0, 250)}` };
+    }
+
+    const executeJson = JSON.parse(rawBody);
+    const rawRows = executeJson?.results?.[0]?.tables?.[0]?.rows;
+    if (!Array.isArray(rawRows)) {
+      return { rows: [], source: mode || "powerbi_executequeries", error: "execute_no_rows_array" };
+    }
+
+    const normalizedRows = rawRows.map((row: Record<string, unknown>) => {
+      const normalized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row || {})) {
+        const cleanKey = cleanupPowerBIColumnKey(key);
+        normalized[cleanKey] = value;
+      }
+      return normalized;
+    });
+
+    return { rows: normalizedRows, source: mode || "powerbi_executequeries" };
+  } catch (err) {
+    return {
+      rows: [],
+      source: "none",
+      error: `powerbi_sample_exception:${(err as Error).message}`,
+    };
   }
 }
 
@@ -1182,7 +1467,7 @@ Deno.serve(async (req) => {
     // These have project_columns populated but NO physical file in storage.
     // We must build EDA from persisted metadata, not from CSV/Parquet files.
     if (virtualDatasetContext.isVirtualDataset) {
-      console.log(`[calculate-eda] eda_detected_powerbi_materialized source_type=${virtualDatasetContext.sourceType}`);
+      console.log(`[calculate-eda] eda_detected_powerbi_materialized source_type=${virtualDatasetContext.sourceType} connection_mode=${virtualDatasetContext.connectionMode || "unknown"}`);
 
       // Check if project_columns are already populated (materialized schema)
       const { data: pbiColumns } = await supabase
@@ -1197,77 +1482,16 @@ Deno.serve(async (req) => {
       if (colCount > 0 && rowCount > 0) {
         console.log(`[calculate-eda] eda_skipped_file_parsing_for_powerbi cols=${colCount} rows=${rowCount}`);
 
-        // ── Map Power BI / XMLA types to canonical platform types ──
-        // Power BI stores types like Int64, Double, DateTime, String, Boolean, Decimal, Currency
-        // Platform expects: "numérico", "data", "booleano", "texto", "categórico"
-        const mapPbiTypeToCanonical = (rawType: string): string => {
-          const t = (rawType || "").toLowerCase().trim();
-          // Numeric types
-          if (/^(int16|int32|int64|double|decimal|currency|number|float|single|numeric|numérico)$/.test(t)) return "numérico";
-          if (/^(percentage|percent)$/.test(t)) return "numérico";
-          // Date/time types
-          if (/^(date|datetime|datetimezone|datetimeoffset|time|timestamp|data)$/.test(t)) return "data";
-          // Boolean
-          if (/^(boolean|bool|booleano)$/.test(t)) return "categórico";
-          // Text/string
-          if (/^(string|text|texto|varchar|nvarchar|char)$/.test(t)) return "texto";
-          // Already canonical
-          if (t === "categórico") return "categórico";
-          // Default: try to detect from name patterns later, but default to texto
-          return "texto";
-        };
-
-        // Normalize all column types and track original mappings
-        const typeMapping: Record<string, { original: string; canonical: string }> = {};
-        const normalizedColumns = pbiColumns!.map(col => {
-          const canonical = mapPbiTypeToCanonical(col.inferred_type);
-          typeMapping[col.column_name] = { original: col.inferred_type, canonical };
-          return { ...col, inferred_type: canonical };
-        });
-
-        console.log(`[calculate-eda] eda_powerbi_type_mapping`, JSON.stringify(typeMapping));
-
-        // Build stats arrays based on CANONICAL types
-        const numericStats: NumericStats[] = [];
-        const categoricalStats: CategoricalStats[] = [];
-        const dateColumns: string[] = [];
-
-        for (const col of normalizedColumns) {
-          if (col.inferred_type === "numérico") {
-            numericStats.push({
-              project_id: project_id,
-              column_name: col.column_name,
-              min_value: null, max_value: null, mean_value: null,
-              median_value: null, std_value: null, null_count: 0,
-            });
-          } else if (col.inferred_type === "data") {
-            dateColumns.push(col.column_name);
-            // Date columns go into categorical with special handling
-            categoricalStats.push({
-              project_id: project_id,
-              column_name: col.column_name,
-              distinct_count: 0,
-              top_categories: [],
-            });
-          } else {
-            categoricalStats.push({
-              project_id: project_id,
-              column_name: col.column_name,
-              distinct_count: 0,
-              top_categories: [],
-            });
-          }
-        }
-
-        // Try to enrich stats from project_dataset_sample if available
+        // Try to enrich stats from persisted sample first
         const { data: sampleData } = await supabase
           .from("project_dataset_sample")
           .select("sample_json")
           .eq("project_id", project_id)
           .maybeSingle();
 
-        // sample_json can be: { rows: [...], columns: [...] } OR a direct array
         let sampleRowsArr: Record<string, unknown>[] = [];
+        let sampleSource = "persisted_sample";
+
         if (sampleData?.sample_json) {
           const sj = sampleData.sample_json as any;
           if (Array.isArray(sj)) {
@@ -1277,119 +1501,191 @@ Deno.serve(async (req) => {
           }
         }
 
-        if (sampleRowsArr.length > 0) {
-          console.log(`[calculate-eda] Enriching Power BI EDA from ${sampleRowsArr.length} sample rows`);
+        if (sampleRowsArr.length === 0) {
+          const fallbackSample = await fetchPowerBISampleRowsFromConnection(supabase, {
+            sourceMetadata: virtualDatasetContext.sourceMetadata,
+            sourcePointer: virtualDatasetContext.sourcePointer,
+          });
 
-          // Also infer types from actual sample data for columns that might be misclassified
-          // This catches cases where the schema says "String" but actual data is numeric
-          for (const col of normalizedColumns) {
-            if (col.inferred_type !== "texto") continue; // already classified
-            const values = sampleRowsArr
-              .map(r => r[col.column_name])
-              .filter(v => v !== null && v !== undefined && v !== "");
-            if (values.length === 0) continue;
+          if (fallbackSample.rows.length > 0) {
+            sampleRowsArr = fallbackSample.rows;
+            sampleSource = `fallback_${fallbackSample.source}`;
+            console.log(
+              `[calculate-eda] eda_powerbi_stats_fallback_sample source=${sampleSource} rows=${sampleRowsArr.length}`,
+            );
 
-            // Check if values are actually numeric
-            const numericCount = values.filter(v => {
-              if (typeof v === "number") return true;
-              const s = String(v).replace(",", ".").trim();
-              return s !== "" && !isNaN(Number(s));
-            }).length;
-
-            if (numericCount >= values.length * 0.7) {
-              console.log(`[calculate-eda] Reclassifying "${col.column_name}" from texto to numérico based on sample data`);
-              col.inferred_type = "numérico";
-              typeMapping[col.column_name].canonical = "numérico";
-              // Move from categorical to numeric
-              const catIdx = categoricalStats.findIndex(c => c.column_name === col.column_name);
-              if (catIdx >= 0) categoricalStats.splice(catIdx, 1);
-              numericStats.push({
-                project_id: project_id,
-                column_name: col.column_name,
-                min_value: null, max_value: null, mean_value: null,
-                median_value: null, std_value: null, null_count: 0,
-              });
-            }
-
-            // Check if values are actually dates
-            const dateCount = values.filter(v => {
-              const s = String(v);
-              return /^\d{4}-\d{2}-\d{2}/.test(s) || /^\d{2}\/\d{2}\/\d{4}/.test(s);
-            }).length;
-            if (dateCount >= values.length * 0.6) {
-              console.log(`[calculate-eda] Reclassifying "${col.column_name}" from texto to data based on sample data`);
-              col.inferred_type = "data";
-              typeMapping[col.column_name].canonical = "data";
-              dateColumns.push(col.column_name);
-            }
+            await Promise.all([
+              supabase.from("project_dataset_sample").upsert(
+                {
+                  project_id,
+                  sample_rows: sampleRowsArr.length,
+                  sample_json: {
+                    rows: sampleRowsArr,
+                    columns: sampleRowsArr.length > 0 ? Object.keys(sampleRowsArr[0]) : [],
+                    source: sampleSource,
+                  },
+                  created_at: new Date().toISOString(),
+                },
+                { onConflict: "project_id" },
+              ),
+              supabase
+                .from("project_datasets")
+                .update({ sample_rows: sampleRowsArr.length, updated_at: new Date().toISOString() })
+                .eq("project_id", project_id)
+                .eq("is_active", true),
+            ]);
+          } else {
+            sampleSource = "schema_only";
+            console.log(
+              `[calculate-eda] eda_powerbi_stats_fallback_sample — no sample rows available (${fallbackSample.error || "no_rows"}), stats will be schema/name driven`,
+            );
           }
-
-          // Enrich numeric stats from sample
-          for (const ns of numericStats) {
-            const values = sampleRowsArr
-              .map(r => r[ns.column_name])
-              .filter(v => v !== null && v !== undefined && v !== "")
-              .map(v => typeof v === "number" ? v : parseFloat(String(v).replace(",", ".")))
-              .filter(v => Number.isFinite(v));
-
-            if (values.length > 0) {
-              ns.min_value = Math.round(Math.min(...values) * 10000) / 10000;
-              ns.max_value = Math.round(Math.max(...values) * 10000) / 10000;
-              ns.mean_value = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10000) / 10000;
-              const sorted = [...values].sort((a, b) => a - b);
-              const mid = Math.floor(sorted.length / 2);
-              ns.median_value = sorted.length % 2 !== 0 ? sorted[mid] : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 10000) / 10000;
-              // Variance
-              const mean = values.reduce((a, b) => a + b, 0) / values.length;
-              const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / (values.length - 1 || 1);
-              ns.std_value = Math.round(Math.sqrt(variance) * 10000) / 10000;
-              ns.null_count = sampleRowsArr.length - values.length;
-            }
-          }
-
-          // Enrich categorical stats from sample (including date columns)
-          for (const cs of categoricalStats) {
-            const isDate = dateColumns.includes(cs.column_name);
-            const values = sampleRowsArr
-              .map(r => {
-                const v = r[cs.column_name];
-                if (v === null || v === undefined || v === "") return "(vazio)";
-                if (isDate) {
-                  // Format dates nicely for display
-                  const s = String(v);
-                  return s.length > 10 ? s.substring(0, 10) : s;
-                }
-                return String(v);
-              });
-            const counts = new Map<string, number>();
-            for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
-            cs.distinct_count = counts.size;
-            cs.top_categories = [...counts.entries()]
-              .sort((a, b) => b[1] - a[1])
-              .slice(0, 10)
-              .map(([category, count]) => ({ category, count }));
-          }
-
-          console.log(`[calculate-eda] eda_powerbi_stats_computed numeric=${numericStats.length} categorical=${categoricalStats.length} dates=${dateColumns.length}`);
-        } else {
-          console.log(`[calculate-eda] eda_powerbi_stats_fallback_sample — no sample rows available, stats will be schema-only`);
         }
 
-        // Update project_columns with corrected canonical types
+        const normalizedColumns = pbiColumns!.map((col) => {
+          const originalType = col.inferred_type || "";
+          const sampleValues = sampleRowsArr.map((row) => row[col.column_name]);
+          const canonical = inferPowerBICanonicalType(col.column_name, originalType, sampleValues);
+          return {
+            ...col,
+            inferred_type: canonical,
+            _original_type: originalType,
+          };
+        });
+
+        const typeMapping: Record<string, { original: string; canonical: string }> = {};
         for (const col of normalizedColumns) {
-          const mapping = typeMapping[col.column_name];
-          if (mapping && mapping.original !== mapping.canonical) {
-            await supabase
-              .from("project_columns")
-              .update({ inferred_type: mapping.canonical })
-              .eq("project_id", project_id)
-              .eq("column_name", col.column_name);
+          typeMapping[col.column_name] = {
+            original: (col as any)._original_type || "",
+            canonical: col.inferred_type,
+          };
+        }
+
+        console.log(`[calculate-eda] eda_powerbi_type_mapping`, JSON.stringify(typeMapping));
+
+        const hasSampleRows = sampleRowsArr.length > 0;
+        const numericStats: NumericStats[] = [];
+        const categoricalStats: CategoricalStats[] = [];
+        const dateColumns: string[] = [];
+        const dateRanges: Record<string, { min_date: string | null; max_date: string | null }> = {};
+
+        for (const col of normalizedColumns) {
+          const rawValues = sampleRowsArr.map((row) => row[col.column_name]);
+          const nonEmptyValues = rawValues.filter(
+            (value) => value !== null && value !== undefined && String(value).trim() !== "",
+          );
+
+          if (col.inferred_type === "data") {
+            dateColumns.push(col.column_name);
           }
+
+          if (col.inferred_type === "numérico") {
+            const numericValues = nonEmptyValues
+              .map((value) => parseNumericCandidate(value))
+              .filter((value): value is number => value !== null);
+
+            const sortedValues = [...numericValues].sort((a, b) => a - b);
+            const mean =
+              numericValues.length > 0
+                ? numericValues.reduce((sum, value) => sum + value, 0) / numericValues.length
+                : null;
+            const variance =
+              numericValues.length > 1 && mean !== null
+                ? numericValues.reduce((sum, value) => sum + (value - mean) ** 2, 0) / (numericValues.length - 1)
+                : null;
+
+            numericStats.push({
+              project_id,
+              column_name: col.column_name,
+              min_value: numericValues.length > 0 ? Math.min(...numericValues) : null,
+              max_value: numericValues.length > 0 ? Math.max(...numericValues) : null,
+              mean_value: mean !== null ? Math.round(mean * 10000) / 10000 : null,
+              median_value: numericValues.length > 0 ? calculateMedianFromSample(sortedValues) : null,
+              std_value: variance !== null ? Math.round(Math.sqrt(Math.max(variance, 0)) * 10000) / 10000 : null,
+              null_count: hasSampleRows ? sampleRowsArr.length - numericValues.length : 0,
+            });
+            continue;
+          }
+
+          if (!hasSampleRows) {
+            categoricalStats.push({
+              project_id,
+              column_name: col.column_name,
+              distinct_count: null,
+              top_categories: [],
+            });
+            continue;
+          }
+
+          const normalizedCategoricalValues = nonEmptyValues.map((value) => {
+            if (col.inferred_type === "data") {
+              const parsedDate = parseDateCandidate(value);
+              return parsedDate ? parsedDate.toISOString().slice(0, 10) : String(value);
+            }
+            return String(value);
+          });
+
+          const counts = new Map<string, number>();
+          for (const value of normalizedCategoricalValues) {
+            counts.set(value, (counts.get(value) ?? 0) + 1);
+          }
+
+          const topCategories = [...counts.entries()]
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([category, count]) => ({
+              category,
+              count,
+              ratio: hasSampleRows && sampleRowsArr.length > 0 ? Number((count / sampleRowsArr.length).toFixed(4)) : undefined,
+            }));
+
+          categoricalStats.push({
+            project_id,
+            column_name: col.column_name,
+            distinct_count: counts.size,
+            top_categories: topCategories,
+          });
+
+          if (col.inferred_type === "data") {
+            const dateValues = normalizedCategoricalValues
+              .map((value) => parseDateCandidate(value))
+              .filter((value): value is Date => value !== null)
+              .sort((a, b) => a.getTime() - b.getTime());
+
+            dateRanges[col.column_name] = {
+              min_date: dateValues.length > 0 ? dateValues[0].toISOString() : null,
+              max_date: dateValues.length > 0 ? dateValues[dateValues.length - 1].toISOString() : null,
+            };
+          }
+        }
+
+        console.log(
+          `[calculate-eda] eda_powerbi_stats_computed numeric=${numericStats.length} categorical=${categoricalStats.length} dates=${dateColumns.length} sample_rows=${sampleRowsArr.length} source=${sampleSource}`,
+        );
+
+        // Update project_columns with corrected canonical types
+        const updatedColumns = normalizedColumns.filter((col) => {
+          const mapping = typeMapping[col.column_name];
+          return Boolean(mapping && mapping.original !== mapping.canonical);
+        });
+
+        if (updatedColumns.length > 0) {
+          await Promise.all(
+            updatedColumns.map((col) =>
+              supabase
+                .from("project_columns")
+                .update({ inferred_type: col.inferred_type })
+                .eq("project_id", project_id)
+                .eq("column_name", col.column_name),
+            ),
+          );
         }
 
         // Persist stats
-        await supabase.from("project_numeric_stats").delete().eq("project_id", project_id);
-        await supabase.from("project_categorical_stats").delete().eq("project_id", project_id);
+        await Promise.all([
+          supabase.from("project_numeric_stats").delete().eq("project_id", project_id),
+          supabase.from("project_categorical_stats").delete().eq("project_id", project_id),
+        ]);
 
         if (numericStats.length > 0) {
           await supabase.from("project_numeric_stats").insert(numericStats);
@@ -1408,18 +1704,24 @@ Deno.serve(async (req) => {
           .update({ active_schema_json: schemaJson, updated_at: new Date().toISOString() })
           .eq("project_id", project_id);
 
+        const inferredNumericCount = normalizedColumns.filter((col) => col.inferred_type === "numérico").length;
+        const inferredDateCount = normalizedColumns.filter((col) => col.inferred_type === "data").length;
+        const inferredCategoricalCount = normalizedColumns.length - inferredNumericCount;
+
         // Mark EDA as done
         const profile = {
           rows_total: rowCount,
           columns_count: colCount,
-          numeric_columns: numericStats.length,
-          categorical_columns: categoricalStats.length,
-          date_columns: dateColumns.length,
+          numeric_columns: inferredNumericCount,
+          categorical_columns: inferredCategoricalCount,
+          date_columns: inferredDateCount,
           computed_at: new Date().toISOString(),
           virtual_dataset: true,
           source_type: virtualDatasetContext.sourceType,
           eda_status: "completed_external_materialized",
           type_mapping: typeMapping,
+          stats_source: sampleSource,
+          date_ranges: dateRanges,
         };
 
         await supabase
