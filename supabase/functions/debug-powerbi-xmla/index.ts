@@ -165,6 +165,9 @@ serve(async (req) => {
     const project_id = normalizeString(body?.project_id);
     const connection_id = normalizeString(body?.connection_id);
     const requested_table_name = normalizeString(body?.table_name);
+    const requested_table_names: string[] = Array.isArray(body?.table_names)
+      ? (body.table_names as string[]).map((n: string) => (n || "").trim()).filter(Boolean)
+      : [];
     const materialize = Boolean(body?.materialize);
 
     if (!project_id) {
