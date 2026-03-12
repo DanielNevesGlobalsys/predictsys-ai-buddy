@@ -52,6 +52,7 @@ interface CandidateTable {
   discovered_name: string;
   effective_name: string;
   source_method: string;
+  business_score?: number;
 }
 
 interface DiagnosticResult {
