@@ -214,22 +214,45 @@ const ExternalDiscoveryFlow = ({
           onUseDetectedSource={handleSourceCTAClick}
           onImportFile={onDataReady}
           onContinuePartial={onDataReady}
-          onSelectTableManually={() => {
-            if (manualTableName.trim()) {
-              // Log the manual selection event
-              try {
-                Promise.resolve(supabase.from("platform_events").insert({
-                  event_type: "powerbi_manual_table_selected",
+          onSelectTableManually={async () => {
+            if (!manualTableName.trim()) return;
+            setManualSubmissionStatus("submitting");
+            setManualSubmissionError(null);
+            try {
+              const { data, error } = await supabase.functions.invoke("select-manual-powerbi-table", {
+                body: {
                   project_id: projectData.id,
-                  source: "connector_powerbi",
-                  status: "info",
-                  metadata: { table_name: manualTableName, connection_id: activeConnectionId },
-                }));
-              } catch { /* best-effort */ }
-              onDataReady();
+                  connection_id: activeConnectionId,
+                  workspace_id: null,
+                  dataset_id: null,
+                  manual_table_name: manualTableName,
+                  organization_id: currentOrganization?.id || null,
+                },
+              });
+              if (error) throw error;
+              if (!data?.success) {
+                throw new Error(data?.message || "Falha ao salvar seleção manual.");
+              }
+              setManualSubmissionStatus("success");
+              toast({
+                title: "Tabela manual selecionada com sucesso",
+                description: "Dataset ativo registrado para o projeto.",
+              });
+              // Give user a moment to see success, then advance
+              setTimeout(() => onDataReady(), 1500);
+            } catch (err: any) {
+              setManualSubmissionStatus("error");
+              setManualSubmissionError(err.message || "Erro ao salvar seleção manual.");
+              toast({
+                title: "Erro",
+                description: err.message || "A tabela manual foi informada, mas não foi possível registrar o dataset ativo. Tente novamente.",
+                variant: "destructive",
+              });
             }
           }}
           isRetrying={isDiscovering}
+          submissionStatus={manualSubmissionStatus}
+          submissionError={manualSubmissionError}
         />
       )}
 
