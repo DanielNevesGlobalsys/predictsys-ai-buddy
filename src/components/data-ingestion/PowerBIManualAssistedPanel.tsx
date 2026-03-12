@@ -9,6 +9,7 @@ import {
   Server, ArrowRight, Loader2, TableProperties, Link2, FileDown,
   ShieldCheck, Globe, Database as DatabaseIcon,
 } from "lucide-react";
+import PowerBIXMLADiagnosticPanel from "./PowerBIXMLADiagnosticPanel";
 
 interface SourceTraceInfo {
   datasource_type: string | null;
