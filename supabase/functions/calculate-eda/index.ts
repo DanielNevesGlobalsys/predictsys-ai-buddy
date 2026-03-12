@@ -1501,26 +1501,6 @@ Deno.serve(async (req) => {
     }
 
     if (columnsToProcess.length === 0) {
-      if (virtualDatasetContext.isVirtualDataset) {
-        const virtualPayload = buildVirtualDatasetPayload({
-          rowCount: virtualDatasetContext.rowCount,
-          columnCount: virtualDatasetContext.columnCount,
-        });
-
-        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
-        await logVirtualEdaEvent(supabase, project_id, {
-          stage: "column_metadata",
-          source_type: virtualDatasetContext.sourceType,
-          row_count: virtualPayload.row_count,
-          column_count: virtualPayload.column_count,
-        });
-
-        return new Response(JSON.stringify(virtualPayload), {
-          status: 200,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
       return new Response(
         JSON.stringify({
           error:
