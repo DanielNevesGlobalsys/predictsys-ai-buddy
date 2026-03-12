@@ -1150,7 +1150,7 @@ serve(async (req) => {
                 sample_rows: sampleRows.length,
                 columns_count: finalColumns.length,
                 is_active: true,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 source_metadata: {
                   connector_type: "powerbi",
                   connection_mode: connectionMode,
