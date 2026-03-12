@@ -62,7 +62,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       const [dsResult, settingsResult] = await Promise.all([
         supabase
           .from("project_datasets")
-          .select("id, total_rows, columns_count, name")
+          .select("id, total_rows, columns_count, name, source_type")
           .eq("project_id", projectData.id)
           .eq("is_active", true)
           .order("created_at", { ascending: false })
