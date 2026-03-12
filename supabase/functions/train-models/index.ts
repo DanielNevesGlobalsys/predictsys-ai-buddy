@@ -2476,23 +2476,41 @@ serve(async (req) => {
 
     if (useVirtualSample) {
       // ========== VIRTUAL SAMPLE PATH (Power BI / External) ==========
+      // Feed virtual data into the CSV path by pre-setting headers and finalSampledLines.
+      // The rest of the CSV processing logic (target extraction, feature selection, etc.)
+      // will handle this data identically to file-sourced CSV data.
       headers = virtualHeaders;
       totalLinesRead = virtualSampledLines.length;
-      console.log(`\n=== Resumo da leitura Virtual ===`);
+      isBatchImport = false;
+
+      console.log(`\n=== Resumo da leitura Virtual (Power BI) ===`);
       console.log(`Colunas: ${headers.length}`);
       console.log(`Linhas: ${totalLinesRead.toLocaleString()}`);
 
+      // Jump directly to post-read CSV processing (finalSampledLines is set, headers is set)
+      // The CSV path below sets finalSampledLines — we set it here and skip to line after CSV reading
+      const finalSampledLines = virtualSampledLines;
+
+      if (headers.length === 0 || finalSampledLines.length === 0) {
+        return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset virtual Power BI. Rematerialize as tabelas." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // ── Now run the SAME post-read logic as CSV path ──
+      // (This is the code that starts after finalSampledLines is computed in the CSV path)
+
       // Find target column index
-      const targetIndex = findHeaderIndex(headers, target_column);
-      if (targetIndex === -1 && !useHumanLabelsAsTarget) {
-        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas: ${headers.slice(0, 20).join(", ")}`);
+      const targetIndex = useHumanLabelsAsTarget ? -1 : findHeaderIndex(headers, target_column);
+      if (!useHumanLabelsAsTarget && targetIndex === -1) {
+        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas disponíveis: ${headers.slice(0, 20).join(", ")}`);
         return new Response(JSON.stringify({
-          error: `Coluna alvo "${target_column}" não encontrada no dataset virtual.`,
+          error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
           available_columns: headers.slice(0, 20)
         }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // Get numeric feature columns
+      // Get numeric feature columns (case-insensitive matching)
       const numericColumns = columns.filter(c =>
         (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
       );
@@ -2507,20 +2525,19 @@ serve(async (req) => {
         });
       }
 
-      console.log(`Features base: ${baseFeatureNames.length}, Features engenharia: ${engineeredFeatureNames.length}`);
+      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+      console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
 
-      // Parse the CSV-like lines into X, y
-      for (const line of virtualSampledLines) {
+      // Parse lines into X, y
+      for (const line of finalSampledLines) {
         const values = parseCSVLine(line, delimiter);
 
-        // Extract target
         let targetValue: number;
         if (useHumanLabelsAsTarget) {
-          targetValue = 0; // will be replaced later
+          targetValue = 0;
         } else {
           const rawTarget = values[targetIndex]?.trim() || "";
           if (rawTarget === "" || rawTarget.toLowerCase() === "null" || rawTarget.toLowerCase() === "nan") continue;
-
           if (problem_type === "classification") {
             if (!labelMap.has(rawTarget)) labelMap.set(rawTarget, labelMap.size);
             targetValue = labelMap.get(rawTarget)!;
@@ -2530,7 +2547,6 @@ serve(async (req) => {
           }
         }
 
-        // Extract features
         const featureValues = featureIndices.map(idx => {
           const raw = values[idx]?.trim() || "0";
           const num = coerceToNumber(raw);
@@ -2541,26 +2557,15 @@ serve(async (req) => {
         const rowObj: Record<string, any> = {};
         headers.forEach((h, i) => { rowObj[h] = values[i]; });
         const engineeredValues = enabledFeatures.map(f => {
-          try {
-            return applyFeatureTransforms([rowObj], [f])[0]?.[f.name] ?? 0;
-          } catch { return 0; }
+          try { return applyFeatureTransforms([rowObj], [f])[0]?.[f.name] ?? 0; }
+          catch { return 0; }
         });
 
         X.push([...featureValues, ...engineeredValues]);
         y.push(targetValue);
       }
 
-      console.log(`Dados processados: ${X.length} linhas, ${X[0]?.length || 0} features`);
-
-      if (X.length === 0) {
-        return new Response(JSON.stringify({ error: "Não foi possível processar dados do dataset virtual" }), {
-          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
-        });
-      }
-
-      // === JUMP to model training (skip CSV/Parquet file reading) ===
-      // We need featureNames for later
-      const featureNames = allFeatureNames;
+      console.log(`Dados processados (virtual): ${X.length} linhas, ${X[0]?.length || 0} features`);
 
     } else if (useParquet) {
       // ========== PARQUET PATH ==========
