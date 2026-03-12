@@ -813,8 +813,9 @@ serve(async (req) => {
                 project_id,
                 sample_json: {
                   rows: allSampleRows,
-                  columns: allColumns.map((c) => ({ name: c.column_name, type: c.data_type })),
+                  columns: allColumns.map((c) => c.column_name),
                 },
+                sample_rows: allSampleRows.length,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "project_id" },
