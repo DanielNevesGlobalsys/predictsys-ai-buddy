@@ -1664,20 +1664,28 @@ Deno.serve(async (req) => {
         );
 
         // Update project_columns with corrected canonical types
-        for (const col of normalizedColumns) {
+        const updatedColumns = normalizedColumns.filter((col) => {
           const mapping = typeMapping[col.column_name];
-          if (mapping && mapping.original !== mapping.canonical) {
-            await supabase
-              .from("project_columns")
-              .update({ inferred_type: mapping.canonical })
-              .eq("project_id", project_id)
-              .eq("column_name", col.column_name);
-          }
+          return Boolean(mapping && mapping.original !== mapping.canonical);
+        });
+
+        if (updatedColumns.length > 0) {
+          await Promise.all(
+            updatedColumns.map((col) =>
+              supabase
+                .from("project_columns")
+                .update({ inferred_type: col.inferred_type })
+                .eq("project_id", project_id)
+                .eq("column_name", col.column_name),
+            ),
+          );
         }
 
         // Persist stats
-        await supabase.from("project_numeric_stats").delete().eq("project_id", project_id);
-        await supabase.from("project_categorical_stats").delete().eq("project_id", project_id);
+        await Promise.all([
+          supabase.from("project_numeric_stats").delete().eq("project_id", project_id),
+          supabase.from("project_categorical_stats").delete().eq("project_id", project_id),
+        ]);
 
         if (numericStats.length > 0) {
           await supabase.from("project_numeric_stats").insert(numericStats);
@@ -1696,18 +1704,24 @@ Deno.serve(async (req) => {
           .update({ active_schema_json: schemaJson, updated_at: new Date().toISOString() })
           .eq("project_id", project_id);
 
+        const inferredNumericCount = normalizedColumns.filter((col) => col.inferred_type === "numérico").length;
+        const inferredDateCount = normalizedColumns.filter((col) => col.inferred_type === "data").length;
+        const inferredCategoricalCount = normalizedColumns.length - inferredNumericCount;
+
         // Mark EDA as done
         const profile = {
           rows_total: rowCount,
           columns_count: colCount,
-          numeric_columns: numericStats.length,
-          categorical_columns: categoricalStats.length,
-          date_columns: dateColumns.length,
+          numeric_columns: inferredNumericCount,
+          categorical_columns: inferredCategoricalCount,
+          date_columns: inferredDateCount,
           computed_at: new Date().toISOString(),
           virtual_dataset: true,
           source_type: virtualDatasetContext.sourceType,
           eda_status: "completed_external_materialized",
           type_mapping: typeMapping,
+          stats_source: sampleSource,
+          date_ranges: dateRanges,
         };
 
         await supabase
