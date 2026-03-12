@@ -167,7 +167,7 @@ export default function PowerBIXMLADiagnosticPanel({
         setMaterializing(false);
       }
     },
-    [projectId, connectionId, workspaceId, datasetId, tableName, onMaterializationSuccess],
+    [projectId, connectionId, workspaceId, datasetId, tableName, selectedTable, onMaterializationSuccess],
   );
 
   const toggleStep = (step: string) => {
