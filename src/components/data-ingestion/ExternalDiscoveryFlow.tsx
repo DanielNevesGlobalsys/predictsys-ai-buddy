@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge";
 import { Loader2, CheckCircle, AlertCircle, Plug, AlertTriangle, Upload, Database, RefreshCw, Link2, Server, ArrowRight } from "lucide-react";
 import { useExternalDiscovery } from "@/hooks/useExternalDiscovery";
 import { useOrganization } from "@/contexts/OrganizationContext";
+import { useToast } from "@/hooks/use-toast";
 import { supabase } from "@/integrations/supabase/client";
 import DiscoveryGrid from "./DiscoveryGrid";
 import ObjectInspectionModal from "./ObjectInspectionModal";
