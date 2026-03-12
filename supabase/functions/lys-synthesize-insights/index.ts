@@ -58,8 +58,15 @@ serve(async (req) => {
     const context = await buildProjectContext(serviceClient, project_id);
     const contextBlock = contextToPromptBlock(context);
 
-    // Check EDA readiness
-    if (context.eda_summary.numeric_columns.length === 0 && context.eda_summary.categorical_columns.length === 0) {
+    // Check EDA readiness — allow virtual/external datasets to pass
+    const isVirtualDataset = context.project_settings?.ingestion_source_type &&
+      ["powerbi", "external", "virtual"].includes(String(context.project_settings.ingestion_source_type).toLowerCase());
+
+    if (
+      !isVirtualDataset &&
+      context.eda_summary.numeric_columns.length === 0 &&
+      context.eda_summary.categorical_columns.length === 0
+    ) {
       return new Response(JSON.stringify({
         success: false, error: "EDA_NOT_READY",
         message: "EDA must be completed before Lys synthesis.",

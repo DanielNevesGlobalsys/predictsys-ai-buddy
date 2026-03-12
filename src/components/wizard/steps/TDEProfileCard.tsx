@@ -115,9 +115,19 @@ export default function TDEProfileCard({ projectId }: TDEProfileCardProps) {
         throw new Error(friendlyMessage);
       }
 
-      setProfile(data.tde_profile as TDEProfile);
+      const tdeResult = data.tde_profile as Record<string, any>;
+      // Defensive: ensure shape label exists
+      if (!tdeResult.dataset_shape_label) {
+        tdeResult.dataset_shape_label = tdeResult.is_virtual_dataset ? "Dataset externo / virtual" : "Não disponível";
+      }
+      if (!tdeResult.candidates) {
+        tdeResult.candidates = { entity_candidates: [], time_candidates: [], value_candidates: [], status_candidates: [], text_candidates: [] };
+      }
+      if (!tdeResult.summary) tdeResult.summary = [];
+      if (!tdeResult.gates) tdeResult.gates = [];
+      setProfile(tdeResult as TDEProfile);
       setHasRun(true);
-      toast({ title: "Perfil do dataset atualizado", description: `Classificado como ${data.tde_profile.dataset_shape_label}.` });
+      toast({ title: "Perfil do dataset atualizado", description: `Classificado como ${tdeResult.dataset_shape_label ?? "Dataset externo"}.` });
     } catch (err) {
       console.error("[TDEProfileCard] Error:", err);
       const message = await extractErrorMessage(err);

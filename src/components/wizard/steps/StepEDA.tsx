@@ -395,12 +395,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             </div>
 
             {/* TDE Profile */}
-            {projectData.id && edaReady && (
+            {projectData.id && showTdeAndLys && (
               <TDEProfileCard key={tdeRefreshKey} projectId={projectData.id} />
             )}
 
             {/* Lys Synthesis — after EDA + TDE */}
-            {projectData.id && edaReady && (
+            {projectData.id && showTdeAndLys && (
               <LysSynthesisPanel
                 synthesis={{
                   narrative: lysSynthesis.narrative,
