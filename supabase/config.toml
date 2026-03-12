@@ -197,3 +197,6 @@ verify_jwt = false
 
 [functions.select-manual-powerbi-table]
 verify_jwt = false
+
+[functions.debug-powerbi-xmla]
+verify_jwt = false
