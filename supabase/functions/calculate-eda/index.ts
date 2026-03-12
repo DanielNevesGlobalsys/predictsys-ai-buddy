@@ -192,6 +192,243 @@ async function logVirtualEdaEvent(supabase: any, projectId: string, metadata: Re
   }
 }
 
+function normalizeStringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function mapPbiTypeToCanonical(rawType: string): string {
+  const t = (rawType || "").toLowerCase().trim();
+  if (/^(int16|int32|int64|double|decimal|currency|number|float|single|numeric|numérico|inteiro|decimal)$/.test(t)) {
+    return "numérico";
+  }
+  if (/^(percentage|percent)$/.test(t)) return "numérico";
+  if (/^(date|datetime|datetimezone|datetimeoffset|time|timestamp|data)$/.test(t)) return "data";
+  if (/^(boolean|bool|booleano)$/.test(t)) return "categórico";
+  if (/^(string|text|texto|varchar|nvarchar|char)$/.test(t)) return "texto";
+  if (t === "categórico") return "categórico";
+  return "texto";
+}
+
+function cleanupPowerBIColumnKey(key: string): string {
+  const matches = key.match(/\[([^\]]+)\]/g);
+  if (matches && matches.length > 0) {
+    return matches[matches.length - 1].replace(/^\[/, "").replace(/\]$/, "").trim();
+  }
+
+  const noQuotes = key.replace(/^'+|'+$/g, "").replace(/^\[|\]$/g, "");
+  const dotParts = noQuotes.split(".");
+  return (dotParts[dotParts.length - 1] || noQuotes).trim();
+}
+
+function escapeDaxTable(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+
+function parseNumericCandidate(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "bigint") {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : null;
+  }
+  if (typeof value !== "string") return null;
+
+  let s = value.trim();
+  if (!s) return null;
+
+  s = s.replace(/\s+/g, "");
+  if (/^-?\d{1,3}(\.\d{3})+,\d+$/.test(s)) {
+    s = s.replace(/\./g, "").replace(/,/g, ".");
+  } else if (/^-?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) {
+    s = s.replace(/,/g, "");
+  } else {
+    s = s.replace(/,/g, ".");
+  }
+
+  const parsed = Number(s);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function parseDateCandidate(value: unknown): Date | null {
+  if (value instanceof Date && !Number.isNaN(value.getTime())) return value;
+  if (typeof value !== "string") return null;
+
+  const s = value.trim();
+  if (!s) return null;
+  if (/^\d{4}-\d{2}-\d{2}(T.*)?$/.test(s) || /^\d{2}\/\d{2}\/\d{4}/.test(s)) {
+    const d = new Date(s);
+    if (!Number.isNaN(d.getTime())) return d;
+  }
+
+  return null;
+}
+
+function parseBooleanCandidate(value: unknown): boolean | null {
+  if (typeof value === "boolean") return value;
+  if (typeof value !== "string") return null;
+  const v = value.trim().toLowerCase();
+  if (["true", "false", "0", "1", "sim", "não", "nao", "yes", "no"].includes(v)) {
+    return ["true", "1", "sim", "yes"].includes(v);
+  }
+  return null;
+}
+
+function inferPowerBICanonicalType(columnName: string, rawType: string, sampleValues: unknown[]): string {
+  const mapped = mapPbiTypeToCanonical(rawType);
+  if (mapped !== "texto") return mapped;
+
+  const cleanName = columnName.toLowerCase();
+  const nonNull = sampleValues.filter((v) => v !== null && v !== undefined && String(v).trim() !== "");
+
+  const isLikelyDateName = /(date|data|dt_|_dt|time|timestamp|created|updated|shipped|required|delivery|due)/i.test(cleanName);
+  const isLikelyIdName = /(^|[_\s])(id|codigo|code|key)($|[_\s])/i.test(cleanName);
+  const isLikelyNumericName = /(amount|valor|price|pre[cç]o|cost|custo|total|sum|avg|mean|count|qty|quant|freight|discount|unit|score|tax|rate|revenue|saldo|number)/i.test(cleanName);
+
+  if (nonNull.length === 0) {
+    if (isLikelyDateName) return "data";
+    if (isLikelyIdName) return "categórico";
+    if (isLikelyNumericName) return "numérico";
+    return "texto";
+  }
+
+  const numericCount = nonNull.filter((v) => parseNumericCandidate(v) !== null).length;
+  const dateCount = nonNull.filter((v) => parseDateCandidate(v) !== null).length;
+  const boolCount = nonNull.filter((v) => parseBooleanCandidate(v) !== null).length;
+
+  const numericRatio = numericCount / nonNull.length;
+  const dateRatio = dateCount / nonNull.length;
+  const boolRatio = boolCount / nonNull.length;
+
+  if (dateRatio >= 0.6 || (isLikelyDateName && dateRatio >= 0.3)) return "data";
+  if (isLikelyIdName) return "categórico";
+  if (numericRatio >= 0.75 || (isLikelyNumericName && numericRatio >= 0.4)) return "numérico";
+  if (boolRatio >= 0.7) return "categórico";
+
+  const uniqueCount = new Set(nonNull.map((v) => String(v))).size;
+  if (uniqueCount <= Math.min(30, Math.ceil(nonNull.length * 0.25))) return "categórico";
+
+  return "texto";
+}
+
+async function fetchPowerBISampleRowsFromConnection(
+  supabase: any,
+  context: {
+    sourceMetadata: Record<string, unknown>;
+    sourcePointer: Record<string, unknown>;
+  },
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string }> {
+  try {
+    const merged = { ...(context.sourcePointer || {}), ...(context.sourceMetadata || {}) };
+
+    const connectionId = normalizeStringValue(merged.connection_id);
+    const workspaceId = normalizeStringValue(merged.workspace_id);
+    const datasetId = normalizeStringValue(merged.dataset_id);
+    const tableNameRaw =
+      normalizeStringValue(merged.effective_query_table_name) ||
+      normalizeStringValue(merged.discovered_table_name) ||
+      normalizeStringValue(merged.table_name);
+
+    if (!connectionId || !workspaceId || !datasetId || !tableNameRaw) {
+      return { rows: [], source: "none", error: "missing_connection_metadata" };
+    }
+
+    const tableName = tableNameRaw.replace(/^\$+/, "").trim();
+    if (!tableName) {
+      return { rows: [], source: "none", error: "missing_table_name" };
+    }
+
+    const { data: conn, error: connError } = await supabase
+      .from("external_connections")
+      .select("metadata, data_sources!external_connections_data_source_id_fkey(connection_config)")
+      .eq("id", connectionId)
+      .maybeSingle();
+
+    if (connError || !conn) {
+      return { rows: [], source: "none", error: `connection_lookup_failed:${connError?.message || "not_found"}` };
+    }
+
+    const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
+    const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
+    const connMetadata = (conn.metadata as Record<string, unknown> | null) || {};
+
+    const clientId = normalizeStringValue(cfg.client_id);
+    const clientSecret = normalizeStringValue(cfg.client_secret);
+    const tenantId = normalizeStringValue(cfg.tenant_id);
+
+    if (!clientId || !clientSecret || !tenantId) {
+      return { rows: [], source: "none", error: "missing_powerbi_credentials" };
+    }
+
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://analysis.windows.net/powerbi/api/.default",
+      }).toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const tokenError = await tokenResp.text();
+      return { rows: [], source: "none", error: `token_failed:${tokenResp.status}:${tokenError.slice(0, 200)}` };
+    }
+
+    const tokenJson = await tokenResp.json();
+    const accessToken = tokenJson?.access_token as string | undefined;
+    if (!accessToken) {
+      return { rows: [], source: "none", error: "token_missing_access_token" };
+    }
+
+    const mode = normalizePowerBIConnectionMode(merged.connection_mode ?? connMetadata.connection_mode);
+    const query = `EVALUATE TOPN(500, ${escapeDaxTable(tableName)})`;
+    const executeResp = await fetch(
+      `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`,
+      {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          queries: [{ query }],
+          serializerSettings: { includeNulls: true },
+        }),
+      },
+    );
+
+    const rawBody = await executeResp.text();
+    if (!executeResp.ok) {
+      return { rows: [], source: mode || "powerbi_executequeries", error: `execute_failed:${executeResp.status}:${rawBody.slice(0, 250)}` };
+    }
+
+    const executeJson = JSON.parse(rawBody);
+    const rawRows = executeJson?.results?.[0]?.tables?.[0]?.rows;
+    if (!Array.isArray(rawRows)) {
+      return { rows: [], source: mode || "powerbi_executequeries", error: "execute_no_rows_array" };
+    }
+
+    const normalizedRows = rawRows.map((row: Record<string, unknown>) => {
+      const normalized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row || {})) {
+        const cleanKey = cleanupPowerBIColumnKey(key);
+        normalized[cleanKey] = value;
+      }
+      return normalized;
+    });
+
+    return { rows: normalizedRows, source: mode || "powerbi_executequeries" };
+  } catch (err) {
+    return {
+      rows: [],
+      source: "none",
+      error: `powerbi_sample_exception:${(err as Error).message}`,
+    };
+  }
+}
+
 function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
   let current = "";
