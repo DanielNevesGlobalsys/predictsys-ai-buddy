@@ -33,6 +33,117 @@ const BYTES_PER_FILE = 15 * 1024 * 1024; // 15MB per individual file
 const MEDIAN_SAMPLE_SIZE = 5000; // Reservoir sample size for median calculation
 const MAX_DISTINCT_CATEGORIES = 500; // Limit distinct values tracked for categories
 
+const VIRTUAL_PROFILE_NOTES = [
+  "Dataset proveniente de conexão assistida Power BI.",
+  "Profiling estatístico completo não disponível nesta etapa.",
+];
+
+function isVirtualSourceType(sourceType: string | null | undefined): boolean {
+  const normalized = String(sourceType || "").toLowerCase();
+  return ["powerbi", "external", "virtual"].includes(normalized);
+}
+
+async function resolveVirtualDatasetContext(supabase: any, projectId: string): Promise<{
+  isVirtualDataset: boolean;
+  sourceType: string | null;
+  rowCount: number | null;
+  columnCount: number | null;
+}> {
+  const [{ data: settings }, { data: activeDataset }] = await Promise.all([
+    supabase
+      .from("project_settings")
+      .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
+      .eq("project_id", projectId)
+      .maybeSingle(),
+    supabase
+      .from("project_datasets")
+      .select("source_type, total_rows, columns_count")
+      .eq("project_id", projectId)
+      .eq("is_active", true)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+  ]);
+
+  const sourceType = (settings?.ingestion_source_type || activeDataset?.source_type || null) as string | null;
+  const isVirtualDataset =
+    (settings?.ingestion_state === "done" && isVirtualSourceType(sourceType)) ||
+    isVirtualSourceType(activeDataset?.source_type);
+
+  return {
+    isVirtualDataset,
+    sourceType,
+    rowCount: activeDataset?.total_rows ?? settings?.ingestion_rows_detected ?? null,
+    columnCount: activeDataset?.columns_count ?? settings?.ingestion_cols_detected ?? null,
+  };
+}
+
+function buildVirtualDatasetPayload(context: {
+  rowCount: number | null;
+  columnCount: number | null;
+}) {
+  return {
+    success: true,
+    is_virtual_dataset: true,
+    eda_ready: true,
+    dataset_shape_label: "Dataset externo / virtual",
+    dataset_profile_type: "external_virtual",
+    row_count: context.rowCount ?? null,
+    column_count: context.columnCount ?? null,
+    columns: [],
+    numeric_summary: [],
+    categorical_summary: [],
+    missing_summary: [],
+    target_candidates: [],
+    entity_candidates: [],
+    time_candidates: [],
+    notes: VIRTUAL_PROFILE_NOTES,
+  };
+}
+
+async function markVirtualEdaReady(
+  supabase: any,
+  projectId: string,
+  payload: ReturnType<typeof buildVirtualDatasetPayload>,
+  sourceType: string | null,
+) {
+  const nowIso = new Date().toISOString();
+
+  await supabase
+    .from("project_settings")
+    .update({
+      eda_status: "succeeded",
+      eda_error: null,
+      eda_state: "done",
+      eda_profile_json: {
+        ...payload,
+        virtual_dataset: true,
+        source_type: sourceType,
+        rows_total: payload.row_count ?? 0,
+        columns_count: payload.column_count ?? 0,
+        numeric_columns: 0,
+        categorical_columns: 0,
+        computed_at: nowIso,
+      },
+      eda_profile_created_at: nowIso,
+    })
+    .eq("project_id", projectId);
+}
+
+async function logVirtualEdaEvent(supabase: any, projectId: string, metadata: Record<string, unknown>) {
+  try {
+    await supabase.from("platform_events").insert({
+      event_type: "powerbi_virtual_eda_payload_returned",
+      project_id: projectId,
+      status: "success",
+      source: "edge",
+      metadata,
+    });
+  } catch (err) {
+    console.warn("[calculate-eda] Non-blocking telemetry error:", err);
+  }
+}
+
 function parseCSVLine(line: string, delimiter: string): string[] {
   const result: string[] = [];
   let current = "";
@@ -1065,54 +1176,29 @@ Deno.serve(async (req) => {
       });
     }
 
+    const virtualDatasetContext = await resolveVirtualDatasetContext(supabase, project_id);
+
     const { paths: filePaths, delimiter, encoding, fileType } = await resolveDatasetFilePaths(supabase, project);
     
     if (filePaths.length === 0) {
-      // Check if this is a virtual/external dataset (Power BI assisted, etc.)
-      const { data: settingsData } = await supabase
-        .from("project_settings")
-        .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
-        .eq("project_id", project_id)
-        .single();
+      if (virtualDatasetContext.isVirtualDataset) {
+        const virtualPayload = buildVirtualDatasetPayload({
+          rowCount: virtualDatasetContext.rowCount,
+          columnCount: virtualDatasetContext.columnCount,
+        });
 
-      const isVirtualDataset = settingsData?.ingestion_state === "done" && 
-        ["powerbi", "external"].includes(settingsData?.ingestion_source_type || "");
+        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
+        await logVirtualEdaEvent(supabase, project_id, {
+          stage: "file_resolution",
+          source_type: virtualDatasetContext.sourceType,
+          row_count: virtualPayload.row_count,
+          column_count: virtualPayload.column_count,
+        });
 
-      if (isVirtualDataset) {
-        console.log(`[calculate-eda] Virtual dataset detected (source=${settingsData.ingestion_source_type}). Marking EDA as virtual-complete.`);
-
-        // Update project_settings to mark EDA as succeeded for virtual datasets
-        await supabase
-          .from("project_settings")
-          .update({
-            eda_status: "succeeded",
-            eda_error: null,
-            eda_state: "done",
-            eda_profile_json: {
-              rows_total: settingsData.ingestion_rows_detected || 0,
-              columns_count: settingsData.ingestion_cols_detected || 0,
-              numeric_columns: 0,
-              categorical_columns: 0,
-              virtual_dataset: true,
-              source_type: settingsData.ingestion_source_type,
-              computed_at: new Date().toISOString(),
-            },
-            eda_profile_created_at: new Date().toISOString(),
-          })
-          .eq("project_id", project_id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            virtual_dataset: true,
-            source_type: settingsData.ingestion_source_type,
-            message: "Dataset virtual/externo detectado. EDA marcado como completo — dados residem na fonte externa.",
-            rows_processed: 0,
-            numeric_stats: 0,
-            categorical_stats: 0,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify(virtualPayload), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       console.error("[calculate-eda] Nenhum arquivo de dataset encontrado");
@@ -1260,95 +1346,24 @@ Deno.serve(async (req) => {
     }
 
     if (columnsToProcess.length === 0) {
-      // Check if this is a virtual/external dataset (Power BI assisted, etc.) before failing
-      const { data: settingsCheck } = await supabase
-        .from("project_settings")
-        .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
-        .eq("project_id", project_id)
-        .single();
+      if (virtualDatasetContext.isVirtualDataset) {
+        const virtualPayload = buildVirtualDatasetPayload({
+          rowCount: virtualDatasetContext.rowCount,
+          columnCount: virtualDatasetContext.columnCount,
+        });
 
-      const isVirtual = settingsCheck?.ingestion_state === "done" &&
-        ["powerbi", "external"].includes(settingsCheck?.ingestion_source_type || "");
+        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
+        await logVirtualEdaEvent(supabase, project_id, {
+          stage: "column_metadata",
+          source_type: virtualDatasetContext.sourceType,
+          row_count: virtualPayload.row_count,
+          column_count: virtualPayload.column_count,
+        });
 
-      if (isVirtual) {
-        console.log(`[calculate-eda] Virtual dataset detected at column-check stage (source=${settingsCheck.ingestion_source_type}). Marking EDA as virtual-complete.`);
-
-        await supabase
-          .from("project_settings")
-          .update({
-            eda_status: "succeeded",
-            eda_error: null,
-            eda_state: "done",
-            eda_profile_json: {
-              rows_total: settingsCheck.ingestion_rows_detected || 0,
-              columns_count: settingsCheck.ingestion_cols_detected || 0,
-              numeric_columns: 0,
-              categorical_columns: 0,
-              virtual_dataset: true,
-              source_type: settingsCheck.ingestion_source_type,
-              computed_at: new Date().toISOString(),
-            },
-            eda_profile_created_at: new Date().toISOString(),
-          })
-          .eq("project_id", project_id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            virtual_dataset: true,
-            source_type: settingsCheck.ingestion_source_type,
-            message: "Dataset virtual/externo detectado. EDA marcado como completo.",
-            rows_processed: 0,
-            numeric_stats: 0,
-            categorical_stats: 0,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      // Also check project_datasets source_type
-      const { data: dsCheck } = await supabase
-        .from("project_datasets")
-        .select("source_type, source_metadata")
-        .eq("project_id", project_id)
-        .eq("is_active", true)
-        .limit(1)
-        .maybeSingle();
-
-      if (dsCheck?.source_type === "powerbi" || dsCheck?.source_type === "external") {
-        console.log(`[calculate-eda] Virtual dataset detected via project_datasets (source=${dsCheck.source_type}). Marking EDA as virtual-complete.`);
-
-        await supabase
-          .from("project_settings")
-          .update({
-            eda_status: "succeeded",
-            eda_error: null,
-            eda_state: "done",
-            eda_profile_json: {
-              rows_total: 0,
-              columns_count: 0,
-              numeric_columns: 0,
-              categorical_columns: 0,
-              virtual_dataset: true,
-              source_type: dsCheck.source_type,
-              computed_at: new Date().toISOString(),
-            },
-            eda_profile_created_at: new Date().toISOString(),
-          })
-          .eq("project_id", project_id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            virtual_dataset: true,
-            source_type: dsCheck.source_type,
-            message: "Dataset virtual/externo detectado. EDA marcado como completo.",
-            rows_processed: 0,
-            numeric_stats: 0,
-            categorical_stats: 0,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify(virtualPayload), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       return new Response(
