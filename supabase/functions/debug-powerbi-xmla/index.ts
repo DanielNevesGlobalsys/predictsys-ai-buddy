@@ -711,16 +711,17 @@ serve(async (req) => {
 
         for (const td of tableDetails) {
           for (const col of td.columns) {
+            const cleanCol = cleanupColumnKey(col.column_name);
             allColumns.push({
               table_name: td.table_name,
-              column_name: usePrefix ? `${td.table_name}.${col.column_name}` : col.column_name,
+              column_name: usePrefix ? `${td.table_name}.${cleanCol}` : cleanCol,
               data_type: col.data_type,
               source_table: td.table_name,
             });
           }
           totalRows += td.row_count;
           for (const row of td.sample_rows) {
-            const prefixed: Record<string, unknown> = {};
+            const prefixed: Record<string, unknown> = { __source_table: td.table_name };
             for (const [k, v] of Object.entries(row)) {
               const cleanKey = cleanupColumnKey(k);
               prefixed[usePrefix ? `${td.table_name}.${cleanKey}` : cleanKey] = v;
