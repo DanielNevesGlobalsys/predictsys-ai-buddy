@@ -84,9 +84,16 @@ const escapeDaxTable = (name: string): string => `'${name.replace(/'/g, "''")}'`
 const escapeDaxString = (value: string): string => `"${value.replace(/"/g, '""')}"`;
 
 const cleanupColumnKey = (key: string): string => {
-  const noBrackets = key.replace(/^\[/, "").replace(/\]$/, "");
-  const parts = noBrackets.split("][");
-  return parts[parts.length - 1] || noBrackets;
+  // Handle formats: [Table][Col], Table[Col], [Col], Col
+  let cleaned = key.trim();
+  // Strip trailing ]
+  cleaned = cleaned.replace(/\]$/, "");
+  // If contains [, take only the part after the LAST [
+  const lastBracket = cleaned.lastIndexOf("[");
+  if (lastBracket >= 0) {
+    cleaned = cleaned.substring(lastBracket + 1);
+  }
+  return cleaned || key;
 };
 
 const typeToInferred = (rawType: string): string => {
