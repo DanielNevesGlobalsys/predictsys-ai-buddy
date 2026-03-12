@@ -1068,6 +1068,53 @@ Deno.serve(async (req) => {
     const { paths: filePaths, delimiter, encoding, fileType } = await resolveDatasetFilePaths(supabase, project);
     
     if (filePaths.length === 0) {
+      // Check if this is a virtual/external dataset (Power BI assisted, etc.)
+      const { data: settingsData } = await supabase
+        .from("project_settings")
+        .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
+        .eq("project_id", project_id)
+        .single();
+
+      const isVirtualDataset = settingsData?.ingestion_state === "done" && 
+        ["powerbi", "external"].includes(settingsData?.ingestion_source_type || "");
+
+      if (isVirtualDataset) {
+        console.log(`[calculate-eda] Virtual dataset detected (source=${settingsData.ingestion_source_type}). Marking EDA as virtual-complete.`);
+
+        // Update project_settings to mark EDA as succeeded for virtual datasets
+        await supabase
+          .from("project_settings")
+          .update({
+            eda_status: "succeeded",
+            eda_error: null,
+            eda_state: "done",
+            eda_profile_json: {
+              rows_total: settingsData.ingestion_rows_detected || 0,
+              columns_count: settingsData.ingestion_cols_detected || 0,
+              numeric_columns: 0,
+              categorical_columns: 0,
+              virtual_dataset: true,
+              source_type: settingsData.ingestion_source_type,
+              computed_at: new Date().toISOString(),
+            },
+            eda_profile_created_at: new Date().toISOString(),
+          })
+          .eq("project_id", project_id);
+
+        return new Response(
+          JSON.stringify({
+            success: true,
+            virtual_dataset: true,
+            source_type: settingsData.ingestion_source_type,
+            message: "Dataset virtual/externo detectado. EDA marcado como completo — dados residem na fonte externa.",
+            rows_processed: 0,
+            numeric_stats: 0,
+            categorical_stats: 0,
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       console.error("[calculate-eda] Nenhum arquivo de dataset encontrado");
       return new Response(
         JSON.stringify({ error: "Nenhum dataset carregado para este projeto. Faça upload de dados primeiro." }),

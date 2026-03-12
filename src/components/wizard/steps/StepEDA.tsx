@@ -42,6 +42,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const [activeDataset, setActiveDataset] = useState<{ id: string; total_rows: number; columns_count: number; name: string } | null>(null);
   const [datasetLoading, setDatasetLoading] = useState(true);
   const [noDataset, setNoDataset] = useState(false);
+  const [isVirtualDataset, setIsVirtualDataset] = useState(false);
 
   // EDA SSOT state
   const [edaSSOT, setEdaSSOT] = useState<EdaSSOT>({
@@ -77,11 +78,15 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
       if (dsResult.data) {
         setActiveDataset(dsResult.data);
         setNoDataset(false);
+        // Check if this is a virtual/external dataset (Power BI assisted)
+        const srcType = dsResult.data.name?.toLowerCase() || "";
+        setIsVirtualDataset(srcType.includes("power bi") || srcType.includes("powerbi"));
       } else {
         // Fallback: check project_settings ingestion_state for assisted/external datasets
         const settings = settingsResult.data as any;
         if (settings?.ingestion_state === 'done' && (settings?.ingestion_rows_detected > 0 || settings?.ingestion_source_type === 'powerbi')) {
           // Dataset was materialized via assisted mode or external connector
+          const isVirtual = ['powerbi', 'external'].includes(settings?.ingestion_source_type || '');
           setActiveDataset({
             id: projectData.id,
             total_rows: settings.ingestion_rows_detected || 1,
@@ -89,10 +94,12 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             name: `Dataset (${settings.ingestion_source_type || 'external'})`,
           });
           setNoDataset(false);
-          console.log("[StepEDA] Using fallback dataset from project_settings ingestion_state=done");
+          setIsVirtualDataset(isVirtual);
+          console.log("[StepEDA] Using fallback dataset from project_settings ingestion_state=done, virtual=", isVirtual);
         } else {
           setActiveDataset(null);
           setNoDataset(true);
+          setIsVirtualDataset(false);
         }
       }
 
@@ -229,6 +236,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
 
   const edaReady = edaSSOT.eda_status === "succeeded" && !!edaSSOT.eda_profile_json;
   const edaRunning = edaSSOT.eda_status === "running" || edaCalculating;
+  const canAdvance = edaReady || isVirtualDataset;
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
@@ -286,10 +294,20 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
+                  {isVirtualDataset && (
+                    <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-[10px]">
+                      Externo
+                    </Badge>
+                  )}
                   {edaReady ? (
                     <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
                       <CheckCircle className="w-3 h-3 mr-1" />
                       EDA: OK
+                    </Badge>
+                  ) : isVirtualDataset && !edaRunning ? (
+                    <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
+                      <CheckCircle className="w-3 h-3 mr-1" />
+                      Conexão validada
                     </Badge>
                   ) : edaRunning ? (
                     <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px]">
@@ -316,8 +334,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* EDA failed */}
-            {edaSSOT.eda_status === "failed" && !edaRunning && (
+            {/* EDA failed — show retry (but not for virtual datasets since they'll handle it via calculate-eda) */}
+            {edaSSOT.eda_status === "failed" && !edaRunning && !isVirtualDataset && (
               <div className="p-4 rounded-lg border bg-destructive/10 border-destructive/30 space-y-3">
                 <div className="flex items-center gap-3">
                   <AlertTriangle className="w-5 h-5 text-destructive" />
@@ -335,8 +353,23 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
+            {/* Virtual dataset info — Power BI / external */}
+            {isVirtualDataset && !edaReady && !edaRunning && (
+              <div className="p-4 rounded-lg border bg-secondary/10 border-secondary/30 space-y-2">
+                <div className="flex items-center gap-3">
+                  <Info className="w-5 h-5 text-secondary" />
+                  <div>
+                    <p className="text-sm font-semibold">Dataset externo (Power BI)</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Os dados residem na fonte externa. A análise exploratória detalhada estará disponível após a importação completa dos dados. Você pode avançar para a próxima etapa.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* EDA succeeded — show EDADisplay */}
-            {edaReady && projectData.id && (
+            {edaReady && projectData.id && !isVirtualDataset && (
               <>
                 <div className="flex items-center justify-end">
                   <Button variant="outline" size="sm" onClick={handleRecalculate} disabled={edaCalculating}>
@@ -393,10 +426,10 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </Button>
           <Button
             onClick={() => onNext({ status: "eda_complete" })}
-            disabled={loading || noDataset || !edaReady}
+            disabled={loading || noDataset || !canAdvance}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {noDataset ? "Dataset ausente" : edaRunning ? "Calculando EDA…" : edaReady ? t("common.next") : "Aguardando EDA"}
+            {noDataset ? "Dataset ausente" : edaRunning ? "Calculando EDA…" : canAdvance ? t("common.next") : "Aguardando EDA"}
           </Button>
         </div>
       </div>
