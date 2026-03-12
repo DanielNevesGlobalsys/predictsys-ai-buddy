@@ -1176,6 +1176,8 @@ Deno.serve(async (req) => {
       });
     }
 
+    const virtualDatasetContext = await resolveVirtualDatasetContext(supabase, project_id);
+
     const { paths: filePaths, delimiter, encoding, fileType } = await resolveDatasetFilePaths(supabase, project);
     
     if (filePaths.length === 0) {
