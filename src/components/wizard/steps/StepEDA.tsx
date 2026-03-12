@@ -69,7 +69,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           .maybeSingle(),
         supabase
           .from("project_settings")
-          .select("eda_status, eda_error, eda_profile_json, eda_profile_created_at")
+          .select("eda_status, eda_error, eda_profile_json, eda_profile_created_at, ingestion_state, ingestion_rows_detected, ingestion_cols_detected, ingestion_source_type")
           .eq("project_id", projectData.id)
           .maybeSingle(),
       ]);
@@ -78,8 +78,22 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
         setActiveDataset(dsResult.data);
         setNoDataset(false);
       } else {
-        setActiveDataset(null);
-        setNoDataset(true);
+        // Fallback: check project_settings ingestion_state for assisted/external datasets
+        const settings = settingsResult.data as any;
+        if (settings?.ingestion_state === 'done' && (settings?.ingestion_rows_detected > 0 || settings?.ingestion_source_type === 'powerbi')) {
+          // Dataset was materialized via assisted mode or external connector
+          setActiveDataset({
+            id: projectData.id,
+            total_rows: settings.ingestion_rows_detected || 1,
+            columns_count: settings.ingestion_cols_detected || 1,
+            name: `Dataset (${settings.ingestion_source_type || 'external'})`,
+          });
+          setNoDataset(false);
+          console.log("[StepEDA] Using fallback dataset from project_settings ingestion_state=done");
+        } else {
+          setActiveDataset(null);
+          setNoDataset(true);
+        }
       }
 
       if (settingsResult.data) {

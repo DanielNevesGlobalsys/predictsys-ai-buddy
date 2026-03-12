@@ -236,10 +236,34 @@ const ExternalDiscoveryFlow = ({
               if (!data?.success) {
                 throw new Error(data?.message || "Falha ao salvar seleção manual.");
               }
+
+              // Verify dataset materialization in SSOT before showing success
+              const { data: verifyData } = await supabase
+                .from("project_datasets")
+                .select("id")
+                .eq("project_id", projectData.id)
+                .eq("is_active", true)
+                .limit(1)
+                .maybeSingle();
+
+              if (!verifyData) {
+                // Fallback: check project_settings
+                const { data: settingsData } = await supabase
+                  .from("project_settings")
+                  .select("ingestion_state")
+                  .eq("project_id", projectData.id)
+                  .maybeSingle();
+
+                if ((settingsData as any)?.ingestion_state !== 'done') {
+                  console.warn("[ExternalDiscoveryFlow] Dataset not found in SSOT after manual selection");
+                  throw new Error("A tabela foi validada, mas o dataset não foi ativado corretamente para a etapa de análise.");
+                }
+              }
+
               setManualSubmissionStatus("success");
               toast({
-                title: "Tabela manual selecionada com sucesso",
-                description: "Dataset ativo registrado para o projeto.",
+                title: "Dataset manual ativo registrado com sucesso",
+                description: "Você pode avançar para a análise.",
               });
               setTimeout(() => onDataReady(), 1500);
             } catch (err: any) {

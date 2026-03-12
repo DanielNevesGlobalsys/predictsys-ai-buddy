@@ -287,6 +287,7 @@ serve(async (req) => {
       manual_table_name: tableName,
       manifest_id: result?.manifest_id,
       dataset_version: result?.dataset_version,
+      project_dataset_id: projectDatasetId,
       table_validated: tableValidated,
       message: 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
