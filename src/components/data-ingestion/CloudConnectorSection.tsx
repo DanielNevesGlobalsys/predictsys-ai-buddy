@@ -806,8 +806,42 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
               <Label htmlFor="isContinuous">{t("dataIngestion.cloud.continuousConnection")}</Label>
             </div>
 
-            {/* Test connection status */}
-            {testMessage && (
+            {/* Power BI Manual Assisted Panel */}
+            {selectedConnector === "powerbi" && pbiTestResult && testStatus === "success" && (
+              <PowerBIManualAssistedPanel
+                connectionStatus={pbiTestResult.connection_status}
+                message={pbiTestResult.message}
+                discoveryAvailable={pbiTestResult.discovery_available}
+                semanticModelType={pbiTestResult.semantic_model_type}
+                sourceTrace={pbiTestResult.source_trace}
+                manualTableName={manualTableName}
+                onManualTableNameChange={(val) => {
+                  setManualTableName(val);
+                  handleInputChange("table_name", val);
+                }}
+                onRetryDiscovery={handleTestConnection}
+                onUseDetectedSource={() => {
+                  toast({ title: "Redirecionando", description: "Configure a conexão direta com a fonte detectada usando os dados preenchidos." });
+                }}
+                onImportFile={onDataReady}
+                onContinuePartial={() => {
+                  if (manualTableName.trim()) {
+                    handleInputChange("table_name", manualTableName);
+                  }
+                  handleSaveConnection();
+                }}
+                onSelectTableManually={() => {
+                  if (manualTableName.trim()) {
+                    handleInputChange("table_name", manualTableName);
+                    handleSaveConnection();
+                  }
+                }}
+                isRetrying={testStatus === "testing"}
+              />
+            )}
+
+            {/* Test connection status (non-Power BI or error state) */}
+            {testMessage && !(selectedConnector === "powerbi" && pbiTestResult && testStatus === "success") && (
               <div className={`flex items-start gap-3 p-3 rounded-lg ${
                 testStatus === "success" 
                   ? "bg-accent/10 border border-accent/30" 
