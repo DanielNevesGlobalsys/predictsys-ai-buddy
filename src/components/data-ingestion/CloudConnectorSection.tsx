@@ -836,7 +836,7 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                     handleSaveConnection();
                   }
                 }}
-                isRetrying={testStatus === "testing"}
+                isRetrying={false}
               />
             )}
 
