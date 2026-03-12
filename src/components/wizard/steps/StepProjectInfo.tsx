@@ -276,6 +276,11 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
       ? (contract.problem_type_default === "clustering" ? "classification" : contract.problem_type_default)
       : effectiveProblemType;
 
+    // Build custom_objective_text for "outro"
+    const customObjectiveText = objectiveKey === "outro" || formData.declared_objective === "outro"
+      ? formData.business_objective.trim() || null
+      : null;
+
     // Persist contract to project_settings
     if (projectData.id) {
       try {
@@ -287,6 +292,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               industry: industryKey !== "generic" ? industryKey : null,
               industry_source: "user",
               objective: objectiveKey,
+              custom_objective_text: customObjectiveText,
               business_intent_contract: contract as any,
               updated_at: new Date().toISOString(),
             },
