@@ -146,10 +146,16 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
     setEdaSSOT(prev => ({ ...prev, eda_status: "running", eda_error: null }));
 
     try {
-      const { error } = await supabase.functions.invoke("calculate-eda", {
+      const { data: responseData, error } = await supabase.functions.invoke("calculate-eda", {
         body: { project_id: projectData.id },
       });
       if (error) throw error;
+
+      // If the response indicates a virtual/external dataset EDA was completed, use it directly
+      const isExternalEda = responseData?.is_virtual_dataset || responseData?.eda_status === "completed_external_materialized";
+      if (isExternalEda) {
+        setIsVirtualDataset(true);
+      }
 
       // Build profile from stats
       const [numResult, catResult] = await Promise.all([
