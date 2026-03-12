@@ -507,17 +507,31 @@ serve(async (req) => {
       .maybeSingle();
 
     if (settingsGate && settingsGate.ingestion_state !== "done") {
-      console.log(`[tde-profile-dataset] Blocked: ingestion_state=${settingsGate.ingestion_state}`);
-      return new Response(JSON.stringify({
-        success: false,
-        error_code: "INGESTION_NOT_READY",
-        error_friendly: "A ingestão de dados ainda não foi concluída. Finalize a importação antes de executar o profiling.",
-        ingestion_state: settingsGate.ingestion_state,
-        ctas: [
-          { label: "Voltar para Upload", action: "goto_step", step: 2 },
-          { label: "Atualizar status", action: "refresh" },
-        ],
-      }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      // For Power BI / external datasets, check if columns already exist (materialization done outside ingestion pipeline)
+      const isExternalSource = isVirtualSourceType(settingsGate.ingestion_source_type);
+      let hasColumnsForExternal = false;
+      if (isExternalSource || !settingsGate.ingestion_state) {
+        const { count: colFallback } = await supabase
+          .from("project_columns")
+          .select("id", { count: "exact", head: true })
+          .eq("project_id", project_id);
+        hasColumnsForExternal = (colFallback ?? 0) > 0;
+      }
+
+      if (!hasColumnsForExternal) {
+        console.log(`[tde-profile-dataset] Blocked: ingestion_state=${settingsGate.ingestion_state}`);
+        return new Response(JSON.stringify({
+          success: false,
+          error_code: "INGESTION_NOT_READY",
+          error_friendly: "A ingestão de dados ainda não foi concluída. Finalize a importação antes de executar o profiling.",
+          ingestion_state: settingsGate.ingestion_state,
+          ctas: [
+            { label: "Voltar para Upload", action: "goto_step", step: 2 },
+            { label: "Atualizar status", action: "refresh" },
+          ],
+        }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+      console.log(`[tde-profile-dataset] External/PowerBI dataset with ${hasColumnsForExternal} columns — bypassing ingestion gate`);
     }
 
     // If manifest/dataset IDs are missing, check if columns exist as fallback

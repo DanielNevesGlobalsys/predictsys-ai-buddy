@@ -863,6 +863,20 @@ serve(async (req) => {
               .eq("id", connection_id);
           }
 
+          // Mark ingestion as done so TDE profiling gate allows execution
+          await supabaseAdmin.from("project_settings").upsert(
+            {
+              project_id,
+              ingestion_state: "done",
+              ingestion_source_type: PBI_SOURCE_TYPE,
+              ingestion_rows_detected: totalRows,
+              ingestion_cols_detected: allColumns.length,
+              ingestion_dataset_id: datasetRow?.id || null,
+              updated_at: new Date().toISOString(),
+            } as any,
+            { onConflict: "project_id" },
+          );
+
           multiMaterialized = true;
           steps.push({
             step: "F",
