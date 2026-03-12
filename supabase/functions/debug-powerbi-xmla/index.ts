@@ -1232,7 +1232,7 @@ serve(async (req) => {
               detail: `Dataset materializado com schema real (${finalColumns.length} colunas / ${finalRowCount} linhas).`,
               data: {
                 project_dataset_id: datasetRow?.id,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 connection_mode: connectionMode,
               },
               duration_ms: Date.now() - started,
