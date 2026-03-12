@@ -389,6 +389,65 @@ serve(async (req) => {
     const inferences: ColumnInference[] = (inferenceRes.data as ColumnInference[]) || [];
 
     if (columns.length === 0) {
+      // Check if this is a virtual/external dataset (Power BI assisted, etc.)
+      const { data: settingsVirtual } = await supabase
+        .from("project_settings")
+        .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
+        .eq("project_id", project_id)
+        .single();
+
+      const isVirtualDs = settingsVirtual?.ingestion_state === "done" &&
+        ["powerbi", "external"].includes(settingsVirtual?.ingestion_source_type || "");
+
+      if (isVirtualDs) {
+        console.log(`[tde-profile-dataset] Virtual dataset (${settingsVirtual.ingestion_source_type}) — returning virtual profile`);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            virtual_dataset: true,
+            source_type: settingsVirtual.ingestion_source_type,
+            profile: {
+              dataset_format: "external",
+              row_count: settingsVirtual.ingestion_rows_detected || 0,
+              col_count: settingsVirtual.ingestion_cols_detected || 0,
+              candidates: [],
+              recommendations: [],
+              adapter_id: "generic",
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
+      // Also check project_datasets source_type
+      const { data: dsCheck } = await supabase
+        .from("project_datasets")
+        .select("source_type")
+        .eq("project_id", project_id)
+        .eq("is_active", true)
+        .limit(1)
+        .maybeSingle();
+
+      if (dsCheck?.source_type === "powerbi" || dsCheck?.source_type === "external") {
+        console.log(`[tde-profile-dataset] Virtual dataset via project_datasets (${dsCheck.source_type}) — returning virtual profile`);
+        return new Response(
+          JSON.stringify({
+            success: true,
+            virtual_dataset: true,
+            source_type: dsCheck.source_type,
+            profile: {
+              dataset_format: "external",
+              row_count: 0,
+              col_count: 0,
+              candidates: [],
+              recommendations: [],
+              adapter_id: "generic",
+            },
+          }),
+          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+        );
+      }
+
       return new Response(
         JSON.stringify({ error: "Nenhuma coluna encontrada. Execute a importação primeiro." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
