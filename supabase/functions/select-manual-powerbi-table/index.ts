@@ -187,7 +187,7 @@ serve(async (req) => {
     });
 
     if (finError) {
-      console.error('[select-manual-pbi] rpc_finalize_ingestion error:', finError);
+      console.error('[select-manual-pbi] rpc_finalize_ingestion error:', JSON.stringify(finError));
 
       // Log failure
       try {
