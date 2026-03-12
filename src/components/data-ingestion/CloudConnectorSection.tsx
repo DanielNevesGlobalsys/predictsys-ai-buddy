@@ -814,6 +814,10 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                 discoveryAvailable={pbiTestResult.discovery_available}
                 semanticModelType={pbiTestResult.semantic_model_type}
                 sourceTrace={pbiTestResult.source_trace}
+                discoveredTables={pbiTestResult.discovered_tables}
+                authValid={pbiTestResult.auth_valid}
+                workspaceValid={pbiTestResult.workspace_valid}
+                datasetValid={pbiTestResult.dataset_valid}
                 manualTableName={manualTableName}
                 onManualTableNameChange={(val) => {
                   setManualTableName(val);
