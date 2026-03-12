@@ -1081,7 +1081,7 @@ serve(async (req) => {
         try {
           const { data: finalizeResult, error: finalizeError } = await supabaseAdmin.rpc("rpc_finalize_ingestion", {
             p_project_id: project_id,
-            p_source_type: "powerbi_materialized",
+            p_source_type: PBI_SOURCE_TYPE,
             p_config_hash: `pbi_materialized_${project_id}_${effectiveTableName}`,
             p_dataset_id: null,
             p_source_pointer: {
