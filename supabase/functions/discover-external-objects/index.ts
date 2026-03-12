@@ -203,9 +203,19 @@ interface SourceTraceResult {
   source_trace_status: 'detected' | 'partial' | 'not_available';
   source_trace_reason_code: string;
   confidence: 'high' | 'medium' | 'low';
+  source_role: 'primary' | 'auxiliary';
   raw_datasources: any[];
   semantic_model_type: string | null;
 }
+
+const PRIMARY_SOURCE_TYPES_SET = new Set([
+  'sql', 'sqlserver', 'azure_sql', 'azuresqldw', 'azure_synapse',
+  'databricks', 'synapse', 'postgresql', 'mysql', 'oracle',
+  'snowflake', 'bigquery', 'amazonredshift', 'aws_redshift',
+  'microsoftfabricwarehouse', 'microsoftfabriclakehouse',
+  'fabric_warehouse', 'fabric_lakehouse', 'sql_server',
+  'analysisservices', 'analysis_services',
+]);
 
 interface PowerBIDiscoveryResult {
   objects: DiscoveredObject[];
@@ -300,6 +310,7 @@ async function traceUnderlyingSource(
     datasource_database: null, datasource_path: null,
     lineage_available: false, source_trace_status: 'not_available',
     source_trace_reason_code: 'no_datasource_info', confidence: 'low',
+    source_role: 'auxiliary',
     raw_datasources: [], semantic_model_type: null,
   };
 
@@ -349,6 +360,7 @@ async function traceUnderlyingSource(
     const primary = sqlLike || datasources[0];
     const classified = classifyDatasource(primary);
 
+    const sourceRole = PRIMARY_SOURCE_TYPES_SET.has(classified.type.toLowerCase()) ? 'primary' as const : 'auxiliary' as const;
     const result: SourceTraceResult = {
       detected: true,
       datasource_type: classified.type,
@@ -358,7 +370,8 @@ async function traceUnderlyingSource(
       lineage_available: true,
       source_trace_status: classified.server ? 'detected' : 'partial',
       source_trace_reason_code: 'datasource_api_ok',
-      confidence: classified.server && classified.database ? 'high' : classified.server ? 'medium' : 'low',
+      confidence: sourceRole === 'primary' && classified.server && classified.database ? 'high' : classified.server ? 'medium' : 'low',
+      source_role: sourceRole,
       raw_datasources: datasources,
       semantic_model_type: null,
     };
@@ -458,200 +471,207 @@ async function discoverPowerBIWithFallback(
 
   const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
-  // ─── Level 1 Primary: DAX discovery ───
-  const daxQuery = `EVALUATE INFO.TABLES()`;
-  const daxStartMs = Date.now();
+  // ─── Level 1 Primary: DAX discovery with fallback chain ───
+  const daxQueries = [
+    { query: 'EVALUATE INFO.TABLES()', method: 'dax_info_tables' },
+    { query: "SELECT [Name] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]", method: 'tmschema_tables' },
+  ];
 
-  await logDiagnostic('powerbi_discovery_request', {
-    endpoint: executeUrl, dax_query: daxQuery, method: 'POST',
-  });
+  let discoveryMethod = 'none';
+  let daxDurationMs = 0;
+  let daxObjects: DiscoveredObject[] = [];
 
-  try {
-    const resp = await fetch(executeUrl, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } })
-    });
-
-    const daxDurationMs = Date.now() - daxStartMs;
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      await logDiagnostic('powerbi_discovery_error', {
-        http_status: resp.status, error_payload_raw: errText.substring(0, 2000),
-        dax_query: daxQuery, endpoint_called: executeUrl, duration_ms: daxDurationMs,
-      });
-      throw new Error(errText);
-    }
-
-    const result = await resp.json();
-    const rows = result.results?.[0]?.tables?.[0]?.rows || [];
-
-    await logDiagnostic('powerbi_discovery_response', {
-      http_status: 200, duration_ms: daxDurationMs, rows_returned: rows.length,
-      raw_response_size: JSON.stringify(result).length, endpoint: executeUrl,
-    });
-
-    const objects: DiscoveredObject[] = [];
-    for (const row of rows) {
-      const name = row['[Name]'] || row['Name'];
-      if (!name || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
-
-      let colCount: number | null = null;
-      let rowCount: number | null = null;
-      try {
-        const colResp = await fetch(executeUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
-        });
-        if (colResp.ok) {
-          const colResult = await colResp.json();
-          const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
-          if (r) {
-            colCount = r['[cols]'] ?? r['cols'] ?? null;
-            rowCount = r['[rows]'] ?? r['rows'] ?? null;
-          }
-        }
-      } catch { /* ignore */ }
-
-      objects.push({
-        object_name: name,
-        object_type: 'semantic_model',
-        object_schema: `${workspace_id}/${dataset_id}`,
-        estimated_columns: colCount,
-        estimated_rows: rowCount,
-        last_updated_at: null,
-        classification: classifyObject(name, colCount, rowCount),
-        metadata: { workspace_id, dataset_id }
-      });
-    }
-
-    return { objects, fallback_used: false, discovery_method: 'dax_info_tables' };
-
-  } catch (daxError) {
-    const daxErrMsg = daxError instanceof Error ? daxError.message : String(daxError);
-    const daxStack = daxError instanceof Error ? daxError.stack : undefined;
-    console.warn(`[discover] Power BI DAX discovery failed, attempting fallback chain:`, daxErrMsg);
-
-    let errorCode: string | undefined;
-    try {
-      const parsed = JSON.parse(daxErrMsg);
-      errorCode = parsed?.error?.code || parsed?.error?.pbi_error?.code || undefined;
-    } catch { /* not JSON */ }
-
-    await logDiagnostic('powerbi_discovery_error', {
-      http_status: null, error_code: errorCode,
-      error_message: daxErrMsg.substring(0, 500),
-      error_payload_raw: daxErrMsg.substring(0, 2000),
-      dax_query: daxQuery, endpoint_called: executeUrl,
-      stack_trace: daxStack?.substring(0, 1000),
-      duration_ms: Date.now() - daxStartMs, phase: 'dax_primary',
-    });
-
-    const classified = classifyPowerBIError(daxErrMsg);
-
-    // ─── Level 1 Fallback: REST API metadata ───
-    const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
-    const fallbackStartMs = Date.now();
+  for (const dq of daxQueries) {
+    const daxStartMs = Date.now();
 
     await logDiagnostic('powerbi_discovery_request', {
-      endpoint: fallbackUrl, method: 'GET', phase: 'rest_fallback',
+      endpoint: executeUrl, dax_query: dq.query, method: 'POST', phase: dq.method,
     });
-
-    let restObjects: DiscoveredObject[] = [];
-    let restFallbackWorked = false;
 
     try {
-      const tablesResp = await fetch(fallbackUrl, {
-        headers: { 'Authorization': `Bearer ${access_token}` }
+      const resp = await fetch(executeUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: [{ query: dq.query }], serializerSettings: { includeNulls: true } })
       });
-      const fallbackDurationMs = Date.now() - fallbackStartMs;
 
-      if (tablesResp.ok) {
-        const tablesData = await tablesResp.json();
-        const tables = tablesData.value || [];
+      daxDurationMs = Date.now() - daxStartMs;
 
-        await logDiagnostic('powerbi_discovery_response', {
-          http_status: 200, duration_ms: fallbackDurationMs, rows_returned: tables.length,
-          raw_response_size: JSON.stringify(tablesData).length, endpoint: fallbackUrl, phase: 'rest_fallback',
+      if (!resp.ok) {
+        const errText = await resp.text();
+        await logDiagnostic('powerbi_discovery_error', {
+          http_status: resp.status, error_payload_raw: errText.substring(0, 2000),
+          dax_query: dq.query, endpoint_called: executeUrl, duration_ms: daxDurationMs, phase: dq.method,
         });
+        continue; // Try next fallback
+      }
 
-        restObjects = tables.map((t: any) => ({
-          object_name: t.name,
+      const result = await resp.json();
+      const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+
+      await logDiagnostic('powerbi_discovery_response', {
+        http_status: 200, duration_ms: daxDurationMs, rows_returned: rows.length,
+        raw_response_size: JSON.stringify(result).length, endpoint: executeUrl, phase: dq.method,
+      });
+
+      for (const row of rows) {
+        const name = row['[Name]'] || row['Name'] || Object.values(row)[0];
+        if (!name || typeof name !== 'string' || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
+
+        let colCount: number | null = null;
+        let rowCount: number | null = null;
+        try {
+          const colResp = await fetch(executeUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
+          });
+          if (colResp.ok) {
+            const colResult = await colResp.json();
+            const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
+            if (r) {
+              colCount = r['[cols]'] ?? r['cols'] ?? null;
+              rowCount = r['[rows]'] ?? r['rows'] ?? null;
+            }
+          }
+        } catch { /* ignore */ }
+
+        daxObjects.push({
+          object_name: name,
           object_type: 'semantic_model',
           object_schema: `${workspace_id}/${dataset_id}`,
-          estimated_columns: t.columns?.length ?? null,
-          estimated_rows: null,
+          estimated_columns: colCount,
+          estimated_rows: rowCount,
           last_updated_at: null,
-          classification: classifyObject(t.name, t.columns?.length ?? null, null),
-          metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
-        }));
-
-        if (restObjects.length > 0) restFallbackWorked = true;
-      } else {
-        const fallbackErrText = await tablesResp.text();
-        await logDiagnostic('powerbi_discovery_error', {
-          http_status: tablesResp.status, error_payload_raw: fallbackErrText.substring(0, 2000),
-          endpoint_called: fallbackUrl, duration_ms: fallbackDurationMs, phase: 'rest_fallback',
+          classification: classifyObject(name, colCount, rowCount),
+          metadata: { workspace_id, dataset_id, discovery_source: dq.method }
         });
       }
-    } catch (fallbackErr) {
-      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+
+      if (daxObjects.length > 0) {
+        discoveryMethod = dq.method;
+        break; // Success, no need to try next fallback
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
       await logDiagnostic('powerbi_discovery_error', {
-        error_message: fbMsg.substring(0, 500), endpoint_called: fallbackUrl,
-        duration_ms: Date.now() - fallbackStartMs, phase: 'rest_fallback',
+        error_message: errMsg.substring(0, 500), phase: dq.method,
+        duration_ms: Date.now() - daxStartMs,
       });
-      console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
+      continue;
     }
+  }
 
-    // ─── Level 2: Source tracing ───
-    await logDiagnostic('powerbi_metadata_fallback_started', { phase: 'source_trace' });
+  if (daxObjects.length > 0) {
+    return { objects: daxObjects, fallback_used: discoveryMethod !== 'dax_info_tables', discovery_method: discoveryMethod };
+  }
 
-    const sourceTrace = await traceUnderlyingSource(
-      access_token, workspace_id, dataset_id,
-      supabaseClient, connectionId, projectId,
-    );
+  // All DAX methods failed - continue to REST and source trace fallbacks
+  const daxErrMsg = 'All DAX discovery methods failed';
+  console.warn(`[discover] Power BI DAX discovery failed, attempting REST fallback`);
 
-    await logDiagnostic('powerbi_metadata_fallback_finished', {
-      phase: 'source_trace',
-      source_detected: sourceTrace.detected,
-      datasource_type: sourceTrace.datasource_type,
-      confidence: sourceTrace.confidence,
-      semantic_model_type: sourceTrace.semantic_model_type,
+  const classified = classifyPowerBIError(daxErrMsg);
+
+  // ─── Level 1 Fallback: REST API metadata ───
+  const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
+  const fallbackStartMs = Date.now();
+
+  await logDiagnostic('powerbi_discovery_request', {
+    endpoint: fallbackUrl, method: 'GET', phase: 'rest_fallback',
+  });
+
+  let restObjects: DiscoveredObject[] = [];
+  let restFallbackWorked = false;
+
+  try {
+    const tablesResp = await fetch(fallbackUrl, {
+      headers: { 'Authorization': `Bearer ${access_token}` }
     });
+    const fallbackDurationMs = Date.now() - fallbackStartMs;
 
-    // Log assisted ingestion offered
-    await logDiagnostic('powerbi_assisted_ingestion_offered', {
-      phase: 'level3',
-      rest_fallback_worked: restFallbackWorked,
-      rest_objects_count: restObjects.length,
-      source_detected: sourceTrace.detected,
-      datasource_type: sourceTrace.datasource_type,
-    });
+    if (tablesResp.ok) {
+      const tablesData = await tablesResp.json();
+      const tables = tablesData.value || [];
 
-    // If REST fallback gave objects, return them with source trace
-    if (restFallbackWorked) {
-      return {
-        objects: restObjects,
-        fallback_used: true,
-        discovery_method: 'rest_api_tables',
-        reason_code: classified.reason_code,
-        error_detail: daxErrMsg.substring(0, 500),
-        source_trace: sourceTrace,
-      };
+      await logDiagnostic('powerbi_discovery_response', {
+        http_status: 200, duration_ms: fallbackDurationMs, rows_returned: tables.length,
+        raw_response_size: JSON.stringify(tablesData).length, endpoint: fallbackUrl, phase: 'rest_fallback',
+      });
+
+      restObjects = tables.map((t: any) => ({
+        object_name: t.name,
+        object_type: 'semantic_model',
+        object_schema: `${workspace_id}/${dataset_id}`,
+        estimated_columns: t.columns?.length ?? null,
+        estimated_rows: null,
+        last_updated_at: null,
+        classification: classifyObject(t.name, t.columns?.length ?? null, null),
+        metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
+      }));
+
+      if (restObjects.length > 0) restFallbackWorked = true;
+    } else {
+      const fallbackErrText = await tablesResp.text();
+      await logDiagnostic('powerbi_discovery_error', {
+        http_status: tablesResp.status, error_payload_raw: fallbackErrText.substring(0, 2000),
+        endpoint_called: fallbackUrl, duration_ms: fallbackDurationMs, phase: 'rest_fallback',
+      });
     }
+  } catch (fallbackErr) {
+    const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    await logDiagnostic('powerbi_discovery_error', {
+      error_message: fbMsg.substring(0, 500), endpoint_called: fallbackUrl,
+      duration_ms: Date.now() - fallbackStartMs, phase: 'rest_fallback',
+    });
+    console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
+  }
 
-    // Both DAX and REST failed — return failure with source trace
+  // ─── Level 2: Source tracing ───
+  await logDiagnostic('powerbi_metadata_fallback_started', { phase: 'source_trace' });
+
+  const sourceTrace = await traceUnderlyingSource(
+    access_token, workspace_id, dataset_id,
+    supabaseClient, connectionId, projectId,
+  );
+
+  await logDiagnostic('powerbi_metadata_fallback_finished', {
+    phase: 'source_trace',
+    source_detected: sourceTrace.detected,
+    datasource_type: sourceTrace.datasource_type,
+    confidence: sourceTrace.confidence,
+    semantic_model_type: sourceTrace.semantic_model_type,
+  });
+
+  // Log assisted mode activated
+  await logDiagnostic('powerbi_assisted_mode', {
+    phase: 'level3',
+    rest_fallback_worked: restFallbackWorked,
+    rest_objects_count: restObjects.length,
+    source_detected: sourceTrace.detected,
+    datasource_type: sourceTrace.datasource_type,
+  });
+
+  // If REST fallback gave objects, return them with source trace
+  if (restFallbackWorked) {
     return {
-      objects: [],
+      objects: restObjects,
       fallback_used: true,
-      discovery_method: 'none',
+      discovery_method: 'rest_api_tables',
       reason_code: classified.reason_code,
       error_detail: daxErrMsg.substring(0, 500),
       source_trace: sourceTrace,
     };
   }
+
+  // Both DAX and REST failed — return failure with source trace
+  return {
+    objects: [],
+    fallback_used: true,
+    discovery_method: 'none',
+    reason_code: classified.reason_code,
+    error_detail: daxErrMsg.substring(0, 500),
+    source_trace: sourceTrace,
+  };
 }
 
 // ═══════════════════════════════════════════════════
@@ -998,6 +1018,7 @@ serve(async (req) => {
           datasource_path: powerbiResult.source_trace.datasource_path,
           semantic_model_type: powerbiResult.source_trace.semantic_model_type,
           confidence: powerbiResult.source_trace.confidence,
+          source_role: powerbiResult.source_trace.source_role,
           source_trace_status: powerbiResult.source_trace.source_trace_status,
         };
       }

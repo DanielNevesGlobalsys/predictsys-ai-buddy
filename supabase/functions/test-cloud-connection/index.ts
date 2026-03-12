@@ -12,6 +12,38 @@ type PowerBIConnectionStatus =
   | 'connected_partial_discovery'
   | 'connected_full_discovery';
 
+const PRIMARY_SOURCE_TYPES = new Set([
+  'sql', 'sqlserver', 'azure_sql', 'azuresqldw', 'azure_synapse',
+  'databricks', 'synapse', 'postgresql', 'mysql', 'oracle',
+  'snowflake', 'bigquery', 'amazonredshift', 'aws_redshift',
+  'microsoftfabricwarehouse', 'microsoftfabriclakehouse',
+  'fabric_warehouse', 'fabric_lakehouse', 'sql_server',
+  'analysisservices', 'analysis_services',
+]);
+
+function classifySourceRole(dsType: string): 'primary' | 'auxiliary' {
+  return PRIMARY_SOURCE_TYPES.has(dsType.toLowerCase()) ? 'primary' : 'auxiliary';
+}
+
+function computeSourceConfidence(
+  server: string | null,
+  database: string | null,
+  role: 'primary' | 'auxiliary',
+): 'high' | 'medium' | 'low' {
+  if (role === 'primary' && server && database) return 'high';
+  if (role === 'primary' && server) return 'medium';
+  if (role === 'auxiliary') return 'low';
+  return 'low';
+}
+
+interface SourceTraceInfo {
+  datasource_type: string | null;
+  datasource_server: string | null;
+  datasource_database: string | null;
+  source_role: 'primary' | 'auxiliary';
+  confidence: 'high' | 'medium' | 'low';
+}
+
 interface PowerBIValidationResult {
   success: boolean;
   connection_status: PowerBIConnectionStatus;
@@ -21,11 +53,8 @@ interface PowerBIValidationResult {
   dataset_valid: boolean;
   discovery_available: boolean;
   semantic_model_type?: string;
-  source_trace?: {
-    datasource_type: string | null;
-    datasource_server: string | null;
-    datasource_database: string | null;
-  };
+  source_trace?: SourceTraceInfo;
+  discovered_tables?: string[];
 }
 
 async function validatePowerBI(config: Record<string, any>): Promise<PowerBIValidationResult> {
@@ -97,22 +126,86 @@ async function validatePowerBI(config: Record<string, any>): Promise<PowerBIVali
     return fail('dataset_not_found', `Erro ao validar dataset: ${err instanceof Error ? err.message : String(err)}`, { auth_valid: true, workspace_valid: true });
   }
 
-  // Step 4: Try discovery (DAX INFO.TABLES)
+  // Step 4: Try discovery with DAX fallback chain
   let discoveryAvailable = false;
+  const discoveredTables: string[] = [];
+
+  const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
+
+  // Try INFO.TABLES()
   try {
-    const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
     const resp = await fetch(executeUrl, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queries: [{ query: 'EVALUATE ROW("ok", 1)' }], serializerSettings: { includeNulls: true } }),
+      body: JSON.stringify({ queries: [{ query: 'EVALUATE INFO.TABLES()' }], serializerSettings: { includeNulls: true } }),
     });
-    discoveryAvailable = resp.ok;
-  } catch {
-    discoveryAvailable = false;
+    if (resp.ok) {
+      const result = await resp.json();
+      const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+      for (const row of rows) {
+        const name = row['[Name]'] || row['Name'];
+        if (name && !name.startsWith('DateTable') && !name.startsWith('LocalDateTable')) {
+          discoveredTables.push(name);
+        }
+      }
+      if (discoveredTables.length > 0) discoveryAvailable = true;
+    }
+  } catch { /* continue to fallbacks */ }
+
+  // Fallback 1: TMSCHEMA_TABLES
+  if (!discoveryAvailable) {
+    try {
+      const resp = await fetch(executeUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: [{ query: 'SELECT [Name] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]' }], serializerSettings: { includeNulls: true } }),
+      });
+      if (resp.ok) {
+        const result = await resp.json();
+        const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+        for (const row of rows) {
+          const name = row['[Name]'] || row['Name'] || Object.values(row)[0];
+          if (name && typeof name === 'string' && !name.startsWith('DateTable') && !name.startsWith('LocalDateTable')) {
+            discoveredTables.push(name);
+          }
+        }
+        if (discoveredTables.length > 0) discoveryAvailable = true;
+      }
+    } catch { /* continue */ }
+  }
+
+  // Fallback 2: Simple DAX test
+  if (!discoveryAvailable) {
+    try {
+      const resp = await fetch(executeUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: [{ query: 'EVALUATE ROW("ok", 1)' }], serializerSettings: { includeNulls: true } }),
+      });
+      if (resp.ok) discoveryAvailable = true;
+    } catch { /* continue */ }
+  }
+
+  // Fallback 3: REST /tables endpoint
+  if (!discoveryAvailable || discoveredTables.length === 0) {
+    try {
+      const tablesUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
+      const resp = await fetch(tablesUrl, { headers: { 'Authorization': `Bearer ${access_token}` } });
+      if (resp.ok) {
+        const data = await resp.json();
+        const tables = data.value || [];
+        for (const t of tables) {
+          if (t.name && !discoveredTables.includes(t.name)) {
+            discoveredTables.push(t.name);
+          }
+        }
+        if (discoveredTables.length > 0 && !discoveryAvailable) discoveryAvailable = true;
+      }
+    } catch { /* continue */ }
   }
 
   // Step 5: Try source trace (datasources endpoint)
-  let sourceTrace: PowerBIValidationResult['source_trace'] | undefined;
+  let sourceTrace: SourceTraceInfo | undefined;
   try {
     const srcUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/datasources`;
     const srcResp = await fetch(srcUrl, { headers: { 'Authorization': `Bearer ${access_token}` } });
@@ -120,21 +213,37 @@ async function validatePowerBI(config: Record<string, any>): Promise<PowerBIVali
       const srcData = await srcResp.json();
       const datasources = srcData.value || [];
       if (datasources.length > 0) {
-        const primary = datasources[0];
+        // Pick primary source first, then any
+        const sqlLike = datasources.find((d: any) => {
+          const t = (d.datasourceType || '').toLowerCase();
+          return PRIMARY_SOURCE_TYPES.has(t);
+        });
+        const primary = sqlLike || datasources[0];
         const details = primary.connectionDetails || {};
+        const dsType = (primary.datasourceType || 'unknown').toLowerCase();
+        const role = classifySourceRole(dsType);
+        const server = details.server || details.url || null;
+        const database = details.database || null;
+
         sourceTrace = {
-          datasource_type: primary.datasourceType || null,
-          datasource_server: details.server || details.url || null,
-          datasource_database: details.database || null,
+          datasource_type: dsType,
+          datasource_server: server,
+          datasource_database: database,
+          source_role: role,
+          confidence: computeSourceConfidence(server, database, role),
         };
       }
     }
   } catch { /* best-effort */ }
 
-  const connectionStatus: PowerBIConnectionStatus = discoveryAvailable ? 'connected_full_discovery' : 'connected_partial_discovery';
-  const message = discoveryAvailable
+  const hasDiscoveredTables = discoveredTables.length > 0;
+  const connectionStatus: PowerBIConnectionStatus = (discoveryAvailable && hasDiscoveredTables)
+    ? 'connected_full_discovery'
+    : 'connected_partial_discovery';
+
+  const message = (discoveryAvailable && hasDiscoveredTables)
     ? 'Conexão validada com sucesso. Discovery automático disponível.'
-    : 'Conexão validada com sucesso. O dataset do Power BI foi acessado, mas o discovery automático completo do semantic model não está disponível para este caso. Você pode continuar informando manualmente a tabela desejada ou usar a fonte analítica detectada.';
+    : 'Conexão com Power BI estabelecida. O dataset foi acessado com sucesso, porém o modelo semântico não permitiu listar automaticamente todas as tabelas. Selecione uma tabela manualmente ou escolha uma das tabelas detectadas.';
 
   return {
     success: true,
@@ -143,9 +252,10 @@ async function validatePowerBI(config: Record<string, any>): Promise<PowerBIVali
     auth_valid: true,
     workspace_valid: true,
     dataset_valid: true,
-    discovery_available: discoveryAvailable,
+    discovery_available: discoveryAvailable && hasDiscoveredTables,
     semantic_model_type: semanticModelType,
     source_trace: sourceTrace,
+    discovered_tables: discoveredTables.length > 0 ? discoveredTables : undefined,
   };
 }
 

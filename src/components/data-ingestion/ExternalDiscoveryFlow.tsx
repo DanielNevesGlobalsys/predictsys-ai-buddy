@@ -197,9 +197,7 @@ const ExternalDiscoveryFlow = ({
         <PowerBIManualAssistedPanel
           connectionStatus="connected_partial_discovery"
           message={
-            sourceDetected
-              ? 'Conexão validada com sucesso. O dataset do Power BI foi acessado, mas o discovery automático completo do semantic model não está disponível para este caso. Você pode continuar informando manualmente a tabela desejada ou usar a fonte analítica detectada.'
-              : discoveryFallback?.user_message || discoveryRun?.error_message || 'O dataset do Power BI foi localizado, mas a inspeção automática do semantic model não pôde ser concluída.'
+            'Conexão com Power BI estabelecida. O dataset foi acessado com sucesso, porém o modelo semântico não permitiu listar automaticamente todas as tabelas. Selecione uma tabela manualmente ou escolha uma das tabelas detectadas.'
           }
           discoveryAvailable={false}
           semanticModelType={effectiveSourceTrace?.semantic_model_type || undefined}
@@ -207,7 +205,12 @@ const ExternalDiscoveryFlow = ({
             datasource_type: effectiveSourceTrace.datasource_type,
             datasource_server: effectiveSourceTrace.datasource_server,
             datasource_database: effectiveSourceTrace.datasource_database,
+            source_role: effectiveSourceTrace.source_role || undefined,
+            confidence: effectiveSourceTrace.confidence || undefined,
           } : null}
+          discoveredTables={
+            objects.length > 0 ? objects.map(o => o.object_name).filter(Boolean) : undefined
+          }
           manualTableName={manualTableName}
           onManualTableNameChange={setManualTableName}
           onRetryDiscovery={handleRediscover}
@@ -238,7 +241,6 @@ const ExternalDiscoveryFlow = ({
                 title: "Tabela manual selecionada com sucesso",
                 description: "Dataset ativo registrado para o projeto.",
               });
-              // Give user a moment to see success, then advance
               setTimeout(() => onDataReady(), 1500);
             } catch (err: any) {
               setManualSubmissionStatus("error");
