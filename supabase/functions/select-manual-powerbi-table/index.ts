@@ -112,7 +112,7 @@ serve(async (req) => {
     // 4. Call rpc_finalize_ingestion to create active dataset and persist state
     const { data: finResult, error: finError } = await supabaseAdmin.rpc('rpc_finalize_ingestion', {
       p_project_id: project_id,
-      p_source_type: 'powerbi_manual_assisted',
+      p_source_type: 'powerbi',
       p_config_hash: `pbi_manual_${project_id}_${tableName}`,
       p_dataset_id: null,
       p_source_pointer: {
@@ -124,8 +124,8 @@ serve(async (req) => {
         connection_id: connection_id || null,
       },
       p_schema_json: schemaJson,
-      p_row_count: 1, // Minimal - will be updated after actual data fetch
-      p_col_count: 1, // Minimal - will be updated after actual data fetch
+      p_row_count: 1,
+      p_col_count: 1,
       p_total_bytes: 0,
       p_sample_strategy: { method: 'manual_selection', source: 'powerbi' },
       p_file_count: 0,
