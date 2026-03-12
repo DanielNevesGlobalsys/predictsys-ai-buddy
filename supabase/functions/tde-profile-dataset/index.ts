@@ -473,7 +473,7 @@ serve(async (req) => {
     // ── Ingestion gate ──────────────────────────────────
     const { data: settingsGate } = await supabase
       .from("project_settings")
-      .select("ingestion_state, ingestion_manifest_id, ingestion_dataset_id")
+      .select("ingestion_state, ingestion_manifest_id, ingestion_dataset_id, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
       .eq("project_id", project_id)
       .maybeSingle();
 
