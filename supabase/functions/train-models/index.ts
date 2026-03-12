@@ -2407,11 +2407,67 @@ serve(async (req) => {
     filePaths = expandedFilePaths;
     console.log(`Arquivos resolvidos para processar: ${filePaths.length}`);
 
-    // Detect if files are Parquet
-    const useParquet = filePaths.some(p => isParquetFile(p, sourceMetadata));
-    console.log(`[AutoML] Formato detectado: ${useParquet ? "Parquet" : "CSV"}`);
+    // ==================== VIRTUAL DATASET DETECTION (Power BI / External) ====================
+    // Power BI materialized datasets have no real files in storage — data lives in project_dataset_sample.
+    const isPowerBIMaterialized = activeDataset &&
+      (sourceMetadata?.source_mode === "powerbi_materialized" ||
+       activeDataset.storage_path?.startsWith("powerbi_materialized/") ||
+       activeDataset.source_type === "powerbi");
+    let useVirtualSample = false;
+    let virtualHeaders: string[] = [];
+    let virtualSampledLines: string[] = [];
 
-    // ==================== DATA READING (PARQUET vs CSV) ====================
+    if (isPowerBIMaterialized) {
+      console.log(`[AutoML] Power BI materialized dataset detected — reading from project_dataset_sample`);
+      const { data: sampleData } = await supabase
+        .from("project_dataset_sample")
+        .select("sample_json, sample_rows")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (sampleData?.sample_json) {
+        const sampleRows = sampleData.sample_json as Record<string, any>[];
+        if (Array.isArray(sampleRows) && sampleRows.length > 0) {
+          // Extract headers from the first row's keys
+          virtualHeaders = Object.keys(sampleRows[0]);
+          // Convert JSON rows to CSV-like delimited lines
+          const vDelimiter = ",";
+          delimiter = vDelimiter;
+          virtualSampledLines = sampleRows.map(row =>
+            virtualHeaders.map(h => {
+              const v = row[h];
+              if (v === null || v === undefined) return "";
+              const s = String(v);
+              // Escape values containing delimiter or quotes
+              if (s.includes(vDelimiter) || s.includes('"') || s.includes('\n')) {
+                return `"${s.replace(/"/g, '""')}"`;
+              }
+              return s;
+            }).join(vDelimiter)
+          );
+          useVirtualSample = true;
+          totalDatasetRows = Math.max(totalDatasetRows, virtualSampledLines.length);
+          console.log(`[AutoML] Virtual sample loaded: ${virtualHeaders.length} cols, ${virtualSampledLines.length} rows`);
+        }
+      }
+
+      if (!useVirtualSample) {
+        console.error(`[AutoML] Power BI dataset detected but no sample data found in project_dataset_sample`);
+        return new Response(JSON.stringify({
+          error: "Dataset Power BI não possui dados de amostra. Rematerialize as tabelas no painel XMLA.",
+          status: "NO_SAMPLE_DATA"
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Detect if files are Parquet
+    const useParquet = !useVirtualSample && filePaths.some(p => isParquetFile(p, sourceMetadata));
+    console.log(`[AutoML] Formato detectado: ${useVirtualSample ? "Virtual (Power BI)" : useParquet ? "Parquet" : "CSV"}`);
+
+    // ==================== DATA READING (VIRTUAL vs PARQUET vs CSV) ====================
     let headers: string[] = [];
     const X: number[][] = [];
     const y: number[] = [];
