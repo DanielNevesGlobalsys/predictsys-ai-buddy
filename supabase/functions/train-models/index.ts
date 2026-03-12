@@ -2474,7 +2474,95 @@ serve(async (req) => {
     const labelMap: Map<string, number> = new Map();
     let totalLinesRead = 0;
 
-    if (useParquet) {
+    if (useVirtualSample) {
+      // ========== VIRTUAL SAMPLE PATH (Power BI / External) ==========
+      headers = virtualHeaders;
+      totalLinesRead = virtualSampledLines.length;
+      console.log(`\n=== Resumo da leitura Virtual ===`);
+      console.log(`Colunas: ${headers.length}`);
+      console.log(`Linhas: ${totalLinesRead.toLocaleString()}`);
+
+      // Find target column index
+      const targetIndex = findHeaderIndex(headers, target_column);
+      if (targetIndex === -1 && !useHumanLabelsAsTarget) {
+        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas: ${headers.slice(0, 20).join(", ")}`);
+        return new Response(JSON.stringify({
+          error: `Coluna alvo "${target_column}" não encontrada no dataset virtual.`,
+          available_columns: headers.slice(0, 20)
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      // Get numeric feature columns
+      const numericColumns = columns.filter(c =>
+        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+      );
+      const featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
+      const baseFeatureNames = featureIndices.map(i => headers[i]);
+      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+
+      if (baseFeatureNames.length === 0) {
+        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      console.log(`Features base: ${baseFeatureNames.length}, Features engenharia: ${engineeredFeatureNames.length}`);
+
+      // Parse the CSV-like lines into X, y
+      for (const line of virtualSampledLines) {
+        const values = parseCSVLine(line, delimiter);
+
+        // Extract target
+        let targetValue: number;
+        if (useHumanLabelsAsTarget) {
+          targetValue = 0; // will be replaced later
+        } else {
+          const rawTarget = values[targetIndex]?.trim() || "";
+          if (rawTarget === "" || rawTarget.toLowerCase() === "null" || rawTarget.toLowerCase() === "nan") continue;
+
+          if (problem_type === "classification") {
+            if (!labelMap.has(rawTarget)) labelMap.set(rawTarget, labelMap.size);
+            targetValue = labelMap.get(rawTarget)!;
+          } else {
+            targetValue = coerceToNumber(rawTarget);
+            if (isNaN(targetValue)) continue;
+          }
+        }
+
+        // Extract features
+        const featureValues = featureIndices.map(idx => {
+          const raw = values[idx]?.trim() || "0";
+          const num = coerceToNumber(raw);
+          return isNaN(num) ? 0 : num;
+        });
+
+        // Apply feature engineering
+        const rowObj: Record<string, any> = {};
+        headers.forEach((h, i) => { rowObj[h] = values[i]; });
+        const engineeredValues = enabledFeatures.map(f => {
+          try {
+            return applyFeatureTransforms([rowObj], [f])[0]?.[f.name] ?? 0;
+          } catch { return 0; }
+        });
+
+        X.push([...featureValues, ...engineeredValues]);
+        y.push(targetValue);
+      }
+
+      console.log(`Dados processados: ${X.length} linhas, ${X[0]?.length || 0} features`);
+
+      if (X.length === 0) {
+        return new Response(JSON.stringify({ error: "Não foi possível processar dados do dataset virtual" }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // === JUMP to model training (skip CSV/Parquet file reading) ===
+      // We need featureNames for later
+      const featureNames = allFeatureNames;
+
+    } else if (useParquet) {
       // ========== PARQUET PATH ==========
       console.log(`[AutoML] Iniciando leitura Parquet...`);
       
