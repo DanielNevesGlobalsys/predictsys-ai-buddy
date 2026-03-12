@@ -33,15 +33,27 @@ serve(async (req) => {
     const {
       project_id,
       connection_id,
-      workspace_id,
-      dataset_id,
+      workspace_id: workspaceIdInput,
+      dataset_id: datasetIdInput,
       manual_table_name,
       organization_id,
-      // Optional: validate table via DAX
-      client_id,
-      client_secret,
-      tenant_id,
+      // Optional: explicit credentials from caller (fallback to saved connection config)
+      client_id: clientIdInput,
+      client_secret: clientSecretInput,
+      tenant_id: tenantIdInput,
     } = body;
+
+    const normalizeString = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    let workspace_id = normalizeString(workspaceIdInput);
+    let dataset_id = normalizeString(datasetIdInput);
+    let client_id = normalizeString(clientIdInput);
+    let client_secret = normalizeString(clientSecretInput);
+    let tenant_id = normalizeString(tenantIdInput);
 
     // Validate required fields
     if (!project_id) {
@@ -54,6 +66,32 @@ serve(async (req) => {
     }
 
     const tableName = manual_table_name.trim();
+
+    // Hydrate missing Power BI identifiers/credentials from saved data source config
+    if (connection_id && (!workspace_id || !dataset_id || !client_id || !client_secret || !tenant_id)) {
+      try {
+        const { data: connWithSource, error: connError } = await supabaseAdmin
+          .from('external_connections')
+          .select('data_source_id, data_sources!external_connections_data_source_id_fkey(connection_config)')
+          .eq('id', connection_id)
+          .maybeSingle();
+
+        if (connError) {
+          console.warn('[select-manual-pbi] Failed to load connection config:', connError.message);
+        } else if (connWithSource) {
+          const dsRel = (connWithSource as any).data_sources;
+          const connectionConfig = (Array.isArray(dsRel) ? dsRel[0]?.connection_config : dsRel?.connection_config) || {};
+
+          workspace_id = workspace_id ?? normalizeString(connectionConfig.workspace_id);
+          dataset_id = dataset_id ?? normalizeString(connectionConfig.dataset_id);
+          client_id = client_id ?? normalizeString(connectionConfig.client_id);
+          client_secret = client_secret ?? normalizeString(connectionConfig.client_secret);
+          tenant_id = tenant_id ?? normalizeString(connectionConfig.tenant_id);
+        }
+      } catch (cfgErr) {
+        console.warn('[select-manual-pbi] Error loading saved connection config:', cfgErr);
+      }
+    }
 
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
@@ -138,8 +176,41 @@ serve(async (req) => {
       validationSkipped = true;
     }
 
-    // Use extracted data or fallback minimums
-    const finalColCount = extractedColumns.length > 0 ? extractedColumns.length : 1;
+    // Prevent fake "1 row / 1 col" activation when schema was not materialized
+    if (!tableValidated || extractedColumns.length === 0) {
+      try {
+        await supabaseAdmin.from('platform_events').insert({
+          event_type: 'powerbi_manual_table_selected',
+          project_id,
+          source: 'connector_powerbi',
+          status: 'error',
+          metadata: {
+            connection_id,
+            workspace_id,
+            dataset_id,
+            manual_table_name: tableName,
+            error_code: 'schema_not_materialized',
+            table_validated: tableValidated,
+            validation_skipped: validationSkipped,
+            message: 'Manual table selection could not extract schema metadata.',
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
+
+      const guidance = validationSkipped
+        ? 'Credenciais/IDs do workspace e dataset não foram resolvidos para validar a tabela.'
+        : 'A tabela foi informada, mas o Power BI não retornou colunas via DAX TOPN(1).';
+
+      return new Response(JSON.stringify({
+        success: false,
+        error_code: 'schema_not_materialized',
+        message: `${guidance} Conecte a fonte detectada (SQL/Lake) ou informe um dataset com schema acessível para continuar.`,
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 422 });
+    }
+
+    const finalColCount = extractedColumns.length;
     const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 1;
 
     // Log submission event
