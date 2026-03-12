@@ -66,6 +66,19 @@ const GENERIC_ADAPTER = {
 
 // ═══ Scoring heuristics ════════════════════════════════════════
 
+// ── Technical column filters ──────────────────────────────────
+
+/** Returns true if the column is a technical/measure/aggregate column that should be deprioritized */
+function isTechnicalOrMeasureColumn(name: string): boolean {
+  const lower = name.toLowerCase();
+  // __ prefixed columns (Power BI internal measures)
+  if (name.startsWith("__")) return true;
+  // Aggregate measure patterns
+  if (/^(count|sum|avg|average|total|measure|medida|qtd|quantidade)[\s_]?/i.test(lower)) return true;
+  if (/[\s_](count|sum|avg|average|total|measure)$/i.test(lower)) return true;
+  return false;
+}
+
 function scoreEntity(
   col: ColumnRow,
   adapterCandidates: string[],
@@ -76,6 +89,11 @@ function scoreEntity(
   const name = col.column_name.toLowerCase();
   let score = 0;
   const reasons: string[] = [];
+
+  // Block technical/measure columns
+  if (isTechnicalOrMeasureColumn(col.column_name)) {
+    return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada"] };
+  }
 
   if (adapterCandidates.some(c => c.toLowerCase() === name)) {
     score += 5;
@@ -114,6 +132,17 @@ function scoreTime(
   const name = col.column_name.toLowerCase();
   let score = 0;
   const reasons: string[] = [];
+
+  // Block technical/measure columns from being time candidates
+  if (isTechnicalOrMeasureColumn(col.column_name)) {
+    console.log(`[tde-profile-dataset] tde_rejected_technical_measure_candidate time="${col.column_name}"`);
+    return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada como âncora temporal"] };
+  }
+
+  // Block calendar/lookup table names used as column names
+  if (/^(calend[aá]rio|calendar|localdate|dimdate|dimcalendar|datatable)$/i.test(name)) {
+    return { column: col.column_name, score: -5, reasons: ["Nome de tabela calendário, não é âncora temporal"] };
+  }
 
   const dateTypes = ["data", "date", "datetime", "timestamp"];
   if (dateTypes.some(dt => col.inferred_type.toLowerCase().includes(dt))) {

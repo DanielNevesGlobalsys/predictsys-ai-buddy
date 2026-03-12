@@ -1178,7 +1178,7 @@ Deno.serve(async (req) => {
 
     const virtualDatasetContext = await resolveVirtualDatasetContext(supabase, project_id);
 
-    // ─── EARLY EXIT: Power BI / external materialized datasets ───
+  // ─── EARLY EXIT: Power BI / external materialized datasets ───
     // These have project_columns populated but NO physical file in storage.
     // We must build EDA from persisted metadata, not from CSV/Parquet files.
     if (virtualDatasetContext.isVirtualDataset) {
@@ -1197,21 +1197,57 @@ Deno.serve(async (req) => {
       if (colCount > 0 && rowCount > 0) {
         console.log(`[calculate-eda] eda_skipped_file_parsing_for_powerbi cols=${colCount} rows=${rowCount}`);
 
-        // Build basic stats from project_columns metadata
+        // ── Map Power BI / XMLA types to canonical platform types ──
+        // Power BI stores types like Int64, Double, DateTime, String, Boolean, Decimal, Currency
+        // Platform expects: "numérico", "data", "booleano", "texto", "categórico"
+        const mapPbiTypeToCanonical = (rawType: string): string => {
+          const t = (rawType || "").toLowerCase().trim();
+          // Numeric types
+          if (/^(int16|int32|int64|double|decimal|currency|number|float|single|numeric|numérico)$/.test(t)) return "numérico";
+          if (/^(percentage|percent)$/.test(t)) return "numérico";
+          // Date/time types
+          if (/^(date|datetime|datetimezone|datetimeoffset|time|timestamp|data)$/.test(t)) return "data";
+          // Boolean
+          if (/^(boolean|bool|booleano)$/.test(t)) return "categórico";
+          // Text/string
+          if (/^(string|text|texto|varchar|nvarchar|char)$/.test(t)) return "texto";
+          // Already canonical
+          if (t === "categórico") return "categórico";
+          // Default: try to detect from name patterns later, but default to texto
+          return "texto";
+        };
+
+        // Normalize all column types and track original mappings
+        const typeMapping: Record<string, { original: string; canonical: string }> = {};
+        const normalizedColumns = pbiColumns!.map(col => {
+          const canonical = mapPbiTypeToCanonical(col.inferred_type);
+          typeMapping[col.column_name] = { original: col.inferred_type, canonical };
+          return { ...col, inferred_type: canonical };
+        });
+
+        console.log(`[calculate-eda] eda_powerbi_type_mapping`, JSON.stringify(typeMapping));
+
+        // Build stats arrays based on CANONICAL types
         const numericStats: NumericStats[] = [];
         const categoricalStats: CategoricalStats[] = [];
+        const dateColumns: string[] = [];
 
-        for (const col of pbiColumns!) {
+        for (const col of normalizedColumns) {
           if (col.inferred_type === "numérico") {
             numericStats.push({
               project_id: project_id,
               column_name: col.column_name,
-              min_value: null,
-              max_value: null,
-              mean_value: null,
-              median_value: null,
-              std_value: null,
-              null_count: 0,
+              min_value: null, max_value: null, mean_value: null,
+              median_value: null, std_value: null, null_count: 0,
+            });
+          } else if (col.inferred_type === "data") {
+            dateColumns.push(col.column_name);
+            // Date columns go into categorical with special handling
+            categoricalStats.push({
+              project_id: project_id,
+              column_name: col.column_name,
+              distinct_count: 0,
+              top_categories: [],
             });
           } else {
             categoricalStats.push({
@@ -1224,38 +1260,107 @@ Deno.serve(async (req) => {
         }
 
         // Try to enrich stats from project_dataset_sample if available
-        const { data: sampleRows } = await supabase
+        const { data: sampleData } = await supabase
           .from("project_dataset_sample")
           .select("sample_json")
           .eq("project_id", project_id)
           .maybeSingle();
 
-        if (sampleRows?.sample_json && Array.isArray(sampleRows.sample_json)) {
-          const rows = sampleRows.sample_json as Record<string, unknown>[];
-          console.log(`[calculate-eda] Enriching Power BI EDA from ${rows.length} sample rows`);
+        // sample_json can be: { rows: [...], columns: [...] } OR a direct array
+        let sampleRowsArr: Record<string, unknown>[] = [];
+        if (sampleData?.sample_json) {
+          const sj = sampleData.sample_json as any;
+          if (Array.isArray(sj)) {
+            sampleRowsArr = sj;
+          } else if (sj && typeof sj === "object" && Array.isArray(sj.rows)) {
+            sampleRowsArr = sj.rows;
+          }
+        }
 
-          // Enrich numeric stats
-          for (const ns of numericStats) {
-            const values = rows
-              .map(r => r[ns.column_name])
-              .filter(v => v !== null && v !== undefined && v !== "")
-              .map(v => Number(v))
-              .filter(v => !isNaN(v));
+        if (sampleRowsArr.length > 0) {
+          console.log(`[calculate-eda] Enriching Power BI EDA from ${sampleRowsArr.length} sample rows`);
 
-            if (values.length > 0) {
-              ns.min_value = Math.min(...values);
-              ns.max_value = Math.max(...values);
-              ns.mean_value = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10000) / 10000;
-              const sorted = [...values].sort((a, b) => a - b);
-              const mid = Math.floor(sorted.length / 2);
-              ns.median_value = sorted.length % 2 !== 0 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-              ns.null_count = rows.length - values.length;
+          // Also infer types from actual sample data for columns that might be misclassified
+          // This catches cases where the schema says "String" but actual data is numeric
+          for (const col of normalizedColumns) {
+            if (col.inferred_type !== "texto") continue; // already classified
+            const values = sampleRowsArr
+              .map(r => r[col.column_name])
+              .filter(v => v !== null && v !== undefined && v !== "");
+            if (values.length === 0) continue;
+
+            // Check if values are actually numeric
+            const numericCount = values.filter(v => {
+              if (typeof v === "number") return true;
+              const s = String(v).replace(",", ".").trim();
+              return s !== "" && !isNaN(Number(s));
+            }).length;
+
+            if (numericCount >= values.length * 0.7) {
+              console.log(`[calculate-eda] Reclassifying "${col.column_name}" from texto to numérico based on sample data`);
+              col.inferred_type = "numérico";
+              typeMapping[col.column_name].canonical = "numérico";
+              // Move from categorical to numeric
+              const catIdx = categoricalStats.findIndex(c => c.column_name === col.column_name);
+              if (catIdx >= 0) categoricalStats.splice(catIdx, 1);
+              numericStats.push({
+                project_id: project_id,
+                column_name: col.column_name,
+                min_value: null, max_value: null, mean_value: null,
+                median_value: null, std_value: null, null_count: 0,
+              });
+            }
+
+            // Check if values are actually dates
+            const dateCount = values.filter(v => {
+              const s = String(v);
+              return /^\d{4}-\d{2}-\d{2}/.test(s) || /^\d{2}\/\d{2}\/\d{4}/.test(s);
+            }).length;
+            if (dateCount >= values.length * 0.6) {
+              console.log(`[calculate-eda] Reclassifying "${col.column_name}" from texto to data based on sample data`);
+              col.inferred_type = "data";
+              typeMapping[col.column_name].canonical = "data";
+              dateColumns.push(col.column_name);
             }
           }
 
-          // Enrich categorical stats
+          // Enrich numeric stats from sample
+          for (const ns of numericStats) {
+            const values = sampleRowsArr
+              .map(r => r[ns.column_name])
+              .filter(v => v !== null && v !== undefined && v !== "")
+              .map(v => typeof v === "number" ? v : parseFloat(String(v).replace(",", ".")))
+              .filter(v => Number.isFinite(v));
+
+            if (values.length > 0) {
+              ns.min_value = Math.round(Math.min(...values) * 10000) / 10000;
+              ns.max_value = Math.round(Math.max(...values) * 10000) / 10000;
+              ns.mean_value = Math.round((values.reduce((a, b) => a + b, 0) / values.length) * 10000) / 10000;
+              const sorted = [...values].sort((a, b) => a - b);
+              const mid = Math.floor(sorted.length / 2);
+              ns.median_value = sorted.length % 2 !== 0 ? sorted[mid] : Math.round(((sorted[mid - 1] + sorted[mid]) / 2) * 10000) / 10000;
+              // Variance
+              const mean = values.reduce((a, b) => a + b, 0) / values.length;
+              const variance = values.reduce((s, v) => s + (v - mean) ** 2, 0) / (values.length - 1 || 1);
+              ns.std_value = Math.round(Math.sqrt(variance) * 10000) / 10000;
+              ns.null_count = sampleRowsArr.length - values.length;
+            }
+          }
+
+          // Enrich categorical stats from sample (including date columns)
           for (const cs of categoricalStats) {
-            const values = rows.map(r => String(r[cs.column_name] ?? "(vazio)"));
+            const isDate = dateColumns.includes(cs.column_name);
+            const values = sampleRowsArr
+              .map(r => {
+                const v = r[cs.column_name];
+                if (v === null || v === undefined || v === "") return "(vazio)";
+                if (isDate) {
+                  // Format dates nicely for display
+                  const s = String(v);
+                  return s.length > 10 ? s.substring(0, 10) : s;
+                }
+                return String(v);
+              });
             const counts = new Map<string, number>();
             for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
             cs.distinct_count = counts.size;
@@ -1263,6 +1368,22 @@ Deno.serve(async (req) => {
               .sort((a, b) => b[1] - a[1])
               .slice(0, 10)
               .map(([category, count]) => ({ category, count }));
+          }
+
+          console.log(`[calculate-eda] eda_powerbi_stats_computed numeric=${numericStats.length} categorical=${categoricalStats.length} dates=${dateColumns.length}`);
+        } else {
+          console.log(`[calculate-eda] eda_powerbi_stats_fallback_sample — no sample rows available, stats will be schema-only`);
+        }
+
+        // Update project_columns with corrected canonical types
+        for (const col of normalizedColumns) {
+          const mapping = typeMapping[col.column_name];
+          if (mapping && mapping.original !== mapping.canonical) {
+            await supabase
+              .from("project_columns")
+              .update({ inferred_type: mapping.canonical })
+              .eq("project_id", project_id)
+              .eq("column_name", col.column_name);
           }
         }
 
@@ -1277,16 +1398,28 @@ Deno.serve(async (req) => {
           await supabase.from("project_categorical_stats").insert(categoricalStats);
         }
 
+        // Also update active_schema_json with canonical types
+        const schemaJson: Record<string, string> = {};
+        for (const col of normalizedColumns) {
+          schemaJson[col.column_name] = col.inferred_type;
+        }
+        await supabase
+          .from("project_dataset_state")
+          .update({ active_schema_json: schemaJson, updated_at: new Date().toISOString() })
+          .eq("project_id", project_id);
+
         // Mark EDA as done
         const profile = {
           rows_total: rowCount,
           columns_count: colCount,
           numeric_columns: numericStats.length,
           categorical_columns: categoricalStats.length,
+          date_columns: dateColumns.length,
           computed_at: new Date().toISOString(),
           virtual_dataset: true,
           source_type: virtualDatasetContext.sourceType,
           eda_status: "completed_external_materialized",
+          type_mapping: typeMapping,
         };
 
         await supabase
@@ -1308,6 +1441,46 @@ Deno.serve(async (req) => {
           .update({ eda_ready: true, updated_at: new Date().toISOString() })
           .eq("project_id", project_id);
 
+        // Also update AI context with real EDA data
+        try {
+          const columnProfile: Record<string, any> = {};
+          for (const ns of numericStats) {
+            columnProfile[ns.column_name] = { type: "numeric", min: ns.min_value, max: ns.max_value, mean: ns.mean_value };
+          }
+          for (const cs of categoricalStats) {
+            const isDate = dateColumns.includes(cs.column_name);
+            columnProfile[cs.column_name] = {
+              type: isDate ? "date" : "categorical",
+              distinct: cs.distinct_count,
+              top: (cs.top_categories || []).slice(0, 5).map(c => c.category),
+            };
+          }
+
+          const { data: existingCtx } = await supabase
+            .from("project_ai_context")
+            .select("id, context")
+            .eq("project_id", project_id)
+            .maybeSingle();
+
+          const edaCtx = {
+            summary: `EDA (Power BI materializado): ${rowCount} linhas, ${numericStats.length} numéricas, ${categoricalStats.length - dateColumns.length} categóricas, ${dateColumns.length} datas.`,
+            column_profile: columnProfile,
+            warnings: [],
+            hypotheses: [],
+          };
+
+          if (existingCtx) {
+            const currentCtx = (existingCtx.context as Record<string, any>) || {};
+            await supabase.from("project_ai_context").update({
+              context: { ...currentCtx, eda: edaCtx },
+              status: "eda_ready",
+              last_updated_at: new Date().toISOString(),
+            }).eq("id", existingCtx.id);
+          }
+        } catch (ctxErr) {
+          console.warn("[calculate-eda] Failed to update AI context:", ctxErr);
+        }
+
         await logVirtualEdaEvent(supabase, project_id, {
           stage: "eda_completed_external_materialized",
           source_type: virtualDatasetContext.sourceType,
@@ -1315,10 +1488,12 @@ Deno.serve(async (req) => {
           column_count: colCount,
           numeric_columns: numericStats.length,
           categorical_columns: categoricalStats.length,
-          sample_rows_used: sampleRows?.sample_json ? (sampleRows.sample_json as unknown[]).length : 0,
+          date_columns: dateColumns.length,
+          sample_rows_used: sampleRowsArr.length,
+          type_mapping: typeMapping,
         });
 
-        console.log(`[calculate-eda] eda_completed_external_materialized numeric=${numericStats.length} categorical=${categoricalStats.length}`);
+        console.log(`[calculate-eda] eda_completed_external_materialized numeric=${numericStats.length} categorical=${categoricalStats.length} dates=${dateColumns.length}`);
 
         return new Response(
           JSON.stringify({
@@ -1330,6 +1505,7 @@ Deno.serve(async (req) => {
             columns_count: colCount,
             numeric_columns: numericStats.length,
             categorical_columns: categoricalStats.length,
+            date_columns: dateColumns.length,
           }),
           { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
         );
