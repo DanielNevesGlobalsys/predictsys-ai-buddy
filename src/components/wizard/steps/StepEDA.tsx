@@ -376,7 +376,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
             )}
 
             {/* EDA succeeded — show EDADisplay */}
-            {edaReady && projectData.id && !isVirtualDataset && (
+            {edaReady && projectData.id && (
               <>
                 <div className="flex items-center justify-end">
                   <Button variant="outline" size="sm" onClick={handleRecalculate} disabled={edaCalculating}>
