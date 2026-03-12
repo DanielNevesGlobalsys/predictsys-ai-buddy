@@ -29,9 +29,12 @@ const ExternalDiscoveryFlow = ({
   onDataReady,
 }: ExternalDiscoveryFlowProps) => {
   const { currentOrganization } = useOrganization();
+  const { toast } = useToast();
   const [hasInitialized, setHasInitialized] = useState(false);
   const [showSourceModal, setShowSourceModal] = useState(false);
   const [manualTableName, setManualTableName] = useState("");
+  const [manualSubmissionStatus, setManualSubmissionStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
+  const [manualSubmissionError, setManualSubmissionError] = useState<string | null>(null);
 
   const {
     connections,
