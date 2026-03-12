@@ -324,17 +324,22 @@ async function fetchPowerBISampleRowsFromConnection(
     const connectionId = normalizeStringValue(merged.connection_id);
     const workspaceId = normalizeStringValue(merged.workspace_id);
     const datasetId = normalizeStringValue(merged.dataset_id);
+
+    // Check for multi-table materialized datasets
+    const materializedTables = Array.isArray(merged.materialized_tables) ? merged.materialized_tables : null;
+    const isMultiTable = materializedTables && materializedTables.length > 0;
+
+    // Single table fallback
     const tableNameRaw =
       normalizeStringValue(merged.effective_query_table_name) ||
       normalizeStringValue(merged.discovered_table_name) ||
       normalizeStringValue(merged.table_name);
 
-    if (!connectionId || !workspaceId || !datasetId || !tableNameRaw) {
+    if (!connectionId || !workspaceId || !datasetId) {
       return { rows: [], source: "none", error: "missing_connection_metadata" };
     }
 
-    const tableName = tableNameRaw.replace(/^\$+/, "").trim();
-    if (!tableName) {
+    if (!isMultiTable && !tableNameRaw) {
       return { rows: [], source: "none", error: "missing_table_name" };
     }
 
@@ -350,7 +355,6 @@ async function fetchPowerBISampleRowsFromConnection(
 
     const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
     const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
-    const connMetadata = (conn.metadata as Record<string, unknown> | null) || {};
 
     const clientId = normalizeStringValue(cfg.client_id);
     const clientSecret = normalizeStringValue(cfg.client_secret);
@@ -382,11 +386,10 @@ async function fetchPowerBISampleRowsFromConnection(
       return { rows: [], source: "none", error: "token_missing_access_token" };
     }
 
-    const mode = normalizePowerBIConnectionMode(merged.connection_mode ?? connMetadata.connection_mode);
-    const query = `EVALUATE TOPN(500, ${escapeDaxTable(tableName)})`;
-    const executeResp = await fetch(
-      `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`,
-      {
+    const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`;
+
+    const executeDaxQuery = async (query: string): Promise<Record<string, unknown>[]> => {
+      const resp = await fetch(executeUrl, {
         method: "POST",
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -396,19 +399,53 @@ async function fetchPowerBISampleRowsFromConnection(
           queries: [{ query }],
           serializerSettings: { includeNulls: true },
         }),
-      },
-    );
+      });
+      const rawBody = await resp.text();
+      if (!resp.ok) return [];
+      const parsed = JSON.parse(rawBody);
+      return parsed?.results?.[0]?.tables?.[0]?.rows || [];
+    };
 
-    const rawBody = await executeResp.text();
-    if (!executeResp.ok) {
-      return { rows: [], source: mode || "powerbi_executequeries", error: `execute_failed:${executeResp.status}:${rawBody.slice(0, 250)}` };
+    // Multi-table: fetch from each table and prefix keys
+    if (isMultiTable) {
+      const allRows: Record<string, unknown>[] = [];
+      const usePrefix = materializedTables.length > 1;
+
+      for (const tblEntry of materializedTables) {
+        const tblName = typeof tblEntry === "string" ? tblEntry : (tblEntry as any)?.table_name;
+        if (!tblName) continue;
+
+        const cleanName = tblName.replace(/^\$+/, "").trim();
+        if (!cleanName) continue;
+
+        const query = `EVALUATE TOPN(200, ${escapeDaxTable(cleanName)})`;
+        const rawRows = await executeDaxQuery(query);
+
+        for (const row of rawRows) {
+          const prefixed: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(row || {})) {
+            const cleanKey = cleanupPowerBIColumnKey(key);
+            prefixed[usePrefix ? `${cleanName}.${cleanKey}` : cleanKey] = value;
+          }
+          // Tag source table for per-table grouping
+          prefixed["__source_table"] = cleanName;
+          allRows.push(prefixed);
+        }
+
+        console.log(`[calculate-eda] multi-table sample: ${cleanName} → ${rawRows.length} rows`);
+      }
+
+      return { rows: allRows, source: "powerbi_executequeries_multi" };
     }
 
-    const executeJson = JSON.parse(rawBody);
-    const rawRows = executeJson?.results?.[0]?.tables?.[0]?.rows;
-    if (!Array.isArray(rawRows)) {
-      return { rows: [], source: mode || "powerbi_executequeries", error: "execute_no_rows_array" };
+    // Single table path
+    const tableName = tableNameRaw!.replace(/^\$+/, "").trim();
+    if (!tableName) {
+      return { rows: [], source: "none", error: "missing_table_name" };
     }
+
+    const query = `EVALUATE TOPN(500, ${escapeDaxTable(tableName)})`;
+    const rawRows = await executeDaxQuery(query);
 
     const normalizedRows = rawRows.map((row: Record<string, unknown>) => {
       const normalized: Record<string, unknown> = {};
@@ -419,7 +456,7 @@ async function fetchPowerBISampleRowsFromConnection(
       return normalized;
     });
 
-    return { rows: normalizedRows, source: mode || "powerbi_executequeries" };
+    return { rows: normalizedRows, source: "powerbi_executequeries" };
   } catch (err) {
     return {
       rows: [],
@@ -1521,7 +1558,7 @@ Deno.serve(async (req) => {
                   sample_rows: sampleRowsArr.length,
                   sample_json: {
                     rows: sampleRowsArr,
-                    columns: sampleRowsArr.length > 0 ? Object.keys(sampleRowsArr[0]) : [],
+                    columns: [...new Set(sampleRowsArr.flatMap((r) => Object.keys(r).filter((k) => k !== "__source_table")))],
                     source: sampleSource,
                   },
                   created_at: new Date().toISOString(),
@@ -1542,9 +1579,22 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Detect multi-table: columns have "TableName.ColName" format
+        const isMultiTableDataset = pbiColumns!.some((c) => c.column_name.includes("."));
+
         const normalizedColumns = pbiColumns!.map((col) => {
           const originalType = col.inferred_type || "";
-          const sampleValues = sampleRowsArr.map((row) => row[col.column_name]);
+          // For multi-table, only use rows from the same source table
+          let relevantRows = sampleRowsArr;
+          if (isMultiTableDataset && col.column_name.includes(".")) {
+            const tableName = col.column_name.split(".")[0];
+            relevantRows = sampleRowsArr.filter((row) => {
+              // Check via __source_table tag or by checking if this row has the key
+              if (row["__source_table"] === tableName) return true;
+              return col.column_name in row && row[col.column_name] !== undefined;
+            });
+          }
+          const sampleValues = relevantRows.map((row) => row[col.column_name]);
           const canonical = inferPowerBICanonicalType(col.column_name, originalType, sampleValues);
           return {
             ...col,
@@ -1561,7 +1611,7 @@ Deno.serve(async (req) => {
           };
         }
 
-        console.log(`[calculate-eda] eda_powerbi_type_mapping`, JSON.stringify(typeMapping));
+        console.log(`[calculate-eda] eda_powerbi_type_mapping multi_table=${isMultiTableDataset}`, JSON.stringify(typeMapping));
 
         const hasSampleRows = sampleRowsArr.length > 0;
         const numericStats: NumericStats[] = [];
@@ -1570,7 +1620,17 @@ Deno.serve(async (req) => {
         const dateRanges: Record<string, { min_date: string | null; max_date: string | null }> = {};
 
         for (const col of normalizedColumns) {
-          const rawValues = sampleRowsArr.map((row) => row[col.column_name]);
+          // For multi-table, only use rows from the relevant table
+          let relevantRows = sampleRowsArr;
+          if (isMultiTableDataset && col.column_name.includes(".")) {
+            const tableName = col.column_name.split(".")[0];
+            relevantRows = sampleRowsArr.filter((row) => {
+              if (row["__source_table"] === tableName) return true;
+              return col.column_name in row && row[col.column_name] !== undefined;
+            });
+          }
+
+          const rawValues = relevantRows.map((row) => row[col.column_name]);
           const nonEmptyValues = rawValues.filter(
             (value) => value !== null && value !== undefined && String(value).trim() !== "",
           );
@@ -1602,12 +1662,12 @@ Deno.serve(async (req) => {
               mean_value: mean !== null ? Math.round(mean * 10000) / 10000 : null,
               median_value: numericValues.length > 0 ? calculateMedianFromSample(sortedValues) : null,
               std_value: variance !== null ? Math.round(Math.sqrt(Math.max(variance, 0)) * 10000) / 10000 : null,
-              null_count: hasSampleRows ? sampleRowsArr.length - numericValues.length : 0,
+              null_count: hasSampleRows ? relevantRows.length - numericValues.length : 0,
             });
             continue;
           }
 
-          if (!hasSampleRows) {
+          if (!hasSampleRows || nonEmptyValues.length === 0) {
             categoricalStats.push({
               project_id,
               column_name: col.column_name,
@@ -1636,7 +1696,7 @@ Deno.serve(async (req) => {
             .map(([category, count]) => ({
               category,
               count,
-              ratio: hasSampleRows && sampleRowsArr.length > 0 ? Number((count / sampleRowsArr.length).toFixed(4)) : undefined,
+              ratio: relevantRows.length > 0 ? Number((count / relevantRows.length).toFixed(4)) : undefined,
             }));
 
           categoricalStats.push({

@@ -665,9 +665,9 @@ serve(async (req) => {
           rcMethod = "COUNTROWS";
         }
 
-        // Get sample (5 rows)
+        // Get sample (200 rows for real statistics)
         let tblSample: Record<string, unknown>[] = [];
-        const sampleResult = await executeDax(`EVALUATE TOPN(5, ${escapeDaxTable(tblName)})`);
+        const sampleResult = await executeDax(`EVALUATE TOPN(200, ${escapeDaxTable(tblName)})`);
         if (sampleResult.ok) {
           tblSample = sampleResult.rows;
         }
