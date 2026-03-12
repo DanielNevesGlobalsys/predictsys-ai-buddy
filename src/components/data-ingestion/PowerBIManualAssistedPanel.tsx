@@ -241,6 +241,18 @@ const PowerBIManualAssistedPanel = ({
         )}
       </div>
 
+      {/* XMLA Diagnostic Panel */}
+      {projectId && (
+        <PowerBIXMLADiagnosticPanel
+          projectId={projectId}
+          connectionId={connectionId}
+          workspaceId={workspaceId}
+          datasetId={datasetId}
+          tableName={manualTableName || undefined}
+          onMaterializationSuccess={onContinuePartial}
+        />
+      )}
+
       {/* Action buttons */}
       <div className="flex flex-wrap gap-2">
         <Button
