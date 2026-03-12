@@ -1558,7 +1558,7 @@ Deno.serve(async (req) => {
                   sample_rows: sampleRowsArr.length,
                   sample_json: {
                     rows: sampleRowsArr,
-                    columns: sampleRowsArr.length > 0 ? Object.keys(sampleRowsArr[0]) : [],
+                    columns: [...new Set(sampleRowsArr.flatMap((r) => Object.keys(r).filter((k) => k !== "__source_table")))],
                     source: sampleSource,
                   },
                   created_at: new Date().toISOString(),
