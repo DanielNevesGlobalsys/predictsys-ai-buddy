@@ -59,8 +59,8 @@ serve(async (req) => {
     const contextBlock = contextToPromptBlock(context);
 
     // Check EDA readiness — allow virtual/external datasets to pass
-    const isVirtualDataset = context.project_settings?.ingestion_source_type &&
-      ["powerbi", "external", "virtual"].includes(String(context.project_settings.ingestion_source_type).toLowerCase());
+    const sourceType = String(context.dataset_summary?.source_type || "").toLowerCase();
+    const isVirtualDataset = ["powerbi", "external", "virtual"].includes(sourceType);
 
     if (
       !isVirtualDataset &&
@@ -71,6 +71,11 @@ serve(async (req) => {
         success: false, error: "EDA_NOT_READY",
         message: "EDA must be completed before Lys synthesis.",
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+    }
+
+    // For virtual datasets with no EDA columns, enrich the prompt context
+    if (isVirtualDataset && context.eda_summary.numeric_columns.length === 0) {
+      console.log(`[lys-synthesize] Virtual dataset (${sourceType}) — proceeding with simplified context`);
     }
 
     // ── 2. Build prompt ──
