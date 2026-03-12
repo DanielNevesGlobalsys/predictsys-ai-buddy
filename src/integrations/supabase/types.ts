@@ -3690,6 +3690,7 @@ export type Database = {
           business_intent_contract: Json | null
           contract_generated_at: string | null
           contract_version: number | null
+          custom_objective_text: string | null
           dashboard_state: string
           dashboard_version: number
           dataset_version: number
@@ -3778,6 +3779,7 @@ export type Database = {
           business_intent_contract?: Json | null
           contract_generated_at?: string | null
           contract_version?: number | null
+          custom_objective_text?: string | null
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number
@@ -3866,6 +3868,7 @@ export type Database = {
           business_intent_contract?: Json | null
           contract_generated_at?: string | null
           contract_version?: number | null
+          custom_objective_text?: string | null
           dashboard_state?: string
           dashboard_version?: number
           dataset_version?: number

@@ -205,12 +205,18 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
         ? data.business_objective 
         : data.declared_objective || data.business_objective;
 
+      // When objective is "outro", send the custom text as declared_objective
+      const effectiveObjective = data.declared_objective === "outro"
+        ? data.business_objective.trim() || data.declared_objective
+        : objective;
+
       const { data: result, error } = await supabase.functions.invoke("generate-intent-contract", {
         body: {
           project_id: projectId,
           project_name: data.name,
           project_description: data.description,
-          declared_objective: objective,
+          declared_objective: effectiveObjective,
+          custom_objective_text: data.declared_objective === "outro" ? data.business_objective.trim() : undefined,
           industry: selectedIndustry || undefined,
         },
       });
@@ -276,6 +282,11 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
       ? (contract.problem_type_default === "clustering" ? "classification" : contract.problem_type_default)
       : effectiveProblemType;
 
+    // Build custom_objective_text for "outro"
+    const customObjectiveText = (objectiveKey as string) === "outro" || formData.declared_objective === "outro"
+      ? formData.business_objective.trim() || null
+      : null;
+
     // Persist contract to project_settings
     if (projectData.id) {
       try {
@@ -287,6 +298,7 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
               industry: industryKey !== "generic" ? industryKey : null,
               industry_source: "user",
               objective: objectiveKey,
+              custom_objective_text: customObjectiveText,
               business_intent_contract: contract as any,
               updated_at: new Date().toISOString(),
             },

@@ -1,0 +1,1 @@
+ALTER TABLE public.project_settings ADD COLUMN IF NOT EXISTS custom_objective_text TEXT DEFAULT NULL;

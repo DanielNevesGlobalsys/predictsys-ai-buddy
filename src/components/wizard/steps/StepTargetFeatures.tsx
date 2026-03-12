@@ -763,6 +763,54 @@ const StepTargetFeatures = ({
     setLoadingColumns(false);
   };
 
+  /**
+   * Persist target selection immediately to backend (SSOT).
+   * This ensures the pipeline can always read the current target from DB,
+   * not relying on UI state or step navigation.
+   */
+  const persistTargetSelection = useCallback(async (col: string, source: "manual" | "label_builder" | "weak_supervision" | "human_labeling" = "manual") => {
+    if (!projectData.id || !col) return;
+    const mode = sourceToMode(source);
+    try {
+      await supabase
+        .from("project_settings")
+        .upsert(
+          {
+            project_id: projectData.id,
+            target_column: col,
+            active_target_column: col,
+            active_target_mode: mode,
+            target_source: source,
+            target_state: "ready",
+            updated_at: new Date().toISOString(),
+          } as any,
+          { onConflict: "project_id" }
+        );
+      console.log(`[StepTargetFeatures] Target persisted immediately: col=${col}, mode=${mode}`);
+    } catch (err) {
+      console.error("[StepTargetFeatures] Failed to persist target immediately:", err);
+    }
+  }, [projectData.id]);
+
+  /**
+   * Auto-run target health check (quality evaluation) after target is persisted.
+   */
+  const runTargetHealthCheck = useCallback(async (col: string) => {
+    if (!projectData.id || !col) return;
+    try {
+      const { data, error } = await supabase.functions.invoke("tde-evaluate-target-quality", {
+        body: { project_id: projectData.id, target_column: col },
+      });
+      if (error) {
+        console.warn("[StepTargetFeatures] Target health check failed:", error);
+      } else {
+        console.log("[StepTargetFeatures] Target health check completed:", data?.quality_score);
+      }
+    } catch (err) {
+      console.warn("[StepTargetFeatures] Target health check exception:", err);
+    }
+  }, [projectData.id]);
+
   const handleTargetChange = (value: string) => {
     if (initialTargetRef.current && value !== initialTargetRef.current && !hasChangedConfig.current) {
       hasChangedConfig.current = true;
@@ -828,6 +876,13 @@ const StepTargetFeatures = ({
     });
     setAppliedTargetColumn(null);
     setInferredProblemType(null);
+
+    // ── IMMEDIATE PERSISTENCE + AUTO HEALTH CHECK ──
+    // Persist target to DB immediately (don't wait for "Save" or step navigation)
+    const source = value === "label" ? targetSource : "manual";
+    persistTargetSelection(value, source);
+    // Fire target health check in background (fire-and-forget)
+    runTargetHealthCheck(value);
   };
 
   const toggleFeature = (columnName: string) => {

@@ -170,6 +170,7 @@ serve(async (req) => {
       project_name,
       project_description,
       declared_objective,
+      custom_objective_text,
       organization_id,
       industry, // NEW: explicit industry selection from UI
     } = await req.json();
@@ -432,6 +433,7 @@ Gere o IntentContract JSON.`;
           active_intent_contract_id: aiContextId,
           contract_version: newVersion,
           contract_generated_at: intentContractV2.created_at,
+          custom_objective_text: custom_objective_text || null,
           updated_at: new Date().toISOString(),
         },
         { onConflict: "project_id" }
