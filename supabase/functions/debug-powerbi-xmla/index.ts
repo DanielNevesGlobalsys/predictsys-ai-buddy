@@ -952,14 +952,10 @@ serve(async (req) => {
     }
     // ── END MULTI-TABLE ──
 
+    // ── SINGLE-TABLE PATH (backward compatible) ──
     let discoveredTableName: string | null = null;
     let effectiveTableName: string | null = null;
     let effectiveTableSource = "none";
-
-    // Sort candidate tables by business relevance (facts first, calendars last)
-    const sortedCandidates = [...discoveredTables].sort(
-      (a, b) => tableBusinessScore(b.effective_name) - tableBusinessScore(a.effective_name),
-    );
 
     const candidateNamePool = uniqueBy(
       sortedCandidates.map((t) => t.effective_name),
