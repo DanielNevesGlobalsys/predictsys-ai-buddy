@@ -33,15 +33,27 @@ serve(async (req) => {
     const {
       project_id,
       connection_id,
-      workspace_id,
-      dataset_id,
+      workspace_id: workspaceIdInput,
+      dataset_id: datasetIdInput,
       manual_table_name,
       organization_id,
-      // Optional: validate table via DAX
-      client_id,
-      client_secret,
-      tenant_id,
+      // Optional: explicit credentials from caller (fallback to saved connection config)
+      client_id: clientIdInput,
+      client_secret: clientSecretInput,
+      tenant_id: tenantIdInput,
     } = body;
+
+    const normalizeString = (value: unknown): string | null => {
+      if (typeof value !== 'string') return null;
+      const trimmed = value.trim();
+      return trimmed.length > 0 ? trimmed : null;
+    };
+
+    let workspace_id = normalizeString(workspaceIdInput);
+    let dataset_id = normalizeString(datasetIdInput);
+    let client_id = normalizeString(clientIdInput);
+    let client_secret = normalizeString(clientSecretInput);
+    let tenant_id = normalizeString(tenantIdInput);
 
     // Validate required fields
     if (!project_id) {
