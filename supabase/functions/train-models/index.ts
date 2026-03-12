@@ -2407,18 +2407,177 @@ serve(async (req) => {
     filePaths = expandedFilePaths;
     console.log(`Arquivos resolvidos para processar: ${filePaths.length}`);
 
-    // Detect if files are Parquet
-    const useParquet = filePaths.some(p => isParquetFile(p, sourceMetadata));
-    console.log(`[AutoML] Formato detectado: ${useParquet ? "Parquet" : "CSV"}`);
+    // ==================== VIRTUAL DATASET DETECTION (Power BI / External) ====================
+    // Power BI materialized datasets have no real files in storage — data lives in project_dataset_sample.
+    const isPowerBIMaterialized = activeDataset &&
+      (sourceMetadata?.source_mode === "powerbi_materialized" ||
+       activeDataset.storage_path?.startsWith("powerbi_materialized/") ||
+       activeDataset.source_type === "powerbi");
+    let useVirtualSample = false;
+    let virtualHeaders: string[] = [];
+    let virtualSampledLines: string[] = [];
 
-    // ==================== DATA READING (PARQUET vs CSV) ====================
+    if (isPowerBIMaterialized) {
+      console.log(`[AutoML] Power BI materialized dataset detected — reading from project_dataset_sample`);
+      const { data: sampleData } = await supabase
+        .from("project_dataset_sample")
+        .select("sample_json, sample_rows")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (sampleData?.sample_json) {
+        const sampleRows = sampleData.sample_json as Record<string, any>[];
+        if (Array.isArray(sampleRows) && sampleRows.length > 0) {
+          // Extract headers from the first row's keys
+          virtualHeaders = Object.keys(sampleRows[0]);
+          // Convert JSON rows to CSV-like delimited lines
+          const vDelimiter = ",";
+          delimiter = vDelimiter;
+          virtualSampledLines = sampleRows.map(row =>
+            virtualHeaders.map(h => {
+              const v = row[h];
+              if (v === null || v === undefined) return "";
+              const s = String(v);
+              // Escape values containing delimiter or quotes
+              if (s.includes(vDelimiter) || s.includes('"') || s.includes('\n')) {
+                return `"${s.replace(/"/g, '""')}"`;
+              }
+              return s;
+            }).join(vDelimiter)
+          );
+          useVirtualSample = true;
+          totalDatasetRows = Math.max(totalDatasetRows, virtualSampledLines.length);
+          console.log(`[AutoML] Virtual sample loaded: ${virtualHeaders.length} cols, ${virtualSampledLines.length} rows`);
+        }
+      }
+
+      if (!useVirtualSample) {
+        console.error(`[AutoML] Power BI dataset detected but no sample data found in project_dataset_sample`);
+        return new Response(JSON.stringify({
+          error: "Dataset Power BI não possui dados de amostra. Rematerialize as tabelas no painel XMLA.",
+          status: "NO_SAMPLE_DATA"
+        }), {
+          status: 400,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+    }
+
+    // Detect if files are Parquet
+    const useParquet = !useVirtualSample && filePaths.some(p => isParquetFile(p, sourceMetadata));
+    console.log(`[AutoML] Formato detectado: ${useVirtualSample ? "Virtual (Power BI)" : useParquet ? "Parquet" : "CSV"}`);
+
+    // ==================== DATA READING (VIRTUAL vs PARQUET vs CSV) ====================
     let headers: string[] = [];
     const X: number[][] = [];
     const y: number[] = [];
     const labelMap: Map<string, number> = new Map();
     let totalLinesRead = 0;
 
-    if (useParquet) {
+    if (useVirtualSample) {
+      // ========== VIRTUAL SAMPLE PATH (Power BI / External) ==========
+      // Power BI materialized datasets have no files in storage.
+      // Data was loaded from project_dataset_sample into virtualHeaders + virtualSampledLines.
+      headers = virtualHeaders;
+      totalLinesRead = virtualSampledLines.length;
+      isBatchImport = false;
+
+      console.log(`\n=== Resumo da leitura Virtual (Power BI) ===`);
+      console.log(`Colunas: ${headers.length}`);
+      console.log(`Linhas: ${totalLinesRead.toLocaleString()}`);
+
+      if (headers.length === 0 || virtualSampledLines.length === 0) {
+        return new Response(JSON.stringify({ error: "Não foi possível ler dados do dataset virtual Power BI. Rematerialize as tabelas." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
+      // Find target column index
+      const targetIndex = useHumanLabelsAsTarget ? -1 : findHeaderIndex(headers, target_column);
+      if (!useHumanLabelsAsTarget && targetIndex === -1) {
+        console.error(`Coluna alvo "${target_column}" não encontrada. Colunas: ${headers.slice(0, 20).join(", ")}`);
+        return new Response(JSON.stringify({
+          error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
+          available_columns: headers.slice(0, 20)
+        }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
+
+      // Get numeric feature columns
+      const numericColumns = columns.filter(c =>
+        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+      );
+      const featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
+      const baseFeatureNames = featureIndices.map(i => headers[i]);
+      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
+
+      if (baseFeatureNames.length === 0) {
+        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+          status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
+        });
+      }
+
+      // Check if target is categorical
+      const targetColumnInfo = columns.find(c => c.column_name === target_column);
+      const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" ||
+                                    targetColumnInfo?.inferred_type === "categorico" ||
+                                    targetColumnInfo?.inferred_type === "texto";
+
+      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+      console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
+      console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
+
+      // Parse CSV lines into X, y (same logic as CSV path)
+      for (const line of virtualSampledLines) {
+        const values = parseCSVLine(line, delimiter);
+
+        // Build raw record for feature engineering
+        const rawRecord: Record<string, string | number | null> = {};
+        headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
+
+        // Get base features
+        const baseFeatures = featureIndices.map(idx => {
+          const val = values[idx]?.replace(",", ".") || "";
+          const parsed = parseFloat(val);
+          return isNaN(parsed) ? 0 : parsed;
+        });
+
+        // Apply engineered features
+        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        const engineeredFeatures = engineeredFeatureNames.map(name => {
+          const val = engineeredValues[name];
+          return typeof val === "number" ? val : 0;
+        });
+
+        const allFeatures = [...baseFeatures, ...engineeredFeatures];
+
+        if (useHumanLabelsAsTarget) {
+          X.push(allFeatures);
+          y.push(0);
+        } else {
+          let targetNumeric: number;
+          if (isTargetCategorical) {
+            const targetVal = values[targetIndex]?.trim() || "";
+            if (!labelMap.has(targetVal) && targetVal) labelMap.set(targetVal, labelMap.size);
+            targetNumeric = labelMap.get(targetVal) ?? -1;
+          } else {
+            targetNumeric = parseFloat(values[targetIndex]?.replace(",", ".") || "");
+          }
+          const hasValidTarget = isTargetCategorical ? targetNumeric !== -1 : !isNaN(targetNumeric);
+          if (hasValidTarget) {
+            X.push(allFeatures);
+            y.push(targetNumeric);
+          }
+        }
+      }
+
+      console.log(`Dados processados (virtual): ${X.length} linhas, ${X[0]?.length || 0} features`);
+
+      // Store feature names for later use (same as CSV/Parquet branches)
+      (globalThis as any).__featureNames = allFeatureNames;
+      (globalThis as any).__isTargetCategorical = isTargetCategorical;
+
+    } else if (useParquet) {
       // ========== PARQUET PATH ==========
       console.log(`[AutoML] Iniciando leitura Parquet...`);
       
