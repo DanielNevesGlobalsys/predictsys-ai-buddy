@@ -138,9 +138,14 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
+  // Power BI partial discovery state
+  const [pbiTestResult, setPbiTestResult] = useState<any>(null);
+  const [manualTableName, setManualTableName] = useState("");
+
   const handleTestConnection = async () => {
     setTestStatus("testing");
     setTestMessage("");
+    setPbiTestResult(null);
 
     try {
       // Use specific function for Databricks
@@ -156,6 +161,23 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
       });
 
       if (error) throw error;
+
+      // Power BI returns granular connection_status
+      if (selectedConnector === "powerbi" && data.connection_status) {
+        setPbiTestResult(data);
+        if (data.success) {
+          setTestStatus("success");
+          setTestMessage(data.message);
+          // Store manual table name if provided
+          if (manualTableName.trim()) {
+            setFormData(prev => ({ ...prev, table_name: manualTableName }));
+          }
+        } else {
+          setTestStatus("error");
+          setTestMessage(data.message);
+        }
+        return;
+      }
 
       if (data.success) {
         setTestStatus("success");
