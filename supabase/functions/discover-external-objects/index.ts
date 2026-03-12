@@ -1018,6 +1018,7 @@ serve(async (req) => {
           datasource_path: powerbiResult.source_trace.datasource_path,
           semantic_model_type: powerbiResult.source_trace.semantic_model_type,
           confidence: powerbiResult.source_trace.confidence,
+          source_role: powerbiResult.source_trace.source_role,
           source_trace_status: powerbiResult.source_trace.source_trace_status,
         };
       }
