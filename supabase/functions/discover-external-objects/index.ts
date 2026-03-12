@@ -559,107 +559,106 @@ async function discoverPowerBIWithFallback(
 
   const classified = classifyPowerBIError(daxErrMsg);
 
-    // ─── Level 1 Fallback: REST API metadata ───
-    const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
-    const fallbackStartMs = Date.now();
+  // ─── Level 1 Fallback: REST API metadata ───
+  const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
+  const fallbackStartMs = Date.now();
 
-    await logDiagnostic('powerbi_discovery_request', {
-      endpoint: fallbackUrl, method: 'GET', phase: 'rest_fallback',
+  await logDiagnostic('powerbi_discovery_request', {
+    endpoint: fallbackUrl, method: 'GET', phase: 'rest_fallback',
+  });
+
+  let restObjects: DiscoveredObject[] = [];
+  let restFallbackWorked = false;
+
+  try {
+    const tablesResp = await fetch(fallbackUrl, {
+      headers: { 'Authorization': `Bearer ${access_token}` }
     });
+    const fallbackDurationMs = Date.now() - fallbackStartMs;
 
-    let restObjects: DiscoveredObject[] = [];
-    let restFallbackWorked = false;
+    if (tablesResp.ok) {
+      const tablesData = await tablesResp.json();
+      const tables = tablesData.value || [];
 
-    try {
-      const tablesResp = await fetch(fallbackUrl, {
-        headers: { 'Authorization': `Bearer ${access_token}` }
+      await logDiagnostic('powerbi_discovery_response', {
+        http_status: 200, duration_ms: fallbackDurationMs, rows_returned: tables.length,
+        raw_response_size: JSON.stringify(tablesData).length, endpoint: fallbackUrl, phase: 'rest_fallback',
       });
-      const fallbackDurationMs = Date.now() - fallbackStartMs;
 
-      if (tablesResp.ok) {
-        const tablesData = await tablesResp.json();
-        const tables = tablesData.value || [];
+      restObjects = tables.map((t: any) => ({
+        object_name: t.name,
+        object_type: 'semantic_model',
+        object_schema: `${workspace_id}/${dataset_id}`,
+        estimated_columns: t.columns?.length ?? null,
+        estimated_rows: null,
+        last_updated_at: null,
+        classification: classifyObject(t.name, t.columns?.length ?? null, null),
+        metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
+      }));
 
-        await logDiagnostic('powerbi_discovery_response', {
-          http_status: 200, duration_ms: fallbackDurationMs, rows_returned: tables.length,
-          raw_response_size: JSON.stringify(tablesData).length, endpoint: fallbackUrl, phase: 'rest_fallback',
-        });
-
-        restObjects = tables.map((t: any) => ({
-          object_name: t.name,
-          object_type: 'semantic_model',
-          object_schema: `${workspace_id}/${dataset_id}`,
-          estimated_columns: t.columns?.length ?? null,
-          estimated_rows: null,
-          last_updated_at: null,
-          classification: classifyObject(t.name, t.columns?.length ?? null, null),
-          metadata: { workspace_id, dataset_id, source: 'rest_fallback' }
-        }));
-
-        if (restObjects.length > 0) restFallbackWorked = true;
-      } else {
-        const fallbackErrText = await tablesResp.text();
-        await logDiagnostic('powerbi_discovery_error', {
-          http_status: tablesResp.status, error_payload_raw: fallbackErrText.substring(0, 2000),
-          endpoint_called: fallbackUrl, duration_ms: fallbackDurationMs, phase: 'rest_fallback',
-        });
-      }
-    } catch (fallbackErr) {
-      const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+      if (restObjects.length > 0) restFallbackWorked = true;
+    } else {
+      const fallbackErrText = await tablesResp.text();
       await logDiagnostic('powerbi_discovery_error', {
-        error_message: fbMsg.substring(0, 500), endpoint_called: fallbackUrl,
-        duration_ms: Date.now() - fallbackStartMs, phase: 'rest_fallback',
+        http_status: tablesResp.status, error_payload_raw: fallbackErrText.substring(0, 2000),
+        endpoint_called: fallbackUrl, duration_ms: fallbackDurationMs, phase: 'rest_fallback',
       });
-      console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
     }
-
-    // ─── Level 2: Source tracing ───
-    await logDiagnostic('powerbi_metadata_fallback_started', { phase: 'source_trace' });
-
-    const sourceTrace = await traceUnderlyingSource(
-      access_token, workspace_id, dataset_id,
-      supabaseClient, connectionId, projectId,
-    );
-
-    await logDiagnostic('powerbi_metadata_fallback_finished', {
-      phase: 'source_trace',
-      source_detected: sourceTrace.detected,
-      datasource_type: sourceTrace.datasource_type,
-      confidence: sourceTrace.confidence,
-      semantic_model_type: sourceTrace.semantic_model_type,
+  } catch (fallbackErr) {
+    const fbMsg = fallbackErr instanceof Error ? fallbackErr.message : String(fallbackErr);
+    await logDiagnostic('powerbi_discovery_error', {
+      error_message: fbMsg.substring(0, 500), endpoint_called: fallbackUrl,
+      duration_ms: Date.now() - fallbackStartMs, phase: 'rest_fallback',
     });
+    console.warn(`[discover] Power BI REST fallback also failed:`, fbMsg);
+  }
 
-    // Log assisted ingestion offered
-    await logDiagnostic('powerbi_assisted_ingestion_offered', {
-      phase: 'level3',
-      rest_fallback_worked: restFallbackWorked,
-      rest_objects_count: restObjects.length,
-      source_detected: sourceTrace.detected,
-      datasource_type: sourceTrace.datasource_type,
-    });
+  // ─── Level 2: Source tracing ───
+  await logDiagnostic('powerbi_metadata_fallback_started', { phase: 'source_trace' });
 
-    // If REST fallback gave objects, return them with source trace
-    if (restFallbackWorked) {
-      return {
-        objects: restObjects,
-        fallback_used: true,
-        discovery_method: 'rest_api_tables',
-        reason_code: classified.reason_code,
-        error_detail: daxErrMsg.substring(0, 500),
-        source_trace: sourceTrace,
-      };
-    }
+  const sourceTrace = await traceUnderlyingSource(
+    access_token, workspace_id, dataset_id,
+    supabaseClient, connectionId, projectId,
+  );
 
-    // Both DAX and REST failed — return failure with source trace
+  await logDiagnostic('powerbi_metadata_fallback_finished', {
+    phase: 'source_trace',
+    source_detected: sourceTrace.detected,
+    datasource_type: sourceTrace.datasource_type,
+    confidence: sourceTrace.confidence,
+    semantic_model_type: sourceTrace.semantic_model_type,
+  });
+
+  // Log assisted mode activated
+  await logDiagnostic('powerbi_assisted_mode', {
+    phase: 'level3',
+    rest_fallback_worked: restFallbackWorked,
+    rest_objects_count: restObjects.length,
+    source_detected: sourceTrace.detected,
+    datasource_type: sourceTrace.datasource_type,
+  });
+
+  // If REST fallback gave objects, return them with source trace
+  if (restFallbackWorked) {
     return {
-      objects: [],
+      objects: restObjects,
       fallback_used: true,
-      discovery_method: 'none',
+      discovery_method: 'rest_api_tables',
       reason_code: classified.reason_code,
       error_detail: daxErrMsg.substring(0, 500),
       source_trace: sourceTrace,
     };
   }
+
+  // Both DAX and REST failed — return failure with source trace
+  return {
+    objects: [],
+    fallback_used: true,
+    discovery_method: 'none',
+    reason_code: classified.reason_code,
+    error_detail: daxErrMsg.substring(0, 500),
+    source_trace: sourceTrace,
+  };
 }
 
 // ═══════════════════════════════════════════════════
