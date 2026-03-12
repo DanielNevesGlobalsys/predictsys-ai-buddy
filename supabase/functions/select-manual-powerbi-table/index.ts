@@ -57,9 +57,13 @@ serve(async (req) => {
 
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
-    // Optional: Validate table exists in semantic model via DAX TOPN(1)
+    // Validate table exists AND extract actual columns via DAX TOPN(1)
     let tableValidated = false;
     let validationSkipped = false;
+    let extractedColumns: string[] = [];
+    let extractedRowCount = 0;
+    let daxAccessToken: string | null = null;
+
     if (client_id && client_secret && tenant_id && workspace_id && dataset_id) {
       try {
         const tokenUrl = `https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token`;
@@ -75,11 +79,14 @@ serve(async (req) => {
           body: params.toString(),
         });
         if (tokenResp.ok) {
-          const { access_token } = await tokenResp.json();
+          const tokenData = await tokenResp.json();
+          daxAccessToken = tokenData.access_token;
           const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
+
+          // Step 1: Get columns + sample via TOPN(1)
           const daxResp = await fetch(executeUrl, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               queries: [{ query: `EVALUATE TOPN(1, '${tableName}')` }],
               serializerSettings: { includeNulls: true },
@@ -87,10 +94,41 @@ serve(async (req) => {
           });
           if (daxResp.ok) {
             tableValidated = true;
+            const daxResult = await daxResp.json();
+            const rawRows = daxResult.results?.[0]?.tables?.[0]?.rows || [];
+            if (rawRows.length > 0) {
+              // Extract column names - Power BI wraps them in [brackets]
+              const rawKeys = Object.keys(rawRows[0]);
+              extractedColumns = rawKeys.map(k => k.replace(/^\[/, '').replace(/\]$/, ''));
+              console.log(`[select-manual-pbi] Extracted ${extractedColumns.length} columns from DAX TOPN(1)`);
+            }
           } else {
-            // DAX failed - table may not exist or DAX is restricted
-            // Don't block - this is best-effort validation
             console.warn(`[select-manual-pbi] DAX validation failed for table '${tableName}', proceeding anyway`);
+          }
+
+          // Step 2: Try to get approximate row count via COUNTROWS
+          if (daxAccessToken && tableValidated) {
+            try {
+              const countResp = await fetch(executeUrl, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  queries: [{ query: `EVALUATE ROW("cnt", COUNTROWS('${tableName}'))` }],
+                  serializerSettings: { includeNulls: true },
+                }),
+              });
+              if (countResp.ok) {
+                const countResult = await countResp.json();
+                const countRows = countResult.results?.[0]?.tables?.[0]?.rows || [];
+                if (countRows.length > 0) {
+                  const cntVal = countRows[0]?.['[cnt]'] ?? countRows[0]?.cnt;
+                  extractedRowCount = typeof cntVal === 'number' ? cntVal : parseInt(String(cntVal), 10) || 0;
+                  console.log(`[select-manual-pbi] COUNTROWS = ${extractedRowCount}`);
+                }
+              }
+            } catch (cntErr) {
+              console.warn('[select-manual-pbi] COUNTROWS failed:', cntErr);
+            }
           }
         }
       } catch (err) {
@@ -99,6 +137,10 @@ serve(async (req) => {
     } else {
       validationSkipped = true;
     }
+
+    // Use extracted data or fallback minimums
+    const finalColCount = extractedColumns.length > 0 ? extractedColumns.length : 1;
+    const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 1;
 
     // Log submission event
     try {
@@ -156,12 +198,12 @@ serve(async (req) => {
       orgId = projSettings?.org_id || null;
     }
 
-    // 3. Build a virtual schema for the manual table (minimal)
-    const schemaJson = [
-      { name: tableName, type: 'table', source: 'powerbi_manual_assisted' },
-    ];
+    // 3. Build schema from extracted columns (or minimal fallback)
+    const schemaJson = extractedColumns.length > 0
+      ? extractedColumns.map((col, i) => ({ name: col, type: 'text', index: i, source: 'powerbi_dax' }))
+      : [{ name: tableName, type: 'table', source: 'powerbi_manual_assisted' }];
 
-    // 4. Call rpc_finalize_ingestion to create active dataset and persist state
+    // 4. Call rpc_finalize_ingestion with REAL column/row counts
     const { data: finResult, error: finError } = await supabaseAdmin.rpc('rpc_finalize_ingestion', {
       p_project_id: project_id,
       p_source_type: 'powerbi',
@@ -175,12 +217,13 @@ serve(async (req) => {
         manual_table_name: tableName,
         connection_id: connection_id || null,
         connection_mode: 'assisted',
-        discovery_status: 'partial',
+        discovery_status: extractedColumns.length > 0 ? 'full' : 'partial',
         table_validated: tableValidated,
+        columns_extracted: extractedColumns.length,
       },
       p_schema_json: schemaJson,
-      p_row_count: 1,
-      p_col_count: 1,
+      p_row_count: finalRowCount,
+      p_col_count: finalColCount,
       p_total_bytes: 0,
       p_sample_strategy: { method: 'manual_selection', source: 'powerbi' },
       p_file_count: 0,
@@ -189,7 +232,6 @@ serve(async (req) => {
     if (finError) {
       console.error('[select-manual-pbi] rpc_finalize_ingestion error:', JSON.stringify(finError));
 
-      // Log failure
       try {
         await supabaseAdmin.from('platform_events').insert({
           event_type: 'powerbi_manual_table_selected',
@@ -209,17 +251,15 @@ serve(async (req) => {
 
     const result = finResult as Record<string, any>;
 
-    // CRITICAL: Insert into project_datasets so StepEDA finds an active dataset
+    // CRITICAL: Insert into project_datasets with REAL counts
     let projectDatasetId: string | null = null;
     try {
-      // Deactivate existing active datasets for this project
       await supabaseAdmin
         .from('project_datasets')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('project_id', project_id)
         .eq('is_active', true);
 
-      // Insert new active dataset
       const { data: pdData, error: pdError } = await supabaseAdmin
         .from('project_datasets')
         .insert({
@@ -228,9 +268,9 @@ serve(async (req) => {
           name: `Power BI: ${tableName}`,
           storage_path: `powerbi_assisted/${project_id}/${tableName}`,
           file_size_bytes: 0,
-          total_rows: 1,
+          total_rows: finalRowCount,
           sample_rows: 0,
-          columns_count: 1,
+          columns_count: finalColCount,
           is_active: true,
           source_type: 'powerbi',
           source_metadata: {
@@ -242,6 +282,7 @@ serve(async (req) => {
             dataset_id: dataset_id || null,
             table_validated: tableValidated,
             manifest_id: result?.manifest_id,
+            columns_extracted: extractedColumns.length,
           },
         })
         .select('id')
@@ -255,6 +296,44 @@ serve(async (req) => {
       }
     } catch (pdErr) {
       console.warn('[select-manual-pbi] project_datasets insert error:', pdErr);
+    }
+
+    // CRITICAL: Persist extracted columns to project_columns
+    if (extractedColumns.length > 0) {
+      try {
+        // Clear existing columns
+        await supabaseAdmin.from('project_columns').delete().eq('project_id', project_id);
+
+        const colsToInsert = extractedColumns.map((col, i) => ({
+          project_id,
+          column_name: col,
+          column_index: i,
+          inferred_type: 'texto',
+        }));
+        const { error: colErr } = await supabaseAdmin.from('project_columns').insert(colsToInsert);
+        if (colErr) {
+          console.warn('[select-manual-pbi] project_columns insert warning:', JSON.stringify(colErr));
+        } else {
+          console.log(`[select-manual-pbi] Inserted ${extractedColumns.length} columns into project_columns`);
+        }
+      } catch (colInsertErr) {
+        console.warn('[select-manual-pbi] project_columns insert error:', colInsertErr);
+      }
+    }
+
+    // Update project_dataset_state with real schema
+    if (extractedColumns.length > 0) {
+      try {
+        await supabaseAdmin
+          .from('project_dataset_state')
+          .update({
+            col_count: finalColCount,
+            row_count: finalRowCount,
+            active_schema_json: schemaJson,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('project_id', project_id);
+      } catch { /* best-effort */ }
     }
 
     // Log success event
@@ -271,17 +350,19 @@ serve(async (req) => {
           dataset_version: result?.dataset_version,
           dataset_status: 'active',
           connection_mode: 'assisted',
-          discovery_status: 'partial',
+          discovery_status: extractedColumns.length > 0 ? 'full' : 'partial',
           project_dataset_id: projectDatasetId,
+          columns_extracted: extractedColumns.length,
+          row_count: finalRowCount,
         },
       });
     } catch { /* best-effort */ }
 
-    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version} dataset=${projectDatasetId}`);
+    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version} dataset=${projectDatasetId} cols=${finalColCount} rows=${finalRowCount}`);
 
     return new Response(JSON.stringify({
       success: true,
-      connection_status: 'connected_partial_discovery',
+      connection_status: extractedColumns.length > 0 ? 'connected_full_discovery' : 'connected_partial_discovery',
       dataset_status: 'active',
       selection_mode: 'manual_assisted',
       manual_table_name: tableName,
@@ -289,7 +370,13 @@ serve(async (req) => {
       dataset_version: result?.dataset_version,
       project_dataset_id: projectDatasetId,
       table_validated: tableValidated,
-      message: 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
+      columns_extracted: extractedColumns.length,
+      column_names: extractedColumns,
+      row_count: finalRowCount,
+      col_count: finalColCount,
+      message: extractedColumns.length > 0
+        ? `Tabela '${tableName}' ativada com ${extractedColumns.length} colunas e ~${finalRowCount} linhas.`
+        : 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error: unknown) {
