@@ -198,12 +198,12 @@ serve(async (req) => {
       orgId = projSettings?.org_id || null;
     }
 
-    // 3. Build a virtual schema for the manual table (minimal)
-    const schemaJson = [
-      { name: tableName, type: 'table', source: 'powerbi_manual_assisted' },
-    ];
+    // 3. Build schema from extracted columns (or minimal fallback)
+    const schemaJson = extractedColumns.length > 0
+      ? extractedColumns.map((col, i) => ({ name: col, type: 'text', index: i, source: 'powerbi_dax' }))
+      : [{ name: tableName, type: 'table', source: 'powerbi_manual_assisted' }];
 
-    // 4. Call rpc_finalize_ingestion to create active dataset and persist state
+    // 4. Call rpc_finalize_ingestion with REAL column/row counts
     const { data: finResult, error: finError } = await supabaseAdmin.rpc('rpc_finalize_ingestion', {
       p_project_id: project_id,
       p_source_type: 'powerbi',
@@ -217,12 +217,13 @@ serve(async (req) => {
         manual_table_name: tableName,
         connection_id: connection_id || null,
         connection_mode: 'assisted',
-        discovery_status: 'partial',
+        discovery_status: extractedColumns.length > 0 ? 'full' : 'partial',
         table_validated: tableValidated,
+        columns_extracted: extractedColumns.length,
       },
       p_schema_json: schemaJson,
-      p_row_count: 1,
-      p_col_count: 1,
+      p_row_count: finalRowCount,
+      p_col_count: finalColCount,
       p_total_bytes: 0,
       p_sample_strategy: { method: 'manual_selection', source: 'powerbi' },
       p_file_count: 0,
@@ -231,7 +232,6 @@ serve(async (req) => {
     if (finError) {
       console.error('[select-manual-pbi] rpc_finalize_ingestion error:', JSON.stringify(finError));
 
-      // Log failure
       try {
         await supabaseAdmin.from('platform_events').insert({
           event_type: 'powerbi_manual_table_selected',
@@ -251,17 +251,15 @@ serve(async (req) => {
 
     const result = finResult as Record<string, any>;
 
-    // CRITICAL: Insert into project_datasets so StepEDA finds an active dataset
+    // CRITICAL: Insert into project_datasets with REAL counts
     let projectDatasetId: string | null = null;
     try {
-      // Deactivate existing active datasets for this project
       await supabaseAdmin
         .from('project_datasets')
         .update({ is_active: false, updated_at: new Date().toISOString() })
         .eq('project_id', project_id)
         .eq('is_active', true);
 
-      // Insert new active dataset
       const { data: pdData, error: pdError } = await supabaseAdmin
         .from('project_datasets')
         .insert({
@@ -270,9 +268,9 @@ serve(async (req) => {
           name: `Power BI: ${tableName}`,
           storage_path: `powerbi_assisted/${project_id}/${tableName}`,
           file_size_bytes: 0,
-          total_rows: 1,
+          total_rows: finalRowCount,
           sample_rows: 0,
-          columns_count: 1,
+          columns_count: finalColCount,
           is_active: true,
           source_type: 'powerbi',
           source_metadata: {
@@ -284,6 +282,7 @@ serve(async (req) => {
             dataset_id: dataset_id || null,
             table_validated: tableValidated,
             manifest_id: result?.manifest_id,
+            columns_extracted: extractedColumns.length,
           },
         })
         .select('id')
@@ -297,6 +296,44 @@ serve(async (req) => {
       }
     } catch (pdErr) {
       console.warn('[select-manual-pbi] project_datasets insert error:', pdErr);
+    }
+
+    // CRITICAL: Persist extracted columns to project_columns
+    if (extractedColumns.length > 0) {
+      try {
+        // Clear existing columns
+        await supabaseAdmin.from('project_columns').delete().eq('project_id', project_id);
+
+        const colsToInsert = extractedColumns.map((col, i) => ({
+          project_id,
+          column_name: col,
+          column_index: i,
+          inferred_type: 'texto',
+        }));
+        const { error: colErr } = await supabaseAdmin.from('project_columns').insert(colsToInsert);
+        if (colErr) {
+          console.warn('[select-manual-pbi] project_columns insert warning:', JSON.stringify(colErr));
+        } else {
+          console.log(`[select-manual-pbi] Inserted ${extractedColumns.length} columns into project_columns`);
+        }
+      } catch (colInsertErr) {
+        console.warn('[select-manual-pbi] project_columns insert error:', colInsertErr);
+      }
+    }
+
+    // Update project_dataset_state with real schema
+    if (extractedColumns.length > 0) {
+      try {
+        await supabaseAdmin
+          .from('project_dataset_state')
+          .update({
+            col_count: finalColCount,
+            row_count: finalRowCount,
+            active_schema_json: schemaJson,
+            updated_at: new Date().toISOString(),
+          })
+          .eq('project_id', project_id);
+      } catch { /* best-effort */ }
     }
 
     // Log success event
