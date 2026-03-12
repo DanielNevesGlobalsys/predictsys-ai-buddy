@@ -281,7 +281,36 @@ serve(async (req) => {
     }
 
     const finalColCount = extractedColumns.length;
-    const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 1;
+    const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 0;
+
+    if (finalRowCount <= 0) {
+      try {
+        await supabaseAdmin.from('platform_events').insert({
+          event_type: 'powerbi_manual_table_selected',
+          project_id,
+          source: 'connector_powerbi',
+          status: 'error',
+          metadata: {
+            connection_id,
+            workspace_id,
+            dataset_id,
+            manual_table_name: tableName,
+            error_code: 'row_count_not_materialized',
+            table_validated: tableValidated,
+            columns_extracted: finalColCount,
+            message: 'Tabela validada sem contagem de linhas real. Materialização bloqueada para evitar dataset fake.',
+          },
+        });
+      } catch {
+        /* best-effort */
+      }
+
+      return new Response(JSON.stringify({
+        success: false,
+        error_code: 'row_count_not_materialized',
+        message: 'A tabela foi validada, mas não foi possível obter COUNTROWS real. Materialização bloqueada para evitar dataset virtual.',
+      }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 422 });
+    }
 
     // Log submission event
     try {
