@@ -1187,7 +1187,7 @@ serve(async (req) => {
             await supabaseAdmin.from("project_dataset_state").upsert(
               {
                 project_id,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 row_count: finalRowCount,
                 col_count: finalColumns.length,
                 active_schema_json: schemaJson,
