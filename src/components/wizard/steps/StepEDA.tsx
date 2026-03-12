@@ -341,8 +341,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* EDA failed — show retry (but not for virtual datasets since they'll handle it via calculate-eda) */}
-            {edaSSOT.eda_status === "failed" && !edaRunning && !isVirtualDataset && (
+            {/* EDA failed — show retry */}
+            {edaSSOT.eda_status === "failed" && !edaRunning && (
               <div className="p-4 rounded-lg border bg-destructive/10 border-destructive/30 space-y-3">
                 <div className="flex items-center gap-3">
                   <AlertTriangle className="w-5 h-5 text-destructive" />
