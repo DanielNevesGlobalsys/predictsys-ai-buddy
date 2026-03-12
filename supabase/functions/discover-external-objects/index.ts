@@ -458,98 +458,106 @@ async function discoverPowerBIWithFallback(
 
   const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
 
-  // ─── Level 1 Primary: DAX discovery ───
-  const daxQuery = `EVALUATE INFO.TABLES()`;
-  const daxStartMs = Date.now();
+  // ─── Level 1 Primary: DAX discovery with fallback chain ───
+  const daxQueries = [
+    { query: 'EVALUATE INFO.TABLES()', method: 'dax_info_tables' },
+    { query: "SELECT [Name] FROM $SYSTEM.TMSCHEMA_TABLES WHERE NOT [IsHidden]", method: 'tmschema_tables' },
+  ];
 
-  await logDiagnostic('powerbi_discovery_request', {
-    endpoint: executeUrl, dax_query: daxQuery, method: 'POST',
-  });
+  let discoveryMethod = 'none';
+  let daxDurationMs = 0;
+  let daxObjects: DiscoveredObject[] = [];
 
-  try {
-    const resp = await fetch(executeUrl, {
-      method: 'POST',
-      headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ queries: [{ query: daxQuery }], serializerSettings: { includeNulls: true } })
+  for (const dq of daxQueries) {
+    const daxStartMs = Date.now();
+
+    await logDiagnostic('powerbi_discovery_request', {
+      endpoint: executeUrl, dax_query: dq.query, method: 'POST', phase: dq.method,
     });
 
-    const daxDurationMs = Date.now() - daxStartMs;
-
-    if (!resp.ok) {
-      const errText = await resp.text();
-      await logDiagnostic('powerbi_discovery_error', {
-        http_status: resp.status, error_payload_raw: errText.substring(0, 2000),
-        dax_query: daxQuery, endpoint_called: executeUrl, duration_ms: daxDurationMs,
-      });
-      throw new Error(errText);
-    }
-
-    const result = await resp.json();
-    const rows = result.results?.[0]?.tables?.[0]?.rows || [];
-
-    await logDiagnostic('powerbi_discovery_response', {
-      http_status: 200, duration_ms: daxDurationMs, rows_returned: rows.length,
-      raw_response_size: JSON.stringify(result).length, endpoint: executeUrl,
-    });
-
-    const objects: DiscoveredObject[] = [];
-    for (const row of rows) {
-      const name = row['[Name]'] || row['Name'];
-      if (!name || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
-
-      let colCount: number | null = null;
-      let rowCount: number | null = null;
-      try {
-        const colResp = await fetch(executeUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
-        });
-        if (colResp.ok) {
-          const colResult = await colResp.json();
-          const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
-          if (r) {
-            colCount = r['[cols]'] ?? r['cols'] ?? null;
-            rowCount = r['[rows]'] ?? r['rows'] ?? null;
-          }
-        }
-      } catch { /* ignore */ }
-
-      objects.push({
-        object_name: name,
-        object_type: 'semantic_model',
-        object_schema: `${workspace_id}/${dataset_id}`,
-        estimated_columns: colCount,
-        estimated_rows: rowCount,
-        last_updated_at: null,
-        classification: classifyObject(name, colCount, rowCount),
-        metadata: { workspace_id, dataset_id }
-      });
-    }
-
-    return { objects, fallback_used: false, discovery_method: 'dax_info_tables' };
-
-  } catch (daxError) {
-    const daxErrMsg = daxError instanceof Error ? daxError.message : String(daxError);
-    const daxStack = daxError instanceof Error ? daxError.stack : undefined;
-    console.warn(`[discover] Power BI DAX discovery failed, attempting fallback chain:`, daxErrMsg);
-
-    let errorCode: string | undefined;
     try {
-      const parsed = JSON.parse(daxErrMsg);
-      errorCode = parsed?.error?.code || parsed?.error?.pbi_error?.code || undefined;
-    } catch { /* not JSON */ }
+      const resp = await fetch(executeUrl, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({ queries: [{ query: dq.query }], serializerSettings: { includeNulls: true } })
+      });
 
-    await logDiagnostic('powerbi_discovery_error', {
-      http_status: null, error_code: errorCode,
-      error_message: daxErrMsg.substring(0, 500),
-      error_payload_raw: daxErrMsg.substring(0, 2000),
-      dax_query: daxQuery, endpoint_called: executeUrl,
-      stack_trace: daxStack?.substring(0, 1000),
-      duration_ms: Date.now() - daxStartMs, phase: 'dax_primary',
-    });
+      daxDurationMs = Date.now() - daxStartMs;
 
-    const classified = classifyPowerBIError(daxErrMsg);
+      if (!resp.ok) {
+        const errText = await resp.text();
+        await logDiagnostic('powerbi_discovery_error', {
+          http_status: resp.status, error_payload_raw: errText.substring(0, 2000),
+          dax_query: dq.query, endpoint_called: executeUrl, duration_ms: daxDurationMs, phase: dq.method,
+        });
+        continue; // Try next fallback
+      }
+
+      const result = await resp.json();
+      const rows = result.results?.[0]?.tables?.[0]?.rows || [];
+
+      await logDiagnostic('powerbi_discovery_response', {
+        http_status: 200, duration_ms: daxDurationMs, rows_returned: rows.length,
+        raw_response_size: JSON.stringify(result).length, endpoint: executeUrl, phase: dq.method,
+      });
+
+      for (const row of rows) {
+        const name = row['[Name]'] || row['Name'] || Object.values(row)[0];
+        if (!name || typeof name !== 'string' || name.startsWith('DateTable') || name.startsWith('LocalDateTable')) continue;
+
+        let colCount: number | null = null;
+        let rowCount: number | null = null;
+        try {
+          const colResp = await fetch(executeUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ queries: [{ query: `EVALUATE ROW("cols", COUNTROWS(INFO.COLUMNS()), "rows", COUNTROWS('${name}'))` }], serializerSettings: { includeNulls: true } })
+          });
+          if (colResp.ok) {
+            const colResult = await colResp.json();
+            const r = colResult.results?.[0]?.tables?.[0]?.rows?.[0];
+            if (r) {
+              colCount = r['[cols]'] ?? r['cols'] ?? null;
+              rowCount = r['[rows]'] ?? r['rows'] ?? null;
+            }
+          }
+        } catch { /* ignore */ }
+
+        daxObjects.push({
+          object_name: name,
+          object_type: 'semantic_model',
+          object_schema: `${workspace_id}/${dataset_id}`,
+          estimated_columns: colCount,
+          estimated_rows: rowCount,
+          last_updated_at: null,
+          classification: classifyObject(name, colCount, rowCount),
+          metadata: { workspace_id, dataset_id, discovery_source: dq.method }
+        });
+      }
+
+      if (daxObjects.length > 0) {
+        discoveryMethod = dq.method;
+        break; // Success, no need to try next fallback
+      }
+    } catch (err) {
+      const errMsg = err instanceof Error ? err.message : String(err);
+      await logDiagnostic('powerbi_discovery_error', {
+        error_message: errMsg.substring(0, 500), phase: dq.method,
+        duration_ms: Date.now() - daxStartMs,
+      });
+      continue;
+    }
+  }
+
+  if (daxObjects.length > 0) {
+    return { objects: daxObjects, fallback_used: discoveryMethod !== 'dax_info_tables', discovery_method: discoveryMethod };
+  }
+
+  // All DAX methods failed - continue to REST and source trace fallbacks
+  const daxErrMsg = 'All DAX discovery methods failed';
+  console.warn(`[discover] Power BI DAX discovery failed, attempting REST fallback`);
+
+  const classified = classifyPowerBIError(daxErrMsg);
 
     // ─── Level 1 Fallback: REST API metadata ───
     const fallbackUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/tables`;
