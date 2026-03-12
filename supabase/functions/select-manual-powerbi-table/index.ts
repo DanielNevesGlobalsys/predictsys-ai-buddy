@@ -67,6 +67,32 @@ serve(async (req) => {
 
     const tableName = manual_table_name.trim();
 
+    // Hydrate missing Power BI identifiers/credentials from saved data source config
+    if (connection_id && (!workspace_id || !dataset_id || !client_id || !client_secret || !tenant_id)) {
+      try {
+        const { data: connWithSource, error: connError } = await supabaseAdmin
+          .from('external_connections')
+          .select('data_source_id, data_sources!external_connections_data_source_id_fkey(connection_config)')
+          .eq('id', connection_id)
+          .maybeSingle();
+
+        if (connError) {
+          console.warn('[select-manual-pbi] Failed to load connection config:', connError.message);
+        } else if (connWithSource) {
+          const dsRel = (connWithSource as any).data_sources;
+          const connectionConfig = (Array.isArray(dsRel) ? dsRel[0]?.connection_config : dsRel?.connection_config) || {};
+
+          workspace_id = workspace_id ?? normalizeString(connectionConfig.workspace_id);
+          dataset_id = dataset_id ?? normalizeString(connectionConfig.dataset_id);
+          client_id = client_id ?? normalizeString(connectionConfig.client_id);
+          client_secret = client_secret ?? normalizeString(connectionConfig.client_secret);
+          tenant_id = tenant_id ?? normalizeString(connectionConfig.tenant_id);
+        }
+      } catch (cfgErr) {
+        console.warn('[select-manual-pbi] Error loading saved connection config:', cfgErr);
+      }
+    }
+
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
     // Validate table exists AND extract actual columns via DAX TOPN(1)
