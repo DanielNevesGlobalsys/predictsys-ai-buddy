@@ -1346,95 +1346,24 @@ Deno.serve(async (req) => {
     }
 
     if (columnsToProcess.length === 0) {
-      // Check if this is a virtual/external dataset (Power BI assisted, etc.) before failing
-      const { data: settingsCheck } = await supabase
-        .from("project_settings")
-        .select("ingestion_state, ingestion_source_type, ingestion_rows_detected, ingestion_cols_detected")
-        .eq("project_id", project_id)
-        .single();
+      if (virtualDatasetContext.isVirtualDataset) {
+        const virtualPayload = buildVirtualDatasetPayload({
+          rowCount: virtualDatasetContext.rowCount,
+          columnCount: virtualDatasetContext.columnCount,
+        });
 
-      const isVirtual = settingsCheck?.ingestion_state === "done" &&
-        ["powerbi", "external"].includes(settingsCheck?.ingestion_source_type || "");
+        await markVirtualEdaReady(supabase, project_id, virtualPayload, virtualDatasetContext.sourceType);
+        await logVirtualEdaEvent(supabase, project_id, {
+          stage: "column_metadata",
+          source_type: virtualDatasetContext.sourceType,
+          row_count: virtualPayload.row_count,
+          column_count: virtualPayload.column_count,
+        });
 
-      if (isVirtual) {
-        console.log(`[calculate-eda] Virtual dataset detected at column-check stage (source=${settingsCheck.ingestion_source_type}). Marking EDA as virtual-complete.`);
-
-        await supabase
-          .from("project_settings")
-          .update({
-            eda_status: "succeeded",
-            eda_error: null,
-            eda_state: "done",
-            eda_profile_json: {
-              rows_total: settingsCheck.ingestion_rows_detected || 0,
-              columns_count: settingsCheck.ingestion_cols_detected || 0,
-              numeric_columns: 0,
-              categorical_columns: 0,
-              virtual_dataset: true,
-              source_type: settingsCheck.ingestion_source_type,
-              computed_at: new Date().toISOString(),
-            },
-            eda_profile_created_at: new Date().toISOString(),
-          })
-          .eq("project_id", project_id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            virtual_dataset: true,
-            source_type: settingsCheck.ingestion_source_type,
-            message: "Dataset virtual/externo detectado. EDA marcado como completo.",
-            rows_processed: 0,
-            numeric_stats: 0,
-            categorical_stats: 0,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
-      }
-
-      // Also check project_datasets source_type
-      const { data: dsCheck } = await supabase
-        .from("project_datasets")
-        .select("source_type, source_metadata")
-        .eq("project_id", project_id)
-        .eq("is_active", true)
-        .limit(1)
-        .maybeSingle();
-
-      if (dsCheck?.source_type === "powerbi" || dsCheck?.source_type === "external") {
-        console.log(`[calculate-eda] Virtual dataset detected via project_datasets (source=${dsCheck.source_type}). Marking EDA as virtual-complete.`);
-
-        await supabase
-          .from("project_settings")
-          .update({
-            eda_status: "succeeded",
-            eda_error: null,
-            eda_state: "done",
-            eda_profile_json: {
-              rows_total: 0,
-              columns_count: 0,
-              numeric_columns: 0,
-              categorical_columns: 0,
-              virtual_dataset: true,
-              source_type: dsCheck.source_type,
-              computed_at: new Date().toISOString(),
-            },
-            eda_profile_created_at: new Date().toISOString(),
-          })
-          .eq("project_id", project_id);
-
-        return new Response(
-          JSON.stringify({
-            success: true,
-            virtual_dataset: true,
-            source_type: dsCheck.source_type,
-            message: "Dataset virtual/externo detectado. EDA marcado como completo.",
-            rows_processed: 0,
-            numeric_stats: 0,
-            categorical_stats: 0,
-          }),
-          { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-        );
+        return new Response(JSON.stringify(virtualPayload), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
       }
 
       return new Response(
