@@ -236,7 +236,41 @@ export default function PowerBIXMLADiagnosticPanel({
             <Badge variant="outline">Colunas: {result.columns_method || "-"}</Badge>
             <Badge variant="outline">Amostra: {result.sample_method || "-"}</Badge>
             <Badge variant="outline">Row count: {result.row_count_method || "-"}</Badge>
+            {result.source_type_persisted && (
+              <Badge variant="default" className="text-xs">source_type: {result.source_type_persisted}</Badge>
+            )}
           </div>
+
+          {/* Table selector when multiple candidates exist */}
+          {(result.candidate_tables?.length ?? 0) > 1 && !materialized && (
+            <div className="rounded border border-primary/20 p-3 bg-primary/5 text-xs space-y-2">
+              <p className="font-medium text-sm">Selecione a tabela para materializar</p>
+              <p className="text-muted-foreground">Múltiplas tabelas reais encontradas. Selecione a tabela de negócio principal:</p>
+              <Select value={selectedTable} onValueChange={setSelectedTable}>
+                <SelectTrigger className="text-xs">
+                  <SelectValue placeholder="Escolha a tabela alvo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {result.candidate_tables!.map((t) => (
+                    <SelectItem key={t.effective_name} value={t.effective_name}>
+                      {t.effective_name} {t.business_score != null ? `(score: ${t.business_score})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedTable && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => runDiagnostic(false)}
+                  disabled={running || materializing}
+                >
+                  <Activity className="w-4 h-4 mr-1" />
+                  Re-diagnosticar com "{selectedTable}"
+                </Button>
+              )}
+            </div>
+          )}
 
           {!!result.ignored_internal_tables?.length && (
             <div className="rounded border border-border p-2 bg-muted/20 text-xs">
