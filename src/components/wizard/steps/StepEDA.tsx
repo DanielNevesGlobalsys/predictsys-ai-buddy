@@ -42,6 +42,7 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
   const [activeDataset, setActiveDataset] = useState<{ id: string; total_rows: number; columns_count: number; name: string } | null>(null);
   const [datasetLoading, setDatasetLoading] = useState(true);
   const [noDataset, setNoDataset] = useState(false);
+  const [isVirtualDataset, setIsVirtualDataset] = useState(false);
 
   // EDA SSOT state
   const [edaSSOT, setEdaSSOT] = useState<EdaSSOT>({
