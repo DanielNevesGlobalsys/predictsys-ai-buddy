@@ -18,9 +18,12 @@ import {
   Hash,
   Download,
   Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
+
+/* ── Types ── */
 
 interface DiagnosticStep {
   step: string;
@@ -103,6 +106,8 @@ const statusColors = {
   skip: "text-muted-foreground",
 };
 
+/* ── Main Component ── */
+
 export default function PowerBIXMLADiagnosticPanel({
   projectId,
   connectionId,
@@ -118,9 +123,17 @@ export default function PowerBIXMLADiagnosticPanel({
   const [materialized, setMaterialized] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
   const [selectedTable, setSelectedTable] = useState<string>("");
+  const [phase, setPhase] = useState<"idle" | "discovered" | "validated" | "materialized">("idle");
 
   const runDiagnostic = useCallback(
-    async (doMaterialize = false) => {
+    async (overrideTable?: string, doMaterialize = false) => {
+      const tableToUse = overrideTable || selectedTable || tableName;
+
+      if (doMaterialize && !tableToUse) {
+        toast.error("Selecione uma tabela antes de materializar.");
+        return;
+      }
+
       if (doMaterialize) setMaterializing(true);
       else setRunning(true);
 
@@ -131,7 +144,7 @@ export default function PowerBIXMLADiagnosticPanel({
             connection_id: connectionId,
             workspace_id: workspaceId,
             dataset_id: datasetId,
-            table_name: selectedTable || tableName,
+            table_name: tableToUse || undefined,
             materialize: doMaterialize,
           },
         });
@@ -143,9 +156,19 @@ export default function PowerBIXMLADiagnosticPanel({
           setCanMaterialize(data.can_materialize || false);
           setMaterialized(data.materialized || false);
 
+          // Determine phase
           if (data.materialized) {
+            setPhase("materialized");
             toast.success("Dataset materializado com schema real.");
             onMaterializationSuccess?.();
+          } else if (data.diagnostic.summary?.columns_found > 0 && data.diagnostic.summary?.row_count > 0) {
+            setPhase("validated");
+          } else if ((data.diagnostic.candidate_tables?.length ?? 0) > 0) {
+            setPhase("discovered");
+            // Auto-select best table if not already selected
+            if (!selectedTable && data.diagnostic.candidate_tables?.length) {
+              setSelectedTable(data.diagnostic.candidate_tables[0].effective_name);
+            }
           }
         } else if (!data?.success) {
           toast.error(data?.error || "Diagnóstico falhou");
@@ -178,170 +201,276 @@ export default function PowerBIXMLADiagnosticPanel({
     });
   };
 
+  const candidates = result?.candidate_tables ?? [];
+  const hasCandidates = candidates.length > 0;
+  const effectiveTable = result?.effective_query_table_name;
+
   return (
-    <Card className="p-4 border-border">
-      <div className="flex items-center justify-between mb-3">
+    <Card className="p-4 border-border space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-primary" />
           <p className="text-sm font-medium">Diagnóstico XMLA</p>
-        </div>
-        <div className="flex gap-2">
-          <Button variant="outline" size="sm" onClick={() => runDiagnostic(false)} disabled={running || materializing}>
-            {running ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Activity className="w-4 h-4 mr-1" />}
-            {running ? "Executando..." : "Executar diagnóstico"}
-          </Button>
-          {canMaterialize && !materialized && (
-            <Button variant="default" size="sm" onClick={() => runDiagnostic(true)} disabled={running || materializing}>
-              {materializing ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Download className="w-4 h-4 mr-1" />}
-              {materializing ? "Materializando..." : "Materializar dataset"}
-            </Button>
+          {phase === "materialized" && (
+            <Badge className="bg-accent text-accent-foreground text-xs ml-2">Materializado ✔</Badge>
           )}
         </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => runDiagnostic(undefined, false)}
+          disabled={running || materializing}
+        >
+          {running ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Activity className="w-4 h-4 mr-1" />}
+          {phase === "idle" ? "Descobrir tabelas" : "Re-executar diagnóstico"}
+        </Button>
       </div>
 
-      {!result && !running && (
-        <p className="text-xs text-muted-foreground">Executa validação real: Auth → Workspace → Dataset → Tabelas reais → Colunas → Amostra → Row count.</p>
+      {/* Idle state */}
+      {phase === "idle" && !running && (
+        <p className="text-xs text-muted-foreground">
+          Clique em "Descobrir tabelas" para listar as tabelas reais do modelo semântico.
+          Tabelas técnicas, de calendário e medidas serão filtradas automaticamente.
+        </p>
       )}
 
+      {/* Summary badges */}
       {result && (
-        <div className="space-y-3 mt-2">
-          <div className="flex flex-wrap gap-2">
-            <SummaryBadge ok={result.summary.auth_ok} label="Auth" />
-            <SummaryBadge ok={result.summary.workspace_ok} label="Workspace" />
-            <SummaryBadge ok={result.summary.dataset_ok} label="Dataset" />
-            <SummaryBadge ok={result.summary.tables_found > 0} label={`${result.summary.tables_found} tabelas`} />
-            <SummaryBadge ok={result.summary.columns_found > 0} label={`${result.summary.columns_found} colunas`} />
-            <SummaryBadge ok={result.summary.sample_ok} label="Amostra" />
-            <SummaryBadge ok={result.summary.row_count > 0} label={`RowCount ${result.summary.row_count || 0}`} />
-            {materialized && <Badge className="bg-accent text-accent-foreground text-xs">Materializado ✔</Badge>}
-          </div>
-
-          {result.xmla_endpoint && (
-            <div className="text-xs text-muted-foreground font-mono bg-muted/50 rounded px-2 py-1 break-all">{result.xmla_endpoint}</div>
+        <div className="flex flex-wrap gap-2">
+          <SummaryBadge ok={result.summary.auth_ok} label="Auth" />
+          <SummaryBadge ok={result.summary.workspace_ok} label="Workspace" />
+          <SummaryBadge ok={result.summary.dataset_ok} label="Dataset" />
+          <SummaryBadge ok={result.summary.tables_found > 0} label={`${result.summary.tables_found} tabelas`} />
+          {selectedTable && (
+            <>
+              <SummaryBadge ok={result.summary.columns_found > 0} label={`${result.summary.columns_found} colunas`} />
+              <SummaryBadge ok={result.summary.sample_ok} label="Amostra" />
+              <SummaryBadge ok={result.summary.row_count > 0} label={`${result.summary.row_count} linhas`} />
+            </>
           )}
+        </div>
+      )}
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
-            <div className="rounded border border-border p-2 bg-muted/20">
-              <p className="text-muted-foreground mb-1">Tabela descoberta</p>
-              <p className="font-medium break-all">{result.discovered_table_name || "-"}</p>
-            </div>
-            <div className="rounded border border-border p-2 bg-muted/20">
-              <p className="text-muted-foreground mb-1">Tabela usada na query</p>
-              <p className="font-medium break-all">{result.effective_query_table_name || "-"}</p>
-            </div>
+      {/* ── TABLE SELECTOR (primary UI) ── */}
+      {hasCandidates && phase !== "materialized" && (
+        <div className="rounded-lg border-2 border-primary/30 p-4 bg-primary/5 space-y-3">
+          <div className="flex items-center gap-2">
+            <Table2 className="w-4 h-4 text-primary" />
+            <p className="text-sm font-semibold">Selecione a tabela de negócio</p>
           </div>
+          <p className="text-xs text-muted-foreground">
+            {candidates.length} tabela(s) real(is) encontrada(s). Tabelas internas, de calendário e medidas foram ocultadas.
+            Selecione exatamente 1 tabela para materializar.
+          </p>
+          <Select
+            value={selectedTable}
+            onValueChange={(v) => {
+              setSelectedTable(v);
+              setPhase("discovered"); // reset validation when table changes
+              setCanMaterialize(false);
+            }}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder="Escolha a tabela alvo" />
+            </SelectTrigger>
+            <SelectContent>
+              {candidates.map((t) => (
+                <SelectItem key={t.effective_name} value={t.effective_name}>
+                  <div className="flex items-center gap-2">
+                    <span>{t.effective_name}</span>
+                    {t.business_score != null && (
+                      <span className="text-muted-foreground text-[10px]">
+                        (relevância: {t.business_score > 10 ? "alta" : t.business_score > 0 ? "média" : "baixa"})
+                      </span>
+                    )}
+                  </div>
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
 
-          <div className="flex flex-wrap gap-2 text-xs">
-            <Badge variant="outline">Source método: {result.table_source_method || "-"}</Badge>
-            <Badge variant="outline">Colunas: {result.columns_method || "-"}</Badge>
-            <Badge variant="outline">Amostra: {result.sample_method || "-"}</Badge>
-            <Badge variant="outline">Row count: {result.row_count_method || "-"}</Badge>
-            {result.source_type_persisted && (
-              <Badge variant="default" className="text-xs">source_type: {result.source_type_persisted}</Badge>
-            )}
-          </div>
-
-          {/* Table selector when multiple candidates exist */}
-          {(result.candidate_tables?.length ?? 0) > 1 && !materialized && (
-            <div className="rounded border border-primary/20 p-3 bg-primary/5 text-xs space-y-2">
-              <p className="font-medium text-sm">Selecione a tabela para materializar</p>
-              <p className="text-muted-foreground">Múltiplas tabelas reais encontradas. Selecione a tabela de negócio principal:</p>
-              <Select value={selectedTable} onValueChange={setSelectedTable}>
-                <SelectTrigger className="text-xs">
-                  <SelectValue placeholder="Escolha a tabela alvo" />
-                </SelectTrigger>
-                <SelectContent>
-                  {result.candidate_tables!.map((t) => (
-                    <SelectItem key={t.effective_name} value={t.effective_name}>
-                      {t.effective_name} {t.business_score != null ? `(score: ${t.business_score})` : ""}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {selectedTable && (
+          {/* Action buttons for selected table */}
+          {selectedTable && (
+            <div className="flex flex-wrap gap-2 pt-1">
+              {phase === "discovered" && (
                 <Button
                   variant="default"
                   size="sm"
-                  onClick={() => runDiagnostic(false)}
+                  onClick={() => runDiagnostic(selectedTable, false)}
                   disabled={running || materializing}
                 >
-                  <Activity className="w-4 h-4 mr-1" />
-                  Re-diagnosticar com "{selectedTable}"
+                  {running ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Columns3 className="w-4 h-4 mr-1" />}
+                  Validar "{selectedTable}"
+                </Button>
+              )}
+              {phase === "validated" && canMaterialize && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => runDiagnostic(selectedTable, true)}
+                  disabled={running || materializing}
+                >
+                  {materializing ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Download className="w-4 h-4 mr-1" />}
+                  {materializing ? "Materializando..." : `Materializar "${selectedTable}"`}
                 </Button>
               )}
             </div>
           )}
 
-          {!!result.ignored_internal_tables?.length && (
-            <div className="rounded border border-border p-2 bg-muted/20 text-xs">
-              <p className="font-medium mb-1">Tabelas internas ignoradas</p>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto text-[11px] text-muted-foreground">
-                {JSON.stringify(result.ignored_internal_tables, null, 2)}
-              </pre>
+          {!selectedTable && (
+            <div className="flex items-center gap-2 text-xs text-yellow-600">
+              <AlertTriangle className="w-3.5 h-3.5" />
+              Selecione uma tabela para continuar.
             </div>
           )}
+        </div>
+      )}
 
-          {!!result.candidate_tables?.length && (
-            <div className="rounded border border-border p-2 bg-muted/20 text-xs">
-              <p className="font-medium mb-1">Tabelas reais candidatas</p>
-              <pre className="overflow-x-auto max-h-40 overflow-y-auto text-[11px] text-muted-foreground">
-                {JSON.stringify(result.candidate_tables, null, 2)}
-              </pre>
+      {/* ── MATERIALIZATION SUCCESS CARD ── */}
+      {phase === "materialized" && effectiveTable && (
+        <div className="rounded-lg border-2 border-accent/40 p-4 bg-accent/5 space-y-2">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-5 h-5 text-accent" />
+            <p className="text-sm font-semibold text-accent">Materialização concluída</p>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+            <div>
+              <p className="text-muted-foreground">Tabela</p>
+              <p className="font-semibold">{effectiveTable}</p>
             </div>
-          )}
+            <div>
+              <p className="text-muted-foreground">Colunas</p>
+              <p className="font-semibold">{result?.summary.columns_found ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">Linhas</p>
+              <p className="font-semibold">{result?.summary.row_count ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-muted-foreground">source_type</p>
+              <p className="font-semibold">{result?.source_type_persisted ?? "powerbi"}</p>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Badge variant="default" className="text-xs">project_datasets ✔</Badge>
+            <Badge variant="default" className="text-xs">project_columns ✔</Badge>
+            <Badge variant="default" className="text-xs">dataset_state ✔</Badge>
+            <Badge variant="default" className="text-xs">schema_json ✔</Badge>
+            <Badge variant="default" className="text-xs">EDA liberado ✔</Badge>
+          </div>
+        </div>
+      )}
 
-          {(result.raw_errors?.columns || result.raw_errors?.sample || result.raw_errors?.row_count) && (
-            <div className="rounded border border-destructive/40 p-2 bg-destructive/5 text-xs">
-              <p className="font-medium mb-1 text-destructive">Erros brutos</p>
+      {/* ── TABLE INFO (after validation) ── */}
+      {result && effectiveTable && phase !== "idle" && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs">
+          <div className="rounded border border-border p-2 bg-muted/20">
+            <p className="text-muted-foreground mb-1">Tabela descoberta</p>
+            <p className="font-medium break-all">{result.discovered_table_name || "-"}</p>
+          </div>
+          <div className="rounded border border-border p-2 bg-muted/20">
+            <p className="text-muted-foreground mb-1">Tabela efetiva (query)</p>
+            <p className="font-medium break-all">{effectiveTable}</p>
+          </div>
+        </div>
+      )}
+
+      {/* Method badges */}
+      {result && phase !== "idle" && (
+        <div className="flex flex-wrap gap-2 text-xs">
+          <Badge variant="outline">Tabelas: {result.table_source_method || "-"}</Badge>
+          <Badge variant="outline">Colunas: {result.columns_method || "-"}</Badge>
+          <Badge variant="outline">Amostra: {result.sample_method || "-"}</Badge>
+          <Badge variant="outline">Row count: {result.row_count_method || "-"}</Badge>
+          {result.source_type_persisted && (
+            <Badge variant="default" className="text-xs">source_type: {result.source_type_persisted}</Badge>
+          )}
+        </div>
+      )}
+
+      {/* Ignored tables (collapsed by default) */}
+      {!!result?.ignored_internal_tables?.length && (
+        <Collapsible>
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ChevronDown className="w-3 h-3" />
+            {result.ignored_internal_tables.length} tabela(s) interna(s) ocultada(s)
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="rounded border border-border p-2 bg-muted/20 text-xs mt-1">
+              {result.ignored_internal_tables.map((t) => (
+                <div key={t.name} className="flex items-center gap-2 py-0.5">
+                  <span className="text-muted-foreground font-mono">{t.name}</span>
+                  <Badge variant="outline" className="text-[10px]">{t.reason}</Badge>
+                </div>
+              ))}
+            </div>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
+
+      {/* Errors */}
+      {result && (result.raw_errors?.columns || result.raw_errors?.sample || result.raw_errors?.row_count) && (
+        <Collapsible>
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-destructive hover:text-destructive/80">
+            <ChevronDown className="w-3 h-3" />
+            Erros brutos
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="rounded border border-destructive/40 p-2 bg-destructive/5 text-xs mt-1">
               <pre className="overflow-x-auto max-h-48 overflow-y-auto text-[11px] text-muted-foreground">
                 {JSON.stringify(result.raw_errors, null, 2)}
               </pre>
             </div>
-          )}
+          </CollapsibleContent>
+        </Collapsible>
+      )}
 
-          <div className="space-y-1">
-            {result.steps.map((step) => (
-              <Collapsible key={step.step} open={expandedSteps.has(step.step)} onOpenChange={() => toggleStep(step.step)}>
-                <CollapsibleTrigger className="w-full">
-                  <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-muted/50 transition-colors cursor-pointer w-full">
-                    <span className={statusColors[step.status]}>
-                      {step.status === "ok" ? (
-                        <CheckCircle className="w-4 h-4" />
-                      ) : step.status === "fail" ? (
-                        <XCircle className="w-4 h-4" />
-                      ) : (
-                        <SkipForward className="w-4 h-4" />
+      {/* Step accordion */}
+      {result && result.steps.length > 0 && (
+        <Collapsible>
+          <CollapsibleTrigger className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground">
+            <ChevronDown className="w-3 h-3" />
+            {result.steps.length} etapas do diagnóstico
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <div className="space-y-1 mt-1">
+              {result.steps.map((step) => (
+                <Collapsible key={step.step} open={expandedSteps.has(step.step)} onOpenChange={() => toggleStep(step.step)}>
+                  <CollapsibleTrigger className="w-full">
+                    <div className="flex items-center gap-2 py-1.5 px-2 rounded hover:bg-muted/50 transition-colors cursor-pointer w-full">
+                      <span className={statusColors[step.status]}>
+                        {step.status === "ok" ? (
+                          <CheckCircle className="w-4 h-4" />
+                        ) : step.status === "fail" ? (
+                          <XCircle className="w-4 h-4" />
+                        ) : (
+                          <SkipForward className="w-4 h-4" />
+                        )}
+                      </span>
+                      <span className="text-muted-foreground">{stepIconMap[step.step]}</span>
+                      <span className="text-xs font-medium flex-1 text-left">{step.label}</span>
+                      {step.duration_ms !== undefined && <span className="text-xs text-muted-foreground">{step.duration_ms}ms</span>}
+                      <ChevronDown
+                        className={`w-3 h-3 text-muted-foreground transition-transform ${expandedSteps.has(step.step) ? "rotate-180" : ""}`}
+                      />
+                    </div>
+                  </CollapsibleTrigger>
+                  <CollapsibleContent>
+                    <div className="ml-10 mb-2 text-xs text-muted-foreground space-y-1">
+                      <p>{step.detail}</p>
+                      {step.data && (
+                        <pre className="bg-muted/30 rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto">
+                          {JSON.stringify(step.data, null, 2)}
+                        </pre>
                       )}
-                    </span>
-                    <span className="text-muted-foreground">{stepIconMap[step.step]}</span>
-                    <span className="text-xs font-medium flex-1 text-left">{step.label}</span>
-                    {step.duration_ms !== undefined && <span className="text-xs text-muted-foreground">{step.duration_ms}ms</span>}
-                    <ChevronDown
-                      className={`w-3 h-3 text-muted-foreground transition-transform ${expandedSteps.has(step.step) ? "rotate-180" : ""}`}
-                    />
-                  </div>
-                </CollapsibleTrigger>
-                <CollapsibleContent>
-                  <div className="ml-10 mb-2 text-xs text-muted-foreground space-y-1">
-                    <p>{step.detail}</p>
-                    {step.data && (
-                      <pre className="bg-muted/30 rounded p-2 overflow-x-auto text-[11px] max-h-48 overflow-y-auto">
-                        {JSON.stringify(step.data, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                </CollapsibleContent>
-              </Collapsible>
-            ))}
-          </div>
-
-          {result.tables.length > 0 && (
-            <div className="text-xs text-muted-foreground">
-              <span className="font-medium text-foreground">Tabelas candidatas: </span>
-              {result.tables.join(", ")}
+                    </div>
+                  </CollapsibleContent>
+                </Collapsible>
+              ))}
             </div>
-          )}
-        </div>
+          </CollapsibleContent>
+        </Collapsible>
       )}
     </Card>
   );
