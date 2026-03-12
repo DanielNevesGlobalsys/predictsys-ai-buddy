@@ -294,10 +294,20 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
                   </div>
                 </div>
                 <div className="flex items-center gap-1.5 flex-wrap">
+                  {isVirtualDataset && (
+                    <Badge className="bg-secondary/20 text-secondary border-secondary/30 text-[10px]">
+                      Externo
+                    </Badge>
+                  )}
                   {edaReady ? (
                     <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
                       <CheckCircle className="w-3 h-3 mr-1" />
                       EDA: OK
+                    </Badge>
+                  ) : isVirtualDataset && !edaRunning ? (
+                    <Badge className="bg-accent/20 text-accent border-accent/30 text-[10px]">
+                      <CheckCircle className="w-3 h-3 mr-1" />
+                      Conexão validada
                     </Badge>
                   ) : edaRunning ? (
                     <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px]">
