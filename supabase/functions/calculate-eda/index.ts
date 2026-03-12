@@ -1579,9 +1579,22 @@ Deno.serve(async (req) => {
           }
         }
 
+        // Detect multi-table: columns have "TableName.ColName" format
+        const isMultiTableDataset = pbiColumns!.some((c) => c.column_name.includes("."));
+
         const normalizedColumns = pbiColumns!.map((col) => {
           const originalType = col.inferred_type || "";
-          const sampleValues = sampleRowsArr.map((row) => row[col.column_name]);
+          // For multi-table, only use rows from the same source table
+          let relevantRows = sampleRowsArr;
+          if (isMultiTableDataset && col.column_name.includes(".")) {
+            const tableName = col.column_name.split(".")[0];
+            relevantRows = sampleRowsArr.filter((row) => {
+              // Check via __source_table tag or by checking if this row has the key
+              if (row["__source_table"] === tableName) return true;
+              return col.column_name in row && row[col.column_name] !== undefined;
+            });
+          }
+          const sampleValues = relevantRows.map((row) => row[col.column_name]);
           const canonical = inferPowerBICanonicalType(col.column_name, originalType, sampleValues);
           return {
             ...col,
@@ -1598,7 +1611,7 @@ Deno.serve(async (req) => {
           };
         }
 
-        console.log(`[calculate-eda] eda_powerbi_type_mapping`, JSON.stringify(typeMapping));
+        console.log(`[calculate-eda] eda_powerbi_type_mapping multi_table=${isMultiTableDataset}`, JSON.stringify(typeMapping));
 
         const hasSampleRows = sampleRowsArr.length > 0;
         const numericStats: NumericStats[] = [];
@@ -1607,7 +1620,17 @@ Deno.serve(async (req) => {
         const dateRanges: Record<string, { min_date: string | null; max_date: string | null }> = {};
 
         for (const col of normalizedColumns) {
-          const rawValues = sampleRowsArr.map((row) => row[col.column_name]);
+          // For multi-table, only use rows from the relevant table
+          let relevantRows = sampleRowsArr;
+          if (isMultiTableDataset && col.column_name.includes(".")) {
+            const tableName = col.column_name.split(".")[0];
+            relevantRows = sampleRowsArr.filter((row) => {
+              if (row["__source_table"] === tableName) return true;
+              return col.column_name in row && row[col.column_name] !== undefined;
+            });
+          }
+
+          const rawValues = relevantRows.map((row) => row[col.column_name]);
           const nonEmptyValues = rawValues.filter(
             (value) => value !== null && value !== undefined && String(value).trim() !== "",
           );
@@ -1639,12 +1662,12 @@ Deno.serve(async (req) => {
               mean_value: mean !== null ? Math.round(mean * 10000) / 10000 : null,
               median_value: numericValues.length > 0 ? calculateMedianFromSample(sortedValues) : null,
               std_value: variance !== null ? Math.round(Math.sqrt(Math.max(variance, 0)) * 10000) / 10000 : null,
-              null_count: hasSampleRows ? sampleRowsArr.length - numericValues.length : 0,
+              null_count: hasSampleRows ? relevantRows.length - numericValues.length : 0,
             });
             continue;
           }
 
-          if (!hasSampleRows) {
+          if (!hasSampleRows || nonEmptyValues.length === 0) {
             categoricalStats.push({
               project_id,
               column_name: col.column_name,
@@ -1673,7 +1696,7 @@ Deno.serve(async (req) => {
             .map(([category, count]) => ({
               category,
               count,
-              ratio: hasSampleRows && sampleRowsArr.length > 0 ? Number((count / sampleRowsArr.length).toFixed(4)) : undefined,
+              ratio: relevantRows.length > 0 ? Number((count / relevantRows.length).toFixed(4)) : undefined,
             }));
 
           categoricalStats.push({
