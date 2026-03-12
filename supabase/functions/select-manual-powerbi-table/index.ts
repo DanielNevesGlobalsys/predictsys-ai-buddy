@@ -209,7 +209,55 @@ serve(async (req) => {
 
     const result = finResult as Record<string, any>;
 
-    // Log success
+    // CRITICAL: Insert into project_datasets so StepEDA finds an active dataset
+    let projectDatasetId: string | null = null;
+    try {
+      // Deactivate existing active datasets for this project
+      await supabaseAdmin
+        .from('project_datasets')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('project_id', project_id)
+        .eq('is_active', true);
+
+      // Insert new active dataset
+      const { data: pdData, error: pdError } = await supabaseAdmin
+        .from('project_datasets')
+        .insert({
+          project_id,
+          user_id: user.id,
+          name: `Power BI: ${tableName}`,
+          storage_path: `powerbi_assisted/${project_id}/${tableName}`,
+          file_size_bytes: 0,
+          total_rows: 1,
+          sample_rows: 0,
+          columns_count: 1,
+          is_active: true,
+          source_type: 'powerbi',
+          source_metadata: {
+            connector_type: 'powerbi',
+            selection_mode: 'manual_assisted',
+            manual_table_name: tableName,
+            connection_id: connection_id || null,
+            workspace_id: workspace_id || null,
+            dataset_id: dataset_id || null,
+            table_validated: tableValidated,
+            manifest_id: result?.manifest_id,
+          },
+        })
+        .select('id')
+        .single();
+
+      if (pdError) {
+        console.warn('[select-manual-pbi] project_datasets insert warning:', JSON.stringify(pdError));
+      } else {
+        projectDatasetId = pdData?.id || null;
+        console.log(`[select-manual-pbi] project_datasets row created: ${projectDatasetId}`);
+      }
+    } catch (pdErr) {
+      console.warn('[select-manual-pbi] project_datasets insert error:', pdErr);
+    }
+
+    // Log success event
     try {
       await supabaseAdmin.from('platform_events').insert({
         event_type: 'powerbi_dataset_active',
@@ -224,11 +272,12 @@ serve(async (req) => {
           dataset_status: 'active',
           connection_mode: 'assisted',
           discovery_status: 'partial',
+          project_dataset_id: projectDatasetId,
         },
       });
     } catch { /* best-effort */ }
 
-    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version}`);
+    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version} dataset=${projectDatasetId}`);
 
     return new Response(JSON.stringify({
       success: true,
