@@ -57,9 +57,13 @@ serve(async (req) => {
 
     console.log(`[select-manual-pbi] project=${project_id} table=${tableName} connection=${connection_id}`);
 
-    // Optional: Validate table exists in semantic model via DAX TOPN(1)
+    // Validate table exists AND extract actual columns via DAX TOPN(1)
     let tableValidated = false;
     let validationSkipped = false;
+    let extractedColumns: string[] = [];
+    let extractedRowCount = 0;
+    let daxAccessToken: string | null = null;
+
     if (client_id && client_secret && tenant_id && workspace_id && dataset_id) {
       try {
         const tokenUrl = `https://login.microsoftonline.com/${tenant_id}/oauth2/v2.0/token`;
@@ -75,11 +79,14 @@ serve(async (req) => {
           body: params.toString(),
         });
         if (tokenResp.ok) {
-          const { access_token } = await tokenResp.json();
+          const tokenData = await tokenResp.json();
+          daxAccessToken = tokenData.access_token;
           const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspace_id}/datasets/${dataset_id}/executeQueries`;
+
+          // Step 1: Get columns + sample via TOPN(1)
           const daxResp = await fetch(executeUrl, {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${access_token}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               queries: [{ query: `EVALUATE TOPN(1, '${tableName}')` }],
               serializerSettings: { includeNulls: true },
@@ -87,10 +94,41 @@ serve(async (req) => {
           });
           if (daxResp.ok) {
             tableValidated = true;
+            const daxResult = await daxResp.json();
+            const rawRows = daxResult.results?.[0]?.tables?.[0]?.rows || [];
+            if (rawRows.length > 0) {
+              // Extract column names - Power BI wraps them in [brackets]
+              const rawKeys = Object.keys(rawRows[0]);
+              extractedColumns = rawKeys.map(k => k.replace(/^\[/, '').replace(/\]$/, ''));
+              console.log(`[select-manual-pbi] Extracted ${extractedColumns.length} columns from DAX TOPN(1)`);
+            }
           } else {
-            // DAX failed - table may not exist or DAX is restricted
-            // Don't block - this is best-effort validation
             console.warn(`[select-manual-pbi] DAX validation failed for table '${tableName}', proceeding anyway`);
+          }
+
+          // Step 2: Try to get approximate row count via COUNTROWS
+          if (daxAccessToken && tableValidated) {
+            try {
+              const countResp = await fetch(executeUrl, {
+                method: 'POST',
+                headers: { 'Authorization': `Bearer ${daxAccessToken}`, 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  queries: [{ query: `EVALUATE ROW("cnt", COUNTROWS('${tableName}'))` }],
+                  serializerSettings: { includeNulls: true },
+                }),
+              });
+              if (countResp.ok) {
+                const countResult = await countResp.json();
+                const countRows = countResult.results?.[0]?.tables?.[0]?.rows || [];
+                if (countRows.length > 0) {
+                  const cntVal = countRows[0]?.['[cnt]'] ?? countRows[0]?.cnt;
+                  extractedRowCount = typeof cntVal === 'number' ? cntVal : parseInt(String(cntVal), 10) || 0;
+                  console.log(`[select-manual-pbi] COUNTROWS = ${extractedRowCount}`);
+                }
+              }
+            } catch (cntErr) {
+              console.warn('[select-manual-pbi] COUNTROWS failed:', cntErr);
+            }
           }
         }
       } catch (err) {
@@ -99,6 +137,10 @@ serve(async (req) => {
     } else {
       validationSkipped = true;
     }
+
+    // Use extracted data or fallback minimums
+    const finalColCount = extractedColumns.length > 0 ? extractedColumns.length : 1;
+    const finalRowCount = extractedRowCount > 0 ? extractedRowCount : 1;
 
     // Log submission event
     try {
