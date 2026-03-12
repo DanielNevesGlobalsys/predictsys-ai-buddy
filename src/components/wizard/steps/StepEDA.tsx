@@ -334,8 +334,8 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
-            {/* EDA failed */}
-            {edaSSOT.eda_status === "failed" && !edaRunning && (
+            {/* EDA failed — show retry (but not for virtual datasets since they'll handle it via calculate-eda) */}
+            {edaSSOT.eda_status === "failed" && !edaRunning && !isVirtualDataset && (
               <div className="p-4 rounded-lg border bg-destructive/10 border-destructive/30 space-y-3">
                 <div className="flex items-center gap-3">
                   <AlertTriangle className="w-5 h-5 text-destructive" />
@@ -353,8 +353,23 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
               </div>
             )}
 
+            {/* Virtual dataset info — Power BI / external */}
+            {isVirtualDataset && !edaReady && !edaRunning && (
+              <div className="p-4 rounded-lg border bg-secondary/10 border-secondary/30 space-y-2">
+                <div className="flex items-center gap-3">
+                  <Info className="w-5 h-5 text-secondary" />
+                  <div>
+                    <p className="text-sm font-semibold">Dataset externo (Power BI)</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Os dados residem na fonte externa. A análise exploratória detalhada estará disponível após a importação completa dos dados. Você pode avançar para a próxima etapa.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* EDA succeeded — show EDADisplay */}
-            {edaReady && projectData.id && (
+            {edaReady && projectData.id && !isVirtualDataset && (
               <>
                 <div className="flex items-center justify-end">
                   <Button variant="outline" size="sm" onClick={handleRecalculate} disabled={edaCalculating}>
