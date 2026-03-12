@@ -69,6 +69,7 @@ interface DiagnosticResult {
   columns_method?: string;
   sample_method?: string;
   row_count_method?: string;
+  source_type_persisted?: string;
   raw_errors?: {
     columns?: unknown;
     sample?: unknown;
