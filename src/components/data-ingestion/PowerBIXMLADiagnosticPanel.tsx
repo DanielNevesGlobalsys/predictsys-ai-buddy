@@ -131,7 +131,7 @@ export default function PowerBIXMLADiagnosticPanel({
             connection_id: connectionId,
             workspace_id: workspaceId,
             dataset_id: datasetId,
-            table_name: tableName,
+            table_name: selectedTable || tableName,
             materialize: doMaterialize,
           },
         });
