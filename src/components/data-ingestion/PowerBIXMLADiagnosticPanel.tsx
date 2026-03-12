@@ -319,7 +319,7 @@ export default function PowerBIXMLADiagnosticPanel({
           )}
 
           {!selectedTable && (
-            <div className="flex items-center gap-2 text-xs text-yellow-600">
+            <div className="flex items-center gap-2 text-xs text-destructive">
               <AlertTriangle className="w-3.5 h-3.5" />
               Selecione uma tabela para continuar.
             </div>
