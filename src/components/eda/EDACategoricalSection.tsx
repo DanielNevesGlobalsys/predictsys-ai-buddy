@@ -142,7 +142,8 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
             <TableBody>
               {stats.map((stat) => {
                 const topCat = (stat.top_categories ?? [])[0];
-                const topPercent = topCat ? ((topCat.count / totalRows) * 100).toFixed(1) : "0";
+                const hasRealData = stat.distinct_count != null && stat.distinct_count > 0;
+                const topPercent = topCat && topCat.count > 0 ? ((topCat.count / totalRows) * 100).toFixed(1) : "—";
                 return (
                   <TableRow
                     key={stat.id}
@@ -151,14 +152,24 @@ const EDACategoricalSection = ({ stats, totalRows }: EDACategoricalSectionProps)
                     style={{ cursor: "pointer" }}
                   >
                     <TableCell className="font-medium">{stat.column_name}</TableCell>
-                    <TableCell className="text-right">{stat.distinct_count}</TableCell>
-                    <TableCell>
-                      {topCat?.category || "-"}
-                      <span className="text-muted-foreground ml-1">
-                        ({topCat?.count.toLocaleString() || 0})
-                      </span>
+                    <TableCell className="text-right">
+                      {stat.distinct_count != null ? stat.distinct_count : <span className="text-muted-foreground">—</span>}
                     </TableCell>
-                    <TableCell className="text-right">{topPercent}%</TableCell>
+                    <TableCell>
+                      {topCat && topCat.count > 0 ? (
+                        <>
+                          {topCat.category}
+                          <span className="text-muted-foreground ml-1">
+                            ({topCat.count.toLocaleString()})
+                          </span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {hasRealData ? `${topPercent}%` : <span className="text-muted-foreground">—</span>}
+                    </TableCell>
                     <TableCell>
                       <div className="flex gap-1 flex-wrap">
                         {hasHighCardinality(stat) && (
