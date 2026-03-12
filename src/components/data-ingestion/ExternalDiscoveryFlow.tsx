@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import DiscoveryGrid from "./DiscoveryGrid";
 import ObjectInspectionModal from "./ObjectInspectionModal";
 import SourceConnectionModal, { mapSourceToConnector } from "./SourceConnectionModal";
+import PowerBIManualAssistedPanel from "./PowerBIManualAssistedPanel";
 import type { ProjectData } from "../wizard/WizardContainer";
 
 interface ExternalDiscoveryFlowProps {
