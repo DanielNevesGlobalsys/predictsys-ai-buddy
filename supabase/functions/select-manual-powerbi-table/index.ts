@@ -350,17 +350,19 @@ serve(async (req) => {
           dataset_version: result?.dataset_version,
           dataset_status: 'active',
           connection_mode: 'assisted',
-          discovery_status: 'partial',
+          discovery_status: extractedColumns.length > 0 ? 'full' : 'partial',
           project_dataset_id: projectDatasetId,
+          columns_extracted: extractedColumns.length,
+          row_count: finalRowCount,
         },
       });
     } catch { /* best-effort */ }
 
-    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version} dataset=${projectDatasetId}`);
+    console.log(`[select-manual-pbi] Success: manifest=${result?.manifest_id} version=${result?.dataset_version} dataset=${projectDatasetId} cols=${finalColCount} rows=${finalRowCount}`);
 
     return new Response(JSON.stringify({
       success: true,
-      connection_status: 'connected_partial_discovery',
+      connection_status: extractedColumns.length > 0 ? 'connected_full_discovery' : 'connected_partial_discovery',
       dataset_status: 'active',
       selection_mode: 'manual_assisted',
       manual_table_name: tableName,
@@ -368,7 +370,13 @@ serve(async (req) => {
       dataset_version: result?.dataset_version,
       project_dataset_id: projectDatasetId,
       table_validated: tableValidated,
-      message: 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
+      columns_extracted: extractedColumns.length,
+      column_names: extractedColumns,
+      row_count: finalRowCount,
+      col_count: finalColCount,
+      message: extractedColumns.length > 0
+        ? `Tabela '${tableName}' ativada com ${extractedColumns.length} colunas e ~${finalRowCount} linhas.`
+        : 'Tabela manual selecionada com sucesso. Dataset ativo registrado para este projeto.',
     }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' }, status: 200 });
 
   } catch (error: unknown) {
