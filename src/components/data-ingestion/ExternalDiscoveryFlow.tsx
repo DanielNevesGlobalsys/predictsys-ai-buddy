@@ -9,6 +9,7 @@ import { supabase } from "@/integrations/supabase/client";
 import DiscoveryGrid from "./DiscoveryGrid";
 import ObjectInspectionModal from "./ObjectInspectionModal";
 import SourceConnectionModal, { mapSourceToConnector } from "./SourceConnectionModal";
+import PowerBIManualAssistedPanel from "./PowerBIManualAssistedPanel";
 import type { ProjectData } from "../wizard/WizardContainer";
 
 interface ExternalDiscoveryFlowProps {
@@ -29,6 +30,7 @@ const ExternalDiscoveryFlow = ({
   const { currentOrganization } = useOrganization();
   const [hasInitialized, setHasInitialized] = useState(false);
   const [showSourceModal, setShowSourceModal] = useState(false);
+  const [manualTableName, setManualTableName] = useState("");
 
   const {
     connections,
@@ -186,8 +188,49 @@ const ExternalDiscoveryFlow = ({
         </Card>
       )}
 
-      {/* Discovery fallback state with source trace */}
-      {showFallbackUI && (
+      {/* Power BI Manual Assisted Selection Mode */}
+      {showFallbackUI && connectorType === 'powerbi' && (
+        <PowerBIManualAssistedPanel
+          connectionStatus="connected_partial_discovery"
+          message={
+            sourceDetected
+              ? 'Conexão validada com sucesso. O dataset do Power BI foi acessado, mas o discovery automático completo do semantic model não está disponível para este caso. Você pode continuar informando manualmente a tabela desejada ou usar a fonte analítica detectada.'
+              : discoveryFallback?.user_message || discoveryRun?.error_message || 'O dataset do Power BI foi localizado, mas a inspeção automática do semantic model não pôde ser concluída.'
+          }
+          discoveryAvailable={false}
+          semanticModelType={effectiveSourceTrace?.semantic_model_type || undefined}
+          sourceTrace={sourceDetected && effectiveSourceTrace ? {
+            datasource_type: effectiveSourceTrace.datasource_type,
+            datasource_server: effectiveSourceTrace.datasource_server,
+            datasource_database: effectiveSourceTrace.datasource_database,
+          } : null}
+          manualTableName={manualTableName}
+          onManualTableNameChange={setManualTableName}
+          onRetryDiscovery={handleRediscover}
+          onUseDetectedSource={handleSourceCTAClick}
+          onImportFile={onDataReady}
+          onContinuePartial={onDataReady}
+          onSelectTableManually={() => {
+            if (manualTableName.trim()) {
+              // Log the manual selection event
+              try {
+                Promise.resolve(supabase.from("platform_events").insert({
+                  event_type: "powerbi_manual_table_selected",
+                  project_id: projectData.id,
+                  source: "connector_powerbi",
+                  status: "info",
+                  metadata: { table_name: manualTableName, connection_id: activeConnectionId },
+                }));
+              } catch { /* best-effort */ }
+              onDataReady();
+            }
+          }}
+          isRetrying={isDiscovering}
+        />
+      )}
+
+      {/* Discovery fallback state (non-Power BI connectors) */}
+      {showFallbackUI && connectorType !== 'powerbi' && (
         <Card className="p-5 border-yellow-500/30 bg-yellow-500/5">
           <div className="flex items-start gap-3">
             <AlertTriangle className="w-5 h-5 text-yellow-600 mt-0.5 flex-shrink-0" />
@@ -200,8 +243,8 @@ const ExternalDiscoveryFlow = ({
                 </p>
                 <p className="text-sm text-muted-foreground mt-1">
                   {sourceDetected
-                    ? 'Foi possível estabelecer conexão com o dataset do Power BI, mas o discovery automático do semantic model não está disponível para este caso. Detectamos uma possível fonte analítica subjacente e recomendamos conectar diretamente essa fonte para uma ingestão mais estável no PredictSys.'
-                    : discoveryFallback?.user_message || discoveryRun?.error_message || 'O dataset do Power BI foi localizado, mas a inspeção automática do semantic model não pôde ser concluída. Você pode usar um arquivo exportado ou conectar manualmente a fonte analítica de origem.'
+                    ? 'Foi possível estabelecer conexão com o dataset, mas o discovery automático não está disponível para este caso. Detectamos uma possível fonte analítica subjacente e recomendamos conectar diretamente essa fonte para uma ingestão mais estável no PredictSys.'
+                    : discoveryFallback?.user_message || discoveryRun?.error_message || 'O dataset foi localizado, mas a inspeção automática não pôde ser concluída. Você pode usar um arquivo exportado ou conectar manualmente a fonte analítica de origem.'
                   }
                 </p>
               </div>

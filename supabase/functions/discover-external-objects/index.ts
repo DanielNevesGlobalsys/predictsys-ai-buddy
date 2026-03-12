@@ -926,8 +926,15 @@ serve(async (req) => {
         })
         .eq("id", runId);
 
-      // Update connection status
-      const connStatus = 'validated';
+      // Update connection status with granular Power BI states
+      let connStatus = 'validated';
+      if (connectorType === 'powerbi') {
+        if (isPowerBIFallbackFailure) {
+          connStatus = 'connected_partial_discovery';
+        } else if (objects.length > 0) {
+          connStatus = 'connected_full_discovery';
+        }
+      }
       const connMessage = isPowerBIFallbackFailure
         ? `Discovery parcial: DAX falhou, conexão válida. ${powerbiResult?.reason_code}`
         : `Discovery completed: ${objects.length} objects found`;

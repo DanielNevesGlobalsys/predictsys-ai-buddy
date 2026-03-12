@@ -12,6 +12,7 @@ import { useToast } from "@/hooks/use-toast";
 import type { ProjectData } from "../wizard/WizardContainer";
 import DatabricksSourceModeSelector from "./DatabricksSourceModeSelector";
 import ExternalDiscoveryFlow from "./ExternalDiscoveryFlow";
+import PowerBIManualAssistedPanel from "./PowerBIManualAssistedPanel";
 
 interface CloudConnectorSectionProps {
   projectData: ProjectData;
@@ -138,9 +139,14 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
     setFormData(prev => ({ ...prev, [field]: value }));
   };
 
+  // Power BI partial discovery state
+  const [pbiTestResult, setPbiTestResult] = useState<any>(null);
+  const [manualTableName, setManualTableName] = useState("");
+
   const handleTestConnection = async () => {
     setTestStatus("testing");
     setTestMessage("");
+    setPbiTestResult(null);
 
     try {
       // Use specific function for Databricks
@@ -156,6 +162,23 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
       });
 
       if (error) throw error;
+
+      // Power BI returns granular connection_status
+      if (selectedConnector === "powerbi" && data.connection_status) {
+        setPbiTestResult(data);
+        if (data.success) {
+          setTestStatus("success");
+          setTestMessage(data.message);
+          // Store manual table name if provided
+          if (manualTableName.trim()) {
+            setFormData(prev => ({ ...prev, table_name: manualTableName }));
+          }
+        } else {
+          setTestStatus("error");
+          setTestMessage(data.message);
+        }
+        return;
+      }
 
       if (data.success) {
         setTestStatus("success");
@@ -783,8 +806,42 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
               <Label htmlFor="isContinuous">{t("dataIngestion.cloud.continuousConnection")}</Label>
             </div>
 
-            {/* Test connection status */}
-            {testMessage && (
+            {/* Power BI Manual Assisted Panel */}
+            {selectedConnector === "powerbi" && pbiTestResult && testStatus === "success" && (
+              <PowerBIManualAssistedPanel
+                connectionStatus={pbiTestResult.connection_status}
+                message={pbiTestResult.message}
+                discoveryAvailable={pbiTestResult.discovery_available}
+                semanticModelType={pbiTestResult.semantic_model_type}
+                sourceTrace={pbiTestResult.source_trace}
+                manualTableName={manualTableName}
+                onManualTableNameChange={(val) => {
+                  setManualTableName(val);
+                  handleInputChange("table_name", val);
+                }}
+                onRetryDiscovery={handleTestConnection}
+                onUseDetectedSource={() => {
+                  toast({ title: "Redirecionando", description: "Configure a conexão direta com a fonte detectada usando os dados preenchidos." });
+                }}
+                onImportFile={onDataReady}
+                onContinuePartial={() => {
+                  if (manualTableName.trim()) {
+                    handleInputChange("table_name", manualTableName);
+                  }
+                  handleSaveConnection();
+                }}
+                onSelectTableManually={() => {
+                  if (manualTableName.trim()) {
+                    handleInputChange("table_name", manualTableName);
+                    handleSaveConnection();
+                  }
+                }}
+                isRetrying={false}
+              />
+            )}
+
+            {/* Test connection status (non-Power BI or error state) */}
+            {testMessage && !(selectedConnector === "powerbi" && pbiTestResult && testStatus === "success") && (
               <div className={`flex items-start gap-3 p-3 rounded-lg ${
                 testStatus === "success" 
                   ? "bg-accent/10 border border-accent/30" 
