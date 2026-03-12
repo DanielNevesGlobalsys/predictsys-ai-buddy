@@ -117,6 +117,7 @@ export default function PowerBIXMLADiagnosticPanel({
   const [canMaterialize, setCanMaterialize] = useState(false);
   const [materialized, setMaterialized] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [selectedTable, setSelectedTable] = useState<string>("");
 
   const runDiagnostic = useCallback(
     async (doMaterialize = false) => {
