@@ -1467,7 +1467,7 @@ Deno.serve(async (req) => {
     // These have project_columns populated but NO physical file in storage.
     // We must build EDA from persisted metadata, not from CSV/Parquet files.
     if (virtualDatasetContext.isVirtualDataset) {
-      console.log(`[calculate-eda] eda_detected_powerbi_materialized source_type=${virtualDatasetContext.sourceType}`);
+      console.log(`[calculate-eda] eda_detected_powerbi_materialized source_type=${virtualDatasetContext.sourceType} connection_mode=${virtualDatasetContext.connectionMode || "unknown"}`);
 
       // Check if project_columns are already populated (materialized schema)
       const { data: pbiColumns } = await supabase
