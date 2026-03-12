@@ -603,8 +603,13 @@ serve(async (req) => {
     let effectiveTableName: string | null = null;
     let effectiveTableSource = "none";
 
+    // Sort candidate tables by business relevance (facts first, calendars last)
+    const sortedCandidates = [...discoveredTables].sort(
+      (a, b) => tableBusinessScore(b.effective_name) - tableBusinessScore(a.effective_name),
+    );
+
     const candidateNamePool = uniqueBy(
-      discoveredTables.map((t) => t.effective_name),
+      sortedCandidates.map((t) => t.effective_name),
       (name) => name,
     );
 
@@ -617,6 +622,7 @@ serve(async (req) => {
       return result.ok;
     };
 
+    // If user explicitly requested a table, probe it first; otherwise use ranked order
     const tableProbeQueue = uniqueBy(
       [
         ...requestedCandidates,
