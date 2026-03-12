@@ -85,7 +85,17 @@ export default function TDEProfileCard({ projectId }: TDEProfileCardProps) {
       if (data?.context) {
         const ctx = data.context as Record<string, any>;
         if (ctx.tde_profile) {
-          setProfile(ctx.tde_profile as TDEProfile);
+          const p = ctx.tde_profile as Record<string, any>;
+          // Ensure dataset_shape_label always has a value (defensive for virtual datasets)
+          if (!p.dataset_shape_label) {
+            p.dataset_shape_label = p.is_virtual_dataset ? "Dataset externo / virtual" : "Não disponível";
+          }
+          if (!p.candidates) {
+            p.candidates = { entity_candidates: [], time_candidates: [], value_candidates: [], status_candidates: [], text_candidates: [] };
+          }
+          if (!p.summary) p.summary = [];
+          if (!p.gates) p.gates = [];
+          setProfile(p as TDEProfile);
           setHasRun(true);
         }
       }
