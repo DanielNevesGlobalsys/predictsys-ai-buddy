@@ -106,6 +106,25 @@ const ignoredReasonForTable = (name: string, isHidden?: boolean): string | null 
   return null;
 };
 
+/** Score a table name for business relevance (higher = more likely business table). */
+const tableBusinessScore = (name: string): number => {
+  const lower = name.toLowerCase();
+  // Strong negative signals — calendar / date / dimension-date / measures
+  if (/^d?_?calend[aá]rio$|^d?_?calendar$|^dim_?date$|^dim_?calendar/i.test(lower)) return -10;
+  if (/calend[aá]rio|calendar|localdate|datetable/i.test(lower)) return -5;
+  if (/^_?(medidas?|measures?)$/i.test(lower)) return -8;
+  // Positive signals — fact / transactional tables
+  if (/^fat[oa]?_|^fato_|^fact_|^f_/i.test(lower)) return 20;
+  if (/vendas|sales|orders|pedidos|transac|receita|revenue|faturamento/i.test(lower)) return 15;
+  if (/clientes?|customers?|leads?|contacts?|accounts?/i.test(lower)) return 10;
+  if (/^dim_/i.test(lower)) return 2; // dimensions are ok but lower priority than facts
+  // Neutral
+  return 5;
+};
+
+/** Canonical source_type for Power BI (matches project_dataset_state check constraint). */
+const PBI_SOURCE_TYPE = "powerbi";
+
 const pickRowValue = (row: Record<string, unknown>, keys: string[]): unknown => {
   for (const key of keys) {
     if (Object.prototype.hasOwnProperty.call(row, key)) return row[key];
@@ -584,8 +603,13 @@ serve(async (req) => {
     let effectiveTableName: string | null = null;
     let effectiveTableSource = "none";
 
+    // Sort candidate tables by business relevance (facts first, calendars last)
+    const sortedCandidates = [...discoveredTables].sort(
+      (a, b) => tableBusinessScore(b.effective_name) - tableBusinessScore(a.effective_name),
+    );
+
     const candidateNamePool = uniqueBy(
-      discoveredTables.map((t) => t.effective_name),
+      sortedCandidates.map((t) => t.effective_name),
       (name) => name,
     );
 
@@ -598,6 +622,7 @@ serve(async (req) => {
       return result.ok;
     };
 
+    // If user explicitly requested a table, probe it first; otherwise use ranked order
     const tableProbeQueue = uniqueBy(
       [
         ...requestedCandidates,
@@ -1043,8 +1068,8 @@ serve(async (req) => {
         });
       } else {
         const connectionMode = ["TMSCHEMA_COLUMNS_TABLEID", "DISCOVER_CSDL_METADATA"].includes(columnsMethod)
-          ? "powerbi_xmla"
-          : "powerbi_executequeries";
+          ? "xmla"
+          : "executequeries";
 
         const schemaJson = finalColumns.map((col, index) => ({
           name: col.column_name,
@@ -1056,7 +1081,7 @@ serve(async (req) => {
         try {
           const { data: finalizeResult, error: finalizeError } = await supabaseAdmin.rpc("rpc_finalize_ingestion", {
             p_project_id: project_id,
-            p_source_type: "powerbi_materialized",
+            p_source_type: PBI_SOURCE_TYPE,
             p_config_hash: `pbi_materialized_${project_id}_${effectiveTableName}`,
             p_dataset_id: null,
             p_source_pointer: {
@@ -1125,7 +1150,7 @@ serve(async (req) => {
                 sample_rows: sampleRows.length,
                 columns_count: finalColumns.length,
                 is_active: true,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 source_metadata: {
                   connector_type: "powerbi",
                   connection_mode: connectionMode,
@@ -1162,7 +1187,7 @@ serve(async (req) => {
             await supabaseAdmin.from("project_dataset_state").upsert(
               {
                 project_id,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 row_count: finalRowCount,
                 col_count: finalColumns.length,
                 active_schema_json: schemaJson,
@@ -1207,7 +1232,7 @@ serve(async (req) => {
               detail: `Dataset materializado com schema real (${finalColumns.length} colunas / ${finalRowCount} linhas).`,
               data: {
                 project_dataset_id: datasetRow?.id,
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 connection_mode: connectionMode,
               },
               duration_ms: Date.now() - started,
@@ -1227,7 +1252,7 @@ serve(async (req) => {
                 row_count_method: rowCountMethod,
               },
               response_summary: {
-                source_type: "powerbi_materialized",
+                source_type: PBI_SOURCE_TYPE,
                 connection_mode: connectionMode,
                 columns: finalColumns.length,
                 row_count: finalRowCount,
@@ -1281,7 +1306,13 @@ serve(async (req) => {
           all_ok: allOk,
         },
         ignored_internal_tables: ignoredTables,
-        candidate_tables: discoveredTables.map((t) => ({ discovered_name: t.discovered_name, effective_name: t.effective_name, source_method: t.source_method })),
+        candidate_tables: sortedCandidates.map((t) => ({
+          discovered_name: t.discovered_name,
+          effective_name: t.effective_name,
+          source_method: t.source_method,
+          business_score: tableBusinessScore(t.effective_name),
+        })),
+        source_type_persisted: PBI_SOURCE_TYPE,
         discovered_table_name: discoveredTableName,
         effective_query_table_name: effectiveTableName,
         table_source_method: effectiveTableSource,

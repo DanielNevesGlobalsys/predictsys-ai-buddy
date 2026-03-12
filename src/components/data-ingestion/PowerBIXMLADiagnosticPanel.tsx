@@ -2,6 +2,7 @@ import { useState, useCallback } from "react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import {
   CheckCircle,
@@ -51,6 +52,7 @@ interface CandidateTable {
   discovered_name: string;
   effective_name: string;
   source_method: string;
+  business_score?: number;
 }
 
 interface DiagnosticResult {
@@ -67,6 +69,7 @@ interface DiagnosticResult {
   columns_method?: string;
   sample_method?: string;
   row_count_method?: string;
+  source_type_persisted?: string;
   raw_errors?: {
     columns?: unknown;
     sample?: unknown;
@@ -114,6 +117,7 @@ export default function PowerBIXMLADiagnosticPanel({
   const [canMaterialize, setCanMaterialize] = useState(false);
   const [materialized, setMaterialized] = useState(false);
   const [expandedSteps, setExpandedSteps] = useState<Set<string>>(new Set());
+  const [selectedTable, setSelectedTable] = useState<string>("");
 
   const runDiagnostic = useCallback(
     async (doMaterialize = false) => {
@@ -127,7 +131,7 @@ export default function PowerBIXMLADiagnosticPanel({
             connection_id: connectionId,
             workspace_id: workspaceId,
             dataset_id: datasetId,
-            table_name: tableName,
+            table_name: selectedTable || tableName,
             materialize: doMaterialize,
           },
         });
@@ -163,7 +167,7 @@ export default function PowerBIXMLADiagnosticPanel({
         setMaterializing(false);
       }
     },
-    [projectId, connectionId, workspaceId, datasetId, tableName, onMaterializationSuccess],
+    [projectId, connectionId, workspaceId, datasetId, tableName, selectedTable, onMaterializationSuccess],
   );
 
   const toggleStep = (step: string) => {
@@ -232,7 +236,41 @@ export default function PowerBIXMLADiagnosticPanel({
             <Badge variant="outline">Colunas: {result.columns_method || "-"}</Badge>
             <Badge variant="outline">Amostra: {result.sample_method || "-"}</Badge>
             <Badge variant="outline">Row count: {result.row_count_method || "-"}</Badge>
+            {result.source_type_persisted && (
+              <Badge variant="default" className="text-xs">source_type: {result.source_type_persisted}</Badge>
+            )}
           </div>
+
+          {/* Table selector when multiple candidates exist */}
+          {(result.candidate_tables?.length ?? 0) > 1 && !materialized && (
+            <div className="rounded border border-primary/20 p-3 bg-primary/5 text-xs space-y-2">
+              <p className="font-medium text-sm">Selecione a tabela para materializar</p>
+              <p className="text-muted-foreground">Múltiplas tabelas reais encontradas. Selecione a tabela de negócio principal:</p>
+              <Select value={selectedTable} onValueChange={setSelectedTable}>
+                <SelectTrigger className="text-xs">
+                  <SelectValue placeholder="Escolha a tabela alvo" />
+                </SelectTrigger>
+                <SelectContent>
+                  {result.candidate_tables!.map((t) => (
+                    <SelectItem key={t.effective_name} value={t.effective_name}>
+                      {t.effective_name} {t.business_score != null ? `(score: ${t.business_score})` : ""}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {selectedTable && (
+                <Button
+                  variant="default"
+                  size="sm"
+                  onClick={() => runDiagnostic(false)}
+                  disabled={running || materializing}
+                >
+                  <Activity className="w-4 h-4 mr-1" />
+                  Re-diagnosticar com "{selectedTable}"
+                </Button>
+              )}
+            </div>
+          )}
 
           {!!result.ignored_internal_tables?.length && (
             <div className="rounded border border-border p-2 bg-muted/20 text-xs">
