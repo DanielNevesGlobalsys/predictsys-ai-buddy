@@ -426,10 +426,10 @@ const StepEDA = ({ projectData, onNext, onBack, loading }: StepEDAProps) => {
           </Button>
           <Button
             onClick={() => onNext({ status: "eda_complete" })}
-            disabled={loading || noDataset || !edaReady}
+            disabled={loading || noDataset || !canAdvance}
             className="bg-gradient-primary hover:shadow-hover transition-all"
           >
-            {noDataset ? "Dataset ausente" : edaRunning ? "Calculando EDA…" : edaReady ? t("common.next") : "Aguardando EDA"}
+            {noDataset ? "Dataset ausente" : edaRunning ? "Calculando EDA…" : canAdvance ? t("common.next") : "Aguardando EDA"}
           </Button>
         </div>
       </div>
