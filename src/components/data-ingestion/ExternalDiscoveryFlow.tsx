@@ -35,6 +35,8 @@ const ExternalDiscoveryFlow = ({
   const [manualTableName, setManualTableName] = useState("");
   const [manualSubmissionStatus, setManualSubmissionStatus] = useState<"idle" | "submitting" | "success" | "error">("idle");
   const [manualSubmissionError, setManualSubmissionError] = useState<string | null>(null);
+  const [autoMaterializing, setAutoMaterializing] = useState(false);
+  const [connectionConfig, setConnectionConfig] = useState<Record<string, any> | null>(null);
 
   const {
     connections,
