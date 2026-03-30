@@ -284,7 +284,7 @@ const WizardContainer = () => {
   };
 
   const handleDashboardNext = () => {
-    setCurrentStep(9);
+    setCurrentStep(10);
   };
   
   const handleFinalComplete = async () => {
