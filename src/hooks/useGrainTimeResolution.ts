@@ -23,7 +23,7 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       // Fetch project data
       const [{ data: settings }, { data: cols }, { data: dsState }] = await Promise.all([
         supabase.from("project_settings").select("objective, entity_key, time_anchor_column, problem_type, ingestion_rows_detected, ingestion_cols_detected").eq("project_id", projectId).maybeSingle(),
-        supabase.from("project_columns").select("column_name, inferred_type, null_percent, distinct_count").eq("project_id", projectId),
+        supabase.from("project_columns").select("column_name, inferred_type, distinct_count").eq("project_id", projectId),
         supabase.from("project_dataset_state").select("row_count, col_count, source_type").eq("project_id", projectId).maybeSingle(),
       ]);
 
