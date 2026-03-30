@@ -649,9 +649,53 @@ const StepTargetFeatures = ({
     });
   }, [lysSynthesis.loaded, lysSynthesis.recommendation, ssotLoaded, ssot.target_column, columns, targetColumn]);
 
+  // ═══ AUTO-RESOLUTION: Apply PRE results to local state ═══
+  useEffect(() => {
+    if (autoResAppliedRef.current) return;
+    if (!autoRes.resolved || autoRes.resolving) return;
+    if (columns.length === 0) return;
+    // Don't override if SSOT already has a target
+    if (ssot.target_column || targetColumn) return;
+
+    const r = autoRes.result;
+    if (!r.target_column) return;
+
+    // Validate target exists in columns
+    const targetExists = columns.some(c => c.name === r.target_column);
+    if (!targetExists) return;
+
+    autoResAppliedRef.current = true;
+
+    // Apply to local state
+    setTargetColumn(r.target_column);
+    if (r.problem_type) setInferredProblemType(r.problem_type);
+    if (r.entity_key && columns.some(c => c.name === r.entity_key)) setEntityKey(r.entity_key);
+    if (r.selected_features.length > 0) {
+      const validFeatures = r.selected_features.filter(f => columns.some(c => c.name === f));
+      if (validFeatures.length > 0) setSelectedFeatures(validFeatures);
+    }
+    if (r.excluded_features.length > 0) {
+      const validExcluded = r.excluded_features.filter(f => columns.some(c => c.name === f));
+      if (validExcluded.length > 0) setExcludedColumns(prev => [...new Set([...prev, ...validExcluded])]);
+    }
+
+    // Auto-persist to SSOT
+    autoRes.applyToSSOT(r);
+
+    // Persist target immediately
+    persistTargetSelection(r.target_column, "manual");
+
+    console.log("[StepTargetFeatures] Auto-resolution applied:", {
+      target: r.target_column,
+      problem_type: r.problem_type,
+      entity_key: r.entity_key,
+      features: r.selected_features.length,
+      confidence: r.confidence_score,
+      auto_fixes: r.auto_fix_details,
+    });
+  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
+
   // NOTE: We intentionally do NOT pre-fill target from event_candidates.
-  // event_candidate ≠ target. Target is often derived (e.g. "no purchase in 90 days").
-  // We only pre-fill entity_key + time_anchor (structural keys), not the target.
 
   // Store initial target on mount
   useEffect(() => {
