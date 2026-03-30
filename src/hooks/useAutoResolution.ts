@@ -2,8 +2,8 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 /**
- * Auto-resolution hook: runs PRE on mount, auto-applies results to SSOT,
- * and provides auto-fix capabilities.
+ * Auto-resolution hook: runs PRE on mount, auto-applies results to SSOT
+ * (project_settings + project_model_selection), triggers builder, and provides auto-fix.
  */
 
 export interface AutoResolutionResult {
@@ -41,6 +41,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
   const [resolving, setResolving] = useState(false);
   const [resolved, setResolved] = useState(false);
   const [applied, setApplied] = useState(false);
+  const [builderStatus, setBuilderStatus] = useState<"idle" | "running" | "done" | "error">("idle");
   const ranRef = useRef(false);
 
   const resolve = useCallback(async () => {
@@ -54,7 +55,6 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
 
       if (error || !data?.success || !data?.resolution) {
         console.warn("[useAutoResolution] PRE failed, using fallback", error || data?.error);
-        // Fallback: read from SSOT
         return await buildFallbackResult();
       }
 
@@ -73,7 +73,6 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       let problemType = prob.problem_type || "classification";
 
       if (!targetCol || tgt.mode === "blocked") {
-        // Attempt fallback target from SSOT
         const { data: settings } = await supabase
           .from("project_settings")
           .select("target_column")
@@ -112,10 +111,8 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       let excludeFeatures = fp.exclude_features || [];
       const blockedFeatures = fp.blocked_features || [];
 
-      // Remove target from features
       includeFeatures = includeFeatures.filter((f: string) => f !== targetCol);
       
-      // If no features, auto-select from columns
       if (includeFeatures.length === 0) {
         const { data: allCols } = await supabase
           .from("project_columns")
@@ -143,7 +140,6 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         }
       }
 
-      // Build insights
       const insights: AutoResolutionResult["insights"] = [
         { label: "Target definido", detail: targetCol || "Não encontrado", ok: !!targetCol },
         { label: "Dataset válido", detail: `${prob.dataset_shape_detected || "desconhecido"}`, ok: val.training_ready !== false },
@@ -213,12 +209,23 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
     return fallback;
   }, [projectId]);
 
-  // Auto-apply resolution to SSOT
+  /**
+   * ATOMIC apply: writes to project_settings + project_model_selection + triggers builder.
+   * This is the critical fix — ensures preflight reads the same state shown in the UI.
+   */
   const applyToSSOT = useCallback(async (res: AutoResolutionResult) => {
     if (!projectId || applied) return;
     if (!res.target_column) return;
 
     try {
+      console.log("[useAutoResolution] Applying atomically to SSOT...", {
+        target: res.target_column,
+        problem: res.problem_type,
+        entity: res.entity_key,
+        features: res.selected_features.length,
+      });
+
+      // 1. Update project_settings (SSOT)
       await supabase
         .from("project_settings")
         .upsert({
@@ -237,8 +244,52 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
           updated_at: new Date().toISOString(),
         } as any, { onConflict: "project_id" });
 
+      console.log("[useAutoResolution] project_settings updated");
+
+      // 2. Sync project_model_selection via atomic RPC (this is what preflight reads!)
+      const upsertRes = await supabase.functions.invoke("upsert-model-selection", {
+        body: {
+          project_id: projectId,
+          target_column: res.target_column,
+          problem_type: res.problem_type,
+          selected_features: res.selected_features,
+          excluded_features: res.excluded_features,
+        },
+      });
+
+      if (upsertRes.data?.success) {
+        console.log("[useAutoResolution] project_model_selection synced:", {
+          version: upsertRes.data.selection_version,
+          hash: upsertRes.data.target_hash,
+          changed: upsertRes.data.did_change,
+        });
+      } else {
+        console.warn("[useAutoResolution] model_selection upsert issue:", upsertRes.data?.error || upsertRes.error);
+      }
+
+      // 3. Auto-trigger builder to generate modeling dataset
+      if (res.selected_features.length >= 3) {
+        setBuilderStatus("running");
+        console.log("[useAutoResolution] Triggering build-modeling-dataset...");
+        try {
+          const builderRes = await supabase.functions.invoke("build-modeling-dataset", {
+            body: { project_id: projectId },
+          });
+          if (builderRes.data?.success || builderRes.data?.status === "READY") {
+            setBuilderStatus("done");
+            console.log("[useAutoResolution] Builder completed successfully");
+          } else {
+            setBuilderStatus("error");
+            console.warn("[useAutoResolution] Builder returned:", builderRes.data?.error || builderRes.data?.status);
+          }
+        } catch (builderErr) {
+          setBuilderStatus("error");
+          console.warn("[useAutoResolution] Builder failed (non-blocking):", builderErr);
+        }
+      }
+
       setApplied(true);
-      console.log("[useAutoResolution] Applied to SSOT:", res.target_column);
+      console.log("[useAutoResolution] FULL atomic apply complete:", res.target_column);
     } catch (err) {
       console.error("[useAutoResolution] Failed to apply to SSOT:", err);
     }
@@ -256,6 +307,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
     resolving,
     resolved,
     applied,
+    builderStatus,
     resolve,
     applyToSSOT,
     setResult,
