@@ -302,7 +302,7 @@ const ExternalDiscoveryFlow = ({
           onRetryDiscovery={handleRediscover}
           onUseDetectedSource={handleSourceCTAClick}
           onImportFile={onDataReady}
-          onContinuePartial={onDataReady}
+          onContinuePartial={handleAutoMaterialize}
           onSelectTableManually={async () => {
             if (!manualTableName.trim()) return;
             setManualSubmissionStatus("submitting");
