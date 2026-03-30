@@ -941,7 +941,10 @@ const StepTargetFeatures = ({
           </div>
         </div>
 
-        {/* ═══ BLOCO 3: STATUS REAL DO PIPELINE ═══ */}
+        {/* ═══ BLOCO 3: ESTRATÉGIA TEMPORAL & GRAIN ═══ */}
+        <GrainTimeStrategyPanel resolution={grainTime.resolution} loading={grainTime.loading} />
+
+        {/* ═══ BLOCO 4: STATUS REAL DO PIPELINE ═══ */}
         <div className="rounded-xl border border-border bg-card p-5 space-y-3">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-primary" />
