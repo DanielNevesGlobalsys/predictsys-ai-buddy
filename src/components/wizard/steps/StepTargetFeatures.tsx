@@ -109,6 +109,10 @@ const StepTargetFeatures = ({
   const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
   const autoResAppliedRef = useRef(false);
 
+  // ═══ GRAIN + TIME RESOLUTION ═══
+  const grainTime = useGrainTimeResolution(projectData.id);
+  const grainTimeRanRef = useRef(false);
+
   // ═══ SSOT: Single Source of Truth from project_settings ═══
   const { ssot, loaded: ssotLoaded, load: loadSSOT, activeMode, isBuilderReady, isBuilderStale } = useTargetFeaturesSSOT(projectData.id);
 
