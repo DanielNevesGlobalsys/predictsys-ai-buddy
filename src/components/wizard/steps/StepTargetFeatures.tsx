@@ -1205,12 +1205,138 @@ const StepTargetFeatures = ({
             <Target className="w-7 h-7 text-primary-foreground" />
           </div>
           <h2 className="text-2xl font-display font-bold mb-1">
-            {t("stepVariables.title")}
+            Variável Alvo &amp; Features
           </h2>
           <p className="text-sm text-muted-foreground">
-            Configure o alvo e as variáveis com base no objetivo do seu projeto.
+            Resolução inteligente + configuração editável do problema preditivo.
           </p>
         </div>
+
+        {/* ═══ AUTO-RESOLUTION BANNER ═══ */}
+        {autoRes.resolving && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-primary/20 bg-primary/5 animate-pulse">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <div>
+              <p className="text-sm font-medium">Analisando dados e formulando problema preditivo...</p>
+              <p className="text-xs text-muted-foreground">O PRE está resolvendo target, entidade e features automaticamente.</p>
+            </div>
+          </div>
+        )}
+
+        {autoRes.resolved && autoRes.result.target_column && (
+          <div className="rounded-xl border border-primary/20 bg-primary/5 overflow-hidden">
+            <div className="p-4 flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Brain className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-sm font-semibold">Sugestão Inteligente</h3>
+                  {autoRes.result.auto_fix_applied && (
+                    <Badge variant="outline" className="text-[10px] py-0">
+                      <Wand2 className="w-3 h-3 mr-1" /> Auto-fix
+                    </Badge>
+                  )}
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 ${
+                      autoRes.result.confidence_score >= 0.7 ? "border-green-500/50 text-green-600" :
+                      autoRes.result.confidence_score >= 0.5 ? "border-yellow-500/50 text-yellow-600" :
+                      "border-destructive/50 text-destructive"
+                    }`}
+                  >
+                    {Math.round(autoRes.result.confidence_score * 100)}% confiança
+                  </Badge>
+                  <Badge variant="secondary" className="text-[10px] py-0">
+                    ✔ Aplicado automaticamente
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Target:</span>{" "}
+                    <span className="font-medium">{autoRes.result.target_column}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Problema:</span>{" "}
+                    <span className="font-medium">{autoRes.result.problem_type === "classification" ? "Classificação" : "Regressão"}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Entity:</span>{" "}
+                    <span className="font-medium">{autoRes.result.entity_key || "—"}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Tempo:</span>{" "}
+                    <span className="font-medium">{autoRes.result.time_column || "Não detectado"}</span>
+                  </div>
+                </div>
+                {autoRes.result.justification && (
+                  <p className="text-xs text-muted-foreground mt-2 italic">{autoRes.result.justification}</p>
+                )}
+              </div>
+              <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => autoRes.resolve()}>
+                <RefreshCw className="w-3 h-3 mr-1" /> Reexecutar
+              </Button>
+            </div>
+
+            {/* Auto-fix details */}
+            {autoRes.result.auto_fix_details.length > 0 && (
+              <div className="px-4 pb-3 space-y-1">
+                {autoRes.result.auto_fix_details.map((detail, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Wand2 className="w-3 h-3 text-primary" />
+                    <span>{detail}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Issues */}
+            {autoRes.result.issues.length > 0 && (
+              <div className="px-4 pb-3 space-y-1">
+                {autoRes.result.issues.slice(0, 3).map((issue, i) => (
+                  <div key={i} className={`flex items-center gap-2 text-xs ${
+                    issue.severity === "block" ? "text-destructive" :
+                    issue.severity === "warn" ? "text-yellow-600" :
+                    "text-muted-foreground"
+                  }`}>
+                    {issue.severity === "block" ? <XCircle className="w-3 h-3" /> :
+                     issue.severity === "warn" ? <AlertTriangle className="w-3 h-3" /> :
+                     <Info className="w-3 h-3" />}
+                    <span>{issue.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ EXPLAINABILITY SECTION ═══ */}
+        {autoRes.resolved && autoRes.result.insights.length > 0 && (
+          <Accordion type="single" collapsible className="border rounded-lg bg-card">
+            <AccordionItem value="insights" className="border-0">
+              <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Insights da resolução</span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="px-4 pb-3">
+                <div className="space-y-2">
+                  {autoRes.result.insights.map((insight, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      {insight.ok
+                        ? <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+                        : <AlertCircle className="w-3.5 h-3.5 text-yellow-500" />
+                      }
+                      <span className="font-medium">{insight.label}:</span>
+                      <span className="text-muted-foreground">{insight.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        )}
 
         {/* Hidden: load column inference data for target selector enrichment */}
         {projectData.id && !advancedMode && (
