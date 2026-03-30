@@ -70,10 +70,94 @@ const ExternalDiscoveryFlow = ({
     init();
   }, [hasInitialized, projectData.id, currentOrganization?.id, connections, dataSourceId, connectorType, connectionName, createConnectionAndDiscover, setActiveConnectionId]);
 
+  // Load connection_config to get workspace_id and dataset_id for XMLA panel
+  useEffect(() => {
+    if (!dataSourceId) return;
+    supabase
+      .from("data_sources")
+      .select("connection_config")
+      .eq("id", dataSourceId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (data?.connection_config) {
+          setConnectionConfig(data.connection_config as Record<string, any>);
+        }
+      });
+  }, [dataSourceId]);
+
+  const pbiWorkspaceId = connectionConfig?.workspace_id || undefined;
+  const pbiDatasetId = connectionConfig?.dataset_id || undefined;
+
   const handleImport = useCallback(async () => {
     const result = await importSelected(true);
     if (result?.completed > 0) onDataReady();
   }, [importSelected, onDataReady]);
+
+  // Auto-materialize via XMLA when user clicks "Continue" and tables were discovered
+  const handleAutoMaterialize = useCallback(async () => {
+    if (!projectData.id || !activeConnectionId) {
+      onDataReady();
+      return;
+    }
+
+    // Check if already materialized
+    const { data: existing } = await supabase
+      .from("project_datasets")
+      .select("id")
+      .eq("project_id", projectData.id)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    
+    if (existing) {
+      onDataReady();
+      return;
+    }
+
+    // Get discovered table names from objects
+    const tableNames = objects.map(o => o.object_name).filter(Boolean);
+    if (tableNames.length === 0 && !pbiWorkspaceId) {
+      onDataReady();
+      return;
+    }
+
+    setAutoMaterializing(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("debug-powerbi-xmla", {
+        body: {
+          project_id: projectData.id,
+          connection_id: activeConnectionId,
+          workspace_id: pbiWorkspaceId,
+          dataset_id: pbiDatasetId,
+          materialize: true,
+          selected_tables: tableNames.length > 0 ? tableNames : undefined,
+        },
+      });
+
+      if (error) throw error;
+      if (data?.materialized) {
+        toast({
+          title: "Dataset materializado com sucesso",
+          description: "Os dados do Power BI foram persistidos. Avançando...",
+        });
+        setTimeout(() => onDataReady(), 500);
+      } else {
+        toast({
+          title: "Materialização não concluída",
+          description: data?.diagnostic?.steps?.find((s: any) => s.status === "fail")?.detail || "Verifique o diagnóstico XMLA.",
+          variant: "destructive",
+        });
+      }
+    } catch (err: any) {
+      toast({
+        title: "Erro na materialização automática",
+        description: err.message,
+        variant: "destructive",
+      });
+    } finally {
+      setAutoMaterializing(false);
+    }
+  }, [projectData.id, activeConnectionId, objects, pbiWorkspaceId, pbiDatasetId, toast, onDataReady]);
 
   const effectiveSourceTrace = sourceTrace || (discoveryRun?.evidence as any)?.source_trace || null;
   const sourceDetected = effectiveSourceTrace?.detected === true;
