@@ -9,7 +9,6 @@ import GlobalControls from "@/components/layout/GlobalControls";
 import StepProjectInfo from "./steps/StepProjectInfo";
 import StepDataUpload from "./steps/StepDataUpload";
 import StepEDA from "./steps/StepEDA";
-import PredictiveResolutionPanel from "./steps/PredictiveResolutionPanel";
 import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
