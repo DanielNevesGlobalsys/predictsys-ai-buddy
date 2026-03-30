@@ -3325,6 +3325,72 @@ export type Database = {
           },
         ]
       }
+      project_predictive_resolutions: {
+        Row: {
+          accepted_at: string | null
+          accepted_by: string | null
+          created_at: string
+          id: string
+          intent_contract_version: number
+          mode: string
+          organization_id: string
+          overall_confidence: number
+          project_id: string
+          resolution_json: Json
+          resolution_version: number
+          selection_version: number
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          id?: string
+          intent_contract_version?: number
+          mode?: string
+          organization_id: string
+          overall_confidence?: number
+          project_id: string
+          resolution_json?: Json
+          resolution_version?: number
+          selection_version?: number
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          accepted_at?: string | null
+          accepted_by?: string | null
+          created_at?: string
+          id?: string
+          intent_contract_version?: number
+          mode?: string
+          organization_id?: string
+          overall_confidence?: number
+          project_id?: string
+          resolution_json?: Json
+          resolution_version?: number
+          selection_version?: number
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_predictive_resolutions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_predictive_resolutions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_problem_inference: {
         Row: {
           confidence: number
@@ -3680,6 +3746,7 @@ export type Database = {
       project_settings: {
         Row: {
           active_intent_contract_id: string | null
+          active_predictive_resolution_id: string | null
           active_run_id: string | null
           active_target_column: string | null
           active_target_mode: string | null
@@ -3733,6 +3800,10 @@ export type Database = {
           modeling_dataset_meta: Json | null
           objective: string | null
           org_id: string | null
+          predictive_resolution_confidence: number | null
+          predictive_resolution_mode: string | null
+          predictive_resolution_state: string | null
+          predictive_resolution_summary: Json | null
           prerequisites_resolved_at: string | null
           prerequisites_source: string | null
           problem_type: string | null
@@ -3769,6 +3840,7 @@ export type Database = {
         }
         Insert: {
           active_intent_contract_id?: string | null
+          active_predictive_resolution_id?: string | null
           active_run_id?: string | null
           active_target_column?: string | null
           active_target_mode?: string | null
@@ -3822,6 +3894,10 @@ export type Database = {
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null
+          predictive_resolution_confidence?: number | null
+          predictive_resolution_mode?: string | null
+          predictive_resolution_state?: string | null
+          predictive_resolution_summary?: Json | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
           problem_type?: string | null
@@ -3858,6 +3934,7 @@ export type Database = {
         }
         Update: {
           active_intent_contract_id?: string | null
+          active_predictive_resolution_id?: string | null
           active_run_id?: string | null
           active_target_column?: string | null
           active_target_mode?: string | null
@@ -3911,6 +3988,10 @@ export type Database = {
           modeling_dataset_meta?: Json | null
           objective?: string | null
           org_id?: string | null
+          predictive_resolution_confidence?: number | null
+          predictive_resolution_mode?: string | null
+          predictive_resolution_state?: string | null
+          predictive_resolution_summary?: Json | null
           prerequisites_resolved_at?: string | null
           prerequisites_source?: string | null
           problem_type?: string | null

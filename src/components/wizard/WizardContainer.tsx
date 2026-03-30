@@ -9,6 +9,7 @@ import GlobalControls from "@/components/layout/GlobalControls";
 import StepProjectInfo from "./steps/StepProjectInfo";
 import StepDataUpload from "./steps/StepDataUpload";
 import StepEDA from "./steps/StepEDA";
+import PredictiveResolutionPanel from "./steps/PredictiveResolutionPanel";
 import StepTargetFeatures from "./steps/StepTargetFeatures";
 import StepTraining from "./steps/StepTraining";
 import StepDeploy from "./steps/StepDeploy";
@@ -60,12 +61,13 @@ const WizardContainer = () => {
     { id: 1, title: t("wizard.steps.info"), description: t("wizard.steps.infoDesc") },
     { id: 2, title: t("wizard.steps.data"), description: t("wizard.steps.dataDesc") },
     { id: 3, title: t("wizard.steps.analysis"), description: t("wizard.steps.analysisDesc") },
-    { id: 4, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
-    { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
-    { id: 6, title: "Previsões", description: "Gerar previsões com o modelo" },
-    { id: 7, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
-    { id: 8, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
-    { id: 9, title: "Agendamento", description: "Configurar execuções recorrentes" },
+    { id: 4, title: "Resolução PRE", description: "Formulação automática do problema preditivo" },
+    { id: 5, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
+    { id: 6, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
+    { id: 7, title: "Previsões", description: "Gerar previsões com o modelo" },
+    { id: 8, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
+    { id: 9, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
+    { id: 10, title: "Agendamento", description: "Configurar execuções recorrentes" },
   ];
 
   // Load SSOT version key for rehydration
@@ -125,9 +127,9 @@ const WizardContainer = () => {
       if (data.status === "configuring") setCurrentStep(2);
       else if (data.status === "data_uploaded") setCurrentStep(3);
       else if (data.status === "eda_complete") setCurrentStep(4);
-      else if (data.status === "training") setCurrentStep(5);
-      else if (data.status === "evaluated") setCurrentStep(6);
-      else if (data.status === "deployed") setCurrentStep(9);
+      else if (data.status === "training") setCurrentStep(6);
+      else if (data.status === "evaluated") setCurrentStep(7);
+      else if (data.status === "deployed") setCurrentStep(10);
     }
     setLoading(false);
   };
@@ -277,12 +279,12 @@ const WizardContainer = () => {
   };
 
   const handleComplete = async () => {
-    // Move to Dashboard step (step 8)
-    await saveProject({ status: "deployed" }, 8);
+    // Move to Dashboard step (step 9)
+    await saveProject({ status: "deployed" }, 9);
   };
 
   const handleDashboardNext = () => {
-    setCurrentStep(9);
+    setCurrentStep(10);
   };
   
   const handleFinalComplete = async () => {
@@ -347,6 +349,16 @@ const WizardContainer = () => {
     setNeedsRetrain(false);
   };
 
+  const handlePREAccept = (resolution: any) => {
+    // PRE accepted — advance to target/features step with pre-filled data
+    setCurrentStep(5);
+  };
+
+  const handlePREReject = () => {
+    // User wants manual — go to target/features step
+    setCurrentStep(5);
+  };
+
   const renderStep = () => {
     const stepProps = {
       projectData,
@@ -365,16 +377,18 @@ const WizardContainer = () => {
       case 3:
         return <StepEDA {...stepProps} />;
       case 4:
-        return <StepTargetFeatures key={ssotVersionKey || projectData.id} {...stepProps} onConfigChange={handleConfigChange} onSSOTChanged={() => projectData.id && loadSSOTVersionKey(projectData.id)} />;
+        return <PredictiveResolutionPanel projectData={projectData} onAccept={handlePREAccept} onReject={handlePREReject} onBack={handleBack} loading={loading} />;
       case 5:
-        return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} onGoToStep={setCurrentStep} />;
+        return <StepTargetFeatures key={ssotVersionKey || projectData.id} {...stepProps} onConfigChange={handleConfigChange} onSSOTChanged={() => projectData.id && loadSSOTVersionKey(projectData.id)} />;
       case 6:
-        return <StepScoring projectData={projectData} onNext={() => setCurrentStep(7)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
+        return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} onGoToStep={setCurrentStep} />;
       case 7:
-        return <StepDeploy {...stepProps} onComplete={handleComplete} />;
+        return <StepScoring projectData={projectData} onNext={() => setCurrentStep(8)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
       case 8:
-        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
+        return <StepDeploy {...stepProps} onComplete={handleComplete} />;
       case 9:
+        return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
+      case 10:
         return <StepScheduling projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
       default:
         return null;
