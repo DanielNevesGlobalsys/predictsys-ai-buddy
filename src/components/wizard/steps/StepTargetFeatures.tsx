@@ -33,6 +33,8 @@ import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import PipelineStateDebugPanel from "./PipelineStateDebugPanel";
+import GrainTimeStrategyPanel from "./GrainTimeStrategyPanel";
+import { useGrainTimeResolution } from "@/hooks/useGrainTimeResolution";
 
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
