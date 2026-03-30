@@ -3760,6 +3760,7 @@ export type Database = {
           custom_objective_text: string | null
           dashboard_state: string
           dashboard_version: number
+          dataset_build_mode: string | null
           dataset_version: number
           derived_target_plan: Json | null
           eda_error: string | null
@@ -3770,6 +3771,7 @@ export type Database = {
           entity_key: string | null
           excluded_columns: Json | null
           feature_columns: Json | null
+          grain_confidence: number | null
           human_label_config: Json | null
           human_label_result: Json | null
           industry: string | null
@@ -3808,6 +3810,9 @@ export type Database = {
           prerequisites_source: string | null
           problem_type: string | null
           project_id: string
+          recommended_grain: string | null
+          recommended_split_strategy: string | null
+          recommended_time_column: string | null
           scoring_state: string
           scoring_version: number
           segment: string | null
@@ -3829,8 +3834,10 @@ export type Database = {
           target_state: string
           target_suggestion_meta: Json | null
           target_trainability_report: Json | null
+          temporal_readiness_state: string | null
           time_anchor_col: string | null
           time_anchor_column: string | null
+          time_strategy_confidence: number | null
           training_state: string
           training_version: number
           updated_at: string
@@ -3854,6 +3861,7 @@ export type Database = {
           custom_objective_text?: string | null
           dashboard_state?: string
           dashboard_version?: number
+          dataset_build_mode?: string | null
           dataset_version?: number
           derived_target_plan?: Json | null
           eda_error?: string | null
@@ -3864,6 +3872,7 @@ export type Database = {
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          grain_confidence?: number | null
           human_label_config?: Json | null
           human_label_result?: Json | null
           industry?: string | null
@@ -3902,6 +3911,9 @@ export type Database = {
           prerequisites_source?: string | null
           problem_type?: string | null
           project_id: string
+          recommended_grain?: string | null
+          recommended_split_strategy?: string | null
+          recommended_time_column?: string | null
           scoring_state?: string
           scoring_version?: number
           segment?: string | null
@@ -3923,8 +3935,10 @@ export type Database = {
           target_state?: string
           target_suggestion_meta?: Json | null
           target_trainability_report?: Json | null
+          temporal_readiness_state?: string | null
           time_anchor_col?: string | null
           time_anchor_column?: string | null
+          time_strategy_confidence?: number | null
           training_state?: string
           training_version?: number
           updated_at?: string
@@ -3948,6 +3962,7 @@ export type Database = {
           custom_objective_text?: string | null
           dashboard_state?: string
           dashboard_version?: number
+          dataset_build_mode?: string | null
           dataset_version?: number
           derived_target_plan?: Json | null
           eda_error?: string | null
@@ -3958,6 +3973,7 @@ export type Database = {
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          grain_confidence?: number | null
           human_label_config?: Json | null
           human_label_result?: Json | null
           industry?: string | null
@@ -3996,6 +4012,9 @@ export type Database = {
           prerequisites_source?: string | null
           problem_type?: string | null
           project_id?: string
+          recommended_grain?: string | null
+          recommended_split_strategy?: string | null
+          recommended_time_column?: string | null
           scoring_state?: string
           scoring_version?: number
           segment?: string | null
@@ -4017,8 +4036,10 @@ export type Database = {
           target_state?: string
           target_suggestion_meta?: Json | null
           target_trainability_report?: Json | null
+          temporal_readiness_state?: string | null
           time_anchor_col?: string | null
           time_anchor_column?: string | null
+          time_strategy_confidence?: number | null
           training_state?: string
           training_version?: number
           updated_at?: string

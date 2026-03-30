@@ -33,6 +33,8 @@ import ExcludedFeaturesList from "./ExcludedFeaturesList";
 import ModelingDatasetSection from "./ModelingDatasetSection";
 import TrainingPreflightPanel from "./TrainingPreflightPanel";
 import PipelineStateDebugPanel from "./PipelineStateDebugPanel";
+import GrainTimeStrategyPanel from "./GrainTimeStrategyPanel";
+import { useGrainTimeResolution } from "@/hooks/useGrainTimeResolution";
 
 import TargetStrategyPanel from "./TargetStrategyPanel";
 import SplitAndLeakagePanel from "./SplitAndLeakagePanel";
@@ -106,6 +108,10 @@ const StepTargetFeatures = ({
   // ═══ AUTO-RESOLUTION: PRE runs on mount and auto-applies ═══
   const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
   const autoResAppliedRef = useRef(false);
+
+  // ═══ GRAIN + TIME RESOLUTION ═══
+  const grainTime = useGrainTimeResolution(projectData.id);
+  const grainTimeRanRef = useRef(false);
 
   // ═══ SSOT: Single Source of Truth from project_settings ═══
   const { ssot, loaded: ssotLoaded, load: loadSSOT, activeMode, isBuilderReady, isBuilderStale } = useTargetFeaturesSSOT(projectData.id);
@@ -450,6 +456,20 @@ const StepTargetFeatures = ({
 
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
+
+  // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
+  useEffect(() => {
+    if (grainTimeRanRef.current) return;
+    if (!autoRes.resolved || autoRes.resolving || columns.length === 0) return;
+    grainTimeRanRef.current = true;
+    grainTime.resolve({
+      targetColumn: targetColumn || autoRes.result.target_column || undefined,
+      problemType: (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression",
+      entityKey: entityKey || autoRes.result.entity_key || null,
+      timeColumn: autoRes.result.time_column || ssot.time_anchor_column || null,
+      objective: businessObjective || undefined,
+    });
+  }, [autoRes.resolved, autoRes.resolving, columns.length, targetColumn, entityKey]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
@@ -921,7 +941,10 @@ const StepTargetFeatures = ({
           </div>
         </div>
 
-        {/* ═══ BLOCO 3: STATUS REAL DO PIPELINE ═══ */}
+        {/* ═══ BLOCO 3: ESTRATÉGIA TEMPORAL & GRAIN ═══ */}
+        <GrainTimeStrategyPanel resolution={grainTime.resolution} loading={grainTime.loading} />
+
+        {/* ═══ BLOCO 4: STATUS REAL DO PIPELINE ═══ */}
         <div className="rounded-xl border border-border bg-card p-5 space-y-3">
           <div className="flex items-center gap-2">
             <BarChart3 className="w-5 h-5 text-primary" />
