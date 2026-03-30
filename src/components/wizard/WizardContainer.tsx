@@ -346,16 +346,6 @@ const WizardContainer = () => {
     setNeedsRetrain(false);
   };
 
-  const handlePREAccept = (resolution: any) => {
-    // PRE accepted — advance to target/features step with pre-filled data
-    setCurrentStep(5);
-  };
-
-  const handlePREReject = () => {
-    // User wants manual — go to target/features step
-    setCurrentStep(5);
-  };
-
   const renderStep = () => {
     const stepProps = {
       projectData,
@@ -374,18 +364,16 @@ const WizardContainer = () => {
       case 3:
         return <StepEDA {...stepProps} />;
       case 4:
-        return <PredictiveResolutionPanel projectData={projectData} onAccept={handlePREAccept} onReject={handlePREReject} onBack={handleBack} loading={loading} />;
-      case 5:
         return <StepTargetFeatures key={ssotVersionKey || projectData.id} {...stepProps} onConfigChange={handleConfigChange} onSSOTChanged={() => projectData.id && loadSSOTVersionKey(projectData.id)} />;
-      case 6:
+      case 5:
         return <StepTraining {...stepProps} needsRetrain={needsRetrain} onTrainingComplete={handleTrainingComplete} onGoToStep={setCurrentStep} />;
+      case 6:
+        return <StepScoring projectData={projectData} onNext={() => setCurrentStep(7)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
       case 7:
-        return <StepScoring projectData={projectData} onNext={() => setCurrentStep(8)} onBack={handleBack} loading={loading} saveProject={saveProject} />;
-      case 8:
         return <StepDeploy {...stepProps} onComplete={handleComplete} />;
-      case 9:
+      case 8:
         return <StepDashboard projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} onNext={handleDashboardNext} />;
-      case 10:
+      case 9:
         return <StepScheduling projectData={projectData} onBack={handleBack} loading={loading} saveProject={saveProject} onFinalComplete={handleFinalComplete} />;
       default:
         return null;
