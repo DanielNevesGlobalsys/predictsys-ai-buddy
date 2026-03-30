@@ -1612,11 +1612,13 @@ serve(async (req) => {
             await supabaseAdmin.from("project_settings").upsert(
               {
                 project_id,
+                org_id: orgId,
                 ingestion_state: "done",
                 ingestion_source_type: PBI_SOURCE_TYPE,
                 ingestion_rows_detected: finalRowCount,
                 ingestion_cols_detected: finalColumns.length,
                 ingestion_dataset_id: datasetRow?.id || null,
+                eda_state: "pending",
                 updated_at: new Date().toISOString(),
               } as any,
               { onConflict: "project_id" },
