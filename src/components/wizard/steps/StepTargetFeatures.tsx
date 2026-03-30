@@ -59,6 +59,10 @@ import type { BusinessIntentContract, ObjectiveKey, IndustryKey } from "@/lib/in
 import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
 import BusinessGuidancePanel, { type TargetSuggestionCard } from "../shared/BusinessGuidancePanel";
 import { useLysSynthesis, type LysRecommendation } from "@/hooks/useLysSynthesis";
+import { useAutoResolution } from "@/hooks/useAutoResolution";
+import { useOrganization } from "@/contexts/OrganizationContext";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Brain, Shield, Clock, BarChart3, RefreshCw, Wand2 } from "lucide-react";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
