@@ -100,10 +100,15 @@ const StepTargetFeatures = ({
 }: StepTargetFeaturesProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const { currentOrganization } = useOrganization();
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loadingColumns, setLoadingColumns] = useState(true);
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
+
+  // ═══ AUTO-RESOLUTION: PRE runs on mount and auto-applies ═══
+  const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
+  const autoResAppliedRef = useRef(false);
 
   // ═══ SSOT: Single Source of Truth from project_settings ═══
   const { ssot, loaded: ssotLoaded, load: loadSSOT, activeMode, isBuilderReady, isBuilderStale } = useTargetFeaturesSSOT(projectData.id);
