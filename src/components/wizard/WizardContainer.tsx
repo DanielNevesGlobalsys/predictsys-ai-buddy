@@ -60,13 +60,12 @@ const WizardContainer = () => {
     { id: 1, title: t("wizard.steps.info"), description: t("wizard.steps.infoDesc") },
     { id: 2, title: t("wizard.steps.data"), description: t("wizard.steps.dataDesc") },
     { id: 3, title: t("wizard.steps.analysis"), description: t("wizard.steps.analysisDesc") },
-    { id: 4, title: "Resolução PRE", description: "Formulação automática do problema preditivo" },
-    { id: 5, title: t("wizard.steps.variables"), description: t("wizard.steps.variablesDesc") },
-    { id: 6, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
-    { id: 7, title: "Previsões", description: "Gerar previsões com o modelo" },
-    { id: 8, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
-    { id: 9, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
-    { id: 10, title: "Agendamento", description: "Configurar execuções recorrentes" },
+    { id: 4, title: "Variável Alvo & Features", description: "Resolução inteligente + configuração do alvo e variáveis" },
+    { id: 5, title: t("wizard.steps.training"), description: t("wizard.steps.trainingDesc") },
+    { id: 6, title: "Previsões", description: "Gerar previsões com o modelo" },
+    { id: 7, title: t("wizard.steps.deploy"), description: t("wizard.steps.deployDesc") },
+    { id: 8, title: t("wizard.steps.dashboard"), description: t("wizard.steps.dashboardDesc") },
+    { id: 9, title: "Agendamento", description: "Configurar execuções recorrentes" },
   ];
 
   // Load SSOT version key for rehydration
