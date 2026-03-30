@@ -59,6 +59,10 @@ import type { BusinessIntentContract, ObjectiveKey, IndustryKey } from "@/lib/in
 import { INDUSTRY_OBJECTIVE_MATRIX, buildBusinessIntentContract } from "@/lib/industryRules";
 import BusinessGuidancePanel, { type TargetSuggestionCard } from "../shared/BusinessGuidancePanel";
 import { useLysSynthesis, type LysRecommendation } from "@/hooks/useLysSynthesis";
+import { useAutoResolution } from "@/hooks/useAutoResolution";
+import { useOrganization } from "@/contexts/OrganizationContext";
+import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
+import { Brain, Shield, Clock, BarChart3, RefreshCw, Wand2 } from "lucide-react";
 
 interface StepTargetFeaturesProps {
   projectData: ProjectData;
@@ -96,10 +100,15 @@ const StepTargetFeatures = ({
 }: StepTargetFeaturesProps) => {
   const { t } = useTranslation();
   const { toast } = useToast();
+  const { currentOrganization } = useOrganization();
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loadingColumns, setLoadingColumns] = useState(true);
   const initialTargetRef = useRef<string | null>(null);
   const hasChangedConfig = useRef(false);
+
+  // ═══ AUTO-RESOLUTION: PRE runs on mount and auto-applies ═══
+  const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
+  const autoResAppliedRef = useRef(false);
 
   // ═══ SSOT: Single Source of Truth from project_settings ═══
   const { ssot, loaded: ssotLoaded, load: loadSSOT, activeMode, isBuilderReady, isBuilderStale } = useTargetFeaturesSSOT(projectData.id);
@@ -640,9 +649,53 @@ const StepTargetFeatures = ({
     });
   }, [lysSynthesis.loaded, lysSynthesis.recommendation, ssotLoaded, ssot.target_column, columns, targetColumn]);
 
+  // ═══ AUTO-RESOLUTION: Apply PRE results to local state ═══
+  useEffect(() => {
+    if (autoResAppliedRef.current) return;
+    if (!autoRes.resolved || autoRes.resolving) return;
+    if (columns.length === 0) return;
+    // Don't override if SSOT already has a target
+    if (ssot.target_column || targetColumn) return;
+
+    const r = autoRes.result;
+    if (!r.target_column) return;
+
+    // Validate target exists in columns
+    const targetExists = columns.some(c => c.name === r.target_column);
+    if (!targetExists) return;
+
+    autoResAppliedRef.current = true;
+
+    // Apply to local state
+    setTargetColumn(r.target_column);
+    if (r.problem_type) setInferredProblemType(r.problem_type);
+    if (r.entity_key && columns.some(c => c.name === r.entity_key)) setEntityKey(r.entity_key);
+    if (r.selected_features.length > 0) {
+      const validFeatures = r.selected_features.filter(f => columns.some(c => c.name === f));
+      if (validFeatures.length > 0) setSelectedFeatures(validFeatures);
+    }
+    if (r.excluded_features.length > 0) {
+      const validExcluded = r.excluded_features.filter(f => columns.some(c => c.name === f));
+      if (validExcluded.length > 0) setExcludedColumns(prev => [...new Set([...prev, ...validExcluded])]);
+    }
+
+    // Auto-persist to SSOT
+    autoRes.applyToSSOT(r);
+
+    // Persist target immediately
+    persistTargetSelection(r.target_column, "manual");
+
+    console.log("[StepTargetFeatures] Auto-resolution applied:", {
+      target: r.target_column,
+      problem_type: r.problem_type,
+      entity_key: r.entity_key,
+      features: r.selected_features.length,
+      confidence: r.confidence_score,
+      auto_fixes: r.auto_fix_details,
+    });
+  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
+
   // NOTE: We intentionally do NOT pre-fill target from event_candidates.
-  // event_candidate ≠ target. Target is often derived (e.g. "no purchase in 90 days").
-  // We only pre-fill entity_key + time_anchor (structural keys), not the target.
 
   // Store initial target on mount
   useEffect(() => {
@@ -1152,12 +1205,138 @@ const StepTargetFeatures = ({
             <Target className="w-7 h-7 text-primary-foreground" />
           </div>
           <h2 className="text-2xl font-display font-bold mb-1">
-            {t("stepVariables.title")}
+            Variável Alvo &amp; Features
           </h2>
           <p className="text-sm text-muted-foreground">
-            Configure o alvo e as variáveis com base no objetivo do seu projeto.
+            Resolução inteligente + configuração editável do problema preditivo.
           </p>
         </div>
+
+        {/* ═══ AUTO-RESOLUTION BANNER ═══ */}
+        {autoRes.resolving && (
+          <div className="flex items-center gap-3 p-4 rounded-xl border border-primary/20 bg-primary/5 animate-pulse">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <div>
+              <p className="text-sm font-medium">Analisando dados e formulando problema preditivo...</p>
+              <p className="text-xs text-muted-foreground">O PRE está resolvendo target, entidade e features automaticamente.</p>
+            </div>
+          </div>
+        )}
+
+        {autoRes.resolved && autoRes.result.target_column && (
+          <div className="rounded-xl border border-primary/20 bg-primary/5 overflow-hidden">
+            <div className="p-4 flex items-start gap-3">
+              <div className="p-2 rounded-lg bg-primary/10">
+                <Brain className="h-5 w-5 text-primary" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="text-sm font-semibold">Sugestão Inteligente</h3>
+                  {autoRes.result.auto_fix_applied && (
+                    <Badge variant="outline" className="text-[10px] py-0">
+                      <Wand2 className="w-3 h-3 mr-1" /> Auto-fix
+                    </Badge>
+                  )}
+                  <Badge
+                    variant="outline"
+                    className={`text-[10px] py-0 ${
+                      autoRes.result.confidence_score >= 0.7 ? "border-green-500/50 text-green-600" :
+                      autoRes.result.confidence_score >= 0.5 ? "border-yellow-500/50 text-yellow-600" :
+                      "border-destructive/50 text-destructive"
+                    }`}
+                  >
+                    {Math.round(autoRes.result.confidence_score * 100)}% confiança
+                  </Badge>
+                  <Badge variant="secondary" className="text-[10px] py-0">
+                    ✔ Aplicado automaticamente
+                  </Badge>
+                </div>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mt-2">
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Target:</span>{" "}
+                    <span className="font-medium">{autoRes.result.target_column}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Problema:</span>{" "}
+                    <span className="font-medium">{autoRes.result.problem_type === "classification" ? "Classificação" : "Regressão"}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Entity:</span>{" "}
+                    <span className="font-medium">{autoRes.result.entity_key || "—"}</span>
+                  </div>
+                  <div className="text-xs">
+                    <span className="text-muted-foreground">Tempo:</span>{" "}
+                    <span className="font-medium">{autoRes.result.time_column || "Não detectado"}</span>
+                  </div>
+                </div>
+                {autoRes.result.justification && (
+                  <p className="text-xs text-muted-foreground mt-2 italic">{autoRes.result.justification}</p>
+                )}
+              </div>
+              <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => autoRes.resolve()}>
+                <RefreshCw className="w-3 h-3 mr-1" /> Reexecutar
+              </Button>
+            </div>
+
+            {/* Auto-fix details */}
+            {autoRes.result.auto_fix_details.length > 0 && (
+              <div className="px-4 pb-3 space-y-1">
+                {autoRes.result.auto_fix_details.map((detail, i) => (
+                  <div key={i} className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <Wand2 className="w-3 h-3 text-primary" />
+                    <span>{detail}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Issues */}
+            {autoRes.result.issues.length > 0 && (
+              <div className="px-4 pb-3 space-y-1">
+                {autoRes.result.issues.slice(0, 3).map((issue, i) => (
+                  <div key={i} className={`flex items-center gap-2 text-xs ${
+                    issue.severity === "block" ? "text-destructive" :
+                    issue.severity === "warn" ? "text-yellow-600" :
+                    "text-muted-foreground"
+                  }`}>
+                    {issue.severity === "block" ? <XCircle className="w-3 h-3" /> :
+                     issue.severity === "warn" ? <AlertTriangle className="w-3 h-3" /> :
+                     <Info className="w-3 h-3" />}
+                    <span>{issue.message}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ═══ EXPLAINABILITY SECTION ═══ */}
+        {autoRes.resolved && autoRes.result.insights.length > 0 && (
+          <Accordion type="single" collapsible className="border rounded-lg bg-card">
+            <AccordionItem value="insights" className="border-0">
+              <AccordionTrigger className="px-4 py-3 hover:no-underline">
+                <div className="flex items-center gap-2">
+                  <Shield className="h-4 w-4 text-primary" />
+                  <span className="text-sm font-medium">Insights da resolução</span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="px-4 pb-3">
+                <div className="space-y-2">
+                  {autoRes.result.insights.map((insight, i) => (
+                    <div key={i} className="flex items-center gap-2 text-xs">
+                      {insight.ok
+                        ? <CheckCircle className="w-3.5 h-3.5 text-green-500" />
+                        : <AlertCircle className="w-3.5 h-3.5 text-yellow-500" />
+                      }
+                      <span className="font-medium">{insight.label}:</span>
+                      <span className="text-muted-foreground">{insight.detail}</span>
+                    </div>
+                  ))}
+                </div>
+              </AccordionContent>
+            </AccordionItem>
+          </Accordion>
+        )}
 
         {/* Hidden: load column inference data for target selector enrichment */}
         {projectData.id && !advancedMode && (
