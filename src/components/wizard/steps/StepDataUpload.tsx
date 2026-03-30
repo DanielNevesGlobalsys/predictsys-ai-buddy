@@ -155,9 +155,11 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
 
   const handleDataReady = useCallback(async () => {
     setIsDataReady(true);
+    // Re-check SSOT to ensure ingestion_state is done
+    await checkIngestionSSOT();
     // Small delay to let manifest be created
     setTimeout(() => checkManifestStatus(), 2000);
-  }, [checkManifestStatus]);
+  }, [checkManifestStatus, checkIngestionSSOT]);
 
   return (
     <Card className="bg-gradient-card shadow-card p-8">
