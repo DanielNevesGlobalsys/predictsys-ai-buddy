@@ -286,9 +286,9 @@ const PowerBIManualAssistedPanel = ({
           Importar metadados/exportação
         </Button>
 
-        <Button variant="ghost" size="sm" onClick={onContinuePartial} disabled={isSubmitting}>
-          <ArrowRight className="w-4 h-4 mr-1" />
-          Continuar com conexão parcial
+        <Button variant="default" size="sm" onClick={onContinuePartial} disabled={isSubmitting || isRetrying}>
+          {isRetrying ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ArrowRight className="w-4 h-4 mr-1" />}
+          {isRetrying ? "Materializando dados..." : "Materializar e continuar"}
         </Button>
       </div>
     </div>

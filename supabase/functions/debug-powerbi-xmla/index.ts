@@ -867,11 +867,13 @@ serve(async (req) => {
           await supabaseAdmin.from("project_settings").upsert(
             {
               project_id,
+              org_id: orgId,
               ingestion_state: "done",
               ingestion_source_type: PBI_SOURCE_TYPE,
               ingestion_rows_detected: totalRows,
               ingestion_cols_detected: allColumns.length,
               ingestion_dataset_id: datasetRow?.id || null,
+              eda_state: "pending",
               updated_at: new Date().toISOString(),
             } as any,
             { onConflict: "project_id" },
@@ -1566,13 +1568,23 @@ serve(async (req) => {
             );
             if (columnsInsertError) throw columnsInsertError;
 
+            // Resolve org_id for dataset state and project_settings
+            const { data: projRowSingle } = await supabaseAdmin
+              .from("projects")
+              .select("organization_id")
+              .eq("id", project_id)
+              .single();
+            const orgId = projRowSingle?.organization_id || "b0000000-0000-0000-0000-000000000001";
+
             await supabaseAdmin.from("project_dataset_state").upsert(
               {
                 project_id,
+                organization_id: orgId,
                 source_type: PBI_SOURCE_TYPE,
                 row_count: finalRowCount,
                 col_count: finalColumns.length,
                 active_schema_json: schemaJson,
+                active_dataset_ref: datasetRow?.id || project_id,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "project_id" },
@@ -1610,11 +1622,13 @@ serve(async (req) => {
             await supabaseAdmin.from("project_settings").upsert(
               {
                 project_id,
+                org_id: orgId,
                 ingestion_state: "done",
                 ingestion_source_type: PBI_SOURCE_TYPE,
                 ingestion_rows_detected: finalRowCount,
                 ingestion_cols_detected: finalColumns.length,
                 ingestion_dataset_id: datasetRow?.id || null,
+                eda_state: "pending",
                 updated_at: new Date().toISOString(),
               } as any,
               { onConflict: "project_id" },
