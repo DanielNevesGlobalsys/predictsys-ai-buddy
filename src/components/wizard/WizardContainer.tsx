@@ -125,9 +125,9 @@ const WizardContainer = () => {
       if (data.status === "configuring") setCurrentStep(2);
       else if (data.status === "data_uploaded") setCurrentStep(3);
       else if (data.status === "eda_complete") setCurrentStep(4);
-      else if (data.status === "training") setCurrentStep(6);
-      else if (data.status === "evaluated") setCurrentStep(7);
-      else if (data.status === "deployed") setCurrentStep(10);
+      else if (data.status === "training") setCurrentStep(5);
+      else if (data.status === "evaluated") setCurrentStep(6);
+      else if (data.status === "deployed") setCurrentStep(9);
     }
     setLoading(false);
   };
