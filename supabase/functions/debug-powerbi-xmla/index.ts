@@ -1568,13 +1568,23 @@ serve(async (req) => {
             );
             if (columnsInsertError) throw columnsInsertError;
 
+            // Resolve org_id for dataset state and project_settings
+            const { data: projRowSingle } = await supabaseAdmin
+              .from("projects")
+              .select("organization_id")
+              .eq("id", project_id)
+              .single();
+            const orgId = projRowSingle?.organization_id || "b0000000-0000-0000-0000-000000000001";
+
             await supabaseAdmin.from("project_dataset_state").upsert(
               {
                 project_id,
+                organization_id: orgId,
                 source_type: PBI_SOURCE_TYPE,
                 row_count: finalRowCount,
                 col_count: finalColumns.length,
                 active_schema_json: schemaJson,
+                active_dataset_ref: datasetRow?.id || project_id,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "project_id" },
