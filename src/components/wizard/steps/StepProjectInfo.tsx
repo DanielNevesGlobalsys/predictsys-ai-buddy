@@ -157,10 +157,11 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
       ? c.prediction_request.custom_objective_text || ""
       : c.prediction_request.objective;
 
+    const legacyIndustry = V3_TO_LEGACY_INDUSTRY[industry] as IndustryKey | undefined;
     const gates = validateIntentGates(
-      industry !== "generic" ? industry : undefined,
+      legacyIndustry && legacyIndustry !== "generic" ? legacyIndustry : undefined,
       objective,
-      industry ? hasAdapter(industry) : false
+      legacyIndustry ? hasAdapter(legacyIndustry) : false
     );
     const blocks = gates.filter((g) => g.status === "BLOCK");
     if (blocks.length > 0) {
