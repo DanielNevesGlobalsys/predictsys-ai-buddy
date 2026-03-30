@@ -457,6 +457,20 @@ const StepTargetFeatures = ({
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
 
+  // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
+  useEffect(() => {
+    if (grainTimeRanRef.current) return;
+    if (!autoRes.resolved || autoRes.resolving || columns.length === 0) return;
+    grainTimeRanRef.current = true;
+    grainTime.resolve({
+      targetColumn: targetColumn || autoRes.result.target_column || undefined,
+      problemType: (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression",
+      entityKey: entityKey || autoRes.result.entity_key || null,
+      timeColumn: autoRes.result.time_column || ssot.time_anchor_column || null,
+      objective: businessObjective || undefined,
+    });
+  }, [autoRes.resolved, autoRes.resolving, columns.length, targetColumn, entityKey]);
+
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
   }, [projectData.target_column]);
