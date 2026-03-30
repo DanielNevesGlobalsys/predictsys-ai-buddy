@@ -66,10 +66,29 @@ const StepDataUpload = ({ projectData, onNext, onBack, loading, saveProject }: S
     }
   }, [projectData.id]);
 
-  // Check if data is ready based on project status and dataset
+  // Check if data is ready based on project status, dataset, or Power BI materialization
   const checkDataReady = useCallback(async () => {
     if (!projectData.id) return false;
     if (projectData.dataset_filename || projectData.data_source_id) return true;
+
+    // Check SSOT first — ingestion_state = "done" means data is ready (covers Power BI materialized)
+    const { data: settings } = await supabase
+      .from("project_settings")
+      .select("ingestion_state")
+      .eq("project_id", projectData.id)
+      .maybeSingle();
+    if (settings?.ingestion_state === "done") return true;
+
+    // Check active dataset exists (Power BI creates project_datasets directly)
+    const { data: activeDs } = await supabase
+      .from("project_datasets")
+      .select("id")
+      .eq("project_id", projectData.id)
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+    if (activeDs) return true;
+
     const { data: project } = await supabase
       .from("projects")
       .select("dataset_filename, data_source_id, status, total_rows, dataset_columns")
