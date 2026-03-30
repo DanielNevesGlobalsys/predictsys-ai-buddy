@@ -362,11 +362,13 @@ const ExternalDiscoveryFlow = ({
               });
             }
           }}
-          isRetrying={isDiscovering}
+          isRetrying={isDiscovering || autoMaterializing}
           submissionStatus={manualSubmissionStatus}
           submissionError={manualSubmissionError}
           projectId={projectData.id}
           connectionId={activeConnectionId || undefined}
+          workspaceId={pbiWorkspaceId}
+          datasetId={pbiDatasetId}
         />
       )}
 
