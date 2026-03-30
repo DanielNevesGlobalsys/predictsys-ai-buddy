@@ -232,9 +232,10 @@ const StepProjectInfo = ({ projectData, onNext, onCancel, loading }: StepProject
 
     const c = contractV3;
     const industryKey = (V3_TO_LEGACY_INDUSTRY[c.business_context.industry] || "generic") as any;
-    const objectiveKey = c.prediction_request.objective === "custom"
+    const rawObjectiveKey = c.prediction_request.objective === "custom"
       ? "outro"
       : mapDeclaredObjectiveToKey(c.prediction_request.objective);
+    const objectiveKey = rawObjectiveKey as ObjectiveKey;
     const businessContract = buildBusinessIntentContract(industryKey, objectiveKey);
     const problemType = resolveV3ProblemType(c);
 
