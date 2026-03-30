@@ -277,12 +277,11 @@ const WizardContainer = () => {
   };
 
   const handleComplete = async () => {
-    // Move to Dashboard step (step 9)
-    await saveProject({ status: "deployed" }, 9);
+    await saveProject({ status: "deployed" }, 8);
   };
 
   const handleDashboardNext = () => {
-    setCurrentStep(10);
+    setCurrentStep(9);
   };
   
   const handleFinalComplete = async () => {
