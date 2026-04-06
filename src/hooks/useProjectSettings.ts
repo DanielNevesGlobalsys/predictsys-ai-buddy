@@ -60,6 +60,8 @@ export function useProjectSettings(projectId: string | undefined) {
       excluded_columns: string[];
       suggestion?: TargetSuggestion | null;
       org_id?: string | null;
+      entity_key?: string | null;
+      time_column?: string | null;
     }) => {
       if (!projectId) return false;
 
@@ -75,15 +77,19 @@ export function useProjectSettings(projectId: string | undefined) {
 
       // Use the SSOT endpoint for atomic versioning + invalidation
       try {
-        const response = await supabase.functions.invoke("upsert-model-selection", {
-          body: {
-            project_id: projectId,
-            target_column: payload.target_column,
-            problem_type: payload.problem_type,
-            selected_features: payload.feature_columns,
-            excluded_features: payload.excluded_columns,
-          },
-        });
+        const body: Record<string, any> = {
+          project_id: projectId,
+          target_column: payload.target_column,
+          problem_type: payload.problem_type,
+          selected_features: payload.feature_columns,
+          excluded_features: payload.excluded_columns,
+        };
+
+        // Pass entity_key and time_column so the edge function persists them
+        if (payload.entity_key) body.entity_key = payload.entity_key;
+        if (payload.time_column) body.time_column = payload.time_column;
+
+        const response = await supabase.functions.invoke("upsert-model-selection", { body });
 
         if (response.error) {
           console.error("Error calling upsert-model-selection:", response.error);
@@ -96,7 +102,7 @@ export function useProjectSettings(projectId: string | undefined) {
           return false;
         }
 
-        console.log(`[useProjectSettings] Selection saved: v${result.selection_version}, hash=${result.target_hash}`);
+        console.log(`[useProjectSettings] Selection saved: v${result.selection_version}, hash=${result.target_hash}, changed=${result.did_change}`);
 
         setSettings({
           project_id: projectId,

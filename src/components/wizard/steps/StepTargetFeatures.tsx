@@ -622,13 +622,24 @@ const StepTargetFeatures = ({
     if (cleanFeatures.length === 0) { toast({ title: t("common.error"), description: "Selecione ao menos 1 feature.", variant: "destructive" }); return false; }
     const problemType = inferredProblemType || projectData.problem_type;
 
-    // 1. Save via atomic model_selection RPC
-    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null });
+    // Resolve time anchor from all available sources
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+
+    // 1. Save via atomic model_selection RPC — includes entity_key + time_column
+    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
     if (!saved) return false;
 
-    // 2. Persist entity_key + time_anchor + grain/time strategy to project_settings
-    const settingsUpdate: Record<string, any> = { entity_key: entityKey };
-    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    // 2. Persist grain/time strategy + target_state to project_settings
+    const settingsUpdate: Record<string, any> = {
+      entity_key: entityKey,
+      target_state: "ready",
+      active_target_column: targetColumn,
+      target_column: targetColumn,
+      problem_type: problemType,
+      active_target_mode: "column",
+      target_source: "manual",
+      predictive_resolution_state: "applied",
+    };
     if (resolvedTimeAnchor) {
       settingsUpdate.time_anchor_column = resolvedTimeAnchor;
       settingsUpdate.recommended_time_column = resolvedTimeAnchor;
@@ -688,8 +699,8 @@ const StepTargetFeatures = ({
     { label: "Entity Key", ok: !!entityKey, detail: entityKey || "—" },
     { label: "Features", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} selecionadas` },
     { label: "EDA processado", ok: unifiedEdaOk, detail: unifiedEdaOk ? "OK" : "Pendente" },
-    { label: "Model selection", ok: autoRes.applied || (selectionVersion !== null && selectionVersion > 0), detail: selectionVersion ? `v${selectionVersion}` : autoRes.applied ? "Aplicado pelo PRE" : "Pendente" },
-    { label: "Builder", ok: autoRes.builderStatus === "done" || isBuilderReady, detail: autoRes.builderStatus === "done" ? "Gerado" : autoRes.builderStatus === "running" || isRebuilding ? "Gerando..." : isBuilderReady ? "Pronto" : "Pendente" },
+    { label: "Model selection", ok: (selectionVersion !== null && selectionVersion > 0) || autoRes.applied, detail: selectionVersion ? `v${selectionVersion}` : autoRes.applied ? "Aplicado pelo PRE" : "Pendente" },
+    { label: "Builder", ok: autoRes.builderStatus === "done" || isBuilderReady || isRebuilding, detail: autoRes.builderStatus === "done" || isBuilderReady ? "Pronto" : autoRes.builderStatus === "running" || isRebuilding ? "Gerando..." : "Pendente" },
   ];
 
   // ═══ LOADING STATES ═══
