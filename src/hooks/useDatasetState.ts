@@ -139,13 +139,19 @@ export function useDatasetState(projectId: string | undefined) {
   const isVirtual = state?.virtual_manifest ?? fallback?.virtualManifest ?? false;
   const hasManifest = !!(state?.manifest_id || fallback?.manifestId) || isVirtual;
 
+  // Reset on project switch
+  useEffect(() => {
+    setState(null);
+    setFallback(null);
+    setLoaded(false);
+  }, [projectId]);
+
   return {
     state,
     fallback,
     loading,
     loaded,
     load,
-    // Unified SSOT values
     rowCount,
     colCount,
     edaReady,
