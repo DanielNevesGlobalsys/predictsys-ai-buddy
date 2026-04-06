@@ -486,10 +486,34 @@ const StepTargetFeatures = ({
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
 
+  // ═══ RESOLVE BEST TIME COLUMN from all sources ═══
+  const resolveBestTimeColumn = useCallback((): string | null => {
+    // Priority: SSOT > auto-resolution > grain engine > contract hints > column heuristic
+    const candidates = [
+      ssot.time_anchor_column,
+      autoRes.result.time_column,
+      grainTime.resolution?.time?.time_column,
+      contractHints?.time_anchor_column,
+    ].filter(Boolean) as string[];
+    if (candidates.length > 0) return candidates[0];
+
+    // Heuristic fallback: scan columns for date-like columns matching snapshot patterns
+    const SNAPSHOT_HINTS = ["dt_ref", "data_ref", "reference_date", "data_referencia", "snapshot_date", "data_base"];
+    const DATE_TYPES = ["date", "datetime", "timestamp", "temporal", "data", "date/time"];
+    for (const hint of SNAPSHOT_HINTS) {
+      const match = columns.find(c => c.name.toLowerCase() === hint.toLowerCase());
+      if (match) return match.name;
+    }
+    // Any date column
+    for (const col of columns) {
+      if (DATE_TYPES.includes((col.type || "").toLowerCase())) return col.name;
+    }
+    return null;
+  }, [ssot.time_anchor_column, autoRes.result.time_column, grainTime.resolution?.time?.time_column, contractHints?.time_anchor_column, columns]);
+
   // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
-  // Runs after auto-resolution is applied OR when key fields change
   const resolveGrainTime = useCallback(() => {
-    const resolvedTime = autoRes.result.time_column || ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+    const resolvedTime = resolveBestTimeColumn();
     const resolvedEntity = entityKey || autoRes.result.entity_key || null;
     const resolvedTarget = targetColumn || autoRes.result.target_column || undefined;
     const resolvedObjective = businessObjective || undefined;
@@ -506,7 +530,7 @@ const StepTargetFeatures = ({
       timeColumn: resolvedTime,
       objective: resolvedObjective as string | undefined,
     });
-  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType]);
+  }, [resolveBestTimeColumn, autoRes.result, entityKey, targetColumn, businessObjective, inferredProblemType]);
 
   useEffect(() => {
     if (grainTimeRanRef.current) return;
@@ -529,28 +553,76 @@ const StepTargetFeatures = ({
     if (autoRes.resolving) return;
 
     autoPromoteRef.current = true;
+
+    // Resolve time column from all sources BEFORE promoting
+    const resolvedTimeAnchor = resolveBestTimeColumn();
+
     console.log("[StepTargetFeatures] AUTO-PROMOTE: Creating official project_model_selection", {
-      target: targetColumn, entity: entityKey, features: selectedFeatures.length, problem: inferredProblemType,
+      target: targetColumn, entity: entityKey, features: selectedFeatures.length,
+      problem: inferredProblemType, time: resolvedTimeAnchor,
     });
 
-    // Fire-and-forget promotion
-    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
-    saveSettings({
-      target_column: targetColumn,
-      problem_type: inferredProblemType || "classification",
-      feature_columns: selectedFeatures.filter(f => f !== targetColumn),
-      excluded_columns: excludedColumns,
-      suggestion: null,
-      entity_key: entityKey,
-      time_column: resolvedTimeAnchor,
-    }).then(saved => {
-      if (saved) {
-        console.log("[StepTargetFeatures] AUTO-PROMOTE: Official selection created successfully");
-        loadSelectionVersion();
-        loadSSOT();
-        setPreflightRefreshKey(k => k + 1);
+    // Fire-and-forget promotion with builder trigger
+    (async () => {
+      const saved = await saveSettings({
+        target_column: targetColumn,
+        problem_type: inferredProblemType || "classification",
+        feature_columns: selectedFeatures.filter(f => f !== targetColumn),
+        excluded_columns: excludedColumns,
+        suggestion: null,
+        entity_key: entityKey,
+        time_column: resolvedTimeAnchor,
+      });
+
+      if (!saved) return;
+      console.log("[StepTargetFeatures] AUTO-PROMOTE: Official selection created");
+
+      // Persist grain/time/split to project_settings
+      const settingsUpdate: Record<string, any> = {
+        target_state: "ready",
+        active_target_column: targetColumn,
+        active_target_mode: "column",
+        target_source: "manual",
+        predictive_resolution_state: "applied",
+      };
+      if (resolvedTimeAnchor) {
+        settingsUpdate.time_anchor_column = resolvedTimeAnchor;
+        settingsUpdate.recommended_time_column = resolvedTimeAnchor;
+        settingsUpdate.temporal_readiness_state = "ready";
       }
-    });
+      if (entityKey && resolvedTimeAnchor) {
+        settingsUpdate.recommended_grain = "entity_time";
+        settingsUpdate.recommended_split_strategy = "temporal";
+        settingsUpdate.dataset_build_mode = "entity_time";
+        settingsUpdate.grain_confidence = 0.85;
+        settingsUpdate.time_strategy_confidence = 0.9;
+      }
+      await supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id);
+
+      console.log("[StepTargetFeatures] AUTO-PROMOTE: Settings updated with time/grain", {
+        time: resolvedTimeAnchor, grain: settingsUpdate.recommended_grain || "original_row",
+      });
+
+      // Auto-trigger builder
+      const cleanFeatures = selectedFeatures.filter(f => f !== targetColumn);
+      if (cleanFeatures.length >= 3) {
+        setIsRebuilding(true);
+        try {
+          const builderRes = await supabase.functions.invoke("build-modeling-dataset", { body: { project_id: projectData.id } });
+          console.log("[StepTargetFeatures] AUTO-PROMOTE: Builder triggered:", builderRes.data?.success ? "OK" : builderRes.data?.error);
+        } catch (e) { console.warn("[StepTargetFeatures] AUTO-PROMOTE: Builder failed:", e); }
+        finally { setIsRebuilding(false); }
+      }
+
+      // Reload state
+      loadSelectionVersion();
+      loadSSOT();
+      setPreflightRefreshKey(k => k + 1);
+
+      // Trigger grain/time resolution with the now-persisted time
+      grainTimeRanRef.current = false;
+      resolveGrainTime();
+    })();
   }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType]);
 
   useEffect(() => {
