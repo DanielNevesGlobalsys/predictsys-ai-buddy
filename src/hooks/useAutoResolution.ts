@@ -315,7 +315,17 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
     }
   }, [projectId, applied]);
 
-  // Auto-run on mount (only once)
+  // Reset all state when projectId changes
+  useEffect(() => {
+    setResult(EMPTY_RESULT);
+    setResolving(false);
+    setResolved(false);
+    setApplied(false);
+    setBuilderStatus("idle");
+    ranRef.current = false;
+  }, [projectId]);
+
+  // Auto-run on mount (only once per project)
   useEffect(() => {
     if (ranRef.current || !projectId || !organizationId) return;
     ranRef.current = true;
