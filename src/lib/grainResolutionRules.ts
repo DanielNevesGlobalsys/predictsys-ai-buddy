@@ -44,10 +44,14 @@ export function resolveGrain(input: GrainInput): GrainResolution {
   // Rule 1: Temporal objectives with entity + time → entity_time
   if (isTemporal && hasEntity && hasTime) {
     grain = "entity_time";
-    snapshotRequired = isMultiRow;
-    aggregationRequired = isMultiRow;
+    // If data shape is unknown but temporal with entity+time, assume multi-row (safer default)
+    const assumeMultiRow = isMultiRow || input.dataShape === "unknown";
+    snapshotRequired = assumeMultiRow;
+    aggregationRequired = assumeMultiRow;
     reasoning.push("Objetivo temporal com entidade e tempo válidos.");
-    reasoning.push(isMultiRow ? "Dataset transacional → agregação necessária." : "Uma observação por entidade/período.");
+    reasoning.push(isMultiRow ? "Dataset transacional → agregação necessária." : 
+      input.dataShape === "unknown" ? "Shape desconhecido — agregação assumida por segurança." : 
+      "Uma observação por entidade/período.");
     confidence = 0.9;
   }
   // Rule 2: Temporal objective, entity only (no time)

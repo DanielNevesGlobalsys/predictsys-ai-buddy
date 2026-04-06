@@ -23,16 +23,16 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       // Fetch project data
       const [{ data: settings }, { data: cols }, { data: dsState }] = await Promise.all([
         supabase.from("project_settings").select("objective, entity_key, time_anchor_column, problem_type, ingestion_rows_detected, ingestion_cols_detected").eq("project_id", projectId).maybeSingle(),
-        supabase.from("project_columns").select("column_name, inferred_type").eq("project_id", projectId),
+        supabase.from("project_columns").select("column_name, inferred_type, null_percent, distinct_count").eq("project_id", projectId),
         supabase.from("project_dataset_state").select("row_count, col_count, source_type").eq("project_id", projectId).maybeSingle(),
       ]);
 
       const s = settings as any;
-      const columns = ((cols || []) as unknown as Array<{ column_name: string; inferred_type: string }>).map(c => ({
+      const columns = ((cols || []) as unknown as Array<{ column_name: string; inferred_type: string; null_percent?: number; distinct_count?: number }>).map(c => ({
         column_name: c.column_name,
         inferred_type: c.inferred_type,
-        null_percent: undefined as number | undefined,
-        distinct_count: undefined as number | undefined,
+        null_percent: (c as any).null_percent as number | undefined,
+        distinct_count: (c as any).distinct_count as number | undefined,
       }));
 
       const objective = overrides?.objective || s?.objective || "generic";
@@ -44,10 +44,12 @@ export function useGrainTimeResolution(projectId: string | undefined) {
 
       // Detect data shape heuristic
       let dataShape = "unknown";
+      let rowsPerEntity: number | null = null;
       if (entityKey && totalRows > 0) {
         const entityCol = columns.find(c => c.column_name === entityKey);
         if (entityCol?.distinct_count && entityCol.distinct_count > 0) {
           const ratio = totalRows / entityCol.distinct_count;
+          rowsPerEntity = ratio;
           dataShape = ratio > 1.5 ? "multiple_rows_per_entity" : "one_row_per_entity";
         }
       }
@@ -57,7 +59,7 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       // 1. Grain resolution
       const grainRes = resolveGrain({
         objective, problemType, entityKey, timeColumn,
-        dataShape, rowsPerEntity: null, totalRows, totalCols,
+        dataShape, rowsPerEntity, totalRows, totalCols,
       });
 
       // 2. Time strategy

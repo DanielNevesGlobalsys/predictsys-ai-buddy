@@ -458,18 +458,35 @@ const StepTargetFeatures = ({
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
 
   // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
+  // Runs after auto-resolution is applied OR when key fields change
+  const resolveGrainTime = useCallback(() => {
+    const resolvedTime = autoRes.result.time_column || ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+    const resolvedEntity = entityKey || autoRes.result.entity_key || null;
+    const resolvedTarget = targetColumn || autoRes.result.target_column || undefined;
+    const resolvedObjective = businessObjective || undefined;
+    const resolvedProblem = (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression";
+
+    console.log("[StepTargetFeatures] Triggering grain/time resolution:", {
+      target: resolvedTarget, entity: resolvedEntity, time: resolvedTime, objective: resolvedObjective,
+    });
+
+    grainTime.resolve({
+      targetColumn: resolvedTarget,
+      problemType: resolvedProblem,
+      entityKey: resolvedEntity,
+      timeColumn: resolvedTime,
+      objective: resolvedObjective as string | undefined,
+    });
+  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType]);
+
   useEffect(() => {
     if (grainTimeRanRef.current) return;
     if (!autoRes.resolved || autoRes.resolving || columns.length === 0) return;
+    // Wait for applyToSSOT to complete before resolving grain
+    if (autoRes.result.target_column && !autoRes.applied) return;
     grainTimeRanRef.current = true;
-    grainTime.resolve({
-      targetColumn: targetColumn || autoRes.result.target_column || undefined,
-      problemType: (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression",
-      entityKey: entityKey || autoRes.result.entity_key || null,
-      timeColumn: autoRes.result.time_column || ssot.time_anchor_column || null,
-      objective: businessObjective || undefined,
-    });
-  }, [autoRes.resolved, autoRes.resolving, columns.length, targetColumn, entityKey]);
+    resolveGrainTime();
+  }, [autoRes.resolved, autoRes.resolving, autoRes.applied, columns.length, resolveGrainTime]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
@@ -609,13 +626,23 @@ const StepTargetFeatures = ({
     const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null });
     if (!saved) return false;
 
-    // 2. Persist entity_key + time_anchor to project_settings
+    // 2. Persist entity_key + time_anchor + grain/time strategy to project_settings
     const settingsUpdate: Record<string, any> = { entity_key: entityKey };
-    const resolvedTimeAnchor = ssot.time_anchor_column || contractHints?.time_anchor_column || null;
-    if (resolvedTimeAnchor) settingsUpdate.time_anchor_column = resolvedTimeAnchor;
-    supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id).then(({ error }) => {
-      if (!error) console.log(`[StepTargetFeatures] entity_key=${entityKey}, time_anchor=${resolvedTimeAnchor} persisted`);
-    });
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    if (resolvedTimeAnchor) {
+      settingsUpdate.time_anchor_column = resolvedTimeAnchor;
+      settingsUpdate.recommended_time_column = resolvedTimeAnchor;
+    }
+    if (grainTime.resolution) {
+      settingsUpdate.recommended_grain = grainTime.resolution.grain.recommended_grain;
+      settingsUpdate.recommended_split_strategy = grainTime.resolution.split.recommended_split;
+      settingsUpdate.dataset_build_mode = grainTime.resolution.build_plan.builder_mode;
+      settingsUpdate.grain_confidence = grainTime.resolution.grain.confidence;
+      settingsUpdate.time_strategy_confidence = grainTime.resolution.time.confidence;
+      settingsUpdate.temporal_readiness_state = grainTime.resolution.temporal_readiness.status;
+    }
+    await supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id);
+    console.log(`[StepTargetFeatures] Persisted: entity=${entityKey}, time=${resolvedTimeAnchor}, grain=${settingsUpdate.recommended_grain || "—"}, split=${settingsUpdate.recommended_split_strategy || "—"}`);
 
     // 3. Auto-trigger builder
     if (cleanFeatures.length >= 3) {
@@ -637,6 +664,9 @@ const StepTargetFeatures = ({
     await Promise.all([loadSelectionVersion(), loadSSOT()]);
     onSSOTChanged?.();
     setPreflightRefreshKey(k => k + 1);
+    // Re-resolve grain/time with updated state
+    grainTimeRanRef.current = false;
+    resolveGrainTime();
     return true;
   };
 
@@ -879,13 +909,25 @@ const StepTargetFeatures = ({
                 Coluna temporal
               </Label>
               <div className="p-3 bg-background rounded-lg border border-border/50 text-sm">
-                {ssot.time_anchor_column ? (
-                  <div className="flex items-center gap-2"><CheckCircle className="w-4 h-4 text-accent" /><span className="font-medium">{ssot.time_anchor_column}</span></div>
-                ) : contractHints?.time_anchor_column ? (
-                  <div className="flex items-center gap-2"><Info className="w-4 h-4 text-muted-foreground" /><span className="text-muted-foreground">Sugerida: {contractHints.time_anchor_column}</span></div>
-                ) : (
-                  <span className="text-muted-foreground">Não detectada</span>
-                )}
+                {(() => {
+                  const resolvedTime = ssot.time_anchor_column 
+                    || grainTime.resolution?.time?.time_column 
+                    || autoRes.result.time_column 
+                    || contractHints?.time_anchor_column 
+                    || null;
+                  if (resolvedTime) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-accent" />
+                        <span className="font-medium">{resolvedTime}</span>
+                        {grainTime.resolution?.time?.time_column_type && grainTime.resolution.time.time_column_type !== "unknown" && (
+                          <Badge variant="outline" className="text-[10px] py-0">{grainTime.resolution.time.time_column_type.replace(/_/g, " ")}</Badge>
+                        )}
+                      </div>
+                    );
+                  }
+                  return <span className="text-muted-foreground">Não detectada</span>;
+                })()}
               </div>
             </div>
           </div>

@@ -225,26 +225,44 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         features: res.selected_features.length,
       });
 
-      // 1. Update project_settings (SSOT)
+      // 1. Update project_settings (SSOT) — includes grain/time fields
+      const settingsPayload: Record<string, any> = {
+        project_id: projectId,
+        target_column: res.target_column,
+        active_target_column: res.target_column,
+        problem_type: res.problem_type,
+        entity_key: res.entity_key,
+        time_anchor_column: res.time_column,
+        feature_columns: res.selected_features,
+        excluded_columns: res.excluded_features,
+        target_state: "ready",
+        active_target_mode: "column",
+        target_source: "manual",
+        predictive_resolution_state: "applied",
+        updated_at: new Date().toISOString(),
+      };
+
+      // If time_column is set, also persist recommended grain/time/split
+      if (res.time_column && res.entity_key) {
+        settingsPayload.recommended_time_column = res.time_column;
+        settingsPayload.recommended_grain = "entity_time";
+        settingsPayload.recommended_split_strategy = "temporal";
+        settingsPayload.dataset_build_mode = "entity_time";
+        settingsPayload.temporal_readiness_state = "ready";
+        settingsPayload.grain_confidence = 0.85;
+        settingsPayload.time_strategy_confidence = 0.9;
+      }
+
       await supabase
         .from("project_settings")
-        .upsert({
-          project_id: projectId,
-          target_column: res.target_column,
-          active_target_column: res.target_column,
-          problem_type: res.problem_type,
-          entity_key: res.entity_key,
-          time_anchor_column: res.time_column,
-          feature_columns: res.selected_features,
-          excluded_columns: res.excluded_features,
-          target_state: "ready",
-          active_target_mode: "column",
-          target_source: "manual",
-          predictive_resolution_state: "applied",
-          updated_at: new Date().toISOString(),
-        } as any, { onConflict: "project_id" });
+        .upsert(settingsPayload as any, { onConflict: "project_id" });
 
-      console.log("[useAutoResolution] project_settings updated");
+      console.log("[useAutoResolution] project_settings updated:", {
+        target: res.target_column,
+        entity: res.entity_key,
+        time: res.time_column,
+        grain: settingsPayload.recommended_grain || "original_row",
+      });
 
       // 2. Sync project_model_selection via atomic RPC (this is what preflight reads!)
       const upsertRes = await supabase.functions.invoke("upsert-model-selection", {
@@ -254,6 +272,8 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
           problem_type: res.problem_type,
           selected_features: res.selected_features,
           excluded_features: res.excluded_features,
+          entity_key: res.entity_key,
+          time_column: res.time_column,
         },
       });
 

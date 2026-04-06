@@ -87,6 +87,8 @@ serve(async (req: Request) => {
       problem_type: rawProblemType,
       selected_features,
       excluded_features,
+      entity_key,
+      time_column,
     } = body;
 
     const problem_type = normalizeProblemType(rawProblemType);
@@ -206,24 +208,30 @@ serve(async (req: Request) => {
     // IMPORTANT: Do NOT overwrite target_source or active_target_mode here.
     // Those fields are set by the calling context (IntentTargetSummary, TargetBuilder, etc.)
     // and overwriting them with stale values causes pipeline misalignment.
+    const settingsUpsert: Record<string, any> = {
+      project_id,
+      org_id: project.organization_id,
+      target_column,
+      problem_type: problem_type || null,
+      feature_columns: selected_features || [],
+      excluded_columns: excluded_features || [],
+      selection_version: newVersion,
+      target_state: target_column ? "ready" : "draft",
+      active_target_column: target_column,
+    };
+
+    // Persist entity_key and time_column if provided
+    if (entity_key !== undefined && entity_key !== null) {
+      settingsUpsert.entity_key = entity_key;
+    }
+    if (time_column !== undefined && time_column !== null) {
+      settingsUpsert.time_anchor_column = time_column;
+      settingsUpsert.recommended_time_column = time_column;
+    }
+
     await supabase
       .from("project_settings")
-      .upsert(
-        {
-          project_id,
-          org_id: project.organization_id,
-          target_column,
-          problem_type: problem_type || null,
-          feature_columns: selected_features || [],
-          excluded_columns: excluded_features || [],
-          // ── SSOT State Machine: sync selection_version + target_state ──
-          selection_version: newVersion,
-          target_state: target_column ? "ready" : "draft",
-          active_target_column: target_column,
-          // Do NOT set active_target_mode or target_source here
-        },
-        { onConflict: "project_id" },
-      );
+      .upsert(settingsUpsert, { onConflict: "project_id" });
 
     // ── SSOT: Mark downstream stages as stale when selection changes ──
     if (didChange) {
