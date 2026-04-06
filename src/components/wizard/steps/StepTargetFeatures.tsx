@@ -284,6 +284,33 @@ const StepTargetFeatures = ({
     } else { setContractMissing(true); }
   }, [projectData.id]);
 
+  // ═══ RESET ALL REFS ON PROJECT SWITCH ═══
+  useEffect(() => {
+    autoResAppliedRef.current = false;
+    lysAppliedRef.current = false;
+    grainTimeRanRef.current = false;
+    inferenceAutoLoaded.current = false;
+    initialTargetRef.current = null;
+    hasChangedConfig.current = false;
+    setTargetColumn("");
+    setSelectedFeatures([]);
+    setExcludedColumns([]);
+    setInferredProblemType(null);
+    setEntityKey("");
+    setAppliedTargetColumn(null);
+    setSelectionVersion(null);
+    setHasEDA(false);
+    setModelingState(null);
+    setBuilderVersionUsed(null);
+    setColumnInference([]);
+    setContractHints(null);
+    setBusinessContract(null);
+    setBusinessObjective(null);
+    setBusinessIndustry(null);
+    setContractMissing(false);
+    setColumns([]);
+  }, [projectData.id]);
+
   // ═══ INITIALIZATION ═══
   useEffect(() => {
     if (projectData.id) {
