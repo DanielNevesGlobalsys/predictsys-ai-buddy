@@ -150,7 +150,7 @@ export function useTargetFeaturesSSOT(projectId: string | undefined) {
   const isBuilderStale = ssot.staleness_flags?.builder_stale === true;
 
   // Reset on project switch
-  React.useEffect(() => {
+  useEffect(() => {
     setSSOT(EMPTY_SSOT);
     setLoaded(false);
     fetchCountRef.current = 0;
