@@ -896,13 +896,25 @@ const StepTargetFeatures = ({
                 Coluna temporal
               </Label>
               <div className="p-3 bg-background rounded-lg border border-border/50 text-sm">
-                {ssot.time_anchor_column ? (
-                  <div className="flex items-center gap-2"><CheckCircle className="w-4 h-4 text-accent" /><span className="font-medium">{ssot.time_anchor_column}</span></div>
-                ) : contractHints?.time_anchor_column ? (
-                  <div className="flex items-center gap-2"><Info className="w-4 h-4 text-muted-foreground" /><span className="text-muted-foreground">Sugerida: {contractHints.time_anchor_column}</span></div>
-                ) : (
-                  <span className="text-muted-foreground">Não detectada</span>
-                )}
+                {(() => {
+                  const resolvedTime = ssot.time_anchor_column 
+                    || grainTime.resolution?.time?.time_column 
+                    || autoRes.result.time_column 
+                    || contractHints?.time_anchor_column 
+                    || null;
+                  if (resolvedTime) {
+                    return (
+                      <div className="flex items-center gap-2">
+                        <CheckCircle className="w-4 h-4 text-accent" />
+                        <span className="font-medium">{resolvedTime}</span>
+                        {grainTime.resolution?.time?.time_column_type && grainTime.resolution.time.time_column_type !== "unknown" && (
+                          <Badge variant="outline" className="text-[10px] py-0">{grainTime.resolution.time.time_column_type.replace(/_/g, " ")}</Badge>
+                        )}
+                      </div>
+                    );
+                  }
+                  return <span className="text-muted-foreground">Não detectada</span>;
+                })()}
               </div>
             </div>
           </div>
