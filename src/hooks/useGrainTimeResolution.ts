@@ -28,11 +28,11 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       ]);
 
       const s = settings as any;
-      const columns = ((cols || []) as unknown as Array<{ column_name: string; inferred_type: string }>).map(c => ({
+      const columns = ((cols || []) as unknown as Array<{ column_name: string; inferred_type: string; null_percent?: number; distinct_count?: number }>).map(c => ({
         column_name: c.column_name,
         inferred_type: c.inferred_type,
-        null_percent: undefined as number | undefined,
-        distinct_count: undefined as number | undefined,
+        null_percent: (c as any).null_percent as number | undefined,
+        distinct_count: (c as any).distinct_count as number | undefined,
       }));
 
       const objective = overrides?.objective || s?.objective || "generic";
