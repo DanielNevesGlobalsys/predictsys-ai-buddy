@@ -515,6 +515,43 @@ const StepTargetFeatures = ({
     resolveGrainTime();
   }, [autoRes.resolved, autoRes.resolving, autoRes.applied, columns.length, resolveGrainTime]);
 
+  // ═══ AUTO-PROMOTE: Create project_model_selection if resolved but not yet official ═══
+  const autoPromoteRef = useRef(false);
+  useEffect(() => {
+    if (autoPromoteRef.current) return;
+    if (!ssotLoaded || !columns.length) return;
+    // Only auto-promote if there's NO official selection yet
+    if (selectionVersion && selectionVersion > 0) return;
+    // Need target + entity + features to promote
+    if (!targetColumn || !entityKey || selectedFeatures.length === 0) return;
+    // Wait for auto-resolution to finish applying
+    if (autoRes.resolving) return;
+
+    autoPromoteRef.current = true;
+    console.log("[StepTargetFeatures] AUTO-PROMOTE: Creating official project_model_selection", {
+      target: targetColumn, entity: entityKey, features: selectedFeatures.length, problem: inferredProblemType,
+    });
+
+    // Fire-and-forget promotion
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    saveSettings({
+      target_column: targetColumn,
+      problem_type: inferredProblemType || "classification",
+      feature_columns: selectedFeatures.filter(f => f !== targetColumn),
+      excluded_columns: excludedColumns,
+      suggestion: null,
+      entity_key: entityKey,
+      time_column: resolvedTimeAnchor,
+    }).then(saved => {
+      if (saved) {
+        console.log("[StepTargetFeatures] AUTO-PROMOTE: Official selection created successfully");
+        loadSelectionVersion();
+        loadSSOT();
+        setPreflightRefreshKey(k => k + 1);
+      }
+    });
+  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType]);
+
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
   }, [projectData.target_column]);
