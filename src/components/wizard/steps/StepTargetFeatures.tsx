@@ -625,6 +625,18 @@ const StepTargetFeatures = ({
     })();
   }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType]);
 
+  useEffect(() => {
+    if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
+  }, [projectData.target_column]);
+
+  // Auto-select all features when no SSOT features
+  useEffect(() => {
+    if (columns.length > 0 && selectedFeatures.length === 0 && ssotLoaded && ssot.feature_columns.length === 0) {
+      const features = columns.filter((c) => c.name !== targetColumn && !c.featureHasError).map((c) => c.name);
+      setSelectedFeatures(features);
+    }
+  }, [columns, targetColumn, ssotLoaded, ssot.feature_columns]);
+
   const checkEDA = async () => {
     if (!projectData.id) return;
     const { count } = await supabase.from("project_numeric_stats").select("id", { count: "exact", head: true }).eq("project_id", projectData.id);
