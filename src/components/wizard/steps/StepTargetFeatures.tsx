@@ -288,6 +288,7 @@ const StepTargetFeatures = ({
   // ═══ RESET ALL REFS ON PROJECT SWITCH ═══
   useEffect(() => {
     autoResAppliedRef.current = false;
+    autoPromoteRef.current = false;
     lysAppliedRef.current = false;
     grainTimeRanRef.current = false;
     inferenceAutoLoaded.current = false;
