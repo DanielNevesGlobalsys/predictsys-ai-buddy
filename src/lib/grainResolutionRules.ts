@@ -88,11 +88,20 @@ export function resolveGrain(input: GrainInput): GrainResolution {
     reasoning.push("Uma linha por entidade — sem agregação.");
     confidence = 0.8;
   }
+  // Rule 7: Unknown shape but has entity + time → prefer entity_time
+  else if (hasEntity && hasTime && input.dataShape === "unknown") {
+    grain = "entity_time";
+    aggregationRequired = true;
+    reasoning.push("Shape desconhecido com entidade + tempo — entity_time assumido por segurança.");
+    confidence = 0.6;
+  }
   // Default
   else {
-    grain = "original_row";
-    reasoning.push("Grain padrão: original_row.");
-    confidence = 0.5;
+    grain = hasEntity && hasTime ? "entity_time" : "original_row";
+    reasoning.push(hasEntity && hasTime
+      ? "Entidade e tempo detectados — grain entity_time."
+      : "Grain padrão: original_row.");
+    confidence = hasEntity && hasTime ? 0.6 : 0.5;
   }
 
   // AUTO-FIX: grain incoherent with temporal objective
