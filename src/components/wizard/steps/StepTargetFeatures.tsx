@@ -463,7 +463,7 @@ const StepTargetFeatures = ({
     const resolvedTime = autoRes.result.time_column || ssot.time_anchor_column || contractHints?.time_anchor_column || null;
     const resolvedEntity = entityKey || autoRes.result.entity_key || null;
     const resolvedTarget = targetColumn || autoRes.result.target_column || undefined;
-    const resolvedObjective = businessObjective || ssot.objective || undefined;
+    const resolvedObjective = businessObjective || undefined;
     const resolvedProblem = (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression";
 
     console.log("[StepTargetFeatures] Triggering grain/time resolution:", {
