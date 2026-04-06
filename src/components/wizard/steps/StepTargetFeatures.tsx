@@ -664,6 +664,9 @@ const StepTargetFeatures = ({
     await Promise.all([loadSelectionVersion(), loadSSOT()]);
     onSSOTChanged?.();
     setPreflightRefreshKey(k => k + 1);
+    // Re-resolve grain/time with updated state
+    grainTimeRanRef.current = false;
+    resolveGrainTime();
     return true;
   };
 
