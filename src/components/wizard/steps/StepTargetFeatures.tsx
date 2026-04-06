@@ -458,18 +458,35 @@ const StepTargetFeatures = ({
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
 
   // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
+  // Runs after auto-resolution is applied OR when key fields change
+  const resolveGrainTime = useCallback(() => {
+    const resolvedTime = autoRes.result.time_column || ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+    const resolvedEntity = entityKey || autoRes.result.entity_key || null;
+    const resolvedTarget = targetColumn || autoRes.result.target_column || undefined;
+    const resolvedObjective = businessObjective || ssot.objective || undefined;
+    const resolvedProblem = (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression";
+
+    console.log("[StepTargetFeatures] Triggering grain/time resolution:", {
+      target: resolvedTarget, entity: resolvedEntity, time: resolvedTime, objective: resolvedObjective,
+    });
+
+    grainTime.resolve({
+      targetColumn: resolvedTarget,
+      problemType: resolvedProblem,
+      entityKey: resolvedEntity,
+      timeColumn: resolvedTime,
+      objective: resolvedObjective as string | undefined,
+    });
+  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType, ssot.objective]);
+
   useEffect(() => {
     if (grainTimeRanRef.current) return;
     if (!autoRes.resolved || autoRes.resolving || columns.length === 0) return;
+    // Wait for applyToSSOT to complete before resolving grain
+    if (autoRes.result.target_column && !autoRes.applied) return;
     grainTimeRanRef.current = true;
-    grainTime.resolve({
-      targetColumn: targetColumn || autoRes.result.target_column || undefined,
-      problemType: (inferredProblemType || autoRes.result.problem_type || "classification") as "classification" | "regression",
-      entityKey: entityKey || autoRes.result.entity_key || null,
-      timeColumn: autoRes.result.time_column || ssot.time_anchor_column || null,
-      objective: businessObjective || undefined,
-    });
-  }, [autoRes.resolved, autoRes.resolving, columns.length, targetColumn, entityKey]);
+    resolveGrainTime();
+  }, [autoRes.resolved, autoRes.resolving, autoRes.applied, columns.length, resolveGrainTime]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
