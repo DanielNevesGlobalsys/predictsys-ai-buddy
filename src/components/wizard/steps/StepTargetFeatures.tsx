@@ -108,6 +108,7 @@ const StepTargetFeatures = ({
   // ═══ AUTO-RESOLUTION: PRE runs on mount and auto-applies ═══
   const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
   const autoResAppliedRef = useRef(false);
+  const autoPromoteRef = useRef(false);
 
   // ═══ GRAIN + TIME RESOLUTION ═══
   const grainTime = useGrainTimeResolution(projectData.id);
