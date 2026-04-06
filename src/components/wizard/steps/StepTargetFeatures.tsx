@@ -477,7 +477,7 @@ const StepTargetFeatures = ({
       timeColumn: resolvedTime,
       objective: resolvedObjective as string | undefined,
     });
-  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType, ssot.objective]);
+  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType]);
 
   useEffect(() => {
     if (grainTimeRanRef.current) return;
