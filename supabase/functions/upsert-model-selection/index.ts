@@ -87,6 +87,8 @@ serve(async (req: Request) => {
       problem_type: rawProblemType,
       selected_features,
       excluded_features,
+      entity_key,
+      time_column,
     } = body;
 
     const problem_type = normalizeProblemType(rawProblemType);
