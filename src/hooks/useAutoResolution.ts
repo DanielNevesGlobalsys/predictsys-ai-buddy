@@ -213,8 +213,8 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
    * ATOMIC apply: writes to project_settings + project_model_selection + triggers builder.
    * This is the critical fix — ensures preflight reads the same state shown in the UI.
    */
-  const applyToSSOT = useCallback(async (res: AutoResolutionResult) => {
-    if (!projectId || applied) return;
+  const applyToSSOT = useCallback(async (res: AutoResolutionResult, force = false) => {
+    if (!projectId || (applied && !force)) return;
     if (!res.target_column) return;
 
     try {
