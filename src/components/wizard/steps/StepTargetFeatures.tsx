@@ -622,8 +622,11 @@ const StepTargetFeatures = ({
     if (cleanFeatures.length === 0) { toast({ title: t("common.error"), description: "Selecione ao menos 1 feature.", variant: "destructive" }); return false; }
     const problemType = inferredProblemType || projectData.problem_type;
 
-    // 1. Save via atomic model_selection RPC
-    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null });
+    // Resolve time anchor from all available sources
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+
+    // 1. Save via atomic model_selection RPC — includes entity_key + time_column
+    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
     if (!saved) return false;
 
     // 2. Persist entity_key + time_anchor + grain/time strategy to project_settings
