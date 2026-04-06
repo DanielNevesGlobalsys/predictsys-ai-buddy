@@ -626,13 +626,23 @@ const StepTargetFeatures = ({
     const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null });
     if (!saved) return false;
 
-    // 2. Persist entity_key + time_anchor to project_settings
+    // 2. Persist entity_key + time_anchor + grain/time strategy to project_settings
     const settingsUpdate: Record<string, any> = { entity_key: entityKey };
-    const resolvedTimeAnchor = ssot.time_anchor_column || contractHints?.time_anchor_column || null;
-    if (resolvedTimeAnchor) settingsUpdate.time_anchor_column = resolvedTimeAnchor;
-    supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id).then(({ error }) => {
-      if (!error) console.log(`[StepTargetFeatures] entity_key=${entityKey}, time_anchor=${resolvedTimeAnchor} persisted`);
-    });
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    if (resolvedTimeAnchor) {
+      settingsUpdate.time_anchor_column = resolvedTimeAnchor;
+      settingsUpdate.recommended_time_column = resolvedTimeAnchor;
+    }
+    if (grainTime.resolution) {
+      settingsUpdate.recommended_grain = grainTime.resolution.grain.recommended_grain;
+      settingsUpdate.recommended_split_strategy = grainTime.resolution.split.recommended_split;
+      settingsUpdate.dataset_build_mode = grainTime.resolution.build_plan.builder_mode;
+      settingsUpdate.grain_confidence = grainTime.resolution.grain.confidence;
+      settingsUpdate.time_strategy_confidence = grainTime.resolution.time.confidence;
+      settingsUpdate.temporal_readiness_state = grainTime.resolution.temporal_readiness.status;
+    }
+    await supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id);
+    console.log(`[StepTargetFeatures] Persisted: entity=${entityKey}, time=${resolvedTimeAnchor}, grain=${settingsUpdate.recommended_grain || "—"}, split=${settingsUpdate.recommended_split_strategy || "—"}`);
 
     // 3. Auto-trigger builder
     if (cleanFeatures.length >= 3) {
