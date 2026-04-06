@@ -38,7 +38,8 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       const objective = overrides?.objective || s?.objective || "generic";
       const problemType = (overrides?.problemType || s?.problem_type || "classification") as "classification" | "regression";
       const entityKey = overrides?.entityKey !== undefined ? overrides.entityKey : (s?.entity_key || null);
-      const timeColumn = overrides?.timeColumn !== undefined ? overrides.timeColumn : (s?.time_anchor_column || null);
+      // CRITICAL: Prefer overrides.timeColumn over DB value — for new projects the DB is empty
+      const timeColumn = overrides?.timeColumn !== undefined ? (overrides.timeColumn || s?.time_anchor_column || null) : (s?.time_anchor_column || null);
       const totalRows = (dsState as any)?.row_count || s?.ingestion_rows_detected || 0;
       const totalCols = columns.length || (dsState as any)?.col_count || 0;
 
