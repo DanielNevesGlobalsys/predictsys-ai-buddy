@@ -44,10 +44,12 @@ export function useGrainTimeResolution(projectId: string | undefined) {
 
       // Detect data shape heuristic
       let dataShape = "unknown";
+      let rowsPerEntity: number | null = null;
       if (entityKey && totalRows > 0) {
         const entityCol = columns.find(c => c.column_name === entityKey);
         if (entityCol?.distinct_count && entityCol.distinct_count > 0) {
           const ratio = totalRows / entityCol.distinct_count;
+          rowsPerEntity = ratio;
           dataShape = ratio > 1.5 ? "multiple_rows_per_entity" : "one_row_per_entity";
         }
       }
@@ -57,7 +59,7 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       // 1. Grain resolution
       const grainRes = resolveGrain({
         objective, problemType, entityKey, timeColumn,
-        dataShape, rowsPerEntity: null, totalRows, totalCols,
+        dataShape, rowsPerEntity, totalRows, totalCols,
       });
 
       // 2. Time strategy
