@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import type { TargetSuggestion } from "@/components/wizard/steps/LysSuggestionCards";
 
@@ -128,6 +128,12 @@ export function useProjectSettings(projectId: string | undefined) {
     },
     [projectId]
   );
+
+  // Reset on project switch
+  useEffect(() => {
+    setSettings(null);
+    setLoading(false);
+  }, [projectId]);
 
   return { settings, loading, loadSettings, saveSettings };
 }

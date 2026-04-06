@@ -108,6 +108,7 @@ const StepTargetFeatures = ({
   // ═══ AUTO-RESOLUTION: PRE runs on mount and auto-applies ═══
   const autoRes = useAutoResolution(projectData.id, currentOrganization?.id);
   const autoResAppliedRef = useRef(false);
+  const autoPromoteRef = useRef(false);
 
   // ═══ GRAIN + TIME RESOLUTION ═══
   const grainTime = useGrainTimeResolution(projectData.id);
@@ -282,6 +283,34 @@ const StepTargetFeatures = ({
       setBusinessIndustry(ps.industry || null);
       setAdvancedMode(ps.advanced_mode_enabled === true);
     } else { setContractMissing(true); }
+  }, [projectData.id]);
+
+  // ═══ RESET ALL REFS ON PROJECT SWITCH ═══
+  useEffect(() => {
+    autoResAppliedRef.current = false;
+    autoPromoteRef.current = false;
+    lysAppliedRef.current = false;
+    grainTimeRanRef.current = false;
+    inferenceAutoLoaded.current = false;
+    initialTargetRef.current = null;
+    hasChangedConfig.current = false;
+    setTargetColumn("");
+    setSelectedFeatures([]);
+    setExcludedColumns([]);
+    setInferredProblemType(null);
+    setEntityKey("");
+    setAppliedTargetColumn(null);
+    setSelectionVersion(null);
+    setHasEDA(false);
+    setModelingState(null);
+    setBuilderVersionUsed(null);
+    setColumnInference([]);
+    setContractHints(null);
+    setBusinessContract(null);
+    setBusinessObjective(null);
+    setBusinessIndustry(null);
+    setContractMissing(false);
+    setColumns([]);
   }, [projectData.id]);
 
   // ═══ INITIALIZATION ═══
@@ -487,6 +516,42 @@ const StepTargetFeatures = ({
     grainTimeRanRef.current = true;
     resolveGrainTime();
   }, [autoRes.resolved, autoRes.resolving, autoRes.applied, columns.length, resolveGrainTime]);
+
+  // ═══ AUTO-PROMOTE: Create project_model_selection if resolved but not yet official ═══
+  useEffect(() => {
+    if (autoPromoteRef.current) return;
+    if (!ssotLoaded || !columns.length) return;
+    // Only auto-promote if there's NO official selection yet
+    if (selectionVersion && selectionVersion > 0) return;
+    // Need target + entity + features to promote
+    if (!targetColumn || !entityKey || selectedFeatures.length === 0) return;
+    // Wait for auto-resolution to finish applying
+    if (autoRes.resolving) return;
+
+    autoPromoteRef.current = true;
+    console.log("[StepTargetFeatures] AUTO-PROMOTE: Creating official project_model_selection", {
+      target: targetColumn, entity: entityKey, features: selectedFeatures.length, problem: inferredProblemType,
+    });
+
+    // Fire-and-forget promotion
+    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    saveSettings({
+      target_column: targetColumn,
+      problem_type: inferredProblemType || "classification",
+      feature_columns: selectedFeatures.filter(f => f !== targetColumn),
+      excluded_columns: excludedColumns,
+      suggestion: null,
+      entity_key: entityKey,
+      time_column: resolvedTimeAnchor,
+    }).then(saved => {
+      if (saved) {
+        console.log("[StepTargetFeatures] AUTO-PROMOTE: Official selection created successfully");
+        loadSelectionVersion();
+        loadSSOT();
+        setPreflightRefreshKey(k => k + 1);
+      }
+    });
+  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;

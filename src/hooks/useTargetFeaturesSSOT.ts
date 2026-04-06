@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { supabase } from "@/integrations/supabase/client";
 
 /**
@@ -148,6 +148,13 @@ export function useTargetFeaturesSSOT(projectId: string | undefined) {
    * Whether selection is stale relative to builder.
    */
   const isBuilderStale = ssot.staleness_flags?.builder_stale === true;
+
+  // Reset on project switch
+  useEffect(() => {
+    setSSOT(EMPTY_SSOT);
+    setLoaded(false);
+    fetchCountRef.current = 0;
+  }, [projectId]);
 
   return {
     ssot,
