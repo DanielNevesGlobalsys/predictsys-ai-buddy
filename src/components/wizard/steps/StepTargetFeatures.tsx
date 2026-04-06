@@ -486,10 +486,34 @@ const StepTargetFeatures = ({
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
   }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
 
+  // ═══ RESOLVE BEST TIME COLUMN from all sources ═══
+  const resolveBestTimeColumn = useCallback((): string | null => {
+    // Priority: SSOT > auto-resolution > grain engine > contract hints > column heuristic
+    const candidates = [
+      ssot.time_anchor_column,
+      autoRes.result.time_column,
+      grainTime.resolution?.time?.time_column,
+      contractHints?.time_anchor_column,
+    ].filter(Boolean) as string[];
+    if (candidates.length > 0) return candidates[0];
+
+    // Heuristic fallback: scan columns for date-like columns matching snapshot patterns
+    const SNAPSHOT_HINTS = ["dt_ref", "data_ref", "reference_date", "data_referencia", "snapshot_date", "data_base"];
+    const DATE_TYPES = ["date", "datetime", "timestamp", "temporal", "data", "date/time"];
+    for (const hint of SNAPSHOT_HINTS) {
+      const match = columns.find(c => c.name.toLowerCase() === hint.toLowerCase());
+      if (match) return match.name;
+    }
+    // Any date column
+    for (const col of columns) {
+      if (DATE_TYPES.includes((col.type || "").toLowerCase())) return col.name;
+    }
+    return null;
+  }, [ssot.time_anchor_column, autoRes.result.time_column, grainTime.resolution?.time?.time_column, contractHints?.time_anchor_column, columns]);
+
   // ═══ AUTO-TRIGGER GRAIN+TIME RESOLUTION ═══
-  // Runs after auto-resolution is applied OR when key fields change
   const resolveGrainTime = useCallback(() => {
-    const resolvedTime = autoRes.result.time_column || ssot.time_anchor_column || contractHints?.time_anchor_column || null;
+    const resolvedTime = resolveBestTimeColumn();
     const resolvedEntity = entityKey || autoRes.result.entity_key || null;
     const resolvedTarget = targetColumn || autoRes.result.target_column || undefined;
     const resolvedObjective = businessObjective || undefined;
@@ -506,7 +530,7 @@ const StepTargetFeatures = ({
       timeColumn: resolvedTime,
       objective: resolvedObjective as string | undefined,
     });
-  }, [autoRes.result, ssot.time_anchor_column, contractHints?.time_anchor_column, entityKey, targetColumn, businessObjective, inferredProblemType]);
+  }, [resolveBestTimeColumn, autoRes.result, entityKey, targetColumn, businessObjective, inferredProblemType]);
 
   useEffect(() => {
     if (grainTimeRanRef.current) return;
