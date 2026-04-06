@@ -260,34 +260,39 @@ serve(async (req: Request) => {
       ]);
     }
 
-    // ── Sync modeling contract problem_type when selection changes ──
-    if (didChange && problem_type) {
-      const { data: contract } = await supabase
-        .from("project_modeling_contracts")
-        .select("id, target_definition")
-        .eq("project_id", project_id)
-        .order("created_at", { ascending: false })
-        .limit(1)
-        .maybeSingle();
+    // ── Auto-generate/update modeling contract with entity/time/grain ──
+    if (didChange) {
+      const grainVal = entity_key && time_column ? "entity_time" : "original_row";
+      const splitVal = time_column ? "temporal" : "stratified";
+      const buildMode = entity_key && time_column ? "entity_time" : "row_level";
 
-      if (contract) {
-        const targetDef = (contract.target_definition as any) || {};
-        const contractPT = (targetDef.problem_type || "").toLowerCase();
-        const normalize = (t: string) => {
-          const l = t.toLowerCase();
-          if (["binary", "classification", "binary_classification"].includes(l)) return "classification";
-          if (["regression", "continuous"].includes(l)) return "regression";
-          return l;
-        };
-        if (normalize(contractPT) !== normalize(problem_type)) {
-          const updatedDef = { ...targetDef, problem_type };
-          await supabase
-            .from("project_modeling_contracts")
-            .update({ target_definition: updatedDef, updated_at: new Date().toISOString() })
-            .eq("id", contract.id);
-          console.log(`[upsert-model-selection] Synced contract problem_type: ${contractPT} → ${problem_type}`);
-        }
-      }
+      const contractPayload = {
+        project_id,
+        organization_id: project.organization_id,
+        version: 3,
+        intent_contract_id: null,
+        entity_key: entity_key || null,
+        anchor_time_col: time_column || null,
+        split_strategy: splitVal,
+        target_definition: {
+          target_name: target_column,
+          problem_type: problem_type,
+          target_source: "column",
+        },
+        feature_plan: {
+          include_features: selected_features || [],
+          exclude_features: excluded_features || [],
+        },
+        dataset_build_mode: buildMode,
+        grain: grainVal,
+        selection_version: newVersion,
+        status: "active",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+
+      await supabase.from("project_modeling_contracts").insert(contractPayload as any);
+      console.log(`[upsert-model-selection] Modeling contract v3 created: grain=${grainVal}, split=${splitVal}, time=${time_column || "none"}, entity=${entity_key || "none"}`);
     }
 
     return new Response(
