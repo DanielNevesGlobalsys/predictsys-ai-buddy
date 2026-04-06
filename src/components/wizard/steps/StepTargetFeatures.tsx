@@ -518,7 +518,6 @@ const StepTargetFeatures = ({
   }, [autoRes.resolved, autoRes.resolving, autoRes.applied, columns.length, resolveGrainTime]);
 
   // ═══ AUTO-PROMOTE: Create project_model_selection if resolved but not yet official ═══
-  const autoPromoteRef = useRef(false);
   useEffect(() => {
     if (autoPromoteRef.current) return;
     if (!ssotLoaded || !columns.length) return;
