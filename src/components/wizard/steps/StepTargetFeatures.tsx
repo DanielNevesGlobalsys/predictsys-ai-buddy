@@ -699,8 +699,8 @@ const StepTargetFeatures = ({
     { label: "Entity Key", ok: !!entityKey, detail: entityKey || "—" },
     { label: "Features", ok: selectedFeatures.filter(f => f !== targetColumn).length > 0, detail: `${selectedFeatures.filter(f => f !== targetColumn).length} selecionadas` },
     { label: "EDA processado", ok: unifiedEdaOk, detail: unifiedEdaOk ? "OK" : "Pendente" },
-    { label: "Model selection", ok: autoRes.applied || (selectionVersion !== null && selectionVersion > 0), detail: selectionVersion ? `v${selectionVersion}` : autoRes.applied ? "Aplicado pelo PRE" : "Pendente" },
-    { label: "Builder", ok: autoRes.builderStatus === "done" || isBuilderReady, detail: autoRes.builderStatus === "done" ? "Gerado" : autoRes.builderStatus === "running" || isRebuilding ? "Gerando..." : isBuilderReady ? "Pronto" : "Pendente" },
+    { label: "Model selection", ok: (selectionVersion !== null && selectionVersion > 0) || autoRes.applied, detail: selectionVersion ? `v${selectionVersion}` : autoRes.applied ? "Aplicado pelo PRE" : "Pendente" },
+    { label: "Builder", ok: autoRes.builderStatus === "done" || isBuilderReady || isRebuilding, detail: autoRes.builderStatus === "done" || isBuilderReady ? "Pronto" : autoRes.builderStatus === "running" || isRebuilding ? "Gerando..." : "Pendente" },
   ];
 
   // ═══ LOADING STATES ═══
