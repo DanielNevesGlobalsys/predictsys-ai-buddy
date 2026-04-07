@@ -1411,13 +1411,20 @@ serve(async (req: Request) => {
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ==================== ENTITY KEY & ANCHOR TIME ====================
-    const entityKey = existingContract?.entity_key
-      ? (typeof existingContract.entity_key === "string" ? existingContract.entity_key : (existingContract.entity_key as any)?.column || detectEntityKey(enrichedColumns, totalRows))
-      : detectEntityKey(enrichedColumns, totalRows);
-    const anchorTimeCol = existingContract?.anchor_time_col || (timeCols.length > 0 ? timeCols[0] : null);
+    // ==================== ENTITY KEY & ANCHOR TIME (SSOT-first) ====================
+    // Priority: model_selection > project_settings > contract > auto-detect
+    const ssotEntityKey = (settings as any)?.entity_key || null;
+    const selectionEntityKey = ssotEntityKey;
+    const contractEntityKey = existingContract?.entity_key
+      ? (typeof existingContract.entity_key === "string" ? existingContract.entity_key : (existingContract.entity_key as any)?.column || null)
+      : null;
+    const entityKey = selectionEntityKey || contractEntityKey || detectEntityKey(enrichedColumns, totalRows);
 
-    console.log(`[build-modeling-dataset] Entity: ${entityKey}, Anchor: ${anchorTimeCol}`);
+    const ssotTimeCol = (settings as any)?.time_anchor_column || (settings as any)?.recommended_time_column || null;
+    const contractTimeCol = existingContract?.anchor_time_col || null;
+    const anchorTimeCol = ssotTimeCol || contractTimeCol || (timeCols.length > 0 ? timeCols[0] : null);
+
+    console.log(`[build-modeling-dataset] Entity: ${entityKey} (ssot=${ssotEntityKey}, contract=${contractEntityKey}), Anchor: ${anchorTimeCol} (ssot=${ssotTimeCol}, contract=${contractTimeCol})`);
 
     // ==================== LEAKAGE COLS FROM CONTRACT + LEAKAGE GUARD ====================
     const leakageCols: string[] = [];
