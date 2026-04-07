@@ -56,7 +56,7 @@ export function useDashboardIntelligence({
   const loadTechnicalSummary = useCallback(async () => {
     if (!projectId) return;
     try {
-      const { data } = await supabase
+      const { data } = await (supabase
         .from("lis_agent_executions" as any)
         .select("decision")
         .eq("project_id", projectId)
@@ -64,7 +64,7 @@ export function useDashboardIntelligence({
         .eq("status", "success")
         .order("created_at", { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .maybeSingle() as any);
 
       if (data?.decision) {
         const ml = data.decision as any;
