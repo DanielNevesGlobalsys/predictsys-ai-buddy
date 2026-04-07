@@ -3574,8 +3574,35 @@ serve(async (req) => {
     const minSamplesRequired = useHumanLabelsAsTarget ? 30 : 100;
 
     if (X.length < minSamplesRequired) {
+      const diagHeaders = (globalThis as any).__featureNames || [];
+      console.error(`[DIAGNOSTIC] 0 samples failure:`);
+      console.error(`  target_column: ${target_column}`);
+      console.error(`  problem_type: ${problem_type}`);
+      console.error(`  delimiter used: "${delimiter}"`);
+      console.error(`  headers count: ${headers?.length || 0}`);
+      console.error(`  headers (first 10): ${headers?.slice(0, 10).join(', ')}`);
+      console.error(`  features count: ${diagHeaders.length}`);
+      console.error(`  totalLinesRead: ${totalLinesRead}`);
+      console.error(`  X.length (valid samples): ${X.length}`);
+      console.error(`  y.length: ${y.length}`);
+      console.error(`  filePaths: ${filePaths.map(p => p.split('/').pop()).join(', ')}`);
+      console.error(`  isBatchImport: ${isBatchImport}`);
+      console.error(`  target in headers: ${headers?.some(h => h.toLowerCase().trim() === target_column.toLowerCase().trim())}`);
+      
       return new Response(JSON.stringify({ 
-        error: `Dados insuficientes após parsing (${X.length} amostras válidas, mínimo: ${minSamplesRequired}). Verifique a qualidade dos dados.` 
+        error: `Dados insuficientes após parsing (${X.length} amostras válidas, mínimo: ${minSamplesRequired}). Verifique a qualidade dos dados.`,
+        diagnostic: {
+          target_column,
+          problem_type,
+          delimiter,
+          headers_count: headers?.length || 0,
+          headers_sample: headers?.slice(0, 10),
+          total_lines_read: totalLinesRead,
+          valid_samples: X.length,
+          file_paths: filePaths.map(p => p.split('/').pop()),
+          is_batch: isBatchImport,
+          target_in_headers: headers?.some(h => h.toLowerCase().trim() === target_column.toLowerCase().trim()),
+        }
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
