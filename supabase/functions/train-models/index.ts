@@ -1738,7 +1738,7 @@ serve(async (req) => {
     // Load active_target fields from project_settings
     const { data: activeTargetSettings } = await supabase
       .from("project_settings")
-      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key")
+      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key, time_anchor_column, recommended_time_column, recommended_split_strategy, recommended_grain, dataset_build_mode")
       .eq("project_id", project_id)
       .maybeSingle();
 
