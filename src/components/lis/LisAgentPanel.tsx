@@ -100,10 +100,10 @@ export default function LisAgentPanel({ executions, loading }: LisAgentPanelProp
                     {/* Warnings */}
                     {exec.warnings?.length > 0 && (
                       <div>
-                        <p className="font-medium text-xs mb-1 text-yellow-600">Avisos</p>
+                        <p className="font-medium text-xs mb-1 text-amber-500 dark:text-amber-400">Avisos</p>
                         <ul className="list-disc pl-4 space-y-1">
                           {exec.warnings.map((w, i) => (
-                            <li key={i} className="text-xs text-yellow-600">{w}</li>
+                            <li key={i} className="text-xs text-amber-500 dark:text-amber-400">{w}</li>
                           ))}
                         </ul>
                       </div>
