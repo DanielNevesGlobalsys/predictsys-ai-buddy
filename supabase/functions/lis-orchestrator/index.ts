@@ -142,6 +142,13 @@ serve(async (req) => {
       toolDef = ML_RESPONSE_TOOL;
       toolName = "ml_decision";
       projectContext = mlCtx as unknown as Record<string, unknown>;
+    } else if (isBAAgent) {
+      const baCtx = await buildBAContext(svc, project_id, stage, execution_mode);
+      systemPrompt = BA_SYSTEM_PROMPT;
+      userPrompt = buildBAPrompt(baCtx);
+      toolDef = BA_RESPONSE_TOOL;
+      toolName = "business_decision";
+      projectContext = baCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
