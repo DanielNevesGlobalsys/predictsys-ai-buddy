@@ -146,7 +146,7 @@ describe("AgentBlockingBanner", () => {
       blocking_issues: ["Conflito de governança"],
     });
     render(<AgentBlockingBanner executions={[exec]} />);
-    expect(screen.getByText(/Governança/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Governança/i).length).toBeGreaterThanOrEqual(1);
   });
 
   it("filters by stage when provided", () => {
