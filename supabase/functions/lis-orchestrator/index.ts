@@ -9,6 +9,12 @@ import {
   selectAgent,
 } from "../_shared/lis-agents.ts";
 import {
+  resolveOrchestration,
+  shouldBlock,
+  canAutoApply,
+  type StageOrchestration,
+} from "../_shared/lis-orchestration.ts";
+import {
   GOVERNANCE_SYSTEM_PROMPT,
   GOVERNANCE_RESPONSE_TOOL,
   buildGovernanceContext,
@@ -97,6 +103,9 @@ serve(async (req) => {
       return jsonResponse({ error: "project_id, organization_id, and stage are required" }, 400);
     }
 
+    // ─── Resolve Orchestration Config ───
+    const orchestration = resolveOrchestration(stage, execution_mode);
+
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
     const isGovernanceAgent = agentName === "governance_agent";
@@ -105,7 +114,7 @@ serve(async (req) => {
     const isMLAgent = agentName === "ml_engineer_agent";
     const isBAAgent = agentName === "business_analyst_agent";
 
-    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
+    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${orchestration.default_mode} Policy=${orchestration.application_policy} Project=${project_id}`);
 
     // ─── Build Context ───
     let systemPrompt: string;
@@ -496,6 +505,17 @@ serve(async (req) => {
         },
       };
     }
+
+    // ─── Attach orchestration metadata ───
+    (finalResponse as any).orchestration = {
+      primary_agent: orchestration.primary_agent,
+      secondary_agents: orchestration.secondary_agents,
+      validator_agent: orchestration.validator_agent,
+      execution_mode: orchestration.default_mode,
+      application_policy: orchestration.application_policy,
+      auto_apply_allowed: orchestration.auto_apply_allowed,
+      stage_description: orchestration.description,
+    };
 
     return jsonResponse(finalResponse);
   } catch (err) {
