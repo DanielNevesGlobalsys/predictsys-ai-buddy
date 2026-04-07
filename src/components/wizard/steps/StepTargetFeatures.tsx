@@ -46,6 +46,7 @@ import HumanLabelingCard from "./HumanLabelingCard";
 import TargetLifecycleCard from "./TargetLifecycleCard";
 import TargetExpertPanel from "./TargetExpertPanel";
 import TargetTrainingReadiness from "./TargetTrainingReadiness";
+import GovernanceConflictBanner from "./GovernanceConflictBanner";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference } from "@/hooks/useProblemInference";
