@@ -32,6 +32,11 @@ export interface TargetFeaturesSSOT {
   time_anchor_column: string | null;
   value_column: string | null;
   
+  // ── Grain/Time/Split strategy ──
+  recommended_grain: string | null;
+  recommended_split_strategy: string | null;
+  dataset_build_mode: string | null;
+  
   // ── Industry context ──
   industry: string | null;
   
