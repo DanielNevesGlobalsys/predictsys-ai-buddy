@@ -95,6 +95,7 @@ serve(async (req) => {
     const isGovernanceAgent = agentName === "governance_agent";
     const isDSAgent = agentName === "data_scientist_agent";
     const isDEAgent = agentName === "data_engineer_agent";
+    const isMLAgent = agentName === "ml_engineer_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
