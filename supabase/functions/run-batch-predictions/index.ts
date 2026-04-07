@@ -319,7 +319,9 @@ serve(async (req) => {
     const means = savedFeatureNames.map((_, i) => savedNormalization.means[i] ?? 0);
     const stdsArr = savedFeatureNames.map((_, i) => savedNormalization.stds[i] || 1);
 
-    // ===== DATASET FILES =====
+    // missingFeaturePct will be computed after CSV headers are read; default to 0
+    let missingFeaturePct = 0;
+
     const { data: activeDataset } = await supabase
       .from("project_datasets").select("*")
       .eq("project_id", project_id).eq("is_active", true).maybeSingle();
