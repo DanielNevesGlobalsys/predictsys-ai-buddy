@@ -540,8 +540,12 @@ serve(async (req: Request) => {
     const splitIntentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
     const splitIntentBase = splitIntentContract.intent_base || splitIntentContract;
     const requiresTime = splitIntentBase.requires_time_column ?? false;
+    // SSOT: read time_anchor_column from project_settings (official source), NOT from AI context
+    const ssotTimeAnchor = projectSettings?.time_anchor_column || null;
     const contractHints = aiCtx?.contract_hints || {};
-    const timeAnchorHint = contractHints.time_anchor_column || null;
+    const timeAnchorHint = ssotTimeAnchor || contractHints.time_anchor_column || null;
+
+    console.log(`[preflight] Split gate: ssotTimeAnchor=${ssotTimeAnchor}, timeAnchorHint=${timeAnchorHint}, requiresTime=${requiresTime}`);
 
     if (splitPolicy) {
       // Check policy drift: if selection_version changed since policy was created
@@ -578,7 +582,15 @@ serve(async (req: Request) => {
         });
         canTrain = false;
       }
-    } else if (requiresTime && !timeAnchorHint) {
+    } else if (timeAnchorHint) {
+      // SSOT has a time anchor — temporal split will be used automatically
+      gates.push({
+        gate: "split_policy",
+        status: "PASS",
+        message: `Split temporal automático via coluna "${timeAnchorHint}" (SSOT).`,
+        details: { time_anchor: timeAnchorHint, source: "project_settings" },
+      });
+    } else if (requiresTime) {
       gates.push({
         gate: "split_policy",
         status: "WARN",
