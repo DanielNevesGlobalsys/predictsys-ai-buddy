@@ -104,6 +104,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         if (project) {
           let orgName = 'Organização';
           if (project.organization_id) {
+            setOrganizationId(project.organization_id);
             const { data: org } = await supabase.from('organizations').select('name').eq('id', project.organization_id).maybeSingle();
             if (org) orgName = org.name;
           }
