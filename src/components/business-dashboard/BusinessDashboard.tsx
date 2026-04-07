@@ -538,6 +538,49 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
             </div>
           </div>
 
+          {/* ═══ LIS AI OS Intelligence Layer ═══ */}
+          {hasIntelligence && (
+            <>
+              <ExecutiveSummaryPanel layer={intelligence.executive_layer} />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <PrioritizationPanel layer={intelligence.prioritization_layer} />
+                <ImpactPanel layer={intelligence.impact_layer} />
+              </div>
+
+              <ActionRecommendationPanel layer={intelligence.action_layer} />
+              <ModelConfidencePanel layer={intelligence.technical_summary_layer} />
+              <ScenarioSimulationPanel layer={intelligence.simulation_layer} />
+            </>
+          )}
+
+          {!hasIntelligence && organizationId && (
+            <Card className="p-4 border-dashed">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Gere inteligência executiva com LIS AI OS
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={generateIntelligence}
+                  disabled={generatingIntelligence}
+                  className="gap-1.5"
+                >
+                  {generatingIntelligence ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
+                  Gerar análise
+                </Button>
+              </div>
+            </Card>
+          )}
+
           <BlockATrustVision
             problemType={problemType}
             inferredProblemType={problemContext || undefined}
