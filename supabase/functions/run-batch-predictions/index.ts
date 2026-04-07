@@ -499,24 +499,41 @@ serve(async (req) => {
 
         const featureValues = new Array(totalFeatures);
 
-        for (let j = 0; j < baseLen; j++) {
-          const raw = values[featureIndices[j]];
-          const val = raw ? +raw.replace(",", ".") : NaN;
-          featureValues[j] = isNaN(val) ? (0 - means[j]) / stdsArr[j] : (val - means[j]) / stdsArr[j];
+        // Build raw record for engineered feature computation
+        const rawRecord: Record<string, string | number | null> = {};
+        for (let h = 0; h < headers.length; h++) {
+          rawRecord[headers[h]] = values[h] || null;
         }
 
+        // Compute engineered features if any
+        let engineeredValues: Record<string, number | string | boolean | null> = {};
         if (hasEngineeredFeatures) {
-          const rawRecord: Record<string, string | number | null> = {};
-          for (let h = 0; h < headers.length; h++) {
-            rawRecord[headers[h]] = values[h] || null;
+          engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        }
+
+        // Map each savedFeatureName to its value — maintaining exact model order
+        for (let j = 0; j < totalFeatures; j++) {
+          const fname = savedFeatureNames[j];
+          let val: number;
+
+          if (engineeredSet.has(fname)) {
+            // Engineered feature — computed above
+            const ev = engineeredValues[fname];
+            val = (typeof ev === "number" && !isNaN(ev)) ? ev : 0;
+          } else {
+            // Base feature — from CSV column
+            const baseIdx = baseFeatureNames.indexOf(fname);
+            if (baseIdx !== -1 && featureIndices[baseIdx] !== -1) {
+              const raw = values[featureIndices[baseIdx]];
+              const parsed = raw ? +raw.replace(",", ".") : NaN;
+              val = isNaN(parsed) ? 0 : parsed;
+            } else {
+              val = 0; // Missing feature defaults to 0
+            }
           }
-          const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-          for (let j = 0; j < engineeredFeatureNames.length; j++) {
-            const val = engineeredValues[engineeredFeatureNames[j]];
-            const normIdx = baseLen + j;
-            featureValues[normIdx] = (typeof val === "number" && !isNaN(val))
-              ? (val - means[normIdx]) / stdsArr[normIdx] : 0;
-          }
+
+          // Normalize
+          featureValues[j] = (val - means[j]) / stdsArr[j];
         }
 
         // MODEL INFERENCE
