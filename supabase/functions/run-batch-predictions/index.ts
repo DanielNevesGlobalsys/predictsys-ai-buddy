@@ -825,6 +825,7 @@ serve(async (req) => {
               // === GATE: Validate feature coverage ===
               const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
               const baseMissingPct = baseFeatureNames.length > 0 ? (baseMissing.length / baseFeatureNames.length) * 100 : 0;
+              missingFeaturePct = baseMissingPct;
 
               console.log(`[Scoring][CSV] Feature validation: model expects ${savedFeatureNames.length} total (${baseLen} base + ${allFeatureNames.length - baseLen} engineered). CSV has ${headers.length} cols (delimiter="${delimiter}"). Base missing: ${baseMissing.length} (${baseMissingPct.toFixed(1)}%)`);
               if (baseMissing.length > 0) {
