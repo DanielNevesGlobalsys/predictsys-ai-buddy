@@ -1136,9 +1136,9 @@ const StepTargetFeatures = ({
           resolution={grainTime.resolution}
           loading={grainTime.loading}
           ssotTimeColumn={ssot.time_anchor_column || autoRes.result.time_column || resolveBestTimeColumn()}
-          ssotGrain={ssot.staleness_flags ? undefined : (ssot as any).recommended_grain || undefined}
-          ssotSplit={ssot.staleness_flags ? undefined : (ssot as any).recommended_split_strategy || undefined}
-          ssotBuildMode={ssot.staleness_flags ? undefined : (ssot as any).dataset_build_mode || undefined}
+          ssotGrain={ssot.recommended_grain || undefined}
+          ssotSplit={ssot.recommended_split_strategy || undefined}
+          ssotBuildMode={ssot.dataset_build_mode || undefined}
         />
 
         {/* ═══ BLOCO 4: STATUS REAL DO PIPELINE ═══ */}
