@@ -404,7 +404,7 @@ serve(async (req) => {
     const segmentColNames = ['segment', 'segmento', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
     const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'id_cliente', 'customer', 'cliente', 'cnpj', 'cpf'];
 
-    const isClassification = (selection?.problem_type || project.problem_type) === "classification";
+    // isClassification already declared above (line ~289)
     const batchId = existingBatchId || `batch_${Date.now()}_${project_id.substring(0, 8)}`;
     const predictionDate = new Date().toISOString();
 
