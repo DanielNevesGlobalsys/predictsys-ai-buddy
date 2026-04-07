@@ -2274,13 +2274,53 @@ serve(async (req) => {
       delimiter = sourceMetadata.delimiter || ",";
       isBatchImport = activeDataset.source_type === "batch_import";
       
-      if (isBatchImport && sourceMetadata.file_paths) {
-        filePaths = sourceMetadata.file_paths as string[];
+      // CRITICAL FIX: For batch imports, resolve ACTUAL storage paths from import_jobs
+      // because source_metadata.file_paths often contains logical folder names, not real file paths.
+      if (isBatchImport) {
+        const batchId = sourceMetadata.batch_id || null;
+        const { data: completedJobs } = await supabase
+          .from("import_jobs")
+          .select("storage_path, delimiter, rows_processed, file_name")
+          .eq("project_id", project_id)
+          .eq("status", "completed")
+          .order("batch_sequence");
+        
+        if (completedJobs && completedJobs.length > 0) {
+          filePaths = completedJobs.map(j => j.storage_path).filter(Boolean);
+          // Use delimiter from the actual import job (most reliable source)
+          const jobDelimiter = completedJobs[0]?.delimiter;
+          if (jobDelimiter) {
+            delimiter = jobDelimiter;
+            console.log(`[AutoML] Delimiter from import_jobs: "${delimiter}"`);
+          }
+          console.log(`[AutoML] Resolved ${filePaths.length} actual file paths from import_jobs`);
+          console.log(`[AutoML] File paths: ${filePaths.map(p => p.split('/').pop()).join(', ')}`);
+        } else if (sourceMetadata.file_paths) {
+          filePaths = sourceMetadata.file_paths as string[];
+          console.log(`[AutoML] WARN: No completed import_jobs found, falling back to source_metadata.file_paths`);
+        } else {
+          filePaths = [activeDataset.storage_path];
+        }
       } else {
         filePaths = [activeDataset.storage_path];
       }
       
-      console.log(`[AutoML] Usando dataset ativo: ${activeDataset.name}`);
+      // Also try to get delimiter from import_jobs if not set in source_metadata
+      if (delimiter === "," && !sourceMetadata.delimiter) {
+        const { data: delimJob } = await supabase
+          .from("import_jobs")
+          .select("delimiter")
+          .eq("project_id", project_id)
+          .eq("status", "completed")
+          .limit(1)
+          .maybeSingle();
+        if (delimJob?.delimiter && delimJob.delimiter !== ",") {
+          delimiter = delimJob.delimiter;
+          console.log(`[AutoML] Delimiter corrected from import_jobs: "${delimiter}"`);
+        }
+      }
+      
+      console.log(`[AutoML] Usando dataset ativo: ${activeDataset.name}, delimiter: "${delimiter}"`);
     } else {
       // Fallback: use project.dataset_filename directly
       console.log(`[AutoML] Sem dataset ativo, usando project.dataset_filename`);
