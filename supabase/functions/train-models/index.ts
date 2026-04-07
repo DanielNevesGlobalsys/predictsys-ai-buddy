@@ -2274,13 +2274,50 @@ serve(async (req) => {
       delimiter = sourceMetadata.delimiter || ",";
       isBatchImport = activeDataset.source_type === "batch_import";
       
-      if (isBatchImport && sourceMetadata.file_paths) {
-        filePaths = sourceMetadata.file_paths as string[];
+      // CRITICAL FIX: For batch imports, use the storage_path (batch folder) and let
+      // the folder expansion logic (below) discover actual files inside.
+      // source_metadata.file_paths may contain logical names that don't map to real storage paths.
+      // import_jobs.storage_path may also point to a different subfolder than the batch folder.
+      if (isBatchImport) {
+        // Use the batch folder as the primary path — folder expansion will list real files
+        filePaths = [activeDataset.storage_path];
+        console.log(`[AutoML] Batch import: using storage_path folder for expansion: ${activeDataset.storage_path}`);
+        
+        // Get delimiter from the actual import job (most reliable source)
+        const { data: completedJobs } = await supabase
+          .from("import_jobs")
+          .select("delimiter, rows_processed, file_name")
+          .eq("project_id", project_id)
+          .eq("status", "completed")
+          .order("batch_sequence");
+        
+        if (completedJobs && completedJobs.length > 0) {
+          const jobDelimiter = completedJobs[0]?.delimiter;
+          if (jobDelimiter) {
+            delimiter = jobDelimiter;
+            console.log(`[AutoML] Delimiter from import_jobs: "${delimiter}"`);
+          }
+        }
       } else {
         filePaths = [activeDataset.storage_path];
       }
       
-      console.log(`[AutoML] Usando dataset ativo: ${activeDataset.name}`);
+      // Also try to get delimiter from import_jobs if not set in source_metadata
+      if (delimiter === "," && !sourceMetadata.delimiter) {
+        const { data: delimJob } = await supabase
+          .from("import_jobs")
+          .select("delimiter")
+          .eq("project_id", project_id)
+          .eq("status", "completed")
+          .limit(1)
+          .maybeSingle();
+        if (delimJob?.delimiter && delimJob.delimiter !== ",") {
+          delimiter = delimJob.delimiter;
+          console.log(`[AutoML] Delimiter corrected from import_jobs: "${delimiter}"`);
+        }
+      }
+      
+      console.log(`[AutoML] Usando dataset ativo: ${activeDataset.name}, delimiter: "${delimiter}"`);
     } else {
       // Fallback: use project.dataset_filename directly
       console.log(`[AutoML] Sem dataset ativo, usando project.dataset_filename`);
@@ -3534,8 +3571,35 @@ serve(async (req) => {
     const minSamplesRequired = useHumanLabelsAsTarget ? 30 : 100;
 
     if (X.length < minSamplesRequired) {
+      const diagHeaders = (globalThis as any).__featureNames || [];
+      console.error(`[DIAGNOSTIC] 0 samples failure:`);
+      console.error(`  target_column: ${target_column}`);
+      console.error(`  problem_type: ${problem_type}`);
+      console.error(`  delimiter used: "${delimiter}"`);
+      console.error(`  headers count: ${headers?.length || 0}`);
+      console.error(`  headers (first 10): ${headers?.slice(0, 10).join(', ')}`);
+      console.error(`  features count: ${diagHeaders.length}`);
+      console.error(`  totalLinesRead: ${totalLinesRead}`);
+      console.error(`  X.length (valid samples): ${X.length}`);
+      console.error(`  y.length: ${y.length}`);
+      console.error(`  filePaths: ${filePaths.map(p => p.split('/').pop()).join(', ')}`);
+      console.error(`  isBatchImport: ${isBatchImport}`);
+      console.error(`  target in headers: ${headers?.some(h => h.toLowerCase().trim() === target_column.toLowerCase().trim())}`);
+      
       return new Response(JSON.stringify({ 
-        error: `Dados insuficientes após parsing (${X.length} amostras válidas, mínimo: ${minSamplesRequired}). Verifique a qualidade dos dados.` 
+        error: `Dados insuficientes após parsing (${X.length} amostras válidas, mínimo: ${minSamplesRequired}). Verifique a qualidade dos dados.`,
+        diagnostic: {
+          target_column,
+          problem_type,
+          delimiter,
+          headers_count: headers?.length || 0,
+          headers_sample: headers?.slice(0, 10),
+          total_lines_read: totalLinesRead,
+          valid_samples: X.length,
+          file_paths: filePaths.map(p => p.split('/').pop()),
+          is_batch: isBatchImport,
+          target_in_headers: headers?.some(h => h.toLowerCase().trim() === target_column.toLowerCase().trim()),
+        }
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
