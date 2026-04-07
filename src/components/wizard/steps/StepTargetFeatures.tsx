@@ -46,6 +46,7 @@ import HumanLabelingCard from "./HumanLabelingCard";
 import TargetLifecycleCard from "./TargetLifecycleCard";
 import TargetExpertPanel from "./TargetExpertPanel";
 import TargetTrainingReadiness from "./TargetTrainingReadiness";
+import GovernanceConflictBanner from "./GovernanceConflictBanner";
 import { useProjectSettings } from "@/hooks/useProjectSettings";
 import { useProjectAIContext } from "@/hooks/useProjectAIContext";
 import { useProblemInference } from "@/hooks/useProblemInference";
@@ -776,6 +777,15 @@ const StepTargetFeatures = ({
       active_target_mode: "column",
       target_source: "manual",
       predictive_resolution_state: "applied",
+      // GOVERNANCE: Explicit save = official confirmation
+      official_target: targetColumn,
+      official_problem_type: problemType,
+      official_entity_key: entityKey,
+      official_time_column: resolvedTimeAnchor,
+      governance_conflict: false,
+      governance_conflict_details: null,
+      last_governance_action: "explicit_save",
+      last_governance_action_at: new Date().toISOString(),
     };
     if (resolvedTimeAnchor) {
       settingsUpdate.time_anchor_column = resolvedTimeAnchor;
@@ -878,6 +888,30 @@ const StepTargetFeatures = ({
           <h2 className="text-2xl font-display font-bold mb-1">Variável Alvo &amp; Features</h2>
           <p className="text-sm text-muted-foreground">Configuração inteligente do problema preditivo.</p>
         </div>
+
+        {/* ═══ GOVERNANCE CONFLICT BANNER ═══ */}
+        {ssot.governance_conflict && (
+          <GovernanceConflictBanner
+            projectId={projectData.id}
+            officialTarget={ssot.official_target}
+            officialProblemType={ssot.official_problem_type}
+            recommendedTarget={ssot.recommended_target}
+            recommendedProblemType={ssot.recommended_problem_type}
+            recommendedReasoning={ssot.recommended_target_reasoning}
+            recommendedConfidence={ssot.recommended_target_confidence}
+            hasConflict={ssot.governance_conflict}
+            onMigrated={() => {
+              loadSSOT();
+              setPreflightRefreshKey(k => k + 1);
+              // Reload everything after migration
+              autoResAppliedRef.current = false;
+              autoPromoteRef.current = false;
+            }}
+            onKeptOfficial={() => {
+              loadSSOT();
+            }}
+          />
+        )}
 
         {/* ═══ BLOCO 1: SUGESTÃO APLICADA (PRE) ═══ */}
         {autoRes.resolving && (

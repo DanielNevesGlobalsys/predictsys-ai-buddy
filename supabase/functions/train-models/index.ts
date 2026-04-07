@@ -1738,7 +1738,7 @@ serve(async (req) => {
     // Load active_target fields from project_settings
     const { data: activeTargetSettings } = await supabase
       .from("project_settings")
-      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key, time_anchor_column, recommended_time_column, recommended_split_strategy, recommended_grain, dataset_build_mode")
+      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key, time_anchor_column, recommended_time_column, recommended_split_strategy, recommended_grain, dataset_build_mode, official_target, official_problem_type, official_entity_key, official_time_column, governance_conflict")
       .eq("project_id", project_id)
       .maybeSingle();
 
@@ -2124,7 +2124,10 @@ serve(async (req) => {
       const contractProblemType = contractTargetDef?.problem_type;
 
       // (a) problem_type mismatch between contract and selection
-      // Normalize: "binary" and "classification" are equivalent
+      // GOVERNANCE FIX: If official_problem_type is set in project_settings, it takes priority.
+      // The contract may be stale from initial intent, but the official problem_type is the user's confirmed choice.
+      const officialProblemType = (activeTargetSettings as any)?.official_problem_type || null;
+      
       const normalizeProblemType = (t: string) => {
         const lower = t.toLowerCase();
         if (lower === "binary" || lower === "classification" || lower === "binary_classification") return "classification";
@@ -2133,13 +2136,23 @@ serve(async (req) => {
       };
       const normalizedContract = contractProblemType ? normalizeProblemType(contractProblemType) : null;
       const normalizedSelection = problem_type ? normalizeProblemType(problem_type) : null;
-      if (normalizedContract && normalizedSelection && normalizedContract !== normalizedSelection) {
+      const normalizedOfficial = officialProblemType ? normalizeProblemType(officialProblemType) : null;
+      
+      // If official_problem_type matches the selection, skip contract mismatch check
+      // (the user explicitly confirmed this problem type via governance)
+      if (normalizedOfficial && normalizedOfficial === normalizedSelection) {
+        console.log(`[Gating] GOVERNANCE: official_problem_type="${officialProblemType}" matches selection="${problem_type}" — skipping contract mismatch check`);
+        if (normalizedContract && normalizedContract !== normalizedSelection) {
+          contractWarning = `Contrato diz "${contractProblemType}" mas alvo oficial é "${problem_type}" (confirmado pelo usuário).`;
+        }
+      } else if (normalizedContract && normalizedSelection && normalizedContract !== normalizedSelection) {
+        // No official override — block as before
         contractBlockedReason = `CONTRACT_PROBLEM_TYPE_MISMATCH: contract=${contractProblemType}, selection=${problem_type}`;
         return blockResponse(
           "CONTRACT_PROBLEM_TYPE_MISMATCH",
-          `Tipo de problema incompatível: contrato diz "${contractProblemType}" mas seleção diz "${problem_type}". Corrija na Etapa 3.`,
+          `Tipo de problema incompatível: contrato diz "${contractProblemType}" mas seleção diz "${problem_type}". Confirme na Etapa 3.`,
           { label: "Revisar Target", go_to_step: 3 },
-          { contract_problem_type: contractProblemType, selection_problem_type: problem_type }
+          { contract_problem_type: contractProblemType, selection_problem_type: problem_type, hint: "Use o botão 'Migrar para novo alvo' na Etapa 3 para confirmar a mudança." }
         );
       }
 

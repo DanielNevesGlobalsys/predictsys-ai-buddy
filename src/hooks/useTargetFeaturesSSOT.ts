@@ -45,6 +45,18 @@ export interface TargetFeaturesSSOT {
   
   // ── Lifecycle ──
   target_lifecycle_state: string | null;
+
+  // ── Governance ──
+  official_target: string | null;
+  official_problem_type: string | null;
+  official_entity_key: string | null;
+  official_time_column: string | null;
+  official_grain: string | null;
+  recommended_target: string | null;
+  recommended_problem_type: string | null;
+  recommended_target_reasoning: string | null;
+  recommended_target_confidence: number | null;
+  governance_conflict: boolean;
 }
 
 const EMPTY_SSOT: TargetFeaturesSSOT = {
@@ -70,6 +82,16 @@ const EMPTY_SSOT: TargetFeaturesSSOT = {
   industry: null,
   staleness_flags: null,
   target_lifecycle_state: null,
+  official_target: null,
+  official_problem_type: null,
+  official_entity_key: null,
+  official_time_column: null,
+  official_grain: null,
+  recommended_target: null,
+  recommended_problem_type: null,
+  recommended_target_reasoning: null,
+  recommended_target_confidence: null,
+  governance_conflict: false,
 };
 
 export function useTargetFeaturesSSOT(projectId: string | undefined) {
@@ -126,6 +148,16 @@ export function useTargetFeaturesSSOT(projectId: string | undefined) {
         industry: d.industry || null,
         staleness_flags: d.staleness_flags || null,
         target_lifecycle_state: d.target_lifecycle_state || null,
+        official_target: d.official_target || null,
+        official_problem_type: d.official_problem_type || null,
+        official_entity_key: d.official_entity_key || null,
+        official_time_column: d.official_time_column || null,
+        official_grain: d.official_grain || null,
+        recommended_target: d.recommended_target || null,
+        recommended_problem_type: d.recommended_problem_type || null,
+        recommended_target_reasoning: d.recommended_target_reasoning || null,
+        recommended_target_confidence: d.recommended_target_confidence != null ? Number(d.recommended_target_confidence) : null,
+        governance_conflict: d.governance_conflict === true,
       };
 
       setSSOT(parsed);
