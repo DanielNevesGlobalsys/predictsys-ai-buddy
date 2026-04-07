@@ -36,6 +36,13 @@ import {
   buildMLPrompt,
   validateMLResponse,
 } from "../_shared/ml-engineer-agent.ts";
+import {
+  BA_SYSTEM_PROMPT,
+  BA_RESPONSE_TOOL,
+  buildBAContext,
+  buildBAPrompt,
+  validateBAResponse,
+} from "../_shared/business-analyst-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -96,6 +103,7 @@ serve(async (req) => {
     const isDSAgent = agentName === "data_scientist_agent";
     const isDEAgent = agentName === "data_engineer_agent";
     const isMLAgent = agentName === "ml_engineer_agent";
+    const isBAAgent = agentName === "business_analyst_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
@@ -134,6 +142,13 @@ serve(async (req) => {
       toolDef = ML_RESPONSE_TOOL;
       toolName = "ml_decision";
       projectContext = mlCtx as unknown as Record<string, unknown>;
+    } else if (isBAAgent) {
+      const baCtx = await buildBAContext(svc, project_id, stage, execution_mode);
+      systemPrompt = BA_SYSTEM_PROMPT;
+      userPrompt = buildBAPrompt(baCtx);
+      toolDef = BA_RESPONSE_TOOL;
+      toolName = "business_decision";
+      projectContext = baCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
@@ -406,6 +421,40 @@ serve(async (req) => {
         stage,
         execution_mode,
         ml_decision: mlDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    } else if (isBAAgent) {
+      const baDecision = validateBAResponse(rawDecision);
+      console.log(`[LIS-BA] Message="${baDecision.executive_summary.main_message?.slice(0, 80)}" Priorities=${baDecision.action_layer.who_to_prioritize.length} Actions=${baDecision.action_layer.recommended_actions.length} Confidence=${baDecision.confidence} Duration=${durationMs}ms`);
+
+      await svc.from("lis_agent_executions").update({
+        status: baDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: baDecision.confidence,
+        decision: baDecision as unknown as Record<string, unknown>,
+        reasoning_summary: baDecision.executive_summary.business_interpretation,
+        warnings: baDecision.executive_summary.main_risks,
+        blocking_issues: [],
+        actions_recommended: baDecision.action_layer.recommended_actions.map(a => ({
+          action: a.action, target: a.target_segment, priority: a.urgency === "immediate" ? "critical" : "medium", auto_applicable: false,
+        })),
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        business_decision: baDecision,
         audit_metadata: {
           input_hash: inputHash,
           context_version: contextVersion,
