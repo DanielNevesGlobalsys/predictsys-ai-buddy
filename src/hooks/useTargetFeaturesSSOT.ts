@@ -82,6 +82,16 @@ const EMPTY_SSOT: TargetFeaturesSSOT = {
   industry: null,
   staleness_flags: null,
   target_lifecycle_state: null,
+  official_target: null,
+  official_problem_type: null,
+  official_entity_key: null,
+  official_time_column: null,
+  official_grain: null,
+  recommended_target: null,
+  recommended_problem_type: null,
+  recommended_target_reasoning: null,
+  recommended_target_confidence: null,
+  governance_conflict: false,
 };
 
 export function useTargetFeaturesSSOT(projectId: string | undefined) {
