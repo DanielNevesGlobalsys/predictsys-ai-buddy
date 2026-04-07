@@ -22,6 +22,13 @@ import {
   buildDSPrompt,
   validateDSResponse,
 } from "../_shared/data-scientist-agent.ts";
+import {
+  DE_SYSTEM_PROMPT,
+  DE_RESPONSE_TOOL,
+  buildDEContext,
+  buildDEPrompt,
+  validateDEResponse,
+} from "../_shared/data-engineer-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -80,6 +87,7 @@ serve(async (req) => {
     const agentName = selectAgent(stage, preferredAgent);
     const isGovernanceAgent = agentName === "governance_agent";
     const isDSAgent = agentName === "data_scientist_agent";
+    const isDEAgent = agentName === "data_engineer_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
@@ -104,6 +112,13 @@ serve(async (req) => {
       toolDef = DS_RESPONSE_TOOL;
       toolName = "ds_decision";
       projectContext = dsCtx as unknown as Record<string, unknown>;
+    } else if (isDEAgent) {
+      const deCtx = await buildDEContext(svc, project_id, stage, execution_mode);
+      systemPrompt = DE_SYSTEM_PROMPT;
+      userPrompt = buildDEPrompt(deCtx);
+      toolDef = DE_RESPONSE_TOOL;
+      toolName = "de_decision";
+      projectContext = deCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
@@ -296,6 +311,45 @@ serve(async (req) => {
         stage,
         execution_mode,
         ds_decision: dsDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    } else if (isDEAgent) {
+      const deDecision = validateDEResponse(rawDecision);
+      console.log(`[LIS-DE] BuildMode=${deDecision.builder_plan.dataset_build_mode} Compatible=${deDecision.training_scoring_compatibility.compatible} Confidence=${deDecision.confidence} Duration=${durationMs}ms`);
+
+      const deWarnings = [
+        ...deDecision.schema_assessment.schema_warnings,
+        ...deDecision.data_reliability_assessment.delimiter_risk,
+        ...deDecision.data_reliability_assessment.parsing_risk,
+      ];
+
+      await svc.from("lis_agent_executions").update({
+        status: deDecision.schema_assessment.schema_blockers.length > 0 ? "blocked"
+          : deDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: deDecision.confidence,
+        decision: deDecision as unknown as Record<string, unknown>,
+        reasoning_summary: deDecision.builder_plan.reasoning,
+        warnings: deWarnings,
+        blocking_issues: deDecision.schema_assessment.schema_blockers,
+        actions_recommended: deDecision.actions_recommended,
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        de_decision: deDecision,
         audit_metadata: {
           input_hash: inputHash,
           context_version: contextVersion,
