@@ -692,6 +692,7 @@ serve(async (req) => {
           // Only base features (non-engineered) need to be in CSV headers
           const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
           const baseMissingPct = baseFeatureNames.length > 0 ? (baseMissing.length / baseFeatureNames.length) * 100 : 0;
+          missingFeaturePct = baseMissingPct;
 
           console.log(`[Scoring] Feature validation: model expects ${savedFeatureNames.length} total (${baseLen} base + ${allFeatureNames.length - baseLen} engineered). CSV has ${headers.length} cols. Base missing: ${baseMissing.length} (${baseMissingPct.toFixed(1)}%)`);
           if (baseMissing.length > 0) {
