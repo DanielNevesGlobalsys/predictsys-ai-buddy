@@ -875,7 +875,7 @@ serve(async (req) => {
                 else if (name.includes('category') || name.includes('categoria')) segmentKeyMap[name] = 'product_category';
               }
 
-              console.log(`[Scoring] Headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}, base_missing=${baseMissing.length}, model_missing=${modelMissing.length}`);
+              console.log(`[Scoring] Headers parsed: ${headers.length} cols, entity_id=${detectedEntityIdCol || "auto"}, base_missing=${baseMissing.length}`);
               isFirstLineOfFile = false;
               isFirstFile = false;
               continue;
