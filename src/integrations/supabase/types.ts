@@ -3771,6 +3771,8 @@ export type Database = {
           entity_key: string | null
           excluded_columns: Json | null
           feature_columns: Json | null
+          governance_conflict: boolean | null
+          governance_conflict_details: Json | null
           grain_confidence: number | null
           human_label_config: Json | null
           human_label_result: Json | null
@@ -3792,6 +3794,8 @@ export type Database = {
           ingestion_state: string
           ingestion_total_bytes: number | null
           label_build_result: Json | null
+          last_governance_action: string | null
+          last_governance_action_at: string | null
           last_pipeline_meta: Json | null
           last_pipeline_stage: string | null
           last_pipeline_state: string | null
@@ -3801,6 +3805,11 @@ export type Database = {
           lys_synthesized_at: string | null
           modeling_dataset_meta: Json | null
           objective: string | null
+          official_entity_key: string | null
+          official_grain: string | null
+          official_problem_type: string | null
+          official_target: string | null
+          official_time_column: string | null
           org_id: string | null
           predictive_resolution_confidence: number | null
           predictive_resolution_mode: string | null
@@ -3811,7 +3820,11 @@ export type Database = {
           problem_type: string | null
           project_id: string
           recommended_grain: string | null
+          recommended_problem_type: string | null
           recommended_split_strategy: string | null
+          recommended_target: string | null
+          recommended_target_confidence: number | null
+          recommended_target_reasoning: string | null
           recommended_time_column: string | null
           scoring_state: string
           scoring_version: number
@@ -3872,6 +3885,8 @@ export type Database = {
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          governance_conflict?: boolean | null
+          governance_conflict_details?: Json | null
           grain_confidence?: number | null
           human_label_config?: Json | null
           human_label_result?: Json | null
@@ -3893,6 +3908,8 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          last_governance_action?: string | null
+          last_governance_action_at?: string | null
           last_pipeline_meta?: Json | null
           last_pipeline_stage?: string | null
           last_pipeline_state?: string | null
@@ -3902,6 +3919,11 @@ export type Database = {
           lys_synthesized_at?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
+          official_entity_key?: string | null
+          official_grain?: string | null
+          official_problem_type?: string | null
+          official_target?: string | null
+          official_time_column?: string | null
           org_id?: string | null
           predictive_resolution_confidence?: number | null
           predictive_resolution_mode?: string | null
@@ -3912,7 +3934,11 @@ export type Database = {
           problem_type?: string | null
           project_id: string
           recommended_grain?: string | null
+          recommended_problem_type?: string | null
           recommended_split_strategy?: string | null
+          recommended_target?: string | null
+          recommended_target_confidence?: number | null
+          recommended_target_reasoning?: string | null
           recommended_time_column?: string | null
           scoring_state?: string
           scoring_version?: number
@@ -3973,6 +3999,8 @@ export type Database = {
           entity_key?: string | null
           excluded_columns?: Json | null
           feature_columns?: Json | null
+          governance_conflict?: boolean | null
+          governance_conflict_details?: Json | null
           grain_confidence?: number | null
           human_label_config?: Json | null
           human_label_result?: Json | null
@@ -3994,6 +4022,8 @@ export type Database = {
           ingestion_state?: string
           ingestion_total_bytes?: number | null
           label_build_result?: Json | null
+          last_governance_action?: string | null
+          last_governance_action_at?: string | null
           last_pipeline_meta?: Json | null
           last_pipeline_stage?: string | null
           last_pipeline_state?: string | null
@@ -4003,6 +4033,11 @@ export type Database = {
           lys_synthesized_at?: string | null
           modeling_dataset_meta?: Json | null
           objective?: string | null
+          official_entity_key?: string | null
+          official_grain?: string | null
+          official_problem_type?: string | null
+          official_target?: string | null
+          official_time_column?: string | null
           org_id?: string | null
           predictive_resolution_confidence?: number | null
           predictive_resolution_mode?: string | null
@@ -4013,7 +4048,11 @@ export type Database = {
           problem_type?: string | null
           project_id?: string
           recommended_grain?: string | null
+          recommended_problem_type?: string | null
           recommended_split_strategy?: string | null
+          recommended_target?: string | null
+          recommended_target_confidence?: number | null
+          recommended_target_reasoning?: string | null
           recommended_time_column?: string | null
           scoring_state?: string
           scoring_version?: number
