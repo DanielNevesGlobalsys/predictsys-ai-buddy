@@ -1738,7 +1738,7 @@ serve(async (req) => {
     // Load active_target fields from project_settings
     const { data: activeTargetSettings } = await supabase
       .from("project_settings")
-      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key")
+      .select("active_target_mode, active_target_column, active_target_ref, target_source, problem_type, entity_key, time_anchor_column, recommended_time_column, recommended_split_strategy, recommended_grain, dataset_build_mode")
       .eq("project_id", project_id)
       .maybeSingle();
 
@@ -2144,8 +2144,18 @@ serve(async (req) => {
       }
 
       // (b)+(c) Check leakage_flags and blocked features from contract as guardrails
+      // IMPORTANT: Only block if leakage columns are still in the active feature list
       const leakageFlags = (modelingContract.leakage_flags as any[]) || [];
-      const criticalLeakage = leakageFlags.filter((f: any) => f.reason?.toLowerCase().includes("critical") || f.reason?.toLowerCase().includes("leakage"));
+      const selectedFeaturesList = (selection?.selected_features as string[]) || [];
+      const excludedFeaturesList = (selection?.excluded_features as string[]) || [];
+      const activeFeatureSet = new Set(selectedFeaturesList.filter(f => !excludedFeaturesList.includes(f)));
+      
+      const criticalLeakage = leakageFlags
+        .filter((f: any) => f.reason?.toLowerCase().includes("critical") || f.reason?.toLowerCase().includes("leakage"))
+        .filter((f: any) => activeFeatureSet.has(f.col)); // Only block if column is still active
+      
+      console.log(`[Gating] Leakage check: ${leakageFlags.length} flags total, ${criticalLeakage.length} still active in features`);
+      
       if (criticalLeakage.length > 0) {
         contractBlockedReason = `CONTRACT_LEAKAGE_DETECTED: ${criticalLeakage.map((f: any) => f.col).join(", ")}`;
         return blockResponse(
@@ -2864,30 +2874,43 @@ serve(async (req) => {
       parquetResult.rows.length = 0;
 
       // Detect datetime column for smart split (Parquet path)
+      // PRIORITY 1: Use SSOT time_anchor_column if available
       {
-        const dtCol = detectDatetimeColumn(headers, parquetResult.rows.length > 0 ? parquetResult.rows : rowsToProcess.slice(0, 2000), true);
-        if (dtCol) {
-          const dtValues: (number | null)[] = [];
-          for (let i = 0; i < X.length; i++) {
-            // We need to reconstruct from the sample — use a simpler approach
-            // Parse the datetime from the original row order
+        const ssotTimCol = (activeTargetSettings as any)?.time_anchor_column || (activeTargetSettings as any)?.recommended_time_column || null;
+        let resolvedDtCol: string | null = null;
+        
+        if (ssotTimCol) {
+          // Check if SSOT time column exists in headers
+          const ssotIdx = headers.findIndex(h => h.toLowerCase() === ssotTimCol.toLowerCase());
+          if (ssotIdx !== -1) {
+            resolvedDtCol = headers[ssotIdx];
+            console.log(`[Split] Using SSOT time anchor for parquet: "${resolvedDtCol}"`);
           }
-          // For Parquet, re-parse datetime from a small subset  
+        }
+        
+        // PRIORITY 2: Auto-detect from data
+        if (!resolvedDtCol) {
+          resolvedDtCol = detectDatetimeColumn(headers, rowsToProcess.slice(0, 2000), true);
+        }
+        
+        if (resolvedDtCol) {
+          // Parse datetime values from rowsToProcess (parquetResult.rows already freed)
           const sampleForDt = rowsToProcess.slice(0, Math.min(rowsToProcess.length, X.length));
           const dtVals: (number | null)[] = [];
           for (const row of sampleForDt) {
-            const val = row[dtCol];
+            const val = row[resolvedDtCol!];
             if (val) {
-              const d = new Date(String(val));
+              const d = val instanceof Date ? val : new Date(String(val));
               dtVals.push(!isNaN(d.getTime()) ? d.getTime() : null);
             } else {
               dtVals.push(null);
             }
           }
           // Only use if we have enough parsed values
-          if (dtVals.filter(v => v !== null).length >= X.length * 0.8) {
+          if (dtVals.filter(v => v !== null).length >= X.length * 0.5) {
             (globalThis as any).__datetimeValues = dtVals.slice(0, X.length);
-            (globalThis as any).__datetimeCol = dtCol;
+            (globalThis as any).__datetimeCol = resolvedDtCol;
+            console.log(`[Split] Parquet datetime: "${resolvedDtCol}", ${dtVals.filter(v => v !== null).length}/${dtVals.length} parsed`);
           }
         }
         
@@ -4023,8 +4046,12 @@ serve(async (req) => {
     console.log(`\n=== Smart Split Detection ===`);
     
     // Detect datetime and group columns from the raw data  
-    // We need to detect these from the original headers/data
-    // For now, use the column metadata we already have
+    // SSOT: prefer official time_anchor_column from project_settings
+    const ssotTimeAnchor = (activeTargetSettings as any)?.time_anchor_column || (activeTargetSettings as any)?.recommended_time_column || null;
+    const ssotSplitStrategy = (activeTargetSettings as any)?.recommended_split_strategy || null;
+    
+    console.log(`[Split] SSOT: time_anchor=${ssotTimeAnchor}, split_strategy=${ssotSplitStrategy}`);
+    
     const datetimeColCandidates = headers.filter(h => 
       /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg)/i.test(h.toLowerCase())
     );
@@ -4032,14 +4059,28 @@ serve(async (req) => {
     let datetimeValues: (number | null)[] | null = null;
     let detectedDatetimeCol: string | null = null;
     
-    // Check if any datetime column was detected during data reading
-    // We store raw datetime values during parsing for split
-    if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
+    // PRIORITY 1: Use SSOT time anchor if available and present in headers
+    if (ssotTimeAnchor) {
+      const ssotIdx = headers.findIndex(h => h.toLowerCase() === ssotTimeAnchor.toLowerCase());
+      if (ssotIdx !== -1) {
+        detectedDatetimeCol = headers[ssotIdx];
+        console.log(`[Split] Using SSOT time anchor: "${detectedDatetimeCol}"`);
+        // We need datetime values — check globalThis first, otherwise parse from stored data
+        if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol?.toLowerCase() === ssotTimeAnchor.toLowerCase()) {
+          const rawDt = (globalThis as any).__datetimeValues as (number | null)[];
+          datetimeValues = rawDt.length > Xfinal.length ? rawDt.slice(0, Xfinal.length) : rawDt;
+        }
+        // If no cached values, we'll still force temporal split below
+      }
+    }
+    
+    // PRIORITY 2: Use auto-detected datetime from data parsing
+    if (!datetimeValues && (globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
       const rawDt = (globalThis as any).__datetimeValues as (number | null)[];
       // CRITICAL: truncate to match current X length (may differ after human-label override)
       datetimeValues = rawDt.length > Xfinal.length ? rawDt.slice(0, Xfinal.length) : rawDt;
       detectedDatetimeCol = (globalThis as any).__datetimeCol;
-      console.log(`[Split] Using detected datetime column: "${detectedDatetimeCol}" (${datetimeValues.length} values for ${Xfinal.length} rows)`);
+      console.log(`[Split] Using auto-detected datetime column: "${detectedDatetimeCol}" (${datetimeValues.length} values for ${Xfinal.length} rows)`);
     }
     
     // Detect group key from column uniqueness

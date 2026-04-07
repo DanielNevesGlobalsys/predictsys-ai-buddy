@@ -79,7 +79,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result, active_target_mode, active_target_column, active_target_ref, target_column, entity_key, time_anchor_column, industry, objective, target_state, target_intent_resolution").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result, active_target_mode, active_target_column, active_target_ref, target_column, entity_key, time_anchor_column, recommended_time_column, recommended_grain, recommended_split_strategy, dataset_build_mode, industry, objective, target_state, target_intent_resolution, builder_state").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
@@ -540,8 +540,12 @@ serve(async (req: Request) => {
     const splitIntentContract = aiCtx?.intent_contract || aiCtx?.intent || {};
     const splitIntentBase = splitIntentContract.intent_base || splitIntentContract;
     const requiresTime = splitIntentBase.requires_time_column ?? false;
+    // SSOT: read time_anchor_column from project_settings (official source), NOT from AI context
+    const ssotTimeAnchor = projectSettings?.time_anchor_column || null;
     const contractHints = aiCtx?.contract_hints || {};
-    const timeAnchorHint = contractHints.time_anchor_column || null;
+    const timeAnchorHint = ssotTimeAnchor || contractHints.time_anchor_column || null;
+
+    console.log(`[preflight] Split gate: ssotTimeAnchor=${ssotTimeAnchor}, timeAnchorHint=${timeAnchorHint}, requiresTime=${requiresTime}`);
 
     if (splitPolicy) {
       // Check policy drift: if selection_version changed since policy was created
@@ -578,7 +582,15 @@ serve(async (req: Request) => {
         });
         canTrain = false;
       }
-    } else if (requiresTime && !timeAnchorHint) {
+    } else if (timeAnchorHint) {
+      // SSOT has a time anchor — temporal split will be used automatically
+      gates.push({
+        gate: "split_policy",
+        status: "PASS",
+        message: `Split temporal automático via coluna "${timeAnchorHint}" (SSOT).`,
+        details: { time_anchor: timeAnchorHint, source: "project_settings" },
+      });
+    } else if (requiresTime) {
       gates.push({
         gate: "split_policy",
         status: "WARN",
