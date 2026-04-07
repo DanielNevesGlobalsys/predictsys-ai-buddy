@@ -429,6 +429,40 @@ serve(async (req) => {
           duration_ms: durationMs,
         },
       };
+    } else if (isBAAgent) {
+      const baDecision = validateBAResponse(rawDecision);
+      console.log(`[LIS-BA] Message="${baDecision.executive_summary.main_message?.slice(0, 80)}" Priorities=${baDecision.action_layer.who_to_prioritize.length} Actions=${baDecision.action_layer.recommended_actions.length} Confidence=${baDecision.confidence} Duration=${durationMs}ms`);
+
+      await svc.from("lis_agent_executions").update({
+        status: baDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: baDecision.confidence,
+        decision: baDecision as unknown as Record<string, unknown>,
+        reasoning_summary: baDecision.executive_summary.business_interpretation,
+        warnings: baDecision.executive_summary.main_risks,
+        blocking_issues: [],
+        actions_recommended: baDecision.action_layer.recommended_actions.map(a => ({
+          action: a.action, target: a.target_segment, priority: a.urgency === "immediate" ? "critical" : "medium", auto_applicable: false,
+        })),
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        business_decision: baDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
     } else {
       const validated = validateAgentResponse(rawDecision);
       console.log(`[LIS] Agent=${agentName} Status=${validated.status} Confidence=${validated.confidence} Duration=${durationMs}ms`);
