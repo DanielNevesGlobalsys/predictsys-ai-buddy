@@ -29,6 +29,13 @@ import {
   buildDEPrompt,
   validateDEResponse,
 } from "../_shared/data-engineer-agent.ts";
+import {
+  ML_SYSTEM_PROMPT,
+  ML_RESPONSE_TOOL,
+  buildMLContext,
+  buildMLPrompt,
+  validateMLResponse,
+} from "../_shared/ml-engineer-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
