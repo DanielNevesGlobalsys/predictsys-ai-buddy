@@ -777,6 +777,15 @@ const StepTargetFeatures = ({
       active_target_mode: "column",
       target_source: "manual",
       predictive_resolution_state: "applied",
+      // GOVERNANCE: Explicit save = official confirmation
+      official_target: targetColumn,
+      official_problem_type: problemType,
+      official_entity_key: entityKey,
+      official_time_column: resolvedTimeAnchor,
+      governance_conflict: false,
+      governance_conflict_details: null,
+      last_governance_action: "explicit_save",
+      last_governance_action_at: new Date().toISOString(),
     };
     if (resolvedTimeAnchor) {
       settingsUpdate.time_anchor_column = resolvedTimeAnchor;
