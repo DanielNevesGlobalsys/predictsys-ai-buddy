@@ -9,6 +9,12 @@ import {
   selectAgent,
 } from "../_shared/lis-agents.ts";
 import {
+  isStageEnabled as rolloutStageEnabled,
+  isAgentAllowed as rolloutAgentAllowed,
+  getEffectiveMode,
+  getRolloutMetadata,
+} from "../_shared/lis-rollout.ts";
+import {
   resolveOrchestration,
   shouldBlock,
   canAutoApply,
