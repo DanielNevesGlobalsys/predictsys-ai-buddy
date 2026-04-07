@@ -29,6 +29,13 @@ import {
   buildDEPrompt,
   validateDEResponse,
 } from "../_shared/data-engineer-agent.ts";
+import {
+  ML_SYSTEM_PROMPT,
+  ML_RESPONSE_TOOL,
+  buildMLContext,
+  buildMLPrompt,
+  validateMLResponse,
+} from "../_shared/ml-engineer-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -88,6 +95,7 @@ serve(async (req) => {
     const isGovernanceAgent = agentName === "governance_agent";
     const isDSAgent = agentName === "data_scientist_agent";
     const isDEAgent = agentName === "data_engineer_agent";
+    const isMLAgent = agentName === "ml_engineer_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
@@ -119,6 +127,13 @@ serve(async (req) => {
       toolDef = DE_RESPONSE_TOOL;
       toolName = "de_decision";
       projectContext = deCtx as unknown as Record<string, unknown>;
+    } else if (isMLAgent) {
+      const mlCtx = await buildMLContext(svc, project_id, stage, execution_mode);
+      systemPrompt = ML_SYSTEM_PROMPT;
+      userPrompt = buildMLPrompt(mlCtx);
+      toolDef = ML_RESPONSE_TOOL;
+      toolName = "ml_decision";
+      projectContext = mlCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
@@ -350,6 +365,47 @@ serve(async (req) => {
         stage,
         execution_mode,
         de_decision: deDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    } else if (isMLAgent) {
+      const mlDecision = validateMLResponse(rawDecision);
+      console.log(`[LIS-ML] Quality=${mlDecision.training_assessment.model_quality} Deploy=${mlDecision.deploy_readiness.status} Metric=${mlDecision.training_assessment.primary_metric_name}=${mlDecision.training_assessment.primary_metric_value} Confidence=${mlDecision.confidence} Duration=${durationMs}ms`);
+
+      const mlWarnings = [
+        ...mlDecision.overfit_underfit_assessment.overfit_signals,
+        ...mlDecision.overfit_underfit_assessment.underfit_signals,
+        ...mlDecision.overfit_underfit_assessment.feature_dominance_risks,
+      ];
+
+      await svc.from("lis_agent_executions").update({
+        status: mlDecision.deploy_readiness.status === "blocked" ? "blocked"
+          : mlDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: mlDecision.confidence,
+        decision: mlDecision as unknown as Record<string, unknown>,
+        reasoning_summary: mlDecision.training_assessment.reasoning,
+        warnings: mlWarnings,
+        blocking_issues: mlDecision.deploy_readiness.required_actions,
+        actions_recommended: mlDecision.model_improvement_opportunities.map(o => ({
+          action: o.suggestion, target: o.area, priority: o.expected_impact === "high" ? "high" : "medium", auto_applicable: false,
+        })),
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        ml_decision: mlDecision,
         audit_metadata: {
           input_hash: inputHash,
           context_version: contextVersion,
