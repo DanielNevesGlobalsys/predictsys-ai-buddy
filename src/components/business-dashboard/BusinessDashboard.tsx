@@ -1,11 +1,12 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet, ArrowLeft, ShieldAlert, Clock, FileText } from 'lucide-react';
+import { Loader2, PlayCircle, AlertCircle, RefreshCw, Download, FileSpreadsheet, ArrowLeft, ShieldAlert, Clock, FileText, Sparkles } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useBusinessDashboard } from './hooks/useBusinessDashboard';
 import { useDashboardState } from './hooks/useDashboardState';
 import { useSimulation } from './hooks/useSimulation';
 import { useProjectAIContext } from '@/hooks/useProjectAIContext';
+import { useDashboardIntelligence } from '@/hooks/useDashboardIntelligence';
 import { BusinessDashboardHero } from './BusinessDashboardHero';
 import { BusinessDashboardFilters } from './BusinessDashboardFilters';
 import { BusinessAIInsights } from './BusinessAIInsights';
@@ -16,6 +17,12 @@ import { DashboardFeedbackWidget } from './DashboardFeedbackWidget';
 import { ConfidenceCard } from './ConfidenceCard';
 import { BusinessSummaryCard } from './BusinessSummaryCard';
 import { ExportCSVModal, ExportJobsModal } from '@/components/export';
+import ExecutiveSummaryPanel from '@/components/dashboard/ExecutiveSummaryPanel';
+import PrioritizationPanel from '@/components/dashboard/PrioritizationPanel';
+import ImpactPanel from '@/components/dashboard/ImpactPanel';
+import ActionRecommendationPanel from '@/components/dashboard/ActionRecommendationPanel';
+import ModelConfidencePanel from '@/components/dashboard/ModelConfidencePanel';
+import ScenarioSimulationPanel from '@/components/dashboard/ScenarioSimulationPanel';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
@@ -54,6 +61,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const [mainMetric, setMainMetric] = useState<{ name: string; value: number } | null>(null);
   const [baselineMetric, setBaselineMetric] = useState<{ name: string; value: number } | null>(null);
   const [productionModelId, setProductionModelId] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState<string>('');
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
@@ -69,6 +77,12 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   useEffect(() => { loadContext(); }, [loadContext]);
 
   const handleRefreshContext = useCallback(() => { loadContext(); }, [loadContext]);
+
+  // Dashboard Intelligence (LIS AI OS)
+  const {
+    intelligence, hasData: hasIntelligence, generating: generatingIntelligence,
+    generate: generateIntelligence,
+  } = useDashboardIntelligence({ projectId, organizationId, autoLoad: true });
 
   const {
     data, filters, updateFilters, loading, error,
@@ -96,6 +110,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
         if (project) {
           let orgName = 'Organização';
           if (project.organization_id) {
+            setOrganizationId(project.organization_id);
             const { data: org } = await supabase.from('organizations').select('name').eq('id', project.organization_id).maybeSingle();
             if (org) orgName = org.name;
           }
@@ -522,6 +537,49 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
               />
             </div>
           </div>
+
+          {/* ═══ LIS AI OS Intelligence Layer ═══ */}
+          {hasIntelligence && (
+            <>
+              <ExecutiveSummaryPanel layer={intelligence.executive_layer} />
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <PrioritizationPanel layer={intelligence.prioritization_layer} />
+                <ImpactPanel layer={intelligence.impact_layer} />
+              </div>
+
+              <ActionRecommendationPanel layer={intelligence.action_layer} />
+              <ModelConfidencePanel layer={intelligence.technical_summary_layer} />
+              <ScenarioSimulationPanel layer={intelligence.simulation_layer} />
+            </>
+          )}
+
+          {!hasIntelligence && organizationId && (
+            <Card className="p-4 border-dashed">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-muted-foreground" />
+                  <span className="text-sm text-muted-foreground">
+                    Gere inteligência executiva com LIS AI OS
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={generateIntelligence}
+                  disabled={generatingIntelligence}
+                  className="gap-1.5"
+                >
+                  {generatingIntelligence ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="w-3.5 h-3.5" />
+                  )}
+                  Gerar análise
+                </Button>
+              </div>
+            </Card>
+          )}
 
           <BlockATrustVision
             problemType={problemType}
