@@ -8,6 +8,13 @@ import {
   computeInputHash,
   selectAgent,
 } from "../_shared/lis-agents.ts";
+import {
+  GOVERNANCE_SYSTEM_PROMPT,
+  GOVERNANCE_RESPONSE_TOOL,
+  buildGovernanceContext,
+  buildGovernancePrompt,
+  validateGovernanceResponse,
+} from "../_shared/governance-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -37,7 +44,6 @@ serve(async (req) => {
       return jsonResponse({ error: "LOVABLE_API_KEY not configured" }, 500);
     }
 
-    // Verify user
     const userClient = createClient(supabaseUrl, anonKey, {
       global: { headers: { Authorization: authHeader } },
     });
@@ -46,7 +52,6 @@ serve(async (req) => {
       return jsonResponse({ error: "Unauthorized" }, 401);
     }
 
-    // Service client for writes
     const svc = createClient(supabaseUrl, serviceKey);
 
     // ─── Parse Request ───
@@ -66,47 +71,59 @@ serve(async (req) => {
 
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
-    const systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
-    if (!systemPrompt) {
-      return jsonResponse({ error: `Unknown agent: ${agentName}` }, 400);
-    }
+    const isGovernanceAgent = agentName === "governance_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
     // ─── Build Context ───
-    // Fetch project context from project_ai_context
-    const { data: aiCtx } = await svc
-      .from("project_ai_context")
-      .select("context, status")
-      .eq("project_id", project_id)
-      .maybeSingle();
+    let systemPrompt: string;
+    let userPrompt: string;
+    let toolDef: any;
+    let toolName: string;
+    let projectContext: Record<string, unknown>;
 
-    // Fetch pipeline state from project_settings
-    const { data: settings } = await svc
-      .from("project_settings")
-      .select("ingestion_state, eda_state, target_state, split_state, builder_state, training_state, scoring_state, dashboard_state, selection_version, dataset_version")
-      .eq("project_id", project_id)
-      .maybeSingle();
+    if (isGovernanceAgent) {
+      // Governance-specific context building
+      const govCtx = await buildGovernanceContext(svc, project_id, stage, execution_mode);
+      systemPrompt = GOVERNANCE_SYSTEM_PROMPT;
+      userPrompt = buildGovernancePrompt(govCtx);
+      toolDef = GOVERNANCE_RESPONSE_TOOL;
+      toolName = "governance_decision";
+      projectContext = govCtx as unknown as Record<string, unknown>;
+    } else {
+      // Generic agent flow
+      systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
+      if (!systemPrompt) {
+        return jsonResponse({ error: `Unknown agent: ${agentName}` }, 400);
+      }
 
-    // Fetch model selection
-    const { data: selection } = await svc
-      .from("project_model_selection")
-      .select("target_column, problem_type, selected_features, excluded_features, selection_version")
-      .eq("project_id", project_id)
-      .maybeSingle();
+      const [aiCtxRes, settingsRes, selectionRes] = await Promise.all([
+        svc.from("project_ai_context").select("context, status").eq("project_id", project_id).maybeSingle(),
+        svc.from("project_settings")
+          .select("ingestion_state, eda_state, target_state, split_state, builder_state, training_state, scoring_state, dashboard_state, selection_version, dataset_version")
+          .eq("project_id", project_id).maybeSingle(),
+        svc.from("project_model_selection")
+          .select("target_column, problem_type, selected_features, excluded_features, selection_version")
+          .eq("project_id", project_id).maybeSingle(),
+      ]);
 
-    const projectContext: Record<string, unknown> = {
-      ai_context: aiCtx?.context || {},
-      pipeline_state: settings || {},
-      model_selection: selection || {},
-      stage,
-      execution_mode,
-    };
+      projectContext = {
+        ai_context: aiCtxRes.data?.context || {},
+        pipeline_state: settingsRes.data || {},
+        model_selection: selectionRes.data || {},
+        stage,
+        execution_mode,
+      };
 
-    const contextVersion = `v${settings?.selection_version || 0}_dv${settings?.dataset_version || 0}`;
+      userPrompt = buildAgentPrompt(agentName, stage, projectContext, input_contract);
+      toolDef = AGENT_RESPONSE_TOOL;
+      toolName = "agent_decision";
+    }
+
+    const contextVersion = `v${(projectContext as any).selection_version || 0}_dv${(projectContext as any).dataset_version || 0}`;
     const inputHash = await computeInputHash({ ...input_contract, stage, agentName });
 
-    // ─── Create Execution Record (pending) ───
+    // ─── Create Execution Record ───
     const { data: execRecord, error: insertErr } = await svc
       .from("lis_agent_executions")
       .insert({
@@ -133,8 +150,6 @@ serve(async (req) => {
     const executionId = execRecord.id;
 
     // ─── Call AI Gateway ───
-    const userPrompt = buildAgentPrompt(agentName, stage, projectContext, input_contract);
-
     const aiResponse = await fetch(GATEWAY_URL, {
       method: "POST",
       headers: {
@@ -147,8 +162,8 @@ serve(async (req) => {
           { role: "system", content: systemPrompt },
           { role: "user", content: userPrompt },
         ],
-        tools: [AGENT_RESPONSE_TOOL],
-        tool_choice: { type: "function", function: { name: "agent_decision" } },
+        tools: [toolDef],
+        tool_choice: { type: "function", function: { name: toolName } },
       }),
     });
 
@@ -156,7 +171,6 @@ serve(async (req) => {
       const errText = await aiResponse.text();
       console.error(`[LIS] AI Gateway error ${aiResponse.status}:`, errText);
 
-      // Update execution as failed
       await svc.from("lis_agent_executions").update({
         status: "failed",
         decision: { error: `AI Gateway ${aiResponse.status}` },
@@ -189,7 +203,6 @@ serve(async (req) => {
         rawDecision = { error: "Failed to parse tool call arguments" };
       }
     } else {
-      // Fallback: try to parse content as JSON
       const content = aiData.choices?.[0]?.message?.content || "";
       try {
         rawDecision = JSON.parse(content);
@@ -199,42 +212,82 @@ serve(async (req) => {
     }
 
     // ─── Validate Response ───
-    const validated = validateAgentResponse(rawDecision);
+    let finalResponse: Record<string, unknown>;
 
-    console.log(`[LIS] Agent=${agentName} Status=${validated.status} Confidence=${validated.confidence} Duration=${durationMs}ms`);
+    if (isGovernanceAgent) {
+      const govDecision = validateGovernanceResponse(rawDecision);
+      console.log(`[LIS-GOV] Pipeline=${govDecision.pipeline_status} Conflict=${govDecision.governance_conflict} Confidence=${govDecision.confidence} Blocks=${govDecision.blocking_reasons.length} Warns=${govDecision.warnings.length}`);
 
-    // ─── Persist Result ───
-    await svc.from("lis_agent_executions").update({
-      status: validated.status,
-      confidence: validated.confidence,
-      decision: validated.decision,
-      reasoning_summary: validated.reasoning_summary,
-      warnings: validated.warnings,
-      blocking_issues: validated.blocking_issues,
-      actions_recommended: validated.actions_recommended,
-      model_used: modelUsed,
-      duration_ms: durationMs,
-      raw_ai_response: aiData,
-      finished_at: new Date().toISOString(),
-    }).eq("id", executionId);
+      // Map governance decision to the standard execution record fields
+      const mappedStatus = govDecision.pipeline_status === "blocked" ? "blocked"
+        : govDecision.pipeline_status === "warning" ? "warning"
+        : "success";
 
-    // ─── Build Response ───
-    const response = {
-      execution_id: executionId,
-      agent_name: agentName,
-      stage,
-      execution_mode,
-      ...validated,
-      audit_metadata: {
-        input_hash: inputHash,
-        context_version: contextVersion,
-        executed_at: new Date().toISOString(),
+      await svc.from("lis_agent_executions").update({
+        status: mappedStatus,
+        confidence: govDecision.confidence,
+        decision: govDecision as unknown as Record<string, unknown>,
+        reasoning_summary: govDecision.conflict_summary.length > 0
+          ? govDecision.conflict_summary
+          : govDecision.consistency_checks.map(c => `[${c.status}] ${c.check}: ${c.reason}`),
+        warnings: govDecision.warnings,
+        blocking_issues: govDecision.blocking_reasons,
+        actions_recommended: govDecision.actions_required,
         model_used: modelUsed,
         duration_ms: durationMs,
-      },
-    };
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
 
-    return jsonResponse(response);
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        governance_decision: govDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    } else {
+      const validated = validateAgentResponse(rawDecision);
+      console.log(`[LIS] Agent=${agentName} Status=${validated.status} Confidence=${validated.confidence} Duration=${durationMs}ms`);
+
+      await svc.from("lis_agent_executions").update({
+        status: validated.status,
+        confidence: validated.confidence,
+        decision: validated.decision,
+        reasoning_summary: validated.reasoning_summary,
+        warnings: validated.warnings,
+        blocking_issues: validated.blocking_issues,
+        actions_recommended: validated.actions_recommended,
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        ...validated,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    }
+
+    return jsonResponse(finalResponse);
   } catch (err) {
     console.error("[LIS] Orchestrator error:", err);
     return jsonResponse({
