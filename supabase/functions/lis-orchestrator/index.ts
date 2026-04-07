@@ -22,6 +22,13 @@ import {
   buildDSPrompt,
   validateDSResponse,
 } from "../_shared/data-scientist-agent.ts";
+import {
+  DE_SYSTEM_PROMPT,
+  DE_RESPONSE_TOOL,
+  buildDEContext,
+  buildDEPrompt,
+  validateDEResponse,
+} from "../_shared/data-engineer-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
