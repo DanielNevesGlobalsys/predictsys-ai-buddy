@@ -347,6 +347,21 @@ serve(async (req) => {
       ], project_id, productionModelId);
     }
 
+    // ===== DELIMITER FIX: resolve from import_jobs if not set in source_metadata =====
+    if (delimiter === ",") {
+      const { data: completedJobs } = await supabase
+        .from("import_jobs")
+        .select("delimiter")
+        .eq("project_id", project_id)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (completedJobs?.[0]?.delimiter && completedJobs[0].delimiter !== ",") {
+        delimiter = completedJobs[0].delimiter;
+        console.log(`[Scoring] Delimiter resolved from import_jobs: "${delimiter}"`);
+      }
+    }
+
     // Expand folder paths + sort for determinism
     const expandedFilePaths = (await Promise.all(
       filePaths.map(async (p) => {
