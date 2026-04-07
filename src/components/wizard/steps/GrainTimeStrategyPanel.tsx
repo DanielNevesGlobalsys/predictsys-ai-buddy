@@ -67,26 +67,26 @@ export default function GrainTimeStrategyPanel({ resolution, loading, ssotTimeCo
         <SummaryItem
           icon={<Layers className="w-4 h-4" />}
           label="Grain"
-          value={GRAIN_LABELS[grain.recommended_grain] || grain.recommended_grain}
-          ok={grain.confidence >= 0.6}
+          value={GRAIN_LABELS[effectiveGrain] || effectiveGrain}
+          ok={grain.confidence >= 0.6 || !!ssotGrain}
         />
         <SummaryItem
           icon={<Clock className="w-4 h-4" />}
           label="Tempo"
-          value={time.time_column || "Não detectado"}
-          ok={time.time_valid}
-          warn={time.time_required && !time.time_valid}
+          value={effectiveTimeColumn || "Não detectado"}
+          ok={effectiveTimeValid}
+          warn={time.time_required && !effectiveTimeValid}
         />
         <SummaryItem
           icon={<GitBranch className="w-4 h-4" />}
           label="Split"
-          value={SPLIT_LABELS[split.recommended_split] || split.recommended_split}
-          ok={split.confidence >= 0.6}
+          value={SPLIT_LABELS[effectiveSplit] || effectiveSplit}
+          ok={split.confidence >= 0.6 || !!ssotSplit}
         />
         <SummaryItem
           icon={<Database className="w-4 h-4" />}
           label="Modo builder"
-          value={build_plan.builder_mode.replace(/_/g, " ")}
+          value={effectiveBuildMode.replace(/_/g, " ")}
           ok={true}
         />
         <SummaryItem
