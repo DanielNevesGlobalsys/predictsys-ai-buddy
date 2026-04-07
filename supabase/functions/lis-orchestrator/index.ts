@@ -9,6 +9,12 @@ import {
   selectAgent,
 } from "../_shared/lis-agents.ts";
 import {
+  resolveOrchestration,
+  shouldBlock,
+  canAutoApply,
+  type StageOrchestration,
+} from "../_shared/lis-orchestration.ts";
+import {
   GOVERNANCE_SYSTEM_PROMPT,
   GOVERNANCE_RESPONSE_TOOL,
   buildGovernanceContext,
