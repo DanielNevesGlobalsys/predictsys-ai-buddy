@@ -2144,8 +2144,18 @@ serve(async (req) => {
       }
 
       // (b)+(c) Check leakage_flags and blocked features from contract as guardrails
+      // IMPORTANT: Only block if leakage columns are still in the active feature list
       const leakageFlags = (modelingContract.leakage_flags as any[]) || [];
-      const criticalLeakage = leakageFlags.filter((f: any) => f.reason?.toLowerCase().includes("critical") || f.reason?.toLowerCase().includes("leakage"));
+      const selectedFeaturesList = (selection?.selected_features as string[]) || [];
+      const excludedFeaturesList = (selection?.excluded_features as string[]) || [];
+      const activeFeatureSet = new Set(selectedFeaturesList.filter(f => !excludedFeaturesList.includes(f)));
+      
+      const criticalLeakage = leakageFlags
+        .filter((f: any) => f.reason?.toLowerCase().includes("critical") || f.reason?.toLowerCase().includes("leakage"))
+        .filter((f: any) => activeFeatureSet.has(f.col)); // Only block if column is still active
+      
+      console.log(`[Gating] Leakage check: ${leakageFlags.length} flags total, ${criticalLeakage.length} still active in features`);
+      
       if (criticalLeakage.length > 0) {
         contractBlockedReason = `CONTRACT_LEAKAGE_DETECTED: ${criticalLeakage.map((f: any) => f.col).join(", ")}`;
         return blockResponse(
