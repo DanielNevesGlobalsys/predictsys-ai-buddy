@@ -2274,32 +2274,29 @@ serve(async (req) => {
       delimiter = sourceMetadata.delimiter || ",";
       isBatchImport = activeDataset.source_type === "batch_import";
       
-      // CRITICAL FIX: For batch imports, resolve ACTUAL storage paths from import_jobs
-      // because source_metadata.file_paths often contains logical folder names, not real file paths.
+      // CRITICAL FIX: For batch imports, use the storage_path (batch folder) and let
+      // the folder expansion logic (below) discover actual files inside.
+      // source_metadata.file_paths may contain logical names that don't map to real storage paths.
+      // import_jobs.storage_path may also point to a different subfolder than the batch folder.
       if (isBatchImport) {
-        const batchId = sourceMetadata.batch_id || null;
+        // Use the batch folder as the primary path — folder expansion will list real files
+        filePaths = [activeDataset.storage_path];
+        console.log(`[AutoML] Batch import: using storage_path folder for expansion: ${activeDataset.storage_path}`);
+        
+        // Get delimiter from the actual import job (most reliable source)
         const { data: completedJobs } = await supabase
           .from("import_jobs")
-          .select("storage_path, delimiter, rows_processed, file_name")
+          .select("delimiter, rows_processed, file_name")
           .eq("project_id", project_id)
           .eq("status", "completed")
           .order("batch_sequence");
         
         if (completedJobs && completedJobs.length > 0) {
-          filePaths = completedJobs.map(j => j.storage_path).filter(Boolean);
-          // Use delimiter from the actual import job (most reliable source)
           const jobDelimiter = completedJobs[0]?.delimiter;
           if (jobDelimiter) {
             delimiter = jobDelimiter;
             console.log(`[AutoML] Delimiter from import_jobs: "${delimiter}"`);
           }
-          console.log(`[AutoML] Resolved ${filePaths.length} actual file paths from import_jobs`);
-          console.log(`[AutoML] File paths: ${filePaths.map(p => p.split('/').pop()).join(', ')}`);
-        } else if (sourceMetadata.file_paths) {
-          filePaths = sourceMetadata.file_paths as string[];
-          console.log(`[AutoML] WARN: No completed import_jobs found, falling back to source_metadata.file_paths`);
-        } else {
-          filePaths = [activeDataset.storage_path];
         }
       } else {
         filePaths = [activeDataset.storage_path];
