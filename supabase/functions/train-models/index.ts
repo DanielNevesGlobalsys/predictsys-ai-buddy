@@ -4033,8 +4033,12 @@ serve(async (req) => {
     console.log(`\n=== Smart Split Detection ===`);
     
     // Detect datetime and group columns from the raw data  
-    // We need to detect these from the original headers/data
-    // For now, use the column metadata we already have
+    // SSOT: prefer official time_anchor_column from project_settings
+    const ssotTimeAnchor = (activeTargetSettings as any)?.time_anchor_column || (activeTargetSettings as any)?.recommended_time_column || null;
+    const ssotSplitStrategy = (activeTargetSettings as any)?.recommended_split_strategy || null;
+    
+    console.log(`[Split] SSOT: time_anchor=${ssotTimeAnchor}, split_strategy=${ssotSplitStrategy}`);
+    
     const datetimeColCandidates = headers.filter(h => 
       /^(data|dt_|date|timestamp|created|updated|dataneg|data_neg)/i.test(h.toLowerCase())
     );
@@ -4042,14 +4046,28 @@ serve(async (req) => {
     let datetimeValues: (number | null)[] | null = null;
     let detectedDatetimeCol: string | null = null;
     
-    // Check if any datetime column was detected during data reading
-    // We store raw datetime values during parsing for split
-    if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
+    // PRIORITY 1: Use SSOT time anchor if available and present in headers
+    if (ssotTimeAnchor) {
+      const ssotIdx = headers.findIndex(h => h.toLowerCase() === ssotTimeAnchor.toLowerCase());
+      if (ssotIdx !== -1) {
+        detectedDatetimeCol = headers[ssotIdx];
+        console.log(`[Split] Using SSOT time anchor: "${detectedDatetimeCol}"`);
+        // We need datetime values — check globalThis first, otherwise parse from stored data
+        if ((globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol?.toLowerCase() === ssotTimeAnchor.toLowerCase()) {
+          const rawDt = (globalThis as any).__datetimeValues as (number | null)[];
+          datetimeValues = rawDt.length > Xfinal.length ? rawDt.slice(0, Xfinal.length) : rawDt;
+        }
+        // If no cached values, we'll still force temporal split below
+      }
+    }
+    
+    // PRIORITY 2: Use auto-detected datetime from data parsing
+    if (!datetimeValues && (globalThis as any).__datetimeValues && (globalThis as any).__datetimeCol) {
       const rawDt = (globalThis as any).__datetimeValues as (number | null)[];
       // CRITICAL: truncate to match current X length (may differ after human-label override)
       datetimeValues = rawDt.length > Xfinal.length ? rawDt.slice(0, Xfinal.length) : rawDt;
       detectedDatetimeCol = (globalThis as any).__datetimeCol;
-      console.log(`[Split] Using detected datetime column: "${detectedDatetimeCol}" (${datetimeValues.length} values for ${Xfinal.length} rows)`);
+      console.log(`[Split] Using auto-detected datetime column: "${detectedDatetimeCol}" (${datetimeValues.length} values for ${Xfinal.length} rows)`);
     }
     
     // Detect group key from column uniqueness
