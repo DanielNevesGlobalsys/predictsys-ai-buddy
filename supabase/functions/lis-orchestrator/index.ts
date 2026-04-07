@@ -103,6 +103,9 @@ serve(async (req) => {
       return jsonResponse({ error: "project_id, organization_id, and stage are required" }, 400);
     }
 
+    // ─── Resolve Orchestration Config ───
+    const orchestration = resolveOrchestration(stage, execution_mode);
+
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
     const isGovernanceAgent = agentName === "governance_agent";
@@ -111,7 +114,7 @@ serve(async (req) => {
     const isMLAgent = agentName === "ml_engineer_agent";
     const isBAAgent = agentName === "business_analyst_agent";
 
-    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
+    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${orchestration.default_mode} Policy=${orchestration.application_policy} Project=${project_id}`);
 
     // ─── Build Context ───
     let systemPrompt: string;
