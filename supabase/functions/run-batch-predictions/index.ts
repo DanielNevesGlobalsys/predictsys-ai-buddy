@@ -285,15 +285,19 @@ serve(async (req) => {
         { label: "Voltar ao Treino", go_to_step: 4 }
       ], project_id, productionModelId);
     }
+    // ===== PROBLEM TYPE FLAGS (must be before any usage) =====
+    const isClassification = (selection?.problem_type || project.problem_type) === "classification";
+    const isRegression = !isClassification;
+
     // ===== MODEL TYPE FLAGS & ARTIFACT EXTRACTION =====
     const isGBModel = !!(modelArtifacts.trees && Array.isArray(modelArtifacts.trees));
     const gbTrees: any[] = isGBModel ? modelArtifacts.trees : [];
-    const gbLR: number = isGBModel ? (modelArtifacts.learning_rate ?? 0.1) : 0;
-    const gbBase: number = isGBModel ? (modelArtifacts.base_prediction ?? 0) : 0;
+    const gbLR: number = isGBModel ? (modelArtifacts.learning_rate ?? modelArtifacts.lr ?? 0.1) : 0;
+    const gbBase: number = isGBModel ? (modelArtifacts.base_prediction ?? modelArtifacts.base ?? 0) : 0;
     const lrWeights: number[] = !isGBModel ? (modelArtifacts.weights || []) : [];
     const lrBias: number = !isGBModel ? (modelArtifacts.bias ?? 0) : 0;
 
-    console.log(`[Scoring] Model type: ${isGBModel ? "GradientBoosting" : "LinearModel"}, isClassification=${isClassification}, trees=${gbTrees.length}, weights=${lrWeights.length}`);
+    console.log(`[Scoring] Model: ${isGBModel ? "GB" : "LR"}, classification=${isClassification}, trees=${gbTrees.length}, weights=${lrWeights.length}`);
 
     if (!savedNormalization?.means || !savedNormalization?.stds || !savedFeatureNames?.length) {
       return blockResponse(gates, "NO_NORMALIZATION", "Modelo sem normalização. Re-treine.", [
@@ -400,7 +404,7 @@ serve(async (req) => {
     const segmentColNames = ['segment', 'segmento', 'region', 'regiao', 'estado', 'state', 'city', 'cidade', 'channel', 'canal', 'campaign', 'campanha', 'cohort', 'coorte', 'age_group', 'faixa_etaria', 'product_category', 'categoria_produto'];
     const entityIdCandidates = ['id', 'entity_id', 'cliente_id', 'customer_id', 'user_id', 'id_cliente', 'customer', 'cliente', 'cnpj', 'cpf'];
 
-    const isClassification = (selection?.problem_type || project.problem_type) === "classification";
+    // isClassification already declared above (line ~289)
     const batchId = existingBatchId || `batch_${Date.now()}_${project_id.substring(0, 8)}`;
     const predictionDate = new Date().toISOString();
 
