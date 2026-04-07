@@ -218,6 +218,16 @@ serve(async (req: Request) => {
       selection_version: newVersion,
       target_state: target_column ? "ready" : "draft",
       active_target_column: target_column,
+      // GOVERNANCE: Set official fields on explicit promotion
+      official_target: target_column,
+      official_problem_type: problem_type || null,
+      official_entity_key: entity_key || null,
+      official_time_column: time_column || null,
+      // Clear governance conflict on explicit save
+      governance_conflict: false,
+      governance_conflict_details: null,
+      last_governance_action: "explicit_promotion",
+      last_governance_action_at: new Date().toISOString(),
     };
 
     // Persist entity_key and time_column if provided
