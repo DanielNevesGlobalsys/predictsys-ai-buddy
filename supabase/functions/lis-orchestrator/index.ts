@@ -127,6 +127,13 @@ serve(async (req) => {
       toolDef = DE_RESPONSE_TOOL;
       toolName = "de_decision";
       projectContext = deCtx as unknown as Record<string, unknown>;
+    } else if (isMLAgent) {
+      const mlCtx = await buildMLContext(svc, project_id, stage, execution_mode);
+      systemPrompt = ML_SYSTEM_PROMPT;
+      userPrompt = buildMLPrompt(mlCtx);
+      toolDef = ML_RESPONSE_TOOL;
+      toolName = "ml_decision";
+      projectContext = mlCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
