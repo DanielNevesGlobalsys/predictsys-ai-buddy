@@ -291,68 +291,33 @@ serve(async (req) => {
       ], project_id, productionModelId);
     }
 
-    // ===== LOAD COLUMNS + FEATURES =====
-    const [columnsRes, featuresRes] = await Promise.all([
-      supabase.from("project_columns").select("*").eq("project_id", project_id).order("column_index"),
-      supabase.from("project_features").select("*").eq("project_id", project_id).eq("enabled", true),
-    ]);
-
-    const columns = columnsRes.data;
-    if (!columns) {
-      return new Response(JSON.stringify({ error: "Erro ao carregar colunas" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const targetCol = selection?.target_column || project.target_column;
-    const numericTypes = ["numerico", "numérico", "numeric"];
-    const numericFeatures = columns.filter(c =>
-      numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== targetCol
-    );
-    const baseFeatureNames = numericFeatures.map(c => c.column_name);
-
-    if (baseFeatureNames.length === 0) {
-      return blockResponse(gates, "NO_FEATURES", "Nenhuma feature numérica encontrada.", [
-        { label: "Revisar Features", go_to_step: 3 }
-      ], project_id, productionModelId);
-    }
+    // ===== LOAD FEATURES =====
+    const featuresRes = await supabase
+      .from("project_features").select("*").eq("project_id", project_id).eq("enabled", true);
 
     const enabledFeatures: ProjectFeature[] = (featuresRes.data || []).map(f => ({
       id: f.id, project_id: f.project_id, name: f.name, label: f.label,
       description: f.description || undefined, enabled: f.enabled,
       expression: f.expression as FeatureExpression
     }));
-
     const engineeredFeatureNames = enabledFeatures.map(f => f.name);
-    const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
     const hasEngineeredFeatures = enabledFeatures.length > 0;
 
-    // Pre-compute normalization lookup
-    const means = allFeatureNames.map(name => {
-      const idx = savedFeatureNames.indexOf(name);
-      return idx !== -1 ? savedNormalization.means[idx] : 0;
-    });
-    const stdsArr = allFeatureNames.map(name => {
-      const idx = savedFeatureNames.indexOf(name);
-      return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
-    });
-
-    // Track missing features
-    let missingFeatureCount = 0;
-    for (const name of savedFeatureNames) {
-      if (!allFeatureNames.includes(name)) missingFeatureCount++;
-    }
-    const missingFeaturePct = savedFeatureNames.length > 0 ? (missingFeatureCount / savedFeatureNames.length) * 100 : 0;
-
-    // Model params
-    const isGBModel = modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees;
-    const gbBase = modelArtifacts.base || 0;
-    const gbLR = modelArtifacts.lr || 0.1;
-    const gbTrees = modelArtifacts.trees || [];
-    const lrWeights: number[] = modelArtifacts.weights || [];
-    const lrBias: number = modelArtifacts.bias || 0;
-    const baseLen = baseFeatureNames.length;
+    // ===== USE MODEL'S FEATURE LIST AS AUTHORITATIVE =====
+    // The model was trained with savedFeatureNames — scoring MUST use the same list
+    const allFeatureNames = [...savedFeatureNames];
     const totalFeatures = allFeatureNames.length;
+
+    // Classify which features are engineered vs base (from CSV columns)
+    const engineeredSet = new Set(engineeredFeatureNames);
+    const baseFeatureNames = allFeatureNames.filter(f => !engineeredSet.has(f));
+    const baseLen = baseFeatureNames.length;
+
+    console.log(`[Scoring] Model expects ${savedFeatureNames.length} features: ${baseLen} base + ${allFeatureNames.length - baseLen} engineered`);
+
+    // Pre-compute normalization lookup (aligned to savedFeatureNames order)
+    const means = savedFeatureNames.map((_, i) => savedNormalization.means[i] ?? 0);
+    const stdsArr = savedFeatureNames.map((_, i) => savedNormalization.stds[i] || 1);
 
     // ===== DATASET FILES =====
     const { data: activeDataset } = await supabase
