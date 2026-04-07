@@ -36,6 +36,13 @@ import {
   buildMLPrompt,
   validateMLResponse,
 } from "../_shared/ml-engineer-agent.ts";
+import {
+  BA_SYSTEM_PROMPT,
+  BA_RESPONSE_TOOL,
+  buildBAContext,
+  buildBAPrompt,
+  validateBAResponse,
+} from "../_shared/business-analyst-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
