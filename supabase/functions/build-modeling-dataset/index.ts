@@ -1366,12 +1366,12 @@ serve(async (req: Request) => {
         allBlockedReasons.push(`Target "${targetColumn}" é texto com alta cardinalidade (${col.distinct_count} valores). Selecione outra coluna.`);
         targetColumn = null;
       } else {
-        if (isNumericType(col.type)) {
-          if ((col.distinct_count || 0) <= 10) {
-            targetType = (col.distinct_count || 0) === 2 ? "binary" : "multiclass";
-          } else {
-            targetType = intent.problem_type === "regression" ? "regression" : "binary";
-          }
+        const normalizedOfficialProblemType = String(officialProblemType || intent.problem_type || "classification").toLowerCase();
+        if (normalizedOfficialProblemType === "regression") {
+          targetType = "regression";
+        } else if (isNumericType(col.type)) {
+          const distinctCount = col.distinct_count || 0;
+          targetType = distinctCount === 2 ? "binary" : "multiclass";
         } else {
           targetType = (col.distinct_count || 0) === 2 ? "binary" : "multiclass";
         }
