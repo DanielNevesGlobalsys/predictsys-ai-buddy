@@ -78,6 +78,12 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
 
   const handleRefreshContext = useCallback(() => { loadContext(); }, [loadContext]);
 
+  // Dashboard Intelligence (LIS AI OS)
+  const {
+    intelligence, hasData: hasIntelligence, generating: generatingIntelligence,
+    generate: generateIntelligence,
+  } = useDashboardIntelligence({ projectId, organizationId, autoLoad: true });
+
   const {
     data, filters, updateFilters, loading, error,
     productionModel, runBatchPredictions, runningBatch,
