@@ -109,18 +109,43 @@ serve(async (req) => {
       return jsonResponse({ error: "project_id, organization_id, and stage are required" }, 400);
     }
 
+    // ─── Rollout Gate ───
+    if (!rolloutStageEnabled(stage)) {
+      console.log(`[LIS-ROLLOUT] Stage "${stage}" disabled in current phase. Skipping.`);
+      return jsonResponse({
+        skipped: true,
+        reason: "STAGE_DISABLED_BY_ROLLOUT",
+        stage,
+        rollout: getRolloutMetadata(),
+      });
+    }
+
     // ─── Resolve Orchestration Config ───
-    const orchestration = resolveOrchestration(stage, execution_mode);
+    const effectiveMode = getEffectiveMode(stage, execution_mode);
+    const orchestration = resolveOrchestration(stage, effectiveMode as any);
 
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
+
+    // ─── Rollout Agent Gate ───
+    if (!rolloutAgentAllowed(stage, agentName)) {
+      console.log(`[LIS-ROLLOUT] Agent "${agentName}" not allowed for stage "${stage}" in current phase. Skipping.`);
+      return jsonResponse({
+        skipped: true,
+        reason: "AGENT_DISABLED_BY_ROLLOUT",
+        agent_name: agentName,
+        stage,
+        rollout: getRolloutMetadata(),
+      });
+    }
+
     const isGovernanceAgent = agentName === "governance_agent";
     const isDSAgent = agentName === "data_scientist_agent";
     const isDEAgent = agentName === "data_engineer_agent";
     const isMLAgent = agentName === "ml_engineer_agent";
     const isBAAgent = agentName === "business_analyst_agent";
 
-    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${orchestration.default_mode} Policy=${orchestration.application_policy} Project=${project_id}`);
+    console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${orchestration.default_mode} Policy=${orchestration.application_policy} Project=${project_id} Phase=${getRolloutMetadata().phase}`);
 
     // ─── Build Context ───
     let systemPrompt: string;
