@@ -319,6 +319,45 @@ serve(async (req) => {
           duration_ms: durationMs,
         },
       };
+    } else if (isDEAgent) {
+      const deDecision = validateDEResponse(rawDecision);
+      console.log(`[LIS-DE] BuildMode=${deDecision.builder_plan.dataset_build_mode} Compatible=${deDecision.training_scoring_compatibility.compatible} Confidence=${deDecision.confidence} Duration=${durationMs}ms`);
+
+      const deWarnings = [
+        ...deDecision.schema_assessment.schema_warnings,
+        ...deDecision.data_reliability_assessment.delimiter_risk,
+        ...deDecision.data_reliability_assessment.parsing_risk,
+      ];
+
+      await svc.from("lis_agent_executions").update({
+        status: deDecision.schema_assessment.schema_blockers.length > 0 ? "blocked"
+          : deDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: deDecision.confidence,
+        decision: deDecision as unknown as Record<string, unknown>,
+        reasoning_summary: deDecision.builder_plan.reasoning,
+        warnings: deWarnings,
+        blocking_issues: deDecision.schema_assessment.schema_blockers,
+        actions_recommended: deDecision.actions_recommended,
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        de_decision: deDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
     } else {
       const validated = validateAgentResponse(rawDecision);
       console.log(`[LIS] Agent=${agentName} Status=${validated.status} Confidence=${validated.confidence} Duration=${durationMs}ms`);
