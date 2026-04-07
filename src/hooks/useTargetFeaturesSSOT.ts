@@ -45,6 +45,18 @@ export interface TargetFeaturesSSOT {
   
   // ── Lifecycle ──
   target_lifecycle_state: string | null;
+
+  // ── Governance ──
+  official_target: string | null;
+  official_problem_type: string | null;
+  official_entity_key: string | null;
+  official_time_column: string | null;
+  official_grain: string | null;
+  recommended_target: string | null;
+  recommended_problem_type: string | null;
+  recommended_target_reasoning: string | null;
+  recommended_target_confidence: number | null;
+  governance_conflict: boolean;
 }
 
 const EMPTY_SSOT: TargetFeaturesSSOT = {
