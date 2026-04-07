@@ -119,7 +119,7 @@ describe("Chat Consistency — Dashboard Intelligence", () => {
   const questions = [
     { q: "Por que esse segmento foi priorizado?", expectSource: "prioritization" },
     { q: "Qual é a principal oportunidade do projeto?", expectSource: "executive" },
-    { q: "Qual ação é recomendada primeiro?", expectSource: "action" },
+    { q: "Qual ação recomendada devo seguir?", expectSource: "action" },
     { q: "Quanto impacto isso pode gerar?", expectSource: "impact" },
     { q: "Esse modelo é confiável?", expectSource: "technical" },
     { q: "Por que o dashboard mostra esse risco?", expectSource: "executive" },
