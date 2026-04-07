@@ -218,6 +218,44 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
     if (!res.target_column) return;
 
     try {
+      // ── GOVERNANCE CHECK: Is there an official target that differs? ──
+      const { data: currentSettings } = await supabase
+        .from("project_settings")
+        .select("official_target, official_problem_type")
+        .eq("project_id", projectId)
+        .maybeSingle();
+
+      const officialTarget = (currentSettings as any)?.official_target || null;
+      const officialProblemType = (currentSettings as any)?.official_problem_type || null;
+
+      // If there's an official target and the new resolution differs, flag a governance conflict
+      if (officialTarget && (officialTarget !== res.target_column || (officialProblemType && officialProblemType !== res.problem_type))) {
+        console.log("[useAutoResolution] GOVERNANCE CONFLICT: official differs from recommended", {
+          official: { target: officialTarget, problem: officialProblemType },
+          recommended: { target: res.target_column, problem: res.problem_type },
+        });
+
+        // Write ONLY to recommended fields — do NOT overwrite official
+        await supabase.from("project_settings").update({
+          recommended_target: res.target_column,
+          recommended_problem_type: res.problem_type,
+          recommended_target_reasoning: res.justification || "Resolução automática pelo PRE.",
+          recommended_target_confidence: res.confidence_score,
+          governance_conflict: true,
+          governance_conflict_details: {
+            detected_at: new Date().toISOString(),
+            official_target: officialTarget,
+            official_problem_type: officialProblemType,
+            recommended_target: res.target_column,
+            recommended_problem_type: res.problem_type,
+            source: "auto_resolution",
+          },
+        } as any).eq("project_id", projectId);
+
+        setApplied(true);
+        return;
+      }
+
       console.log("[useAutoResolution] Applying atomically to SSOT...", {
         target: res.target_column,
         problem: res.problem_type,
@@ -239,6 +277,12 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         active_target_mode: "column",
         target_source: "manual",
         predictive_resolution_state: "applied",
+        // Set official fields on first apply (no prior official exists)
+        official_target: res.target_column,
+        official_problem_type: res.problem_type,
+        official_entity_key: res.entity_key,
+        official_time_column: res.time_column,
+        governance_conflict: false,
         updated_at: new Date().toISOString(),
       };
 
@@ -251,6 +295,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         settingsPayload.temporal_readiness_state = "ready";
         settingsPayload.grain_confidence = 0.85;
         settingsPayload.time_strategy_confidence = 0.9;
+        settingsPayload.official_grain = "entity_time";
       }
 
       await supabase
