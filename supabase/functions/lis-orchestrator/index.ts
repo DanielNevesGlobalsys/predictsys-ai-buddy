@@ -373,6 +373,47 @@ serve(async (req) => {
           duration_ms: durationMs,
         },
       };
+    } else if (isMLAgent) {
+      const mlDecision = validateMLResponse(rawDecision);
+      console.log(`[LIS-ML] Quality=${mlDecision.training_assessment.model_quality} Deploy=${mlDecision.deploy_readiness.status} Metric=${mlDecision.training_assessment.primary_metric_name}=${mlDecision.training_assessment.primary_metric_value} Confidence=${mlDecision.confidence} Duration=${durationMs}ms`);
+
+      const mlWarnings = [
+        ...mlDecision.overfit_underfit_assessment.overfit_signals,
+        ...mlDecision.overfit_underfit_assessment.underfit_signals,
+        ...mlDecision.overfit_underfit_assessment.feature_dominance_risks,
+      ];
+
+      await svc.from("lis_agent_executions").update({
+        status: mlDecision.deploy_readiness.status === "blocked" ? "blocked"
+          : mlDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: mlDecision.confidence,
+        decision: mlDecision as unknown as Record<string, unknown>,
+        reasoning_summary: mlDecision.training_assessment.reasoning,
+        warnings: mlWarnings,
+        blocking_issues: mlDecision.deploy_readiness.required_actions,
+        actions_recommended: mlDecision.model_improvement_opportunities.map(o => ({
+          action: o.suggestion, target: o.area, priority: o.expected_impact === "high" ? "high" : "medium", auto_applicable: false,
+        })),
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        ml_decision: mlDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
     } else {
       const validated = validateAgentResponse(rawDecision);
       console.log(`[LIS] Agent=${agentName} Status=${validated.status} Confidence=${validated.confidence} Duration=${durationMs}ms`);
