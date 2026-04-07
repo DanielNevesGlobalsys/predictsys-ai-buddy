@@ -991,6 +991,99 @@ export type Database = {
           },
         ]
       }
+      lis_agent_executions: {
+        Row: {
+          actions_recommended: Json | null
+          agent_name: string
+          blocking_issues: Json | null
+          confidence: number | null
+          context_version: string | null
+          created_at: string
+          decision: Json | null
+          duration_ms: number | null
+          execution_mode: string
+          finished_at: string | null
+          id: string
+          input_contract: Json
+          input_hash: string | null
+          model_used: string | null
+          organization_id: string
+          project_context_snapshot: Json
+          project_id: string
+          raw_ai_response: Json | null
+          reasoning_summary: Json | null
+          stage: string
+          status: string
+          triggered_by: string | null
+          warnings: Json | null
+        }
+        Insert: {
+          actions_recommended?: Json | null
+          agent_name: string
+          blocking_issues?: Json | null
+          confidence?: number | null
+          context_version?: string | null
+          created_at?: string
+          decision?: Json | null
+          duration_ms?: number | null
+          execution_mode?: string
+          finished_at?: string | null
+          id?: string
+          input_contract?: Json
+          input_hash?: string | null
+          model_used?: string | null
+          organization_id: string
+          project_context_snapshot?: Json
+          project_id: string
+          raw_ai_response?: Json | null
+          reasoning_summary?: Json | null
+          stage: string
+          status?: string
+          triggered_by?: string | null
+          warnings?: Json | null
+        }
+        Update: {
+          actions_recommended?: Json | null
+          agent_name?: string
+          blocking_issues?: Json | null
+          confidence?: number | null
+          context_version?: string | null
+          created_at?: string
+          decision?: Json | null
+          duration_ms?: number | null
+          execution_mode?: string
+          finished_at?: string | null
+          id?: string
+          input_contract?: Json
+          input_hash?: string | null
+          model_used?: string | null
+          organization_id?: string
+          project_context_snapshot?: Json
+          project_id?: string
+          raw_ai_response?: Json | null
+          reasoning_summary?: Json | null
+          stage?: string
+          status?: string
+          triggered_by?: string | null
+          warnings?: Json | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "lis_agent_executions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "lis_agent_executions_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       organization_data_policy: {
         Row: {
           allow_data_export: boolean
