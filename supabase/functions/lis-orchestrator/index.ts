@@ -15,6 +15,13 @@ import {
   buildGovernancePrompt,
   validateGovernanceResponse,
 } from "../_shared/governance-agent.ts";
+import {
+  DS_SYSTEM_PROMPT,
+  DS_RESPONSE_TOOL,
+  buildDSContext,
+  buildDSPrompt,
+  validateDSResponse,
+} from "../_shared/data-scientist-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -72,6 +79,7 @@ serve(async (req) => {
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
     const isGovernanceAgent = agentName === "governance_agent";
+    const isDSAgent = agentName === "data_scientist_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
@@ -83,13 +91,19 @@ serve(async (req) => {
     let projectContext: Record<string, unknown>;
 
     if (isGovernanceAgent) {
-      // Governance-specific context building
       const govCtx = await buildGovernanceContext(svc, project_id, stage, execution_mode);
       systemPrompt = GOVERNANCE_SYSTEM_PROMPT;
       userPrompt = buildGovernancePrompt(govCtx);
       toolDef = GOVERNANCE_RESPONSE_TOOL;
       toolName = "governance_decision";
       projectContext = govCtx as unknown as Record<string, unknown>;
+    } else if (isDSAgent) {
+      const dsCtx = await buildDSContext(svc, project_id, stage, execution_mode);
+      systemPrompt = DS_SYSTEM_PROMPT;
+      userPrompt = buildDSPrompt(dsCtx);
+      toolDef = DS_RESPONSE_TOOL;
+      toolName = "ds_decision";
+      projectContext = dsCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
@@ -245,6 +259,43 @@ serve(async (req) => {
         stage,
         execution_mode,
         governance_decision: govDecision,
+        audit_metadata: {
+          input_hash: inputHash,
+          context_version: contextVersion,
+          executed_at: new Date().toISOString(),
+          model_used: modelUsed,
+          duration_ms: durationMs,
+        },
+      };
+    } else if (isDSAgent) {
+      const dsDecision = validateDSResponse(rawDecision);
+      console.log(`[LIS-DS] Family=${dsDecision.problem_formulation.objective_family} Target=${dsDecision.target_recommendation.recommended_target} Confidence=${dsDecision.confidence} Duration=${durationMs}ms`);
+
+      await svc.from("lis_agent_executions").update({
+        status: dsDecision.confidence >= 0.5 ? "success" : "warning",
+        confidence: dsDecision.confidence,
+        decision: dsDecision as unknown as Record<string, unknown>,
+        reasoning_summary: dsDecision.target_recommendation.target_reasoning,
+        warnings: [
+          ...dsDecision.modeling_risk_assessment.target_risks,
+          ...dsDecision.modeling_risk_assessment.general_risks,
+        ],
+        blocking_issues: dsDecision.actions_recommended
+          .filter(a => a.priority === "critical")
+          .map(a => a.action),
+        actions_recommended: dsDecision.actions_recommended,
+        model_used: modelUsed,
+        duration_ms: durationMs,
+        raw_ai_response: aiData,
+        finished_at: new Date().toISOString(),
+      }).eq("id", executionId);
+
+      finalResponse = {
+        execution_id: executionId,
+        agent_name: agentName,
+        stage,
+        execution_mode,
+        ds_decision: dsDecision,
         audit_metadata: {
           input_hash: inputHash,
           context_version: contextVersion,
