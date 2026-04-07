@@ -28,7 +28,7 @@ export function useDashboardIntelligence({
     if (!projectId) return;
     setLoading(true);
     try {
-      const { data } = await supabase
+      const { data } = await (supabase
         .from("lis_agent_executions" as any)
         .select("decision, created_at, confidence")
         .eq("project_id", projectId)
@@ -37,12 +37,12 @@ export function useDashboardIntelligence({
         .eq("status", "success")
         .order("created_at", { ascending: false })
         .limit(1)
-        .maybeSingle();
+        .maybeSingle() as any);
 
       if (data?.decision) {
         const parsed = parseBaDecisionToIntelligence(data.decision as Record<string, unknown>);
         setIntelligence(parsed);
-        setLastGeneratedAt(data.created_at);
+        setLastGeneratedAt(data.created_at as string);
         setHasData(true);
       }
     } catch (err) {
