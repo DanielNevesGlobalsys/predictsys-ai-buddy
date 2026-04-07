@@ -132,7 +132,7 @@ export function useDataScientistAgent({ projectId, organizationId }: UseDataScie
   const fetchLatest = useCallback(async (): Promise<DSAgentResult | null> => {
     try {
       const { data } = await supabase
-        .from("lis_agent_executions" as any)
+        .from("lis_agent_executions")
         .select("*")
         .eq("project_id", projectId)
         .eq("agent_name", "data_scientist_agent")
@@ -140,19 +140,20 @@ export function useDataScientistAgent({ projectId, organizationId }: UseDataScie
         .limit(1)
         .maybeSingle();
 
-      if (data?.decision) {
+      const row = data as any;
+      if (row?.decision) {
         const mapped: DSAgentResult = {
-          execution_id: data.id,
+          execution_id: row.id,
           agent_name: "data_scientist_agent",
-          stage: data.stage,
-          execution_mode: data.execution_mode,
-          ds_decision: data.decision as unknown as DSDecision,
+          stage: row.stage,
+          execution_mode: row.execution_mode,
+          ds_decision: row.decision as DSDecision,
           audit_metadata: {
-            input_hash: data.input_hash || "",
-            context_version: data.context_version || "",
-            executed_at: data.created_at,
-            model_used: data.model_used || "",
-            duration_ms: data.duration_ms || 0,
+            input_hash: row.input_hash || "",
+            context_version: row.context_version || "",
+            executed_at: row.created_at,
+            model_used: row.model_used || "",
+            duration_ms: row.duration_ms || 0,
           },
         };
         setResult(mapped);

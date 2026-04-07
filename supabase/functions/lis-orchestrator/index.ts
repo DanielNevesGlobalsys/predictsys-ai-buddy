@@ -15,6 +15,13 @@ import {
   buildGovernancePrompt,
   validateGovernanceResponse,
 } from "../_shared/governance-agent.ts";
+import {
+  DS_SYSTEM_PROMPT,
+  DS_RESPONSE_TOOL,
+  buildDSContext,
+  buildDSPrompt,
+  validateDSResponse,
+} from "../_shared/data-scientist-agent.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
