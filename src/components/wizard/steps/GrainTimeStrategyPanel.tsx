@@ -6,6 +6,11 @@ import type { GrainTimeResolution } from "@/types/grainResolution";
 interface GrainTimeStrategyPanelProps {
   resolution: GrainTimeResolution | null;
   loading?: boolean;
+  /** SSOT overrides — if present, these take priority over the resolution object */
+  ssotTimeColumn?: string | null;
+  ssotGrain?: string | null;
+  ssotSplit?: string | null;
+  ssotBuildMode?: string | null;
 }
 
 const GRAIN_LABELS: Record<string, string> = {
