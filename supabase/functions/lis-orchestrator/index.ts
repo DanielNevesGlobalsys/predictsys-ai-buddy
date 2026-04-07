@@ -112,6 +112,13 @@ serve(async (req) => {
       toolDef = DS_RESPONSE_TOOL;
       toolName = "ds_decision";
       projectContext = dsCtx as unknown as Record<string, unknown>;
+    } else if (isDEAgent) {
+      const deCtx = await buildDEContext(svc, project_id, stage, execution_mode);
+      systemPrompt = DE_SYSTEM_PROMPT;
+      userPrompt = buildDEPrompt(deCtx);
+      toolDef = DE_RESPONSE_TOOL;
+      toolName = "de_decision";
+      projectContext = deCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
