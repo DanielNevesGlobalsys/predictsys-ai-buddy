@@ -880,6 +880,30 @@ const StepTargetFeatures = ({
           <p className="text-sm text-muted-foreground">Configuração inteligente do problema preditivo.</p>
         </div>
 
+        {/* ═══ GOVERNANCE CONFLICT BANNER ═══ */}
+        {ssot.governance_conflict && (
+          <GovernanceConflictBanner
+            projectId={projectData.id}
+            officialTarget={ssot.official_target}
+            officialProblemType={ssot.official_problem_type}
+            recommendedTarget={ssot.recommended_target}
+            recommendedProblemType={ssot.recommended_problem_type}
+            recommendedReasoning={ssot.recommended_target_reasoning}
+            recommendedConfidence={ssot.recommended_target_confidence}
+            hasConflict={ssot.governance_conflict}
+            onMigrated={() => {
+              loadSSOT();
+              setPreflightRefreshKey(k => k + 1);
+              // Reload everything after migration
+              autoResAppliedRef.current = false;
+              autoPromoteRef.current = false;
+            }}
+            onKeptOfficial={() => {
+              loadSSOT();
+            }}
+          />
+        )}
+
         {/* ═══ BLOCO 1: SUGESTÃO APLICADA (PRE) ═══ */}
         {autoRes.resolving && (
           <div className="flex items-center gap-3 p-4 rounded-xl border border-primary/20 bg-primary/5 animate-pulse">
