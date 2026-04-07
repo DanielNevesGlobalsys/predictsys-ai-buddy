@@ -600,15 +600,25 @@ function runTrainingGate(
 
   // ========== LEAKAGE GATE ==========
 
-  // 3.1 From FeatureReport
-  if (report.leakage_detected) {
-    leakageNotes.push(`Leakage detectado pelo Feature Builder em ${report.leakage_columns.length} coluna(s).`);
-    // Only block if critical
-    if (report.leakage_columns.length >= 3) {
+  // 3.1 From FeatureReport — only count leakage columns that are STILL in features_final
+  const activeLeakageCols = report.leakage_columns.filter(lc =>
+    report.features_final.includes(lc.column)
+  );
+  if (activeLeakageCols.length > 0) {
+    leakageNotes.push(`Leakage detectado em ${activeLeakageCols.length} coluna(s) ativa(s) no features_final.`);
+    // Only block if critical leakage columns are still active in the final feature set
+    if (activeLeakageCols.length >= 3) {
       blocked_reason_code = "BLOCKED_LEAKAGE";
       can_train = false;
-      leakageNotes.push("BLOCKED: Leakage estrutural em múltiplas colunas.");
+      leakageNotes.push("BLOCKED: Leakage estrutural em múltiplas colunas ativas.");
     }
+  }
+  // Log removed leakage columns (already excluded — informational only)
+  const removedLeakageCols = report.leakage_columns.filter(lc =>
+    !report.features_final.includes(lc.column)
+  );
+  if (removedLeakageCols.length > 0) {
+    leakageNotes.push(`${removedLeakageCols.length} coluna(s) de leakage já removida(s)/bloqueada(s) (não bloqueiam o builder).`);
   }
 
   // 3.2 Token-based leakage check on feature names
@@ -1411,13 +1421,20 @@ serve(async (req: Request) => {
       }), { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
-    // ==================== ENTITY KEY & ANCHOR TIME ====================
-    const entityKey = existingContract?.entity_key
-      ? (typeof existingContract.entity_key === "string" ? existingContract.entity_key : (existingContract.entity_key as any)?.column || detectEntityKey(enrichedColumns, totalRows))
-      : detectEntityKey(enrichedColumns, totalRows);
-    const anchorTimeCol = existingContract?.anchor_time_col || (timeCols.length > 0 ? timeCols[0] : null);
+    // ==================== ENTITY KEY & ANCHOR TIME (SSOT-first) ====================
+    // Priority: model_selection > project_settings > contract > auto-detect
+    const ssotEntityKey = (settings as any)?.entity_key || null;
+    const selectionEntityKey = ssotEntityKey;
+    const contractEntityKey = existingContract?.entity_key
+      ? (typeof existingContract.entity_key === "string" ? existingContract.entity_key : (existingContract.entity_key as any)?.column || null)
+      : null;
+    const entityKey = selectionEntityKey || contractEntityKey || detectEntityKey(enrichedColumns, totalRows);
 
-    console.log(`[build-modeling-dataset] Entity: ${entityKey}, Anchor: ${anchorTimeCol}`);
+    const ssotTimeCol = (settings as any)?.time_anchor_column || (settings as any)?.recommended_time_column || null;
+    const contractTimeCol = existingContract?.anchor_time_col || null;
+    const anchorTimeCol = ssotTimeCol || contractTimeCol || (timeCols.length > 0 ? timeCols[0] : null);
+
+    console.log(`[build-modeling-dataset] Entity: ${entityKey} (ssot=${ssotEntityKey}, contract=${contractEntityKey}), Anchor: ${anchorTimeCol} (ssot=${ssotTimeCol}, contract=${contractTimeCol})`);
 
     // ==================== LEAKAGE COLS FROM CONTRACT + LEAKAGE GUARD ====================
     const leakageCols: string[] = [];

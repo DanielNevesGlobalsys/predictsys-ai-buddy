@@ -32,6 +32,11 @@ export interface TargetFeaturesSSOT {
   time_anchor_column: string | null;
   value_column: string | null;
   
+  // ── Grain/Time/Split strategy ──
+  recommended_grain: string | null;
+  recommended_split_strategy: string | null;
+  dataset_build_mode: string | null;
+  
   // ── Industry context ──
   industry: string | null;
   
@@ -59,6 +64,9 @@ const EMPTY_SSOT: TargetFeaturesSSOT = {
   entity_key: null,
   time_anchor_column: null,
   value_column: null,
+  recommended_grain: null,
+  recommended_split_strategy: null,
+  dataset_build_mode: null,
   industry: null,
   staleness_flags: null,
   target_lifecycle_state: null,
@@ -112,6 +120,9 @@ export function useTargetFeaturesSSOT(projectId: string | undefined) {
         entity_key: d.entity_key || null,
         time_anchor_column: d.time_anchor_column || null,
         value_column: d.value_column || null,
+        recommended_grain: d.recommended_grain || null,
+        recommended_split_strategy: d.recommended_split_strategy || null,
+        dataset_build_mode: d.dataset_build_mode || null,
         industry: d.industry || null,
         staleness_flags: d.staleness_flags || null,
         target_lifecycle_state: d.target_lifecycle_state || null,

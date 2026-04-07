@@ -1132,7 +1132,14 @@ const StepTargetFeatures = ({
         </div>
 
         {/* ═══ BLOCO 3: ESTRATÉGIA TEMPORAL & GRAIN ═══ */}
-        <GrainTimeStrategyPanel resolution={grainTime.resolution} loading={grainTime.loading} />
+        <GrainTimeStrategyPanel
+          resolution={grainTime.resolution}
+          loading={grainTime.loading}
+          ssotTimeColumn={ssot.time_anchor_column || autoRes.result.time_column || resolveBestTimeColumn()}
+          ssotGrain={ssot.recommended_grain || undefined}
+          ssotSplit={ssot.recommended_split_strategy || undefined}
+          ssotBuildMode={ssot.dataset_build_mode || undefined}
+        />
 
         {/* ═══ BLOCO 4: STATUS REAL DO PIPELINE ═══ */}
         <div className="rounded-xl border border-border bg-card p-5 space-y-3">

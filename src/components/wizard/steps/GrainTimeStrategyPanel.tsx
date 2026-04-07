@@ -6,6 +6,11 @@ import type { GrainTimeResolution } from "@/types/grainResolution";
 interface GrainTimeStrategyPanelProps {
   resolution: GrainTimeResolution | null;
   loading?: boolean;
+  /** SSOT overrides — if present, these take priority over the resolution object */
+  ssotTimeColumn?: string | null;
+  ssotGrain?: string | null;
+  ssotSplit?: string | null;
+  ssotBuildMode?: string | null;
 }
 
 const GRAIN_LABELS: Record<string, string> = {
@@ -32,10 +37,17 @@ const SPLIT_LABELS: Record<string, string> = {
   blocked_temporal: "Temporal bloqueado",
 };
 
-export default function GrainTimeStrategyPanel({ resolution, loading }: GrainTimeStrategyPanelProps) {
+export default function GrainTimeStrategyPanel({ resolution, loading, ssotTimeColumn, ssotGrain, ssotSplit, ssotBuildMode }: GrainTimeStrategyPanelProps) {
   if (loading || !resolution) return null;
 
   const { grain, time, split, build_plan, temporal_readiness, overall_confidence, auto_fixes_applied } = resolution;
+
+  // Apply SSOT overrides — these take priority over the resolution engine
+  const effectiveTimeColumn = ssotTimeColumn || time.time_column;
+  const effectiveTimeValid = !!effectiveTimeColumn || time.time_valid;
+  const effectiveGrain = ssotGrain || grain.recommended_grain;
+  const effectiveSplit = ssotSplit || split.recommended_split;
+  const effectiveBuildMode = ssotBuildMode || build_plan.builder_mode;
 
   const confidenceColor = overall_confidence >= 0.7 ? "text-green-600" : overall_confidence >= 0.5 ? "text-yellow-600" : "text-destructive";
   const confidenceBg = overall_confidence >= 0.7 ? "bg-green-500/10 border-green-500/20" : overall_confidence >= 0.5 ? "bg-yellow-500/10 border-yellow-500/20" : "bg-destructive/10 border-destructive/20";
@@ -55,26 +67,26 @@ export default function GrainTimeStrategyPanel({ resolution, loading }: GrainTim
         <SummaryItem
           icon={<Layers className="w-4 h-4" />}
           label="Grain"
-          value={GRAIN_LABELS[grain.recommended_grain] || grain.recommended_grain}
-          ok={grain.confidence >= 0.6}
+          value={GRAIN_LABELS[effectiveGrain] || effectiveGrain}
+          ok={grain.confidence >= 0.6 || !!ssotGrain}
         />
         <SummaryItem
           icon={<Clock className="w-4 h-4" />}
           label="Tempo"
-          value={time.time_column || "Não detectado"}
-          ok={time.time_valid}
-          warn={time.time_required && !time.time_valid}
+          value={effectiveTimeColumn || "Não detectado"}
+          ok={effectiveTimeValid}
+          warn={time.time_required && !effectiveTimeValid}
         />
         <SummaryItem
           icon={<GitBranch className="w-4 h-4" />}
           label="Split"
-          value={SPLIT_LABELS[split.recommended_split] || split.recommended_split}
-          ok={split.confidence >= 0.6}
+          value={SPLIT_LABELS[effectiveSplit] || effectiveSplit}
+          ok={split.confidence >= 0.6 || !!ssotSplit}
         />
         <SummaryItem
           icon={<Database className="w-4 h-4" />}
           label="Modo builder"
-          value={build_plan.builder_mode.replace(/_/g, " ")}
+          value={effectiveBuildMode.replace(/_/g, " ")}
           ok={true}
         />
         <SummaryItem
