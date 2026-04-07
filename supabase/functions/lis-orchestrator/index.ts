@@ -518,6 +518,8 @@ serve(async (req) => {
     };
 
     return jsonResponse(finalResponse);
+  } catch (err) {
+    console.error("[LIS] Orchestrator error:", err);
     return jsonResponse({
       error: err instanceof Error ? err.message : "Unknown error",
     }, 500);
