@@ -291,70 +291,37 @@ serve(async (req) => {
       ], project_id, productionModelId);
     }
 
-    // ===== LOAD COLUMNS + FEATURES =====
-    const [columnsRes, featuresRes] = await Promise.all([
-      supabase.from("project_columns").select("*").eq("project_id", project_id).order("column_index"),
-      supabase.from("project_features").select("*").eq("project_id", project_id).eq("enabled", true),
-    ]);
-
-    const columns = columnsRes.data;
-    if (!columns) {
-      return new Response(JSON.stringify({ error: "Erro ao carregar colunas" }), {
-        status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    const targetCol = selection?.target_column || project.target_column;
-    const numericTypes = ["numerico", "numérico", "numeric"];
-    const numericFeatures = columns.filter(c =>
-      numericTypes.includes(c.inferred_type.toLowerCase()) && c.column_name !== targetCol
-    );
-    const baseFeatureNames = numericFeatures.map(c => c.column_name);
-
-    if (baseFeatureNames.length === 0) {
-      return blockResponse(gates, "NO_FEATURES", "Nenhuma feature numérica encontrada.", [
-        { label: "Revisar Features", go_to_step: 3 }
-      ], project_id, productionModelId);
-    }
+    // ===== LOAD FEATURES =====
+    const featuresRes = await supabase
+      .from("project_features").select("*").eq("project_id", project_id).eq("enabled", true);
 
     const enabledFeatures: ProjectFeature[] = (featuresRes.data || []).map(f => ({
       id: f.id, project_id: f.project_id, name: f.name, label: f.label,
       description: f.description || undefined, enabled: f.enabled,
       expression: f.expression as FeatureExpression
     }));
-
     const engineeredFeatureNames = enabledFeatures.map(f => f.name);
-    const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
     const hasEngineeredFeatures = enabledFeatures.length > 0;
 
-    // Pre-compute normalization lookup
-    const means = allFeatureNames.map(name => {
-      const idx = savedFeatureNames.indexOf(name);
-      return idx !== -1 ? savedNormalization.means[idx] : 0;
-    });
-    const stdsArr = allFeatureNames.map(name => {
-      const idx = savedFeatureNames.indexOf(name);
-      return idx !== -1 ? (savedNormalization.stds[idx] || 1) : 1;
-    });
-
-    // Track missing features
-    let missingFeatureCount = 0;
-    for (const name of savedFeatureNames) {
-      if (!allFeatureNames.includes(name)) missingFeatureCount++;
-    }
-    const missingFeaturePct = savedFeatureNames.length > 0 ? (missingFeatureCount / savedFeatureNames.length) * 100 : 0;
-
-    // Model params
-    const isGBModel = modelArtifacts.type === "gradient_boosting" && modelArtifacts.trees;
-    const gbBase = modelArtifacts.base || 0;
-    const gbLR = modelArtifacts.lr || 0.1;
-    const gbTrees = modelArtifacts.trees || [];
-    const lrWeights: number[] = modelArtifacts.weights || [];
-    const lrBias: number = modelArtifacts.bias || 0;
-    const baseLen = baseFeatureNames.length;
+    // ===== USE MODEL'S FEATURE LIST AS AUTHORITATIVE =====
+    // The model was trained with savedFeatureNames — scoring MUST use the same list
+    const allFeatureNames = [...savedFeatureNames];
     const totalFeatures = allFeatureNames.length;
 
-    // ===== DATASET FILES =====
+    // Classify which features are engineered vs base (from CSV columns)
+    const engineeredSet = new Set(engineeredFeatureNames);
+    const baseFeatureNames = allFeatureNames.filter(f => !engineeredSet.has(f));
+    const baseLen = baseFeatureNames.length;
+
+    console.log(`[Scoring] Model expects ${savedFeatureNames.length} features: ${baseLen} base + ${allFeatureNames.length - baseLen} engineered`);
+
+    // Pre-compute normalization lookup (aligned to savedFeatureNames order)
+    const means = savedFeatureNames.map((_, i) => savedNormalization.means[i] ?? 0);
+    const stdsArr = savedFeatureNames.map((_, i) => savedNormalization.stds[i] || 1);
+
+    // missingFeaturePct will be computed after CSV headers are read; default to 0
+    let missingFeaturePct = 0;
+
     const { data: activeDataset } = await supabase
       .from("project_datasets").select("*")
       .eq("project_id", project_id).eq("is_active", true).maybeSingle();
@@ -380,6 +347,21 @@ serve(async (req) => {
       return blockResponse(gates, "NO_DATASET", "Nenhum dataset encontrado.", [
         { label: "Ir para Upload", go_to_step: 1 }
       ], project_id, productionModelId);
+    }
+
+    // ===== DELIMITER FIX: resolve from import_jobs if not set in source_metadata =====
+    if (delimiter === ",") {
+      const { data: completedJobs } = await supabase
+        .from("import_jobs")
+        .select("delimiter")
+        .eq("project_id", project_id)
+        .eq("status", "completed")
+        .order("created_at", { ascending: false })
+        .limit(1);
+      if (completedJobs?.[0]?.delimiter && completedJobs[0].delimiter !== ",") {
+        delimiter = completedJobs[0].delimiter;
+        console.log(`[Scoring] Delimiter resolved from import_jobs: "${delimiter}"`);
+      }
     }
 
     // Expand folder paths + sort for determinism
@@ -519,24 +501,41 @@ serve(async (req) => {
 
         const featureValues = new Array(totalFeatures);
 
-        for (let j = 0; j < baseLen; j++) {
-          const raw = values[featureIndices[j]];
-          const val = raw ? +raw.replace(",", ".") : NaN;
-          featureValues[j] = isNaN(val) ? (0 - means[j]) / stdsArr[j] : (val - means[j]) / stdsArr[j];
+        // Build raw record for engineered feature computation
+        const rawRecord: Record<string, string | number | null> = {};
+        for (let h = 0; h < headers.length; h++) {
+          rawRecord[headers[h]] = values[h] || null;
         }
 
+        // Compute engineered features if any
+        let engineeredValues: Record<string, number | string | boolean | null> = {};
         if (hasEngineeredFeatures) {
-          const rawRecord: Record<string, string | number | null> = {};
-          for (let h = 0; h < headers.length; h++) {
-            rawRecord[headers[h]] = values[h] || null;
+          engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        }
+
+        // Map each savedFeatureName to its value — maintaining exact model order
+        for (let j = 0; j < totalFeatures; j++) {
+          const fname = savedFeatureNames[j];
+          let val: number;
+
+          if (engineeredSet.has(fname)) {
+            // Engineered feature — computed above
+            const ev = engineeredValues[fname];
+            val = (typeof ev === "number" && !isNaN(ev)) ? ev : 0;
+          } else {
+            // Base feature — from CSV column
+            const baseIdx = baseFeatureNames.indexOf(fname);
+            if (baseIdx !== -1 && featureIndices[baseIdx] !== -1) {
+              const raw = values[featureIndices[baseIdx]];
+              const parsed = raw ? +raw.replace(",", ".") : NaN;
+              val = isNaN(parsed) ? 0 : parsed;
+            } else {
+              val = 0; // Missing feature defaults to 0
+            }
           }
-          const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
-          for (let j = 0; j < engineeredFeatureNames.length; j++) {
-            const val = engineeredValues[engineeredFeatureNames[j]];
-            const normIdx = baseLen + j;
-            featureValues[normIdx] = (typeof val === "number" && !isNaN(val))
-              ? (val - means[normIdx]) / stdsArr[normIdx] : 0;
-          }
+
+          // Normalize
+          featureValues[j] = (val - means[j]) / stdsArr[j];
         }
 
         // MODEL INFERENCE
@@ -671,7 +670,7 @@ serve(async (req) => {
           headers = parquetHeaders;
           const headersLower = headers.map(h => h.toLowerCase().trim());
 
-          // Case-insensitive feature matching
+          // Case-insensitive feature matching — only for base features (non-engineered)
           featureIndices = baseFeatureNames.map(name => {
             const exact = headers.indexOf(name);
             if (exact !== -1) return exact;
@@ -690,26 +689,34 @@ serve(async (req) => {
           }
 
           // === GATE: Validate feature coverage ===
+          // Only base features (non-engineered) need to be in CSV headers
           const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
-          const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
-          const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+          const baseMissingPct = baseFeatureNames.length > 0 ? (baseMissing.length / baseFeatureNames.length) * 100 : 0;
+          missingFeaturePct = baseMissingPct;
 
-          if (modelMissingPct > 20 || baseMissing.length > 0) {
-            const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
+          console.log(`[Scoring] Feature validation: model expects ${savedFeatureNames.length} total (${baseLen} base + ${allFeatureNames.length - baseLen} engineered). CSV has ${headers.length} cols. Base missing: ${baseMissing.length} (${baseMissingPct.toFixed(1)}%)`);
+          if (baseMissing.length > 0) {
+            console.log(`[Scoring] Missing base features: ${baseMissing.slice(0, 20).join(", ")}`);
+          }
+
+          // Block only if >50% of base features are missing (allows partial scoring)
+          if (baseMissingPct > 50) {
             gates.push({
               gate: "feature_validation",
               status: "BLOCK",
-              message: `Features ausentes: ${missingList.join(", ")} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
+              message: `${baseMissing.length}/${baseFeatureNames.length} features base ausentes no CSV: ${baseMissing.slice(0, 10).join(", ")}`
             });
-            return blockResponse(gates, "MISSING_FEATURES", "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.", [
-              { label: "Regerar Builder", go_to_step: 3 },
-              { label: "Retreinar", go_to_step: 4 },
-            ], project_id, productionModelId);
+            return blockResponse(gates, "MISSING_FEATURES",
+              `${baseMissing.length} de ${baseFeatureNames.length} features do modelo não existem no dataset. Delimiter usado: "${delimiter}". Headers: ${headers.length} colunas.`,
+              [
+                { label: "Regerar Builder", go_to_step: 3 },
+                { label: "Retreinar", go_to_step: 4 },
+              ], project_id, productionModelId);
           }
           gates.push({
             gate: "feature_validation",
-            status: modelMissing.length > 0 ? "WARN" : "PASS",
-            message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+            status: baseMissing.length > 0 ? "WARN" : "PASS",
+            message: `base_missing=${baseMissing.length}/${baseFeatureNames.length}, engineered=${allFeatureNames.length - baseLen}, entity_id_col=${detectedEntityIdCol || "auto-generated"}`
           });
 
           // Segmentation
@@ -797,7 +804,7 @@ serve(async (req) => {
               headers = parseCSVLine(line, delimiter);
               const headersLower = headers.map(h => h.toLowerCase().trim());
 
-              // Case-insensitive feature matching
+              // Case-insensitive feature matching — only base (non-engineered) features
               featureIndices = baseFeatureNames.map(name => {
                 const exact = headers.indexOf(name);
                 if (exact !== -1) return exact;
@@ -817,20 +824,26 @@ serve(async (req) => {
 
               // === GATE: Validate feature coverage ===
               const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
-              const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
-              const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+              const baseMissingPct = baseFeatureNames.length > 0 ? (baseMissing.length / baseFeatureNames.length) * 100 : 0;
+              missingFeaturePct = baseMissingPct;
 
-              if (modelMissingPct > 20 || baseMissing.length > 0) {
-                const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
+              console.log(`[Scoring][CSV] Feature validation: model expects ${savedFeatureNames.length} total (${baseLen} base + ${allFeatureNames.length - baseLen} engineered). CSV has ${headers.length} cols (delimiter="${delimiter}"). Base missing: ${baseMissing.length} (${baseMissingPct.toFixed(1)}%)`);
+              if (baseMissing.length > 0) {
+                console.log(`[Scoring][CSV] Missing base features: ${baseMissing.slice(0, 20).join(", ")}`);
+                console.log(`[Scoring][CSV] CSV headers: ${headers.slice(0, 20).join(", ")}`);
+              }
+
+              // Block only if >50% of base features are missing
+              if (baseMissingPct > 50) {
                 gates.push({
                   gate: "feature_validation",
                   status: "BLOCK",
-                  message: `Features ausentes: ${missingList.join(", ")}${missingList.length < baseMissing.length + modelMissing.length ? "..." : ""} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
+                  message: `${baseMissing.length}/${baseFeatureNames.length} features base ausentes: ${baseMissing.slice(0, 10).join(", ")}`
                 });
                 return blockResponse(
                   gates,
                   "MISSING_FEATURES",
-                  "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.",
+                  `${baseMissing.length} de ${baseFeatureNames.length} features do modelo não existem no dataset. Delimiter: "${delimiter}". CSV headers: ${headers.length} colunas.`,
                   [
                     { label: "Regerar Builder", go_to_step: 3 },
                     { label: "Retreinar", go_to_step: 4 },
@@ -841,8 +854,8 @@ serve(async (req) => {
               }
               gates.push({
                 gate: "feature_validation",
-                status: modelMissing.length > 0 ? "WARN" : "PASS",
-                message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+                status: baseMissing.length > 0 ? "WARN" : "PASS",
+                message: `base_missing=${baseMissing.length}/${baseFeatureNames.length}, engineered=${allFeatureNames.length - baseLen}, entity_id_col=${detectedEntityIdCol || "auto-generated"}`
               });
 
               // Segmentation: already case-insensitive
