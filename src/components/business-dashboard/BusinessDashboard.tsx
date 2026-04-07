@@ -61,6 +61,7 @@ export function BusinessDashboard({ projectId }: BusinessDashboardProps) {
   const [mainMetric, setMainMetric] = useState<{ name: string; value: number } | null>(null);
   const [baselineMetric, setBaselineMetric] = useState<{ name: string; value: number } | null>(null);
   const [productionModelId, setProductionModelId] = useState<string | null>(null);
+  const [organizationId, setOrganizationId] = useState<string>('');
 
   const [exportModalOpen, setExportModalOpen] = useState(false);
   const [exportJobsModalOpen, setExportJobsModalOpen] = useState(false);
