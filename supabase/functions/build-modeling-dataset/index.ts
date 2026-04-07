@@ -1121,6 +1121,7 @@ serve(async (req: Request) => {
     console.log(`[build-modeling-dataset] resolveActiveTarget: mode=${activeTarget.mode}, column=${activeTarget.column}, target_source=${activeTarget.target_source}`);
 
     const selectionVersion = modelSelection?.selection_version || 0;
+    const officialProblemType = (settings as any)?.official_problem_type || modelSelection?.problem_type || settings?.problem_type || inference?.problem_type || intent.problem_type || "classification";
     let targetColumn = activeTarget.column || modelSelection?.target_column || settings?.target_column || null;
     let targetType: "binary" | "multiclass" | "regression" = "binary";
     let targetSource: "direct" | "label_builder" = "direct";
