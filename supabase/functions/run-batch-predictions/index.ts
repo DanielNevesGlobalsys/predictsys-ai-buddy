@@ -651,7 +651,7 @@ serve(async (req) => {
           headers = parquetHeaders;
           const headersLower = headers.map(h => h.toLowerCase().trim());
 
-          // Case-insensitive feature matching
+          // Case-insensitive feature matching — only for base features (non-engineered)
           featureIndices = baseFeatureNames.map(name => {
             const exact = headers.indexOf(name);
             if (exact !== -1) return exact;
@@ -670,26 +670,33 @@ serve(async (req) => {
           }
 
           // === GATE: Validate feature coverage ===
+          // Only base features (non-engineered) need to be in CSV headers
           const baseMissing = baseFeatureNames.filter(f => headersLower.indexOf(f.toLowerCase()) === -1);
-          const modelMissing = savedFeatureNames!.filter(f => !allFeatureNames.includes(f));
-          const modelMissingPct = savedFeatureNames!.length > 0 ? (modelMissing.length / savedFeatureNames!.length) * 100 : 0;
+          const baseMissingPct = baseFeatureNames.length > 0 ? (baseMissing.length / baseFeatureNames.length) * 100 : 0;
 
-          if (modelMissingPct > 20 || baseMissing.length > 0) {
-            const missingList = [...new Set([...baseMissing, ...modelMissing])].slice(0, 10);
+          console.log(`[Scoring] Feature validation: model expects ${savedFeatureNames.length} total (${baseLen} base + ${allFeatureNames.length - baseLen} engineered). CSV has ${headers.length} cols. Base missing: ${baseMissing.length} (${baseMissingPct.toFixed(1)}%)`);
+          if (baseMissing.length > 0) {
+            console.log(`[Scoring] Missing base features: ${baseMissing.slice(0, 20).join(", ")}`);
+          }
+
+          // Block only if >50% of base features are missing (allows partial scoring)
+          if (baseMissingPct > 50) {
             gates.push({
               gate: "feature_validation",
               status: "BLOCK",
-              message: `Features ausentes: ${missingList.join(", ")} (base_missing=${baseMissing.length}, model_missing_pct=${modelMissingPct.toFixed(1)}%)`
+              message: `${baseMissing.length}/${baseFeatureNames.length} features base ausentes no CSV: ${baseMissing.slice(0, 10).join(", ")}`
             });
-            return blockResponse(gates, "MISSING_FEATURES", "Features do modelo não existem no dataset atual. Regerar Builder e Re-deploy.", [
-              { label: "Regerar Builder", go_to_step: 3 },
-              { label: "Retreinar", go_to_step: 4 },
-            ], project_id, productionModelId);
+            return blockResponse(gates, "MISSING_FEATURES",
+              `${baseMissing.length} de ${baseFeatureNames.length} features do modelo não existem no dataset. Delimiter usado: "${delimiter}". Headers: ${headers.length} colunas.`,
+              [
+                { label: "Regerar Builder", go_to_step: 3 },
+                { label: "Retreinar", go_to_step: 4 },
+              ], project_id, productionModelId);
           }
           gates.push({
             gate: "feature_validation",
-            status: modelMissing.length > 0 ? "WARN" : "PASS",
-            message: `base_missing=${baseMissing.length}, model_missing=${modelMissing.length} (${modelMissingPct.toFixed(1)}%), entity_id_col=${detectedEntityIdCol || "auto-generated"}`
+            status: baseMissing.length > 0 ? "WARN" : "PASS",
+            message: `base_missing=${baseMissing.length}/${baseFeatureNames.length}, engineered=${allFeatureNames.length - baseLen}, entity_id_col=${detectedEntityIdCol || "auto-generated"}`
           });
 
           // Segmentation
