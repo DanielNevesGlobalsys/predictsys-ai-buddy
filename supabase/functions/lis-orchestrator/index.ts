@@ -79,6 +79,7 @@ serve(async (req) => {
     // ─── Select Agent ───
     const agentName = selectAgent(stage, preferredAgent);
     const isGovernanceAgent = agentName === "governance_agent";
+    const isDSAgent = agentName === "data_scientist_agent";
 
     console.log(`[LIS] Agent=${agentName} Stage=${stage} Mode=${execution_mode} Project=${project_id}`);
 
@@ -90,13 +91,19 @@ serve(async (req) => {
     let projectContext: Record<string, unknown>;
 
     if (isGovernanceAgent) {
-      // Governance-specific context building
       const govCtx = await buildGovernanceContext(svc, project_id, stage, execution_mode);
       systemPrompt = GOVERNANCE_SYSTEM_PROMPT;
       userPrompt = buildGovernancePrompt(govCtx);
       toolDef = GOVERNANCE_RESPONSE_TOOL;
       toolName = "governance_decision";
       projectContext = govCtx as unknown as Record<string, unknown>;
+    } else if (isDSAgent) {
+      const dsCtx = await buildDSContext(svc, project_id, stage, execution_mode);
+      systemPrompt = DS_SYSTEM_PROMPT;
+      userPrompt = buildDSPrompt(dsCtx);
+      toolDef = DS_RESPONSE_TOOL;
+      toolName = "ds_decision";
+      projectContext = dsCtx as unknown as Record<string, unknown>;
     } else {
       // Generic agent flow
       systemPrompt = AGENT_SYSTEM_PROMPTS[agentName];
