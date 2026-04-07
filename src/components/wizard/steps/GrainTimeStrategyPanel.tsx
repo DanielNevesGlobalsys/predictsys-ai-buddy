@@ -37,10 +37,17 @@ const SPLIT_LABELS: Record<string, string> = {
   blocked_temporal: "Temporal bloqueado",
 };
 
-export default function GrainTimeStrategyPanel({ resolution, loading }: GrainTimeStrategyPanelProps) {
+export default function GrainTimeStrategyPanel({ resolution, loading, ssotTimeColumn, ssotGrain, ssotSplit, ssotBuildMode }: GrainTimeStrategyPanelProps) {
   if (loading || !resolution) return null;
 
   const { grain, time, split, build_plan, temporal_readiness, overall_confidence, auto_fixes_applied } = resolution;
+
+  // Apply SSOT overrides — these take priority over the resolution engine
+  const effectiveTimeColumn = ssotTimeColumn || time.time_column;
+  const effectiveTimeValid = !!effectiveTimeColumn || time.time_valid;
+  const effectiveGrain = ssotGrain || grain.recommended_grain;
+  const effectiveSplit = ssotSplit || split.recommended_split;
+  const effectiveBuildMode = ssotBuildMode || build_plan.builder_mode;
 
   const confidenceColor = overall_confidence >= 0.7 ? "text-green-600" : overall_confidence >= 0.5 ? "text-yellow-600" : "text-destructive";
   const confidenceBg = overall_confidence >= 0.7 ? "bg-green-500/10 border-green-500/20" : overall_confidence >= 0.5 ? "bg-yellow-500/10 border-yellow-500/20" : "bg-destructive/10 border-destructive/20";
