@@ -148,6 +148,16 @@ export function useTargetFeaturesSSOT(projectId: string | undefined) {
         industry: d.industry || null,
         staleness_flags: d.staleness_flags || null,
         target_lifecycle_state: d.target_lifecycle_state || null,
+        official_target: d.official_target || null,
+        official_problem_type: d.official_problem_type || null,
+        official_entity_key: d.official_entity_key || null,
+        official_time_column: d.official_time_column || null,
+        official_grain: d.official_grain || null,
+        recommended_target: d.recommended_target || null,
+        recommended_problem_type: d.recommended_problem_type || null,
+        recommended_target_reasoning: d.recommended_target_reasoning || null,
+        recommended_target_confidence: d.recommended_target_confidence != null ? Number(d.recommended_target_confidence) : null,
+        governance_conflict: d.governance_conflict === true,
       };
 
       setSSOT(parsed);
