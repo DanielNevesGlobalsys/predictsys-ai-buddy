@@ -506,9 +506,18 @@ serve(async (req) => {
       };
     }
 
+    // ─── Attach orchestration metadata ───
+    (finalResponse as any).orchestration = {
+      primary_agent: orchestration.primary_agent,
+      secondary_agents: orchestration.secondary_agents,
+      validator_agent: orchestration.validator_agent,
+      execution_mode: orchestration.default_mode,
+      application_policy: orchestration.application_policy,
+      auto_apply_allowed: orchestration.auto_apply_allowed,
+      stage_description: orchestration.description,
+    };
+
     return jsonResponse(finalResponse);
-  } catch (err) {
-    console.error("[LIS] Orchestrator error:", err);
     return jsonResponse({
       error: err instanceof Error ? err.message : "Unknown error",
     }, 500);
