@@ -141,8 +141,15 @@ describe("Chat Consistency — Dashboard Intelligence", () => {
   });
 
   it("fails gracefully with empty intelligence", () => {
-    const { emptyDashboardIntelligence } = require("@/components/business-dashboard/dashboardIntelligence");
-    const empty = emptyDashboardIntelligence();
+    const empty: DashboardIntelligence = {
+      executive_layer: { main_message: "", main_opportunity: "", main_risk: "", main_action: "", confidence_message: "" },
+      prioritization_layer: { priority_entities: [], priority_segments: [], priority_rules: [], reasoning: [] },
+      impact_layer: { financial_impact: [], operational_impact: [], expected_return: [], reasoning: [] },
+      action_layer: { recommended_actions: [], action_sequences: [], segments_to_watch: [] },
+      technical_summary_layer: { model_quality_summary: "", score_reliability_summary: "", main_limitation: "" },
+      dashboard_design_layer: { keep_blocks: [], remove_blocks: [], new_blocks: [], chart_recommendations: [], reasoning: [] },
+      simulation_layer: { what_if_scenarios: [], controls_recommended: [], assumptions: [] },
+    };
     const result = answerFromIntelligence("Qual a principal oportunidade?", empty);
     expect(result.answered).toBe(false);
   });

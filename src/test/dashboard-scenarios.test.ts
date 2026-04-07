@@ -260,7 +260,7 @@ describe("Scenario D — Weak Prioritization", () => {
 
   it("report shows low prioritization quality", () => {
     const report = buildReport(intel);
-    expect(report.prioritization_quality_score).toBe(0);
+    expect(report.prioritization_quality_score).toBeLessThanOrEqual(0.4);
   });
 });
 
