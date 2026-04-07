@@ -2874,30 +2874,43 @@ serve(async (req) => {
       parquetResult.rows.length = 0;
 
       // Detect datetime column for smart split (Parquet path)
+      // PRIORITY 1: Use SSOT time_anchor_column if available
       {
-        const dtCol = detectDatetimeColumn(headers, parquetResult.rows.length > 0 ? parquetResult.rows : rowsToProcess.slice(0, 2000), true);
-        if (dtCol) {
-          const dtValues: (number | null)[] = [];
-          for (let i = 0; i < X.length; i++) {
-            // We need to reconstruct from the sample — use a simpler approach
-            // Parse the datetime from the original row order
+        const ssotTimCol = (activeTargetSettings as any)?.time_anchor_column || (activeTargetSettings as any)?.recommended_time_column || null;
+        let resolvedDtCol: string | null = null;
+        
+        if (ssotTimCol) {
+          // Check if SSOT time column exists in headers
+          const ssotIdx = headers.findIndex(h => h.toLowerCase() === ssotTimCol.toLowerCase());
+          if (ssotIdx !== -1) {
+            resolvedDtCol = headers[ssotIdx];
+            console.log(`[Split] Using SSOT time anchor for parquet: "${resolvedDtCol}"`);
           }
-          // For Parquet, re-parse datetime from a small subset  
+        }
+        
+        // PRIORITY 2: Auto-detect from data
+        if (!resolvedDtCol) {
+          resolvedDtCol = detectDatetimeColumn(headers, rowsToProcess.slice(0, 2000), true);
+        }
+        
+        if (resolvedDtCol) {
+          // Parse datetime values from rowsToProcess (parquetResult.rows already freed)
           const sampleForDt = rowsToProcess.slice(0, Math.min(rowsToProcess.length, X.length));
           const dtVals: (number | null)[] = [];
           for (const row of sampleForDt) {
-            const val = row[dtCol];
+            const val = row[resolvedDtCol!];
             if (val) {
-              const d = new Date(String(val));
+              const d = val instanceof Date ? val : new Date(String(val));
               dtVals.push(!isNaN(d.getTime()) ? d.getTime() : null);
             } else {
               dtVals.push(null);
             }
           }
           // Only use if we have enough parsed values
-          if (dtVals.filter(v => v !== null).length >= X.length * 0.8) {
+          if (dtVals.filter(v => v !== null).length >= X.length * 0.5) {
             (globalThis as any).__datetimeValues = dtVals.slice(0, X.length);
-            (globalThis as any).__datetimeCol = dtCol;
+            (globalThis as any).__datetimeCol = resolvedDtCol;
+            console.log(`[Split] Parquet datetime: "${resolvedDtCol}", ${dtVals.filter(v => v !== null).length}/${dtVals.length} parsed`);
           }
         }
         
