@@ -2486,8 +2486,13 @@ serve(async (req) => {
         .maybeSingle();
 
       if (sampleData?.sample_json) {
-        const sampleRows = sampleData.sample_json as Record<string, any>[];
-        if (Array.isArray(sampleRows) && sampleRows.length > 0) {
+        // sample_json can be either a plain array of rows OR an object { rows, columns, source }
+        const rawJson = sampleData.sample_json as any;
+        const sampleRows: Record<string, any>[] = Array.isArray(rawJson)
+          ? rawJson
+          : (Array.isArray(rawJson?.rows) ? rawJson.rows : []);
+        console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}`);
+        if (sampleRows.length > 0) {
           // Extract headers from the first row's keys
           virtualHeaders = Object.keys(sampleRows[0]);
           // Convert JSON rows to CSV-like delimited lines
