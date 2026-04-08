@@ -236,6 +236,7 @@ const ENTITY_KEY_POLICIES: Record<IndustryKey, BusinessIntentContract['entity_ke
   finance: { required: true, recommended_patterns: ['id', 'account_id', 'cpf', 'cnpj', 'contract_id'], forbid_patterns: ['name', 'nome', 'email', 'phone'] },
   education: { required: true, recommended_patterns: ['id', 'student_id', 'matricula', 'ra', 'cpf'], forbid_patterns: ['name', 'nome', 'email'] },
   logistics: { required: true, recommended_patterns: ['id', 'order_id', 'shipment_id', 'tracking'], forbid_patterns: ['name', 'nome', 'address'] },
+  agro: { required: true, recommended_patterns: ['produtor', 'cooperado', 'codlot', 'codpes', 'fazenda', 'lote', 'filial', 'codemp'], forbid_patterns: ['nome', 'name', 'email', 'telefone'] },
   generic: { required: true, recommended_patterns: ['id', 'entity_id', 'key', 'cpf', 'cnpj'], forbid_patterns: ['name', 'nome', 'email', 'phone'] },
 };
 
