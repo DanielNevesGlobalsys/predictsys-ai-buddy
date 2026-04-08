@@ -457,14 +457,113 @@ const StepTraining = ({
     }
   };
 
+  const syncProblemTypeToPipeline = async (newType: "classification" | "regression") => {
+    if (!projectData.id) return;
+
+    console.log("[StepTraining] Syncing problem_type across SSOT...", {
+      project_id: projectData.id,
+      new_type: newType,
+    });
+
+    const [{ data: selection }, { data: settings }] = await Promise.all([
+      supabase
+        .from("project_model_selection" as any)
+        .select("*")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+      supabase
+        .from("project_settings")
+        .select("target_column, active_target_column, feature_columns, excluded_columns, entity_key, time_anchor_column")
+        .eq("project_id", projectData.id)
+        .maybeSingle(),
+    ]);
+
+    const selectionData = (selection as any) || {};
+    const settingsData = (settings as any) || {};
+    const targetColumn =
+      selectionData.target_column ||
+      settingsData.target_column ||
+      settingsData.active_target_column ||
+      projectData.target_column ||
+      null;
+
+    if (!targetColumn) {
+      throw new Error("Não foi possível sincronizar o tipo do problema porque o target não está definido.");
+    }
+
+    const selectedFeatures = Array.isArray(selectionData.selected_features)
+      ? selectionData.selected_features
+      : Array.isArray(settingsData.feature_columns)
+        ? settingsData.feature_columns
+        : [];
+
+    const excludedFeatures = Array.isArray(selectionData.excluded_features)
+      ? selectionData.excluded_features
+      : Array.isArray(settingsData.excluded_columns)
+        ? settingsData.excluded_columns
+        : [];
+
+    const entityKey = selectionData.entity_key ?? settingsData.entity_key ?? null;
+    const timeColumn = selectionData.time_column ?? settingsData.time_anchor_column ?? null;
+
+    const saveProjectPromise = saveProject({ problem_type: newType });
+    const upsertPromise = supabase.functions.invoke("upsert-model-selection", {
+      body: {
+        project_id: projectData.id,
+        target_column: targetColumn,
+        problem_type: newType,
+        selected_features: selectedFeatures,
+        excluded_features: excludedFeatures,
+        entity_key: entityKey,
+        time_column: timeColumn,
+      },
+    });
+
+    const [, upsertRes] = await Promise.all([saveProjectPromise, upsertPromise]);
+
+    if (upsertRes.error || !(upsertRes.data as any)?.success) {
+      console.error("[StepTraining] Failed to sync problem_type to SSOT", {
+        error: upsertRes.error,
+        data: upsertRes.data,
+      });
+      throw new Error(
+        (upsertRes.data as any)?.error ||
+        upsertRes.error?.message ||
+        "Falha ao sincronizar o tipo do problema no pipeline."
+      );
+    }
+
+    console.log("[StepTraining] problem_type synced", {
+      new_type: newType,
+      selection_version: (upsertRes.data as any)?.selection_version,
+      did_change: (upsertRes.data as any)?.did_change,
+    });
+
+    setDetectedProblemType(newType);
+    setShowTypeWarning(false);
+    setError(null);
+    setTrainabilityError(null);
+    setPreflightReport(null);
+    setErrorAction(null);
+    setPreflightRefreshKey(k => k + 1);
+
+    await Promise.all([
+      loadSelectionVersion(),
+      checkTrainReadiness(),
+      runPreflightGuard(),
+    ]);
+  };
+
   const handleAcceptDetectedType = async () => {
     if (!detectedProblemType) return;
-    
-    await saveProject({ 
-      problem_type: detectedProblemType as "classification" | "regression" 
-    });
-    setShowTypeWarning(false);
-    toast.success(t("training.problemTypeUpdated"));
+
+    try {
+      await syncProblemTypeToPipeline(detectedProblemType as "classification" | "regression");
+      toast.success(t("training.problemTypeUpdated"));
+    } catch (err) {
+      console.error("[StepTraining] Failed to accept detected type:", err);
+      toast.error(err instanceof Error ? err.message : "Erro ao sincronizar o tipo do problema.");
+    }
   };
 
   const handleStartTraining = async () => {
@@ -1049,10 +1148,13 @@ const StepTraining = ({
                           }
                           if (fs.action?.startsWith("change_problem_type_")) {
                             const newType = fs.action.replace("change_problem_type_", "") as "classification" | "regression";
-                            await saveProject({ problem_type: newType });
-                            toast.success(`Tipo alterado para ${newType === "classification" ? "Classificação" : "Regressão"}`);
-                            setError(null);
-                            setTrainabilityError(null);
+                            try {
+                              await syncProblemTypeToPipeline(newType);
+                              toast.success(`Tipo alterado para ${newType === "classification" ? "Classificação" : "Regressão"}`);
+                            } catch (err) {
+                              console.error("[StepTraining] Failed to apply fix suggestion:", err);
+                              toast.error(err instanceof Error ? err.message : "Erro ao sincronizar o tipo do problema.");
+                            }
                           } else if (fs.action === "open_target_step" || fs.action?.startsWith("open_step_")) {
                             const step = fs.action.startsWith("open_step_") ? parseInt(fs.action.replace("open_step_", ""), 10) : 3;
                             if (onGoToStep && !isNaN(step)) onGoToStep(step); else onBack();
@@ -1076,10 +1178,13 @@ const StepTraining = ({
                             onClick={async () => {
                               const suggestion = (trainabilityError.details as any)?.suggestion;
                               if (suggestion) {
-                                await saveProject({ problem_type: suggestion as "classification" | "regression" });
-                                toast.success(`Tipo alterado para ${suggestion === "classification" ? "Classificação" : "Regressão"}`);
-                                setError(null);
-                                setTrainabilityError(null);
+                                try {
+                                  await syncProblemTypeToPipeline(suggestion as "classification" | "regression");
+                                  toast.success(`Tipo alterado para ${suggestion === "classification" ? "Classificação" : "Regressão"}`);
+                                } catch (err) {
+                                  console.error("[StepTraining] Failed to apply fallback suggestion:", err);
+                                  toast.error(err instanceof Error ? err.message : "Erro ao sincronizar o tipo do problema.");
+                                }
                               }
                             }}
                           >
