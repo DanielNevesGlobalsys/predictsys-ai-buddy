@@ -410,7 +410,7 @@ export function classifyAgroTable(
   const hasEntity = columns.some(c => AGRO_ENTITY_PATTERNS.some(p => p.test(c.column_name)));
 
   // Calendar tables
-  if (/calendario|calendar|dim_data|dim_tempo|dim_time/i.test(name)) {
+  if (/calend[aá]rio|calendar|dim_data|dim_tempo|dim_time/i.test(name)) {
     return {
       table_name: tableName, role: "dimension_lookup_temporal",
       has_quantity_columns: hasQty, has_temporal_columns: true, has_entity_columns: hasEntity,
