@@ -93,6 +93,9 @@ interface Props {
   workspaceId?: string;
   datasetId?: string;
   tableName?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tenantId?: string;
   onMaterializationSuccess?: () => void;
 }
 
@@ -130,6 +133,9 @@ export default function PowerBIXMLADiagnosticPanel({
   workspaceId,
   datasetId,
   tableName,
+  clientId,
+  clientSecret,
+  tenantId,
   onMaterializationSuccess,
 }: Props) {
   const [running, setRunning] = useState(false);
@@ -180,6 +186,9 @@ export default function PowerBIXMLADiagnosticPanel({
           connection_id: connectionId,
           workspace_id: workspaceId,
           dataset_id: datasetId,
+          client_id: clientId,
+          client_secret: clientSecret,
+          tenant_id: tenantId,
           materialize: doMaterialize,
         };
 

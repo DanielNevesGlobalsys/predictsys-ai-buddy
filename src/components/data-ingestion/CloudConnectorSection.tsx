@@ -845,6 +845,9 @@ const CloudConnectorSection = ({ projectData, saveProject, onDataReady }: CloudC
                 connectionId={editingConnectionId || undefined}
                 workspaceId={formData.workspace_id}
                 datasetId={formData.dataset_id}
+                clientId={formData.client_id}
+                clientSecret={formData.client_secret}
+                tenantId={formData.tenant_id}
               />
             )}
 

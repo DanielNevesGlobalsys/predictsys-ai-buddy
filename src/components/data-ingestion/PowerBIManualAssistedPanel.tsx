@@ -45,6 +45,9 @@ interface PowerBIManualAssistedPanelProps {
   connectionId?: string;
   workspaceId?: string;
   datasetId?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tenantId?: string;
 }
 
 const confidenceLabel: Record<string, string> = {
@@ -77,6 +80,9 @@ const PowerBIManualAssistedPanel = ({
   connectionId,
   workspaceId,
   datasetId,
+  clientId,
+  clientSecret,
+  tenantId,
 }: PowerBIManualAssistedPanelProps) => {
   const isPartial = connectionStatus === "connected_partial_discovery";
   const isFull = connectionStatus === "connected_full_discovery";
@@ -248,6 +254,9 @@ const PowerBIManualAssistedPanel = ({
           connectionId={connectionId}
           workspaceId={workspaceId}
           datasetId={datasetId}
+          clientId={clientId}
+          clientSecret={clientSecret}
+          tenantId={tenantId}
           tableName={manualTableName || undefined}
           onMaterializationSuccess={onContinuePartial}
         />
