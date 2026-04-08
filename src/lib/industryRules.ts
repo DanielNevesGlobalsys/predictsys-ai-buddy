@@ -360,6 +360,7 @@ const ENTITY_KEY_HINT_PATTERNS: Record<IndustryKey, string[]> = {
   finance: ['id_cliente', 'cpf', 'cnpj', 'account_id', 'contract_id', 'contrato'],
   education: ['id_aluno', 'ra', 'cpf', 'matricula', 'student_id'],
   logistics: ['id_pedido', 'order_id', 'shipment_id', 'tracking_id'],
+  agro: ['produtor', 'cooperado', 'codlot', 'codpes', 'fazenda', 'talhao', 'lote', 'filial', 'codemp', 'cod_produtor', 'id_produtor'],
   generic: ['id_cliente', 'cpf', 'cnpj', 'contrato', 'account', 'customer_id', 'entity_id'],
 };
 
