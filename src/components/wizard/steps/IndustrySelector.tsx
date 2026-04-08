@@ -3,7 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Building2, GraduationCap, ShoppingBag, Heart,
-  Truck, Landmark, Globe, Check,
+  Truck, Landmark, Globe, Check, Wheat,
 } from "lucide-react";
 import type { IndustryKey } from "@/types/intentContract";
 import { INDUSTRY_DISPLAY_NAMES } from "@/types/intentContract";
@@ -24,6 +24,7 @@ const INDUSTRY_OPTIONS: {
   { key: "finance", icon: Landmark, description: "Bancos, fintechs, seguradoras" },
   { key: "education", icon: GraduationCap, description: "Escolas, universidades, EAD" },
   { key: "logistics", icon: Truck, description: "Transporte, entregas, supply chain" },
+  { key: "agro", icon: Wheat, description: "Cooperativas, fazendas, produtores rurais" },
   { key: "generic", icon: Globe, description: "Outro segmento / não sei" },
 ];
 

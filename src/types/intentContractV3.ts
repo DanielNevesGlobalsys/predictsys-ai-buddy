@@ -22,6 +22,7 @@ export type IndustryKeyV3 =
   | "finance"
   | "education"
   | "logistics"
+  | "agro"
   | "hr"
   | "insurance"
   | "telecom"
@@ -366,6 +367,7 @@ const INDUSTRY_V1_TO_V3: Record<string, IndustryKeyV3> = {
   finance: "finance",
   education: "education",
   logistics: "logistics",
+  agro: "agro",
   generic: "generic",
 };
 
@@ -647,6 +649,7 @@ export const UI_FIELD_SPECS: UIFieldSpec[] = [
       { value: "finance", label_pt: "Finanças", description_pt: "Bancos, fintechs, seguradoras" },
       { value: "education", label_pt: "Educação", description_pt: "Escolas, universidades, EdTechs" },
       { value: "logistics", label_pt: "Logística", description_pt: "Transporte, entregas, supply chain" },
+      { value: "agro", label_pt: "Agro", description_pt: "Cooperativas, fazendas, produtores rurais" },
       { value: "hr", label_pt: "RH / Pessoas", description_pt: "Gestão de pessoas, recrutamento" },
       { value: "insurance", label_pt: "Seguros", description_pt: "Seguradoras, corretoras" },
       { value: "telecom", label_pt: "Telecom", description_pt: "Operadoras, provedores" },
