@@ -44,6 +44,17 @@ export interface DashboardIntelligence {
     controls_recommended: string[];
     assumptions: string[];
   };
+  /** Agro-specific dashboard layer — populated only when industry = "agro" */
+  agro_layer?: {
+    production_forecast_summary: string;
+    captacao_projection: string;
+    top_producers: Array<{ entity: string; predicted_volume: string; trend: string }>;
+    risk_regions: Array<{ region: string; risk_type: string; severity: string }>;
+    safra_distribution: Array<{ period: string; volume: string; pct_of_total: string }>;
+    drivers: Array<{ feature: string; business_translation: string; impact: string }>;
+    field_actions: Array<{ action: string; target: string; priority: string }>;
+    operational_risks: string[];
+  };
 }
 
 export function emptyDashboardIntelligence(): DashboardIntelligence {
