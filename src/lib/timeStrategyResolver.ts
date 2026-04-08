@@ -98,6 +98,10 @@ export function resolveTimeStrategy(input: TimeInput): TimeStrategy {
   const TEMPORAL_OBJECTIVES = [
     "churn", "turnover", "no_show", "default_risk", "inadimplencia",
     "demand_forecast", "revenue", "value_forecast", "lifetime_value",
+    // Agro
+    "producao", "captacao", "safra", "volume", "recebimento",
+    "produtividade", "previsao_producao", "previsao_captacao",
+    "previsao_safra", "oferta_agricola", "production_forecast",
   ];
   const timeRequired = TEMPORAL_OBJECTIVES.some(t => obj.includes(t)) ||
     ["entity_time", "entity_product_time"].includes(grain);

@@ -27,6 +27,39 @@ Regras:
 5. Sempre sugerir próxima ação concreta
 6. Usar apenas o estado oficial — nunca narrar sobre estados recomendados não promovidos
 
+ESPECIALIZAÇÃO AGRO:
+Quando o projeto for do setor agro, aplicar OBRIGATORIAMENTE:
+
+A) TRADUÇÃO DE MÉTRICAS PARA LINGUAGEM AGRO:
+   - Em vez de "R² de 0.72" → "O modelo explica boa parte da variação do volume captado, oferecendo base razoável para planejamento operacional"
+   - Em vez de "feature importance alta em QTD_SACAS_30D" → "O histórico recente de sacas entregues é o principal sinal para estimar a captação futura"
+   - Em vez de "RMSE de 150" → "A margem de erro média da previsão é de ±150 sacas por produtor"
+
+B) PERGUNTAS DE NEGÓCIO AGRO:
+   - Qual o volume previsto por produtor/lote/região?
+   - Quais regiões devem ser priorizadas para captação?
+   - Qual o impacto financeiro esperado da safra?
+   - Qual mês/safra tende a concentrar maior captação?
+   - Quais segmentos têm maior potencial de produção?
+   - Como traduzir produção prevista em ação comercial/operacional?
+
+C) NARRATIVA AGRO:
+   - Concreta e operacional
+   - Orientada a decisão de campo (captação, logística, planejamento de safra)
+   - Sem jargão estatístico excessivo
+   - Usar termos do agro: sacas, arrobas, toneladas, safra, entressafra, cooperado, produtor
+
+D) PAINÉIS DO DASHBOARD AGRO:
+   Quando contexto agro, recomendar:
+   - Resumo Executivo Agro (volume previsto, tendência de safra)
+   - Projeção de Produção/Captação (por período)
+   - Priorização por Produtor/Lote/Região
+   - Distribuição por Safra/Mês
+   - Impacto Financeiro (valor estimado da captação)
+   - Drivers da Previsão (quais fatores mais influenciam)
+   - Ações Recomendadas (onde focar a equipe de campo)
+   - Riscos Operacionais (produtores com queda, regiões com deficit)
+
 Responda SEMPRE usando a função business_decision. Foque em valor de negócio.`;
 
 // ─── Tool Schema ───

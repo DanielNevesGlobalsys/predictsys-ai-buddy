@@ -3,7 +3,7 @@
 // No DB tables — rules live here, contract persisted as JSON
 // ═══════════════════════════════════════════════════════════════
 
-export type IndustryKey = 'retail' | 'health' | 'finance' | 'education' | 'logistics' | 'generic';
+export type IndustryKey = 'retail' | 'health' | 'finance' | 'education' | 'logistics' | 'agro' | 'generic';
 
 export type ObjectiveKey =
   | 'churn'
@@ -106,6 +106,15 @@ export const INDUSTRY_OBJECTIVE_MATRIX: Record<IndustryKey, IndustryEntry> = {
       { key: 'propensity', label_pt: 'Propensão de atraso', description_pt: 'Prever probabilidade de atraso na entrega', default_problem_type: 'classification' },
       { key: 'price_optimization', label_pt: 'Otimização de frete', description_pt: 'Prever custo ideal de frete', default_problem_type: 'regression' },
       { key: 'generic_prediction', label_pt: 'Outro objetivo', description_pt: 'Objetivo personalizado para logística', default_problem_type: 'classification' },
+    ],
+  },
+  agro: {
+    objectives: [
+      { key: 'demand_forecast', label_pt: 'Previsão de Produção/Captação', description_pt: 'Prever volume de produção, captação ou recebimento futuro', default_problem_type: 'regression' },
+      { key: 'propensity', label_pt: 'Risco de Não-Entrega', description_pt: 'Prever quais produtores/lotes têm risco de não cumprir entrega', default_problem_type: 'classification' },
+      { key: 'churn', label_pt: 'Evasão de Cooperado', description_pt: 'Prever quais cooperados podem deixar a cooperativa', default_problem_type: 'classification' },
+      { key: 'anomaly', label_pt: 'Detecção de Anomalias', description_pt: 'Identificar padrões atípicos em pesagem, qualidade ou movimentação', default_problem_type: 'classification' },
+      { key: 'generic_prediction', label_pt: 'Outro objetivo agro', description_pt: 'Objetivo personalizado para o agronegócio', default_problem_type: 'regression' },
     ],
   },
   generic: {
@@ -227,6 +236,7 @@ const ENTITY_KEY_POLICIES: Record<IndustryKey, BusinessIntentContract['entity_ke
   finance: { required: true, recommended_patterns: ['id', 'account_id', 'cpf', 'cnpj', 'contract_id'], forbid_patterns: ['name', 'nome', 'email', 'phone'] },
   education: { required: true, recommended_patterns: ['id', 'student_id', 'matricula', 'ra', 'cpf'], forbid_patterns: ['name', 'nome', 'email'] },
   logistics: { required: true, recommended_patterns: ['id', 'order_id', 'shipment_id', 'tracking'], forbid_patterns: ['name', 'nome', 'address'] },
+  agro: { required: true, recommended_patterns: ['produtor', 'cooperado', 'codlot', 'codpes', 'fazenda', 'lote', 'filial', 'codemp'], forbid_patterns: ['nome', 'name', 'email', 'telefone'] },
   generic: { required: true, recommended_patterns: ['id', 'entity_id', 'key', 'cpf', 'cnpj'], forbid_patterns: ['name', 'nome', 'email', 'phone'] },
 };
 
@@ -314,6 +324,7 @@ const BLOCKED_TARGET_PATTERNS_MAP: Record<IndustryKey, string[]> = {
   finance: ['id', 'uuid', 'hash', 'token', 'id_conta', 'id_contrato', 'numero_contrato'],
   education: ['id', 'uuid', 'hash', 'token', 'ra', 'matricula_id', 'id_aluno'],
   logistics: ['id', 'uuid', 'hash', 'token', 'tracking', 'id_pedido', 'id_remessa'],
+  agro: ['id', 'uuid', 'hash', 'token', 'sk_', 'datmov', 'data_', 'dt_', 'calendario', 'mes', 'ano', 'semana', 'codlot', 'codpes', 'codemp', 'sk_filial', 'sk_pessoa', 'sk_empresa'],
   generic: ['id', 'uuid', 'hash', 'token', 'codigo', 'key', 'index', '_id'],
 };
 
@@ -337,6 +348,7 @@ const TIME_ANCHOR_CANDIDATES: Record<IndustryKey, string[]> = {
   finance: ['data_cadastro', 'created_at', 'dt_ref', 'data_abertura', 'data_contrato'],
   education: ['data_matricula', 'created_at', 'dt_ref', 'data_ingresso'],
   logistics: ['data_pedido', 'created_at', 'dt_ref', 'data_embarque', 'data_entrega'],
+  agro: ['datmov', 'data_movimento', 'data_recebimento', 'data_entrega', 'data_colheita', 'data_plantio', 'data_pesagem', 'dt_movimento', 'created_at'],
   generic: ['data_cadastro', 'created_at', 'dt_ref', 'data_movimento', 'date', 'timestamp'],
 };
 
@@ -348,6 +360,7 @@ const ENTITY_KEY_HINT_PATTERNS: Record<IndustryKey, string[]> = {
   finance: ['id_cliente', 'cpf', 'cnpj', 'account_id', 'contract_id', 'contrato'],
   education: ['id_aluno', 'ra', 'cpf', 'matricula', 'student_id'],
   logistics: ['id_pedido', 'order_id', 'shipment_id', 'tracking_id'],
+  agro: ['produtor', 'cooperado', 'codlot', 'codpes', 'fazenda', 'talhao', 'lote', 'filial', 'codemp', 'cod_produtor', 'id_produtor'],
   generic: ['id_cliente', 'cpf', 'cnpj', 'contrato', 'account', 'customer_id', 'entity_id'],
 };
 

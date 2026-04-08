@@ -9,6 +9,7 @@ export type IndustryKey =
   | "logistics"
   | "education"
   | "finance"
+  | "agro"
   | "generic";
 
 /** Problem archetypes */
@@ -66,6 +67,16 @@ export interface IntentContractV2 {
   migration_from_legacy?: boolean;
   legacy_version?: number | null;
   created_at: string;
+  /** Agro-specific context — only populated when industry = "agro" */
+  agro_context?: {
+    agro_subdomain: string;
+    business_cycle: string;
+    forecast_unit: string;
+    production_entity: string;
+    has_seasonality: boolean;
+    seasonality_grain: string;
+    business_event_of_interest: string;
+  };
 }
 
 // ─── Legacy compat: original flat contract ─────────────────────
@@ -149,6 +160,7 @@ export const INDUSTRY_DISPLAY_NAMES: Record<IndustryKey, string> = {
   logistics: "Logística",
   education: "Educação",
   finance: "Finanças",
+  agro: "Agro",
   generic: "Genérico",
 };
 

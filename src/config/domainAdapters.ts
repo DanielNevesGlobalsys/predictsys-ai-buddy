@@ -180,6 +180,73 @@ const ADAPTERS: Record<IndustryKey, DomainAdapter> = {
     },
   },
 
+  agro: {
+    industry: "agro",
+    display_name: "Agro",
+    entity_candidates: [
+      "produtor", "cooperado", "cooperativa", "fazenda", "talhao", "lote",
+      "codlot", "codpes", "filial", "unidade", "regiao", "propriedade",
+      "fornecedor", "cod_produtor", "id_produtor", "codemp",
+    ],
+    time_candidates: [
+      "datmov", "data_movimento", "data_recebimento", "data_entrega",
+      "data_colheita", "data_plantio", "data_pesagem", "dt_movimento",
+      "dt_recebimento", "dt_colheita", "created_at",
+    ],
+    event_candidates: [
+      "quebra_safra", "nao_entrega", "inadimplente", "desvio_padrao",
+      "cancelado", "devolvido", "rejeitado",
+    ],
+    value_candidates: [
+      "qtdsac", "qtdpes", "peso", "peso_liquido", "peso_bruto",
+      "volume", "producao", "captacao", "recebimento", "sacas",
+      "toneladas", "kg", "rendimento", "produtividade",
+      "valor_recebido", "valor_total", "litros", "arrobas",
+    ],
+    leakage_watchlist: [
+      "resultado_final", "status_final", "data_liquidacao",
+      "valor_liquidado", "data_encerramento",
+    ],
+    recommended_templates: [
+      {
+        template_id: "previsao_captacao",
+        display_name: "Previsão de Captação",
+        problem_type: "regression",
+        description: "Prevê o volume de captação (sacas, kg, toneladas) por produtor/lote por período.",
+      },
+      {
+        template_id: "previsao_producao",
+        display_name: "Previsão de Produção",
+        problem_type: "regression",
+        description: "Estima a produção futura por fazenda, talhão ou região.",
+      },
+      {
+        template_id: "previsao_safra",
+        display_name: "Previsão de Safra",
+        problem_type: "regression",
+        description: "Prevê o volume total de safra por período e região.",
+      },
+      {
+        template_id: "risco_nao_entrega",
+        display_name: "Risco de Não-Entrega",
+        problem_type: "classification",
+        description: "Identifica produtores/lotes com risco de não cumprir a entrega contratada.",
+      },
+    ],
+    default_window_days: 90,
+    column_dictionary: {
+      qtdsac: "Quantidade de sacas",
+      qtdpes: "Quantidade pesada",
+      datmov: "Data da movimentação",
+      codlot: "Código do lote de café",
+      codpes: "Código da pessoa/produtor",
+      peso: "Peso da mercadoria",
+      producao: "Volume de produção",
+      captacao: "Volume captado",
+      rendimento: "Rendimento por área/período",
+    },
+  },
+
   generic: {
     industry: "generic",
     display_name: "Genérico",

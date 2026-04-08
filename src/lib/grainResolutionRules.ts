@@ -8,6 +8,11 @@ const TEMPORAL_OBJECTIVES = [
   "churn", "turnover", "no_show", "default_risk", "inadimplencia",
   "propensity", "demand_forecast", "revenue", "value_forecast",
   "lifetime_value", "price_optimization",
+  // Agro temporal objectives
+  "producao", "captacao", "safra", "volume", "recebimento",
+  "produtividade", "previsao_producao", "previsao_captacao",
+  "previsao_safra", "previsao_volume", "oferta_agricola",
+  "entrega_futura", "production_forecast",
 ];
 
 const TRANSACTIONAL_OBJECTIVES = [
@@ -61,8 +66,11 @@ export function resolveGrain(input: GrainInput): GrainResolution {
     reasoning.push("⚠ Sem coluna temporal confirmada — confiança reduzida.");
     confidence = 0.6;
   }
-  // Rule 3: Forecast → entity_product_time or entity_time
-  else if (["demand_forecast", "revenue", "value_forecast"].some(o => obj.includes(o))) {
+  // Rule 3: Forecast / Agro production → entity_product_time or entity_time
+  else if (["demand_forecast", "revenue", "value_forecast",
+    "producao", "captacao", "safra", "previsao_producao",
+    "previsao_captacao", "previsao_safra", "oferta_agricola",
+    "production_forecast"].some(o => obj.includes(o))) {
     grain = hasEntity ? "entity_product_time" : "entity_time";
     aggregationRequired = true;
     snapshotRequired = hasTime;

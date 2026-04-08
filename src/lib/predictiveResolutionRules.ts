@@ -23,11 +23,19 @@ import type {
 const CLASSIFICATION_OBJECTIVES = [
   "churn", "turnover", "no_show", "default_risk", "inadimplencia",
   "propensity", "anomaly_detection", "risk_scoring", "anomaly",
+  // Agro classification
+  "risco_quebra_safra", "risco_nao_entrega", "risco_queda_entrega",
+  "nao_entrega", "quebra_safra",
 ];
 
 const REGRESSION_OBJECTIVES = [
   "demand_forecast", "revenue", "ticket", "value_forecast",
   "lifetime_value", "price_optimization",
+  // Agro regression
+  "producao", "captacao", "safra", "volume", "peso", "sacas",
+  "toneladas", "recebimento", "produtividade", "previsao_producao",
+  "previsao_captacao", "previsao_safra", "previsao_volume",
+  "oferta_agricola", "entrega_futura", "production_forecast",
 ];
 
 export function resolveProblemType(objective: string | undefined): "classification" | "regression" {
@@ -43,6 +51,9 @@ const ENTITY_PATTERNS = [
   "patient_id", "id_paciente", "student_id", "id_aluno",
   "employee_id", "id_funcionario", "matricula", "account_id",
   "id_conta", "contract_id", "id_contrato", "user_id",
+  // Agro entities
+  "produtor", "cooperado", "codlot", "codpes", "fazenda",
+  "talhao", "lote", "filial", "codemp", "cod_produtor", "id_produtor",
 ];
 
 const BLOCKED_ENTITY_PATTERNS = [
@@ -97,6 +108,9 @@ const TIME_PATTERNS = [
   "order_date", "purchase_date", "data_pedido", "data_evento",
   "event_date", "dt_evento", "data_internacao", "admission_date",
   "hire_date", "data_admissao", "data_contrato",
+  // Agro time patterns
+  "datmov", "data_movimento", "data_recebimento", "data_entrega",
+  "data_colheita", "data_plantio", "data_pesagem", "dt_movimento",
 ];
 
 const BLOCKED_TIME_PATTERNS = [
