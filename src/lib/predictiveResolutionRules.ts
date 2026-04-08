@@ -108,6 +108,9 @@ const TIME_PATTERNS = [
   "order_date", "purchase_date", "data_pedido", "data_evento",
   "event_date", "dt_evento", "data_internacao", "admission_date",
   "hire_date", "data_admissao", "data_contrato",
+  // Agro time patterns
+  "datmov", "data_movimento", "data_recebimento", "data_entrega",
+  "data_colheita", "data_plantio", "data_pesagem", "dt_movimento",
 ];
 
 const BLOCKED_TIME_PATTERNS = [
