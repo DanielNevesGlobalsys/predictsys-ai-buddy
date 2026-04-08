@@ -186,6 +186,9 @@ export default function PowerBIXMLADiagnosticPanel({
           connection_id: connectionId,
           workspace_id: workspaceId,
           dataset_id: datasetId,
+          client_id: clientId,
+          client_secret: clientSecret,
+          tenant_id: tenantId,
           materialize: doMaterialize,
         };
 

@@ -254,6 +254,9 @@ const PowerBIManualAssistedPanel = ({
           connectionId={connectionId}
           workspaceId={workspaceId}
           datasetId={datasetId}
+          clientId={clientId}
+          clientSecret={clientSecret}
+          tenantId={tenantId}
           tableName={manualTableName || undefined}
           onMaterializationSuccess={onContinuePartial}
         />
