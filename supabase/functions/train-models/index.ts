@@ -2488,13 +2488,36 @@ serve(async (req) => {
       if (sampleData?.sample_json) {
         // sample_json can be either a plain array of rows OR an object { rows, columns, source }
         const rawJson = sampleData.sample_json as any;
-        const sampleRows: Record<string, any>[] = Array.isArray(rawJson)
+        let sampleRows: Record<string, any>[] = Array.isArray(rawJson)
           ? rawJson
           : (Array.isArray(rawJson?.rows) ? rawJson.rows : []);
-        console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}`);
+
+        // Detect multi-table stacked rows: rows from different __source_table values
+        // only have their own table's columns. We need ALL columns in every row.
+        const declaredColumns: string[] = Array.isArray(rawJson?.columns) ? rawJson.columns : [];
+        if (sampleRows.length > 0 && declaredColumns.length > 0) {
+          const sourceTables = new Set(sampleRows.map(r => r.__source_table).filter(Boolean));
+          if (sourceTables.size > 1) {
+            console.log(`[AutoML] Multi-table sample detected: ${sourceTables.size} tables (${[...sourceTables].join(", ")}). Merging rows with all ${declaredColumns.length} columns.`);
+            // Each row needs all declared columns; fill missing with empty string
+            sampleRows = sampleRows.map(row => {
+              const merged: Record<string, any> = {};
+              for (const col of declaredColumns) {
+                merged[col] = row[col] !== undefined ? row[col] : "";
+              }
+              if (row.__source_table) merged.__source_table = row.__source_table;
+              return merged;
+            });
+          }
+        }
+
+        console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}, declaredCols=${declaredColumns.length}`);
         if (sampleRows.length > 0) {
-          // Extract headers from the first row's keys
-          virtualHeaders = Object.keys(sampleRows[0]);
+          // Use declared columns if available (covers all tables), otherwise fall back to first row keys
+          virtualHeaders = declaredColumns.length > 0
+            ? declaredColumns.filter(c => c !== "__source_table")
+            : Object.keys(sampleRows[0]).filter(c => c !== "__source_table");
+
           // Convert JSON rows to CSV-like delimited lines
           const vDelimiter = ",";
           delimiter = vDelimiter;
@@ -2503,7 +2526,6 @@ serve(async (req) => {
               const v = row[h];
               if (v === null || v === undefined) return "";
               const s = String(v);
-              // Escape values containing delimiter or quotes
               if (s.includes(vDelimiter) || s.includes('"') || s.includes('\n')) {
                 return `"${s.replace(/"/g, '""')}"`;
               }
