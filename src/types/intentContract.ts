@@ -160,6 +160,7 @@ export const INDUSTRY_DISPLAY_NAMES: Record<IndustryKey, string> = {
   logistics: "Logística",
   education: "Educação",
   finance: "Finanças",
+  agro: "Agro",
   generic: "Genérico",
 };
 
