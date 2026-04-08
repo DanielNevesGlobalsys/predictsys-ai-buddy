@@ -28,6 +28,28 @@ Regras:
 6. Nunca reintroduzir features em blocked_features
 7. Se a base não sustenta o problema, sinalize bloqueio
 
+ESPECIALIZAÇÃO AGRO — MULTI-TABLE:
+Quando o projeto for do setor agro, aplicar OBRIGATORIAMENTE:
+
+A) TABELAS DE CALENDÁRIO (Calendário, dim_data, dim_tempo):
+   - Classificar como "dimension_lookup_temporal"
+   - NUNCA sugerir campos de calendário como target
+   - Permitir uso como apoio ao split temporal e para features temporais derivadas
+
+B) TABELAS DE MOVIMENTAÇÃO (Detalhe Movimentação, fato_recebimento, etc.):
+   - Classificar como "event_fact" ou "transaction_fact"
+   - Buscar nelas: quantidade (QTDSAC, QTDPES), volume, peso, sacas, entidade, data real do evento
+   - Target deve vir preferencialmente destas tabelas
+
+C) GRAIN AGRO:
+   - Se há entidade + data + objetivo quantitativo: grain = entidade × tempo
+   - Exemplos: lote × mês, produtor × mês, cooperado × semana, unidade × período
+   - Joins com calendário são normais e não devem confundir a detecção de entidade
+
+D) BUILDER AGRO:
+   - dataset_build_mode deve ser "aggregate" ou "snapshot" quando dados estão em nível transacional
+   - Agregação deve preservar a semântica de quantidade (sum para sacas/peso, count para eventos)
+
 Responda SEMPRE usando a função de_decision. Seja preciso e técnico.`;
 
 // ─── Tool Schema ───
