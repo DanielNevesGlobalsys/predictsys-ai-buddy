@@ -23,11 +23,19 @@ import type {
 const CLASSIFICATION_OBJECTIVES = [
   "churn", "turnover", "no_show", "default_risk", "inadimplencia",
   "propensity", "anomaly_detection", "risk_scoring", "anomaly",
+  // Agro classification
+  "risco_quebra_safra", "risco_nao_entrega", "risco_queda_entrega",
+  "nao_entrega", "quebra_safra",
 ];
 
 const REGRESSION_OBJECTIVES = [
   "demand_forecast", "revenue", "ticket", "value_forecast",
   "lifetime_value", "price_optimization",
+  // Agro regression
+  "producao", "captacao", "safra", "volume", "peso", "sacas",
+  "toneladas", "recebimento", "produtividade", "previsao_producao",
+  "previsao_captacao", "previsao_safra", "previsao_volume",
+  "oferta_agricola", "entrega_futura", "production_forecast",
 ];
 
 export function resolveProblemType(objective: string | undefined): "classification" | "regression" {
