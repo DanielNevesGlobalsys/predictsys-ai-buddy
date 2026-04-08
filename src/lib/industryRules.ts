@@ -108,6 +108,15 @@ export const INDUSTRY_OBJECTIVE_MATRIX: Record<IndustryKey, IndustryEntry> = {
       { key: 'generic_prediction', label_pt: 'Outro objetivo', description_pt: 'Objetivo personalizado para logística', default_problem_type: 'classification' },
     ],
   },
+  agro: {
+    objectives: [
+      { key: 'demand_forecast', label_pt: 'Previsão de Produção/Captação', description_pt: 'Prever volume de produção, captação ou recebimento futuro', default_problem_type: 'regression' },
+      { key: 'propensity', label_pt: 'Risco de Não-Entrega', description_pt: 'Prever quais produtores/lotes têm risco de não cumprir entrega', default_problem_type: 'classification' },
+      { key: 'churn', label_pt: 'Evasão de Cooperado', description_pt: 'Prever quais cooperados podem deixar a cooperativa', default_problem_type: 'classification' },
+      { key: 'anomaly', label_pt: 'Detecção de Anomalias', description_pt: 'Identificar padrões atípicos em pesagem, qualidade ou movimentação', default_problem_type: 'classification' },
+      { key: 'generic_prediction', label_pt: 'Outro objetivo agro', description_pt: 'Objetivo personalizado para o agronegócio', default_problem_type: 'regression' },
+    ],
+  },
   generic: {
     objectives: [
       { key: 'churn', label_pt: 'Churn / Cancelamento', description_pt: 'Prever quais entidades deixarão de estar ativas', default_problem_type: 'classification' },
