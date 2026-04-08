@@ -9,6 +9,7 @@ export type IndustryKey =
   | "logistics"
   | "education"
   | "finance"
+  | "agro"
   | "generic";
 
 /** Problem archetypes */
