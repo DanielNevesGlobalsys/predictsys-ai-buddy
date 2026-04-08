@@ -66,8 +66,11 @@ export function resolveGrain(input: GrainInput): GrainResolution {
     reasoning.push("⚠ Sem coluna temporal confirmada — confiança reduzida.");
     confidence = 0.6;
   }
-  // Rule 3: Forecast → entity_product_time or entity_time
-  else if (["demand_forecast", "revenue", "value_forecast"].some(o => obj.includes(o))) {
+  // Rule 3: Forecast / Agro production → entity_product_time or entity_time
+  else if (["demand_forecast", "revenue", "value_forecast",
+    "producao", "captacao", "safra", "previsao_producao",
+    "previsao_captacao", "previsao_safra", "oferta_agricola",
+    "production_forecast"].some(o => obj.includes(o))) {
     grain = hasEntity ? "entity_product_time" : "entity_time";
     aggregationRequired = true;
     snapshotRequired = hasTime;
