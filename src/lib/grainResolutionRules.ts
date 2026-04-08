@@ -8,6 +8,11 @@ const TEMPORAL_OBJECTIVES = [
   "churn", "turnover", "no_show", "default_risk", "inadimplencia",
   "propensity", "demand_forecast", "revenue", "value_forecast",
   "lifetime_value", "price_optimization",
+  // Agro temporal objectives
+  "producao", "captacao", "safra", "volume", "recebimento",
+  "produtividade", "previsao_producao", "previsao_captacao",
+  "previsao_safra", "previsao_volume", "oferta_agricola",
+  "entrega_futura", "production_forecast",
 ];
 
 const TRANSACTIONAL_OBJECTIVES = [
