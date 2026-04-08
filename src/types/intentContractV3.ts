@@ -22,6 +22,7 @@ export type IndustryKeyV3 =
   | "finance"
   | "education"
   | "logistics"
+  | "agro"
   | "hr"
   | "insurance"
   | "telecom"
