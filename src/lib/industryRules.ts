@@ -348,6 +348,7 @@ const TIME_ANCHOR_CANDIDATES: Record<IndustryKey, string[]> = {
   finance: ['data_cadastro', 'created_at', 'dt_ref', 'data_abertura', 'data_contrato'],
   education: ['data_matricula', 'created_at', 'dt_ref', 'data_ingresso'],
   logistics: ['data_pedido', 'created_at', 'dt_ref', 'data_embarque', 'data_entrega'],
+  agro: ['datmov', 'data_movimento', 'data_recebimento', 'data_entrega', 'data_colheita', 'data_plantio', 'data_pesagem', 'dt_movimento', 'created_at'],
   generic: ['data_cadastro', 'created_at', 'dt_ref', 'data_movimento', 'date', 'timestamp'],
 };
 
