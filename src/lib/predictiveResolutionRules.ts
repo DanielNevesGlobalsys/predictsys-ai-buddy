@@ -51,6 +51,9 @@ const ENTITY_PATTERNS = [
   "patient_id", "id_paciente", "student_id", "id_aluno",
   "employee_id", "id_funcionario", "matricula", "account_id",
   "id_conta", "contract_id", "id_contrato", "user_id",
+  // Agro entities
+  "produtor", "cooperado", "codlot", "codpes", "fazenda",
+  "talhao", "lote", "filial", "codemp", "cod_produtor", "id_produtor",
 ];
 
 const BLOCKED_ENTITY_PATTERNS = [
