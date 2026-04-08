@@ -3,7 +3,7 @@
 // No DB tables — rules live here, contract persisted as JSON
 // ═══════════════════════════════════════════════════════════════
 
-export type IndustryKey = 'retail' | 'health' | 'finance' | 'education' | 'logistics' | 'generic';
+export type IndustryKey = 'retail' | 'health' | 'finance' | 'education' | 'logistics' | 'agro' | 'generic';
 
 export type ObjectiveKey =
   | 'churn'
