@@ -324,6 +324,7 @@ const BLOCKED_TARGET_PATTERNS_MAP: Record<IndustryKey, string[]> = {
   finance: ['id', 'uuid', 'hash', 'token', 'id_conta', 'id_contrato', 'numero_contrato'],
   education: ['id', 'uuid', 'hash', 'token', 'ra', 'matricula_id', 'id_aluno'],
   logistics: ['id', 'uuid', 'hash', 'token', 'tracking', 'id_pedido', 'id_remessa'],
+  agro: ['id', 'uuid', 'hash', 'token', 'sk_', 'datmov', 'data_', 'dt_', 'calendario', 'mes', 'ano', 'semana', 'codlot', 'codpes', 'codemp', 'sk_filial', 'sk_pessoa', 'sk_empresa'],
   generic: ['id', 'uuid', 'hash', 'token', 'codigo', 'key', 'index', '_id'],
 };
 
