@@ -24,6 +24,7 @@ const INDUSTRY_OPTIONS: {
   { key: "finance", icon: Landmark, description: "Bancos, fintechs, seguradoras" },
   { key: "education", icon: GraduationCap, description: "Escolas, universidades, EAD" },
   { key: "logistics", icon: Truck, description: "Transporte, entregas, supply chain" },
+  { key: "agro", icon: Wheat, description: "Cooperativas, fazendas, produtores rurais" },
   { key: "generic", icon: Globe, description: "Outro segmento / não sei" },
 ];
 
