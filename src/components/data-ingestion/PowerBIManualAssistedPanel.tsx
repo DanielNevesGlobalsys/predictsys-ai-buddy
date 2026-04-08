@@ -80,6 +80,9 @@ const PowerBIManualAssistedPanel = ({
   connectionId,
   workspaceId,
   datasetId,
+  clientId,
+  clientSecret,
+  tenantId,
 }: PowerBIManualAssistedPanelProps) => {
   const isPartial = connectionStatus === "connected_partial_discovery";
   const isFull = connectionStatus === "connected_full_discovery";

@@ -133,6 +133,9 @@ export default function PowerBIXMLADiagnosticPanel({
   workspaceId,
   datasetId,
   tableName,
+  clientId,
+  clientSecret,
+  tenantId,
   onMaterializationSuccess,
 }: Props) {
   const [running, setRunning] = useState(false);
