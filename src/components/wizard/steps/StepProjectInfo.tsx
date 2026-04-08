@@ -46,6 +46,7 @@ const V3_TO_LEGACY_INDUSTRY: Record<string, string> = {
   finance: "finance",
   education: "education",
   logistics: "logistics",
+  agro: "agro",
   hr: "hr",
   insurance: "insurance",
   telecom: "telecom",

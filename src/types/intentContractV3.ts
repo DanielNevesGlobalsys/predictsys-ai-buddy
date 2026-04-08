@@ -367,6 +367,7 @@ const INDUSTRY_V1_TO_V3: Record<string, IndustryKeyV3> = {
   finance: "finance",
   education: "education",
   logistics: "logistics",
+  agro: "agro",
   generic: "generic",
 };
 

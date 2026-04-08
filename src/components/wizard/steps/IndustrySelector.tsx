@@ -3,7 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import {
   Building2, GraduationCap, ShoppingBag, Heart,
-  Truck, Landmark, Globe, Check,
+  Truck, Landmark, Globe, Check, Wheat,
 } from "lucide-react";
 import type { IndustryKey } from "@/types/intentContract";
 import { INDUSTRY_DISPLAY_NAMES } from "@/types/intentContract";
