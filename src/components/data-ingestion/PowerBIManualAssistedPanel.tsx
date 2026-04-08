@@ -45,6 +45,9 @@ interface PowerBIManualAssistedPanelProps {
   connectionId?: string;
   workspaceId?: string;
   datasetId?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tenantId?: string;
 }
 
 const confidenceLabel: Record<string, string> = {

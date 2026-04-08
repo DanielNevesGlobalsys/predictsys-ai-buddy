@@ -93,6 +93,9 @@ interface Props {
   workspaceId?: string;
   datasetId?: string;
   tableName?: string;
+  clientId?: string;
+  clientSecret?: string;
+  tenantId?: string;
   onMaterializationSuccess?: () => void;
 }
 
