@@ -39,6 +39,13 @@ export type ObjectiveArchetype =
   | "next_best_action"
   | "risk_scoring"
   | "turnover"
+  // Agro-specific objectives
+  | "agro_captacao"
+  | "agro_produtividade"
+  | "agro_rendimento"
+  | "agro_volume"
+  | "agro_entrega"
+  | "agro_qualidade"
   | "custom";
 
 export type PredictionNature = "will_it_happen" | "how_much" | "when" | "who_is_similar";
@@ -53,6 +60,17 @@ export type EntityGranularity =
   | "product"
   | "account"
   | "household"
+  // Agro entities
+  | "produtor"
+  | "cooperado"
+  | "fazenda"
+  | "propriedade"
+  | "talhao"
+  | "lote"
+  | "unidade"
+  | "regiao"
+  | "cultura"
+  | "safra"
   | "other";
 
 export type HorizonUnit = "days" | "weeks" | "months";
@@ -353,6 +371,16 @@ const ENTITY_LABELS: Partial<Record<EntityGranularity, string>> = {
   product: "Produto",
   account: "Conta",
   household: "Domicílio",
+  produtor: "Produtor",
+  cooperado: "Cooperado",
+  fazenda: "Fazenda",
+  propriedade: "Propriedade",
+  talhao: "Talhão",
+  lote: "Lote",
+  unidade: "Unidade",
+  regiao: "Região",
+  cultura: "Cultura",
+  safra: "Safra",
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -396,6 +424,7 @@ const GRANULARITY_FROM_INDUSTRY: Record<string, EntityGranularity> = {
   finance: "account",
   logistics: "transaction",
   hr: "employee",
+  agro: "produtor",
   generic: "customer",
 };
 

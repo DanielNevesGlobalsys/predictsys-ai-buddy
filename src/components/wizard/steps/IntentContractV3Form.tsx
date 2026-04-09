@@ -1,4 +1,4 @@
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useRef, useEffect } from "react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,6 +40,16 @@ import type {
   UIFieldSpec,
 } from "@/types/intentContractV3";
 import { UI_FIELD_SPECS, createEmptyContractV3 } from "@/types/intentContractV3";
+import {
+  getObjectiveOptions,
+  getEntityOptions,
+  getProcessOptions,
+  getDecisionHints,
+  getQuestionHints,
+  getDefaultEntity,
+  getObjectiveNatureHint,
+  isValueCompatible,
+} from "@/config/industryContextualOptions";
 
 // ─── Block metadata ────────────────────────────────────────────
 const BLOCKS = [
@@ -323,31 +333,106 @@ export default function IntentContractV3Form({
   disabled,
 }: IntentContractV3FormProps) {
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const prevIndustryRef = useRef(contract.business_context.industry);
+
+  const industry = contract.business_context.industry;
+
+  // Reset incompatible values when industry changes
+  useEffect(() => {
+    if (prevIndustryRef.current === industry) return;
+    prevIndustryRef.current = industry;
+
+    const objectiveOpts = getObjectiveOptions(industry);
+    const entityOpts = getEntityOptions(industry);
+
+    let needsUpdate = false;
+    const updated = structuredClone(contract);
+
+    const currentObj = updated.prediction_request.objective;
+    if (currentObj && !isValueCompatible(currentObj, objectiveOpts)) {
+      updated.prediction_request.objective = "custom" as any;
+      updated.prediction_request.custom_objective_text = "";
+      needsUpdate = true;
+    }
+
+    const currentEntity = updated.prediction_request.entity_granularity;
+    if (currentEntity && !isValueCompatible(currentEntity, entityOpts)) {
+      updated.prediction_request.entity_granularity = getDefaultEntity(industry) as any;
+      needsUpdate = true;
+    }
+
+    if (currentObj && isValueCompatible(currentObj, objectiveOpts)) {
+      const hint = getObjectiveNatureHint(industry, currentObj);
+      if (hint && updated.prediction_request.prediction_nature !== hint) {
+        updated.prediction_request.prediction_nature = hint;
+        needsUpdate = true;
+      }
+    }
+
+    if (needsUpdate) {
+      updated.updated_at = new Date().toISOString();
+      onChange(updated);
+    }
+  }, [industry]);
+
+  // Build contextual specs with industry-aware options
+  const contextualSpecs = useMemo(() => {
+    return UI_FIELD_SPECS.map((spec) => {
+      if (spec.field_path === "prediction_request.objective") {
+        const opts = getObjectiveOptions(industry);
+        return { ...spec, options: opts.map(o => ({ value: o.value, label_pt: o.label_pt, description_pt: o.description_pt })) };
+      }
+      if (spec.field_path === "prediction_request.entity_granularity") {
+        const opts = getEntityOptions(industry);
+        return { ...spec, options: opts.map(o => ({ value: o.value, label_pt: o.label_pt, description_pt: o.description_pt })) };
+      }
+      if (spec.field_path === "business_context.current_process") {
+        const opts = getProcessOptions(industry);
+        return { ...spec, options: opts.map(o => ({ value: o.value, label_pt: o.label_pt, description_pt: o.description_pt })) };
+      }
+      if (spec.field_path === "business_context.business_decision") {
+        const hints = getDecisionHints(industry);
+        return { ...spec, description_pt: hints[0] || spec.description_pt };
+      }
+      if (spec.field_path === "prediction_request.prediction_question") {
+        const hints = getQuestionHints(industry);
+        return { ...spec, description_pt: hints[0] || spec.description_pt };
+      }
+      return spec;
+    });
+  }, [industry]);
 
   const fieldsByGroup = useMemo(() => {
     const map: Record<string, UIFieldSpec[]> = {};
-    for (const spec of UI_FIELD_SPECS) {
+    for (const spec of contextualSpecs) {
       if (!map[spec.group]) map[spec.group] = [];
       map[spec.group].push(spec);
     }
     return map;
-  }, []);
+  }, [contextualSpecs]);
 
   const handleFieldChange = useCallback(
     (fieldPath: string, value: any) => {
       const updated = setNestedValue(contract, fieldPath, value);
       updated.updated_at = new Date().toISOString();
+
+      // Auto-set nature hint when objective changes
+      if (fieldPath === "prediction_request.objective") {
+        const hint = getObjectiveNatureHint(industry, value);
+        if (hint) {
+          updated.prediction_request.prediction_nature = hint;
+        }
+      }
+
       onChange(updated);
     },
-    [contract, onChange]
+    [contract, onChange, industry]
   );
 
-  // Default open sections
   const defaultOpen = BLOCKS.filter((b) => b.defaultOpen).map((b) => b.key);
 
   return (
     <div className="space-y-4">
-      {/* Toggle for advanced sections */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
           Preencha o contrato de intenção para guiar o pipeline preditivo
