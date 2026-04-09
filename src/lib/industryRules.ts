@@ -381,6 +381,21 @@ export function mapDeclaredObjectiveToKey(declared: string): ObjectiveKey {
     educacao: 'churn',
     segmentacao: 'segmentation',
     outro: 'generic_prediction',
+    // Agro objectives → map to closest legacy keys
+    demand_forecast: 'demand_forecast',
+    agro_captacao: 'demand_forecast',
+    agro_produtividade: 'demand_forecast',
+    agro_rendimento: 'demand_forecast',
+    agro_volume: 'demand_forecast',
+    agro_entrega: 'demand_forecast',
+    agro_qualidade: 'generic_prediction',
+    risk_scoring: 'generic_prediction',
+    default_risk: 'propensity',
+    propensity: 'propensity',
+    turnover: 'churn',
+    lifetime_value: 'demand_forecast',
+    anomaly_detection: 'generic_prediction',
+    custom: 'generic_prediction',
   };
   return map[declared] ?? 'generic_prediction';
 }
