@@ -6,6 +6,55 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+// ═══ Agro domain helpers ══════════════════════════════════════
+
+const AGRO_REGRESSION_SIGNALS = [
+  "captacao", "captação", "producao", "produção", "safra", "volume",
+  "rendimento", "produtividade", "colheita", "recebimento", "sacas",
+  "toneladas", "peso", "quantidade", "harvest", "yield", "production",
+  "forecast", "previsao", "previsão", "demand",
+];
+
+const AGRO_NUMERIC_TARGET_TOKENS = [
+  "qtd", "sacas", "peso", "volume", "producao", "produção",
+  "captacao", "captação", "recebimento", "rendimento",
+  "produtividade", "quantidade", "tonelada", "kg", "litro",
+  "qtdpes", "qtdsac",
+];
+
+const DATE_COLUMN_PATTERNS = [
+  "datmov", "dt_mov", "data_mov", "date_", "dt_", "_date", "_data",
+  "created_at", "updated_at", "sk_data", "data_ref", "dt_ref",
+  "calendario", "calendar",
+];
+
+const CALENDAR_TABLE_PATTERN = /^(calend[aá]rio|calendar|dimdate|dimcalendar)\./i;
+
+function isDateColumn(colName: string, inferredType: string): boolean {
+  const lo = colName.toLowerCase();
+  const ty = (inferredType || "").toLowerCase();
+  if (["date", "datetime", "timestamp", "data", "temporal"].some(d => ty.includes(d))) return true;
+  if (DATE_COLUMN_PATTERNS.some(p => lo.includes(p))) return true;
+  if (CALENDAR_TABLE_PATTERN.test(colName)) return true;
+  return false;
+}
+
+function isCalendarColumn(colName: string): boolean {
+  return CALENDAR_TABLE_PATTERN.test(colName) || colName.toLowerCase().includes("calendario") || colName.toLowerCase().includes("calendar");
+}
+
+function isAgroProject(settings: Record<string, any>): boolean {
+  const industry = (settings?.industry || settings?.intent_contract_v3?.business_context?.industry || "").toLowerCase();
+  return ["agro", "agronegocio", "agronegócio", "agriculture", "farming", "cafe", "café", "soja", "milho"].some(k => industry.includes(k));
+}
+
+function isAgroRegressionObjective(objective: string): boolean {
+  const lo = (objective || "").toLowerCase();
+  return AGRO_REGRESSION_SIGNALS.some(s => lo.includes(s));
+}
+
+// ═══ Main ══════════════════════════════════════════════════════
+
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response(null, { headers: corsHeaders });
@@ -45,23 +94,39 @@ Deno.serve(async (req) => {
 
     const intentContractV3 = settings?.intent_contract_v3 || null;
     const edaProfile = settings?.eda_profile_json || null;
-    const tdeProfile = settings?.tde_profile || null;
+    // ── CRITICAL FIX: Read tde_profile_result FIRST, fallback to tde_profile ──
+    const tdeProfile = settings?.tde_profile_result || settings?.tde_profile || null;
     const businessIntent = settings?.business_intent_contract || null;
     const targetIntentResolution = settings?.target_intent_resolution || null;
+
+    // ── Detect Agro domain ──────────────────────────────────
+    const isAgro = isAgroProject(settings || {});
+    const objective = intentContractV3?.prediction_request?.objective
+      || businessIntent?.objective || "generic_prediction";
+    const objLower = (objective || "").toLowerCase();
+    const isAgroRegression = isAgro && isAgroRegressionObjective(objective);
+
+    console.log(`[PRE] Domain: isAgro=${isAgro}, isAgroRegression=${isAgroRegression}, objective=${objective}`);
 
     // ── Resolve problem type ───────────────────────────────────
     const CLASSIFICATION_OBJ = ["churn", "turnover", "no_show", "default_risk", "inadimplencia", "propensity", "anomaly", "risk_scoring"];
     const REGRESSION_OBJ = ["demand_forecast", "revenue", "ticket", "value_forecast", "lifetime_value", "price_optimization"];
 
-    const objective = intentContractV3?.prediction_request?.objective
-      || businessIntent?.objective || "generic_prediction";
-
-    const objLower = (objective || "").toLowerCase();
-    const problemType = REGRESSION_OBJ.some((r: string) => objLower.includes(r)) ? "regression" : "classification";
+    let problemType: string;
+    if (isAgroRegression) {
+      // AGRO RULE: regression is the strong default for production/captation objectives
+      problemType = "regression";
+      console.log(`[PRE] AGRO_OVERRIDE: forcing regression for objective="${objective}"`);
+    } else {
+      problemType = REGRESSION_OBJ.some((r: string) => objLower.includes(r)) ? "regression" : "classification";
+    }
 
     // ── Resolve entity key ─────────────────────────────────────
     const ENTITY_PATTERNS = ["id_cliente", "customer_id", "client_id", "cpf", "cnpj", "patient_id", "id_paciente", "student_id", "employee_id", "matricula", "account_id", "user_id", "id_conta", "contract_id"];
+    const AGRO_ENTITY_PATTERNS = ["codlot", "codpes", "sk_pessoa", "sk_lotecaf", "codgre", "cod_produtor", "cod_cooperado", "cod_fazenda", "cod_talhao", "id_safra", "cod_propriedade", "sk_filial"];
     const BLOCKED_ENTITY = ["nome", "name", "email", "telefone", "phone", "endereco", "address", "descricao"];
+
+    const entityPatterns = isAgro ? [...AGRO_ENTITY_PATTERNS, ...ENTITY_PATTERNS] : ENTITY_PATTERNS;
 
     let entityKey: string | null = null;
     let entityConfidence = 0;
@@ -71,15 +136,20 @@ Deno.serve(async (req) => {
       entityKey = modelSelection.entity_key;
       entityConfidence = 0.9;
       entityReasoning = "Herdado da seleção existente.";
+    } else if (tdeProfile?.candidates?.entity_candidates?.length) {
+      const top = tdeProfile.candidates.entity_candidates[0];
+      entityKey = typeof top === "string" ? top : top?.column;
+      entityConfidence = 0.8;
+      entityReasoning = "Sugerido pelo TDE.";
     } else if (tdeProfile?.entity_key_candidates?.length) {
       const top = tdeProfile.entity_key_candidates[0];
       entityKey = typeof top === "string" ? top : top?.column;
       entityConfidence = 0.8;
-      entityReasoning = "Sugerido pelo TDE.";
+      entityReasoning = "Sugerido pelo TDE (legacy).";
     } else {
-      for (const pattern of ENTITY_PATTERNS) {
+      for (const pattern of entityPatterns) {
         const match = columns.find((c: any) => c.column_name.toLowerCase().includes(pattern));
-        if (match) {
+        if (match && !BLOCKED_ENTITY.some(b => match.column_name.toLowerCase().includes(b))) {
           entityKey = match.column_name;
           entityConfidence = 0.7;
           entityReasoning = `Padrão detectado: ${pattern}.`;
@@ -90,20 +160,34 @@ Deno.serve(async (req) => {
 
     // ── Resolve time anchor ────────────────────────────────────
     const TIME_PATTERNS = ["data_ref", "dt_ref", "reference_date", "created_at", "data_criacao", "order_date", "data_compra", "data_pedido", "data_internacao", "admission_date", "hire_date"];
+    const AGRO_TIME_PATTERNS = ["datmov", "dt_mov", "data_movimentacao", "data_operacional", "data_entrada", "data_recebimento"];
     const BLOCKED_TIME = ["data_cancelamento", "cancellation_date", "data_obito", "data_encerramento", "close_date", "data_saida"];
+
+    const timePatterns = isAgro ? [...AGRO_TIME_PATTERNS, ...TIME_PATTERNS] : TIME_PATTERNS;
 
     let timeAnchor: string | null = null;
     let timeConfidence = 0;
     let timeReasoning = "Não detectado.";
 
-    if (tdeProfile?.time_anchor_candidates?.length) {
+    // For Agro: prefer operational date from movement table over calendar SK_DATA
+    if (tdeProfile?.candidates?.time_candidates?.length) {
+      const timeCandidates = tdeProfile.candidates.time_candidates;
+      // Filter out calendar columns for agro — prefer operational dates
+      const filtered = isAgro
+        ? timeCandidates.filter((t: any) => !isCalendarColumn(typeof t === "string" ? t : t?.column || ""))
+        : timeCandidates;
+      const top = filtered[0] || timeCandidates[0];
+      timeAnchor = typeof top === "string" ? top : top?.column;
+      timeConfidence = 0.8;
+      timeReasoning = isAgro && filtered[0] ? "Data operacional da movimentação (preferida sobre calendário)." : "Sugerido pelo TDE.";
+    } else if (tdeProfile?.time_anchor_candidates?.length) {
       const top = tdeProfile.time_anchor_candidates[0];
       timeAnchor = typeof top === "string" ? top : top?.column;
       timeConfidence = 0.8;
-      timeReasoning = "Sugerido pelo TDE.";
+      timeReasoning = "Sugerido pelo TDE (legacy).";
     } else {
-      const dateCols = columns.filter((c: any) => ["date", "datetime", "timestamp", "temporal"].includes((c.inferred_type || "").toLowerCase()));
-      for (const pattern of TIME_PATTERNS) {
+      const dateCols = columns.filter((c: any) => isDateColumn(c.column_name, c.inferred_type || ""));
+      for (const pattern of timePatterns) {
         const match = dateCols.find((c: any) => c.column_name.toLowerCase().includes(pattern));
         if (match && !BLOCKED_TIME.some((b: string) => match.column_name.toLowerCase().includes(b))) {
           timeAnchor = match.column_name;
@@ -113,11 +197,15 @@ Deno.serve(async (req) => {
         }
       }
       if (!timeAnchor && dateCols.length > 0) {
-        const safe = dateCols.find((c: any) => !BLOCKED_TIME.some((b: string) => c.column_name.toLowerCase().includes(b)));
+        // For agro: prefer non-calendar date columns
+        const safeCols = isAgro
+          ? dateCols.filter((c: any) => !isCalendarColumn(c.column_name) && !BLOCKED_TIME.some((b: string) => c.column_name.toLowerCase().includes(b)))
+          : dateCols.filter((c: any) => !BLOCKED_TIME.some((b: string) => c.column_name.toLowerCase().includes(b)));
+        const safe = safeCols[0] || dateCols.find((c: any) => !BLOCKED_TIME.some((b: string) => c.column_name.toLowerCase().includes(b)));
         if (safe) {
           timeAnchor = safe.column_name;
           timeConfidence = 0.5;
-          timeReasoning = `Primeira coluna temporal: ${safe.column_name}.`;
+          timeReasoning = `Primeira coluna temporal válida: ${safe.column_name}.`;
         }
       }
     }
@@ -128,16 +216,38 @@ Deno.serve(async (req) => {
     interface TargetCandidate {
       column: string; score: number; mode: string; reasoning: string;
       business_fit: number; semantic_fit: number; temporal_fit: number; trainability_fit: number; leakage_penalty: number;
+      domain_mismatch_penalty: number;
     }
     const candidates: TargetCandidate[] = [];
+
+    // ── CRITICAL BLOCKER: Date columns can NEVER be target ──
+    function isBlockedAsTarget(colName: string, colType: string): { blocked: boolean; reason: string } {
+      if (isDateColumn(colName, colType)) {
+        return { blocked: true, reason: "BLOCK_DATE_AS_TARGET: Colunas temporais não podem ser variável alvo." };
+      }
+      if (isCalendarColumn(colName)) {
+        return { blocked: true, reason: "BLOCK_CALENDAR_AS_TARGET: Colunas de calendário não são variáveis alvo." };
+      }
+      // Block surrogate keys
+      const lo = colName.toLowerCase();
+      if (lo.startsWith("sk_") || lo.startsWith("__")) {
+        return { blocked: true, reason: "BLOCK_SURROGATE_KEY: Chave surrogada não é variável alvo." };
+      }
+      return { blocked: false, reason: "" };
+    }
 
     // From contract
     const dataExp = intentContractV3?.data_expectations;
     if (dataExp?.has_outcome_column === true && dataExp?.outcome_column_name) {
       const col = columns.find((c: any) => c.column_name.toLowerCase() === dataExp.outcome_column_name.toLowerCase());
       if (col) {
-        candidates.push({ column: col.column_name, score: 0.95, mode: "explicit",
-          reasoning: "Declarado no contrato.", business_fit: 1, semantic_fit: 0.9, temporal_fit: 0.9, trainability_fit: 0.9, leakage_penalty: 0 });
+        const block = isBlockedAsTarget(col.column_name, col.inferred_type || "");
+        if (!block.blocked) {
+          candidates.push({ column: col.column_name, score: 0.95, mode: "explicit",
+            reasoning: "Declarado no contrato.", business_fit: 1, semantic_fit: 0.9, temporal_fit: 0.9, trainability_fit: 0.9, leakage_penalty: 0, domain_mismatch_penalty: 0 });
+        } else {
+          console.log(`[PRE] Contract target BLOCKED: ${col.column_name} — ${block.reason}`);
+        }
       }
     }
 
@@ -145,33 +255,111 @@ Deno.serve(async (req) => {
     if (modelSelection?.target_column) {
       const col = columns.find((c: any) => c.column_name === modelSelection.target_column);
       if (col && !candidates.some((c: TargetCandidate) => c.column === col.column_name)) {
-        candidates.push({ column: col.column_name, score: 0.9, mode: "explicit",
-          reasoning: "Herdado da seleção.", business_fit: 0.8, semantic_fit: 0.9, temporal_fit: 0.8, trainability_fit: 0.9, leakage_penalty: 0 });
+        const block = isBlockedAsTarget(col.column_name, col.inferred_type || "");
+        if (!block.blocked) {
+          candidates.push({ column: col.column_name, score: 0.9, mode: "explicit",
+            reasoning: "Herdado da seleção.", business_fit: 0.8, semantic_fit: 0.9, temporal_fit: 0.8, trainability_fit: 0.9, leakage_penalty: 0, domain_mismatch_penalty: 0 });
+        }
       }
     }
 
-    // From TDE
+    // ── AGRO: Prioritize numeric volume columns from movement table ──
+    if (isAgroRegression) {
+      for (const col of columns) {
+        if (candidates.some((c: TargetCandidate) => c.column === col.column_name)) continue;
+        const block = isBlockedAsTarget(col.column_name, col.inferred_type || "");
+        if (block.blocked) continue;
+
+        const lo = col.column_name.toLowerCase();
+        const isNumeric = ["numeric", "numérico", "integer", "inteiro", "float", "number"].includes((col.inferred_type || "").toLowerCase());
+        if (!isNumeric) continue;
+
+        const isAgroTarget = AGRO_NUMERIC_TARGET_TOKENS.some(t => lo.includes(t));
+        if (isAgroTarget) {
+          const isFromMovement = lo.includes("moviment") || lo.includes("detalhe") || !isCalendarColumn(col.column_name);
+          const score = isFromMovement ? 0.92 : 0.75;
+          candidates.push({
+            column: col.column_name, score, mode: "agro_domain",
+            reasoning: `Coluna numérica agro de volume/captação (${col.column_name}).`,
+            business_fit: 0.95, semantic_fit: 0.9, temporal_fit: 0.7, trainability_fit: 0.85,
+            leakage_penalty: 0, domain_mismatch_penalty: 0,
+          });
+          console.log(`[PRE] AGRO_TARGET_BOOST: ${col.column_name} score=${score}`);
+        }
+      }
+    }
+
+    // From TDE profile
+    if (tdeProfile?.candidates?.value_candidates?.length && isAgroRegression) {
+      // For agro regression, value candidates are strong target candidates
+      for (const vc of tdeProfile.candidates.value_candidates.slice(0, 5)) {
+        const colName = typeof vc === "string" ? vc : vc?.column;
+        if (!colName || candidates.some((c: TargetCandidate) => c.column === colName)) continue;
+        const col = columns.find((c: any) => c.column_name === colName);
+        if (!col) continue;
+        const block = isBlockedAsTarget(colName, col.inferred_type || "");
+        if (block.blocked) continue;
+        candidates.push({
+          column: colName, score: 0.85, mode: "tde_value",
+          reasoning: `TDE value candidate: ${colName} (agro regression context).`,
+          business_fit: 0.8, semantic_fit: 0.7, temporal_fit: 0.6, trainability_fit: 0.8,
+          leakage_penalty: 0, domain_mismatch_penalty: 0,
+        });
+      }
+    }
+
+    // From TDE target_candidates (legacy path)
     if (tdeProfile?.target_candidates?.length) {
       for (const tc of tdeProfile.target_candidates.slice(0, 5)) {
         const colName = typeof tc === "string" ? tc : tc?.column || tc?.name;
         if (!colName || candidates.some((c: TargetCandidate) => c.column === colName)) continue;
-        if (!columns.find((c: any) => c.column_name === colName)) continue;
+        const col = columns.find((c: any) => c.column_name === colName);
+        if (!col) continue;
+        const block = isBlockedAsTarget(colName, col.inferred_type || "");
+        if (block.blocked) {
+          console.log(`[PRE] TDE target BLOCKED: ${colName} — ${block.reason}`);
+          continue;
+        }
         const leak = LEAKAGE_TOKENS.some((t: string) => colName.toLowerCase().includes(t)) ? 0.3 : 0;
-        candidates.push({ column: colName, score: (tc?.score || 0.6) - leak, mode: "explicit",
-          reasoning: `TDE: ${tc?.reason || "candidato"}.`, business_fit: 0.6, semantic_fit: 0.6, temporal_fit: 0.5, trainability_fit: 0.6, leakage_penalty: leak });
+        // Agro domain mismatch: penalize status/event columns in regression context
+        const domainMismatch = (isAgroRegression && (colName.toLowerCase().includes("status") || colName.toLowerCase().includes("tipo"))) ? 0.25 : 0;
+        candidates.push({ column: colName, score: (tc?.score || 0.6) - leak - domainMismatch, mode: "explicit",
+          reasoning: `TDE: ${tc?.reason || "candidato"}.`, business_fit: 0.6, semantic_fit: 0.6, temporal_fit: 0.5, trainability_fit: 0.6, leakage_penalty: leak, domain_mismatch_penalty: domainMismatch });
       }
     }
 
-    // Binary heuristic
-    if (problemType === "classification" && candidates.length < 3) {
+    // From TDE status_candidates
+    if (tdeProfile?.candidates?.status_candidates?.length) {
+      for (const sc of tdeProfile.candidates.status_candidates.slice(0, 3)) {
+        const colName = typeof sc === "string" ? sc : sc?.column;
+        if (!colName || candidates.some((c: TargetCandidate) => c.column === colName)) continue;
+        const col = columns.find((c: any) => c.column_name === colName);
+        if (!col) continue;
+        const block = isBlockedAsTarget(colName, col.inferred_type || "");
+        if (block.blocked) continue;
+        // Heavy penalty for status in agro regression
+        const domainMismatch = isAgroRegression ? 0.4 : 0;
+        candidates.push({
+          column: colName, score: 0.55 - domainMismatch, mode: "tde_status",
+          reasoning: `TDE status candidate: ${colName}.`,
+          business_fit: 0.5, semantic_fit: 0.5, temporal_fit: 0.3, trainability_fit: 0.6,
+          leakage_penalty: 0, domain_mismatch_penalty: domainMismatch,
+        });
+      }
+    }
+
+    // Binary heuristic (only for classification, never for agro regression)
+    if (problemType === "classification" && !isAgroRegression && candidates.length < 3) {
       for (const col of columns) {
         if (candidates.some((c: TargetCandidate) => c.column === col.column_name)) continue;
+        const block = isBlockedAsTarget(col.column_name, col.inferred_type || "");
+        if (block.blocked) continue;
         const n = col.column_name.toLowerCase();
         const t = (col.inferred_type || "").toLowerCase();
         if (t === "boolean" || n.includes("flag") || n.includes("is_")) {
           const leak = LEAKAGE_TOKENS.some((tk: string) => n.includes(tk)) ? 0.4 : 0;
           candidates.push({ column: col.column_name, score: 0.5 - leak, mode: "explicit",
-            reasoning: "Coluna binária por heurística.", business_fit: 0.4, semantic_fit: 0.5, temporal_fit: 0.3, trainability_fit: 0.6, leakage_penalty: leak });
+            reasoning: "Coluna binária por heurística.", business_fit: 0.4, semantic_fit: 0.5, temporal_fit: 0.3, trainability_fit: 0.6, leakage_penalty: leak, domain_mismatch_penalty: 0 });
         }
       }
     }
@@ -191,7 +379,10 @@ Deno.serve(async (req) => {
     let grain = "original_row";
     let grainReasoning = "Grain padrão.";
 
-    if (["churn", "turnover", "no_show", "default_risk", "inadimplencia"].some((o: string) => objLower.includes(o))) {
+    if (isAgroRegression) {
+      grain = entityKey ? "entity_product_time" : "entity_time";
+      grainReasoning = "Agro produção: grain por entidade × tempo/safra.";
+    } else if (["churn", "turnover", "no_show", "default_risk", "inadimplencia"].some((o: string) => objLower.includes(o))) {
       grain = "entity_time";
       grainReasoning = "Evento futuro por entidade.";
     } else if (["demand_forecast", "revenue", "value_forecast"].some((o: string) => objLower.includes(o))) {
@@ -205,12 +396,36 @@ Deno.serve(async (req) => {
     const needsAgg = grain === "aggregated" || grain === "entity_product_time";
     const snapshotReq = grain === "entity_time" && !!timeAnchor && dataShape === "multiple_rows_per_entity";
 
+    // Detect multi-table context for agro
+    const hasMultiTable = columns.some(c => c.column_name.includes("."));
+    let primaryTable: string | null = null;
+    let auxiliaryTable: string | null = null;
+
+    if (hasMultiTable && isAgro) {
+      const tableNames = new Set(columns.map(c => c.column_name.split(".")[0]).filter(Boolean));
+      for (const t of tableNames) {
+        const lo = t.toLowerCase();
+        if (lo.includes("moviment") || lo.includes("detalhe") || lo.includes("fato") || lo.includes("fact")) {
+          primaryTable = t;
+        } else if (lo.includes("calend") || lo.includes("dim") || lo.includes("lookup")) {
+          auxiliaryTable = t;
+        }
+      }
+      if (!primaryTable && tableNames.size > 0) {
+        // Default: non-calendar table is primary
+        for (const t of tableNames) {
+          if (!t.toLowerCase().includes("calend")) { primaryTable = t; break; }
+        }
+      }
+      console.log(`[PRE] AGRO_MULTI_TABLE: primary=${primaryTable}, auxiliary=${auxiliaryTable}`);
+    }
+
     const datasetStrategy = {
       needs_aggregation: needsAgg,
       aggregation_level: needsAgg ? "entity" : null,
       snapshot_required: snapshotReq,
       temporal_strategy: snapshotReq ? "multi_period" : (timeAnchor ? "snapshot" : "none"),
-      multi_table_strategy: null,
+      multi_table_strategy: isAgro && hasMultiTable ? { primary_table: primaryTable, auxiliary_table: auxiliaryTable, calendar_role: "temporal_enrichment" } : null,
       split_suggestion: timeAnchor ? "temporal" : "stratified",
     };
 
@@ -248,8 +463,15 @@ Deno.serve(async (req) => {
     if (targetDef.mode === "blocked") { issues.push({ code: "NO_TARGET", severity: "block", message: "Sem target válido.", suggestion: "Defina manualmente." }); blocking.push("NO_TARGET"); }
     if (["entity_time", "entity_product_time"].includes(grain) && !timeAnchor) { issues.push({ code: "NO_TIME_ANCHOR", severity: "block", message: "Problema temporal sem âncora.", suggestion: "Selecione coluna temporal." }); blocking.push("NO_TIME_ANCHOR"); }
 
+    // Agro governance: block if date column is target
+    if (targetDef.target_name && isDateColumn(targetDef.target_name, "")) {
+      issues.push({ code: "BLOCK_DATE_AS_TARGET", severity: "block", message: `Coluna temporal "${targetDef.target_name}" não pode ser variável alvo.`, suggestion: "Selecione uma coluna numérica de volume/captação." });
+      blocking.push("BLOCK_DATE_AS_TARGET");
+    }
+
     // ── Confidence ─────────────────────────────────────────────
     let problemFit = intentContractV3 ? 0.8 : 0.5;
+    if (isAgroRegression) problemFit = 0.9; // High confidence for agro regression with matching objective
     const targetFit = targetDef.target_confidence || 0;
     let grainFit = (entityKey && timeAnchor) ? 0.9 : entityKey ? 0.7 : 0.5;
     let timeFit = timeAnchor ? 0.9 : 0.5;
@@ -257,8 +479,9 @@ Deno.serve(async (req) => {
 
     // ── Build resolution ───────────────────────────────────────
     const resolution = {
-      version: 1,
+      version: 2,
       mode,
+      domain: isAgro ? "agro" : "generic",
       problem_definition: {
         problem_type: problemType,
         business_mode: objective,
@@ -266,6 +489,7 @@ Deno.serve(async (req) => {
         dataset_shape_detected: dataShape,
         time_anchor: timeAnchor,
         horizon_days: horizonDays,
+        multi_table: hasMultiTable ? { primary_table: primaryTable, auxiliary_table: auxiliaryTable } : null,
       },
       target_definition: targetDef,
       dataset_strategy: datasetStrategy,
@@ -278,11 +502,15 @@ Deno.serve(async (req) => {
       },
       validation: { training_ready: blocking.length === 0, issues_detected: issues, blocking_errors: blocking },
       explanation: {
-        why_this_problem: problemType === "classification"
-          ? `Objetivo "${objective}" = evento (sim/não) → classificação.`
-          : `Objetivo "${objective}" = valor numérico → regressão.`,
+        why_this_problem: isAgroRegression
+          ? `Domínio Agro + objetivo "${objective}" = previsão de volume contínuo → regressão.`
+          : problemType === "classification"
+            ? `Objetivo "${objective}" = evento (sim/não) → classificação.`
+            : `Objetivo "${objective}" = valor numérico → regressão.`,
         why_this_target: targetDef.target_reasoning,
         why_this_grain: grainReasoning,
+        why_not_status: isAgroRegression ? "Colunas de status/evento foram penalizadas pois o objetivo é previsão contínua de volume agro." : undefined,
+        why_not_date_target: "Colunas temporais são BLOQUEADAS como variável alvo — servem apenas como âncora temporal.",
         main_risks: [
           ...(targetDef.mode === "blocked" ? ["Sem target — bloqueado."] : []),
           ...(!timeAnchor ? ["Sem âncora temporal."] : []),
@@ -297,9 +525,10 @@ Deno.serve(async (req) => {
         intentContractV3 && "intent_contract_v3",
         businessIntent && "business_intent_contract",
         edaProfile && "eda_profile_json",
-        tdeProfile && "tde_profile",
+        tdeProfile && "tde_profile_result",
         modelSelection && "model_selection",
         columns.length > 0 && "project_columns",
+        isAgro && "agro_domain_rules",
       ].filter(Boolean),
       rules_triggered: [
         `PROBLEM_TYPE_${problemType.toUpperCase()}`,
@@ -307,6 +536,8 @@ Deno.serve(async (req) => {
         timeAnchor && "TIME_ANCHOR_RESOLVED",
         `TARGET_MODE_${targetDef.mode.toUpperCase()}`,
         `GRAIN_${grain.toUpperCase()}`,
+        isAgroRegression && "AGRO_REGRESSION_OVERRIDE",
+        hasMultiTable && "MULTI_TABLE_DETECTED",
       ].filter(Boolean),
       created_at: new Date().toISOString(),
     };
@@ -319,7 +550,7 @@ Deno.serve(async (req) => {
       .insert({
         project_id,
         organization_id,
-        resolution_version: 1,
+        resolution_version: 2,
         intent_contract_version: 3,
         selection_version: selectionVersion,
         mode,
@@ -351,10 +582,13 @@ Deno.serve(async (req) => {
         grain,
         confidence: overall,
         training_ready: blocking.length === 0,
+        domain: isAgro ? "agro" : "generic",
+        primary_table: primaryTable,
+        auxiliary_table: auxiliaryTable,
       },
     }).eq("project_id", project_id);
 
-    console.log(`[PRE] Resolution created: id=${inserted.id} confidence=${overall} target=${targetDef.target_name}`);
+    console.log(`[PRE] Resolution created: id=${inserted.id} confidence=${overall} target=${targetDef.target_name} domain=${isAgro ? "agro" : "generic"}`);
 
     return new Response(JSON.stringify({
       success: true,
