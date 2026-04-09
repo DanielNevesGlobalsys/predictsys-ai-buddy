@@ -539,6 +539,35 @@ serve(async (req) => {
         notes.push("Template requer coluna temporal, mas sinal fraco");
       }
 
+      // ═══ AGRO DOMAIN BOOST / PENALTY ══════════════════════════
+      const isAgroIndustry = industry === "agro";
+      const isAgroObjective = ["captacao", "producao", "safra", "volume", "sacas", "peso",
+        "toneladas", "recebimento", "produtividade", "previsao", "oferta_agricola",
+        "entrega_futura", "agro"].some(k => declaredObjective.includes(k));
+
+      if (isAgroIndustry || isAgroObjective) {
+        // Strong boost for agro regression templates when objective is production/captação
+        if (spec.industry === "agro" && spec.problem_type === "regression" && isAgroObjective) {
+          score += 0.30;
+          reasons.push("Template agro de regressão alinhado com objetivo de captação/produção");
+        }
+        // Moderate boost for agro templates in general
+        else if (spec.industry === "agro") {
+          score += 0.15;
+          reasons.push("Template especializado para o setor agro");
+        }
+        // PENALTY: generic classification templates should lose priority in agro production contexts
+        if (isAgroObjective && spec.problem_type === "classification" && spec.industry !== "agro") {
+          score -= 0.25;
+          notes.push("Penalizado: classificação genérica em contexto agro de produção/captação");
+        }
+        // PENALTY: status-based templates lose priority in agro production
+        if (isAgroObjective && spec.required_signals.includes("status") && spec.industry !== "agro") {
+          score -= 0.15;
+          notes.push("Penalizado: template baseado em status não é ideal para previsão de volume agro");
+        }
+      }
+
       // Clamp
       score = Math.max(0, Math.min(0.95, score));
 
