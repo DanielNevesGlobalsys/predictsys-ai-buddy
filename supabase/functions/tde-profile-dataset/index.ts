@@ -814,6 +814,13 @@ serve(async (req) => {
       total_cols: columns.length,
     };
 
+    // ─── Persist tde_profile_result to project_settings (CRITICAL for PRE) ──
+    await supabase.from("project_settings").update({
+      tde_profile_result: tdeProfile,
+      updated_at: new Date().toISOString(),
+    } as any).eq("project_id", project_id);
+    console.log(`[tde-profile-dataset] tde_profile_result persisted to project_settings`);
+
     // ─── Persist to project_ai_context ──────────────────────
 
     if (aiContextRes.data) {

@@ -176,6 +176,40 @@ Guidelines:
       });
     }
 
+    // ── GUARDRAIL: Block date columns as suggested target ──
+    const DATE_TARGET_BLOCKLIST = ["datmov", "dt_mov", "data_mov", "sk_data", "created_at", "updated_at", "date", "data_ref", "dt_ref"];
+    const suggestedTargetLower = (synthesis.suggested_target || "").toLowerCase();
+    const isDateTarget = DATE_TARGET_BLOCKLIST.some(d => suggestedTargetLower.includes(d))
+      || /^(calend[aá]rio|calendar)\./i.test(synthesis.suggested_target || "")
+      || ["date", "datetime", "timestamp", "data", "temporal"].some(t => suggestedTargetLower.includes(t) && !suggestedTargetLower.includes("qty") && !suggestedTargetLower.includes("qtd"));
+
+    if (isDateTarget) {
+      console.warn(`[lys-synthesize] GUARDRAIL: Blocked date column "${synthesis.suggested_target}" as target. Looking for numeric alternative.`);
+      // Try to find a numeric alternative from suggested_features or alternative_target_candidates
+      const altCandidates = synthesis.alternative_target_candidates || [];
+      const numericAlt = altCandidates.find((c: any) => c.problem_type === "regression" && !DATE_TARGET_BLOCKLIST.some((d: string) => (c.column || "").toLowerCase().includes(d)));
+      if (numericAlt) {
+        synthesis.suggested_target = numericAlt.column;
+        synthesis.suggested_problem_type = numericAlt.problem_type || "regression";
+        console.log(`[lys-synthesize] GUARDRAIL: Replaced with numeric alternative: ${numericAlt.column}`);
+      } else {
+        // Check suggested_features for numeric columns
+        const numericFeature = (synthesis.suggested_features || []).find((f: string) => {
+          const lo = f.toLowerCase();
+          return ["qtd", "sacas", "peso", "volume", "quantidade", "producao", "captacao", "rendimento"].some(t => lo.includes(t));
+        });
+        if (numericFeature) {
+          synthesis.suggested_target = numericFeature;
+          synthesis.suggested_problem_type = "regression";
+          synthesis.suggested_features = (synthesis.suggested_features || []).filter((f: string) => f !== numericFeature);
+          console.log(`[lys-synthesize] GUARDRAIL: Promoted numeric feature as target: ${numericFeature}`);
+        } else {
+          synthesis.suggested_target = null;
+          console.log(`[lys-synthesize] GUARDRAIL: No valid alternative found, target set to null`);
+        }
+      }
+    }
+
     console.log(`[lys-synthesize] Complete. Confidence: ${synthesis.confidence_score}, Target: ${synthesis.suggested_target}`);
 
     // ── 3. Persist to SSOT ──
