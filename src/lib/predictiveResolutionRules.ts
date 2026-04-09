@@ -199,9 +199,14 @@ export function resolveTarget(
   tdeProfile?: any,
   edaProfile?: any,
   modelSelection?: any,
+  industry?: string,
+  objective?: string,
 ): TargetDefinition {
   const candidates: TargetCandidate[] = [];
   const rulesTriggered: string[] = [];
+  const isAgro = isAgroIndustry(industry || "");
+  const obj = (objective || "").toLowerCase();
+  const isAgroProduction = isAgro && AGRO_REGRESSION_OBJECTIVES.some(o => obj.includes(o));
 
   // 1. Explicit from contract
   if (contractHints?.has_outcome_column === true && contractHints?.outcome_column_name) {
@@ -237,7 +242,31 @@ export function resolveTarget(
     }
   }
 
-  // 3. TDE candidates
+  // 3. AGRO DOMAIN SCORING — inject agro-specific candidates BEFORE generic TDE
+  if (isAgro && columns.length > 0) {
+    const agroRanking = rankAgroTargets(columns, obj);
+    for (const agroCandidate of agroRanking.ranked) {
+      if (candidates.some(c => c.column === agroCandidate.column)) continue;
+      // Boost score for agro production objectives
+      const domainBoost = isAgroProduction ? 0.15 : 0;
+      candidates.push({
+        column: agroCandidate.column,
+        score: Math.min(0.93, agroCandidate.target_score + 0.4 + domainBoost),
+        mode: "derived",
+        reasoning: `Candidato agro: ${agroCandidate.signals.join(", ")}. Score domínio: ${agroCandidate.target_score.toFixed(2)}.`,
+        business_fit: agroCandidate.target_score,
+        semantic_fit: agroCandidate.target_score,
+        temporal_fit: 0.7,
+        trainability_fit: 0.8,
+        leakage_penalty: 0,
+      });
+    }
+    if (agroRanking.ranked.length > 0) {
+      rulesTriggered.push("AGRO_DOMAIN_TARGET_SCORING");
+    }
+  }
+
+  // 4. TDE candidates
   if (tdeProfile?.target_candidates?.length) {
     for (const tc of tdeProfile.target_candidates.slice(0, 5)) {
       const colName = typeof tc === "string" ? tc : tc?.column || tc?.name;
@@ -245,10 +274,23 @@ export function resolveTarget(
       const col = columns.find(c => c.column_name === colName);
       if (!col) continue;
 
-      const leakPenalty = LEAKAGE_TOKENS.some(t => colName.toLowerCase().includes(t)) ? 0.3 : 0;
+      let leakPenalty = LEAKAGE_TOKENS.some(t => colName.toLowerCase().includes(t)) ? 0.3 : 0;
+      let baseScore = tc?.score || 0.6;
+
+      // AGRO PENALTY: penalize status/event candidates in agro production context
+      if (isAgroProduction) {
+        const lowerName = colName.toLowerCase();
+        if (AGRO_BLOCKED_TARGET_PATTERNS.some(p => p.test(lowerName))) {
+          baseScore -= 0.4;
+          leakPenalty += 0.1;
+        } else if (/status|flag|tipo|origem|tipo_mov/i.test(lowerName)) {
+          baseScore -= 0.3;
+        }
+      }
+
       candidates.push({
         column: colName,
-        score: (tc?.score || 0.6) - leakPenalty,
+        score: Math.max(0, baseScore - leakPenalty),
         mode: "explicit",
         reasoning: `Sugerido pelo TDE: ${tc?.reason || "candidato detectado"}.`,
         business_fit: tc?.business_fit || 0.6,
@@ -260,8 +302,8 @@ export function resolveTarget(
     }
   }
 
-  // 4. Heuristic scan for binary columns (classification)
-  if (problemType === "classification" && candidates.length < 3) {
+  // 5. Heuristic scan for binary columns (classification) — SKIP for agro production
+  if (problemType === "classification" && candidates.length < 3 && !isAgroProduction) {
     for (const col of columns) {
       if (candidates.some(c => c.column === col.column_name)) continue;
       const name = col.column_name.toLowerCase();
