@@ -18,6 +18,18 @@ import type {
   TargetMode,
 } from "@/types/predictiveResolution";
 
+import {
+  isAgroIndustry,
+  resolveAgroProblemType,
+  rankAgroTargets,
+  classifyAgroTable,
+  AGRO_REGRESSION_OBJECTIVES,
+  AGRO_BLOCKED_TARGET_PATTERNS,
+  AGRO_TARGET_PATTERNS,
+  AGRO_ENTITY_PATTERNS,
+  AGRO_TEMPORAL_PATTERNS,
+} from "@/config/agroDomainRules";
+
 // ─── Objective → Problem Type ──────────────────────────────────
 
 const CLASSIFICATION_OBJECTIVES = [
@@ -38,8 +50,15 @@ const REGRESSION_OBJECTIVES = [
   "oferta_agricola", "entrega_futura", "production_forecast",
 ];
 
-export function resolveProblemType(objective: string | undefined): "classification" | "regression" {
+export function resolveProblemType(objective: string | undefined, industry?: string): "classification" | "regression" {
   const obj = (objective || "").toLowerCase();
+
+  // AGRO OVERRIDE: if industry is agro, check agro-specific rules first
+  if (isAgroIndustry(industry || "")) {
+    const agroType = resolveAgroProblemType(obj);
+    if (agroType) return agroType;
+  }
+
   if (REGRESSION_OBJECTIVES.some(r => obj.includes(r))) return "regression";
   return "classification";
 }
