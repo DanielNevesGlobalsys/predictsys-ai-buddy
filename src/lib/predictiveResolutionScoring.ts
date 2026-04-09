@@ -82,12 +82,16 @@ export function buildPredictiveResolution(input: PREInputBundle): PredictiveReso
   if (input.dataset_sample) inputsUsed.push("dataset_sample");
   if (input.dataset_state) inputsUsed.push("dataset_state");
 
-  // 1. Problem type
+  // 1. Problem type — pass industry for agro override
   const objective = contract?.prediction_request?.objective
     || input.business_intent_contract?.objective
     || "generic_prediction";
-  const problemType = resolveProblemType(objective);
+  const industry = contract?.business_context?.industry
+    || input.business_intent_contract?.industry
+    || "";
+  const problemType = resolveProblemType(objective, industry);
   rulesTriggered.push(`PROBLEM_TYPE_${problemType.toUpperCase()}`);
+  if (industry) rulesTriggered.push(`INDUSTRY_${industry.toUpperCase()}`);
 
   // 2. Entity key
   const entityResult = resolveEntityKey(
@@ -102,7 +106,7 @@ export function buildPredictiveResolution(input: PREInputBundle): PredictiveReso
   const timeResult = resolveTimeAnchor(columns, contract, input.tde_profile);
   if (timeResult.time_anchor) rulesTriggered.push("TIME_ANCHOR_RESOLVED");
 
-  // 4. Target
+  // 4. Target — pass industry + objective for agro domain scoring
   const targetDef = resolveTarget(
     columns,
     problemType,
@@ -110,6 +114,8 @@ export function buildPredictiveResolution(input: PREInputBundle): PredictiveReso
     input.tde_profile,
     input.eda_profile_json,
     input.model_selection,
+    industry,
+    objective,
   );
   rulesTriggered.push(`TARGET_MODE_${targetDef.mode.toUpperCase()}`);
 
