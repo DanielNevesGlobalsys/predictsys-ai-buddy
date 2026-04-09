@@ -40,6 +40,16 @@ import type {
   UIFieldSpec,
 } from "@/types/intentContractV3";
 import { UI_FIELD_SPECS, createEmptyContractV3 } from "@/types/intentContractV3";
+import {
+  getObjectiveOptions,
+  getEntityOptions,
+  getProcessOptions,
+  getDecisionHints,
+  getQuestionHints,
+  getDefaultEntity,
+  getObjectiveNatureHint,
+  isValueCompatible,
+} from "@/config/industryContextualOptions";
 
 // ─── Block metadata ────────────────────────────────────────────
 const BLOCKS = [
