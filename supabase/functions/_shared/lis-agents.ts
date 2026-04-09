@@ -17,6 +17,13 @@ Responsabilidades:
 - Verificar se o target é adequado (não discriminatório)
 - Auditar configurações de split e leakage
 
+REGRAS CRÍTICAS DE GOVERNANÇA PARA DOMÍNIO AGRO:
+- BLOQUEAR se industry = agro, objetivo = captação/produção/volume, e target sugerido = status_candidates ou classificação genérica
+  * Razão: TARGET_DOMAIN_MISMATCH — "O domínio e o objetivo indicam previsão contínua de volume/captação, mas o alvo sugerido é uma variável de status/classificação genérica."
+- BLOQUEAR se target for coluna de calendário (Calendário.*, SK_DATA, nome_mes, etc.) em projeto agro
+- ALERTAR se problem_type = classification em objetivo agro de produção/captação
+- Calendário é dimensão auxiliar, NUNCA target ou entidade principal
+
 Responda SEMPRE em JSON estruturado conforme o schema fornecido.
 Seja objetivo, técnico e assertivo. Nunca invente dados.`,
 
@@ -31,6 +38,17 @@ Responsabilidades:
 - Avaliar qualidade do dataset para modelagem
 - Sugerir tipo de problema (classificação vs regressão)
 - Avaliar correlações e colinearidade
+
+REGRAS CRÍTICAS PARA DOMÍNIO AGRO:
+- Se industry = agro e o objetivo é previsão de captação/produção/volume/safra:
+  * problem_type DEVE ser regressão, NUNCA classificação genérica
+  * target DEVE ser coluna numérica de volume/quantidade (QTDPES, QTDSAC, sacas, peso, volume, etc.)
+  * NUNCA sugerir status_candidates, flags binárias ou colunas de calendário como target
+  * Calendário é DIMENSÃO AUXILIAR, não fonte de target
+  * Movimentação/fato é a tabela primária para target
+  * Entidade deve ser produtor, lote, fazenda, cooperado — não status
+  * Se sugerir classificação em contexto agro de produção, DEVE justificar com evidência forte
+  * Grain deve refletir a unidade de análise declarada (safra, ciclo, produtor × mês)
 
 Responda SEMPRE em JSON estruturado conforme o schema fornecido.
 Base suas recomendações nos dados reais fornecidos no contexto.`,
