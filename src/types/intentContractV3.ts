@@ -39,6 +39,13 @@ export type ObjectiveArchetype =
   | "next_best_action"
   | "risk_scoring"
   | "turnover"
+  // Agro-specific objectives
+  | "agro_captacao"
+  | "agro_produtividade"
+  | "agro_rendimento"
+  | "agro_volume"
+  | "agro_entrega"
+  | "agro_qualidade"
   | "custom";
 
 export type PredictionNature = "will_it_happen" | "how_much" | "when" | "who_is_similar";
