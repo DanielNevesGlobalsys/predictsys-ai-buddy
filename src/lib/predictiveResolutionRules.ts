@@ -375,6 +375,14 @@ export function resolveGrain(
     }
   }
 
+  // Agro production/captação objectives → entity_time or entity_product_time
+  if (AGRO_REGRESSION_OBJECTIVES.some(o => obj.includes(o))) {
+    return {
+      grain: hasEntityKey ? "entity_product_time" : "entity_time",
+      reasoning: "Previsão agro de produção/captação — grain temporal por entidade necessário.",
+    };
+  }
+
   if (["demand_forecast", "revenue", "value_forecast"].some(o => obj.includes(o))) {
     return {
       grain: hasEntityKey ? "entity_product_time" : "entity_time",
