@@ -2381,8 +2381,11 @@ serve(async (req) => {
     console.log(`Target sample size: ${TARGET_SAMPLE_SIZE.toLocaleString()}`);
     console.log(`Max linhas para leitura: ${MAX_ROWS_TO_READ.toLocaleString()}`);
 
-    if (totalDatasetRows < MIN_ROWS_FOR_TRAIN) {
-      console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${MIN_ROWS_FOR_TRAIN})`);
+    // For temporal_aggregated, lower the minimum (aggregated datasets are small by design)
+    const effectiveMinRows = isTemporalAggregated ? 30 : MIN_ROWS_FOR_TRAIN;
+
+    if (totalDatasetRows < effectiveMinRows) {
+      console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${effectiveMinRows})`);
       
       // Update project status to not_enough_data
       await supabase
@@ -2394,10 +2397,10 @@ serve(async (req) => {
 
       return new Response(JSON.stringify({ 
         error: `Dados insuficientes para treinamento`,
-        details: `O dataset possui ${totalDatasetRows.toLocaleString()} linhas, mas são necessárias pelo menos ${MIN_ROWS_FOR_TRAIN.toLocaleString()} linhas para um modelo confiável.`,
+        details: `O dataset possui ${totalDatasetRows.toLocaleString()} linhas, mas são necessárias pelo menos ${effectiveMinRows.toLocaleString()} linhas para um modelo confiável.`,
         status: "not_enough_data",
         total_rows: totalDatasetRows,
-        min_required: MIN_ROWS_FOR_TRAIN
+        min_required: effectiveMinRows
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
