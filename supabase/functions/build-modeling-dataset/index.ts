@@ -1101,6 +1101,126 @@ serve(async (req: Request) => {
       };
     });
 
+    // ==================== TEMPORAL AGGREGATION MODE ====================
+    const datasetBuildMode = (settings as any)?.dataset_build_mode || "original_row";
+    const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
+    let aggregationApplied = false;
+    let aggregationStats: Record<string, any> | null = null;
+
+    if (isTemporalAggregated) {
+      console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
+      const aggEntityKey = (settings as any)?.entity_key || null;
+      const aggTimeCol = (settings as any)?.time_anchor_column || null;
+      const aggTargetCol = (settings as any)?.target_column || "agg_sacas_mes";
+
+      if (aggEntityKey && aggTimeCol) {
+        // Load sample to compute aggregation stats
+        const { data: sampleDataAgg } = await supabase
+          .from("project_dataset_sample")
+          .select("sample_json")
+          .eq("project_id", project_id)
+          .maybeSingle();
+
+        const sampleJsonAgg = (sampleDataAgg as any)?.sample_json as Record<string, any> | null;
+        const sampleRowsAgg: Record<string, any>[] = sampleJsonAgg?.rows ? (sampleJsonAgg.rows as any[]).slice(0, 1000) : [];
+
+        if (sampleRowsAgg.length > 0) {
+          // Aggregate sample by entity × month
+          const aggMap = new Map<string, { count: number; codpes_set: Set<string>; codgre_set: Set<string>; origem_set: Set<string>; tipo_set: Set<string> }>();
+          let minDate = "9999-12"; let maxDate = "0000-01";
+
+          for (const row of sampleRowsAgg) {
+            const entity = String(row[aggEntityKey] || "");
+            const rawDate = String(row[aggTimeCol] || "");
+            const month = rawDate.substring(0, 7); // "YYYY-MM"
+            if (!entity || !month || month.length < 7) continue;
+
+            const key = `${entity}|${month}`;
+            if (!aggMap.has(key)) {
+              aggMap.set(key, { count: 0, codpes_set: new Set(), codgre_set: new Set(), origem_set: new Set(), tipo_set: new Set() });
+            }
+            const agg = aggMap.get(key)!;
+            agg.count += 1; // each row = 1 saca
+            const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
+            if (codpes) agg.codpes_set.add(codpes);
+            const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
+            if (codgre) agg.codgre_set.add(codgre);
+            const origem = String(row["Detalhe Movimentação.Origem da Movimentação"] || "");
+            if (origem) agg.origem_set.add(origem);
+            const tipo = String(row["Detalhe Movimentação.Tipo do Movimento"] || "");
+            if (tipo) agg.tipo_set.add(tipo);
+            if (month < minDate) minDate = month;
+            if (month > maxDate) maxDate = month;
+          }
+
+          // Compute aggregated stats
+          const aggRows = Array.from(aggMap.entries()).map(([key, v]) => ({
+            key,
+            entity: key.split("|")[0],
+            month: key.split("|")[1],
+            agg_sacas_mes: v.count,
+            agg_movimentacoes: v.count,
+            agg_codpes_distintos: v.codpes_set.size,
+            codgre: v.codgre_set.values().next().value || "",
+            origem: v.origem_set.values().next().value || "",
+            tipo: v.tipo_set.values().next().value || "",
+          }));
+
+          const targetValues = aggRows.map(r => r.agg_sacas_mes);
+          const targetMean = targetValues.reduce((a, b) => a + b, 0) / targetValues.length;
+          const targetStd = Math.sqrt(targetValues.reduce((a, b) => a + (b - targetMean) ** 2, 0) / targetValues.length);
+          const targetMin = Math.min(...targetValues);
+          const targetMax = Math.max(...targetValues);
+          const targetMedian = targetValues.sort((a, b) => a - b)[Math.floor(targetValues.length / 2)];
+          const distinctEntities = new Set(aggRows.map(r => r.entity)).size;
+          const distinctMonths = new Set(aggRows.map(r => r.month)).size;
+
+          // Estimate total aggregated rows from full dataset
+          // Sample ratio: sampleRowsAgg.length / totalRows
+          const sampleRatio = totalRows > 0 ? sampleRowsAgg.length / totalRows : 1;
+          const estimatedAggRows = sampleRatio > 0 ? Math.round(aggRows.length / sampleRatio) : aggRows.length;
+          totalRows = estimatedAggRows; // Override for downstream
+
+          aggregationStats = {
+            sample_raw_rows: sampleRowsAgg.length,
+            sample_agg_rows: aggRows.length,
+            estimated_total_agg_rows: estimatedAggRows,
+            distinct_entities: distinctEntities,
+            distinct_months: distinctMonths,
+            month_range: `${minDate} → ${maxDate}`,
+            target_stats: { mean: targetMean, std: targetStd, min: targetMin, max: targetMax, median: targetMedian },
+          };
+
+          console.log(`[build-modeling-dataset] Aggregation: ${aggRows.length} agg rows from ${sampleRowsAgg.length} raw, ${distinctEntities} entities, ${distinctMonths} months, target mean=${targetMean.toFixed(2)}, std=${targetStd.toFixed(2)}`);
+
+          // Replace enrichedColumns with aggregated schema
+          enrichedColumns.length = 0;
+          enrichedColumns.push(
+            { name: aggTargetCol, type: "numeric", distinct_count: targetValues.length, mean: targetMean, std: targetStd },
+            { name: "agg_movimentacoes", type: "numeric", distinct_count: new Set(targetValues).size, mean: targetMean, std: targetStd },
+            { name: "agg_codpes_distintos", type: "numeric", distinct_count: new Set(aggRows.map(r => r.agg_codpes_distintos)).size, mean: aggRows.reduce((a, r) => a + r.agg_codpes_distintos, 0) / aggRows.length, std: 1 },
+            { name: "ref_month", type: "numeric", distinct_count: distinctMonths },
+            { name: "ref_year", type: "numeric", distinct_count: new Set(aggRows.map(r => parseInt(r.month.split("-")[0]))).size },
+          );
+
+          // Add calendar features from model_selection selected_features
+          const selectedFeatures = (modelSelection?.selected_features as string[]) || [];
+          for (const sf of selectedFeatures) {
+            if (!enrichedColumns.find(c => c.name === sf)) {
+              const isNumeric = /Ano|Número|Trimestre/i.test(sf);
+              enrichedColumns.push({
+                name: sf,
+                type: isNumeric ? "numeric" : "categorical",
+                distinct_count: isNumeric ? 10 : 5,
+              });
+            }
+          }
+
+          aggregationApplied = true;
+        }
+      }
+    }
+
     const timeCols = enrichedColumns.filter(c => isTimeColumn(c.name)).map(c => c.name);
     const eventCols = enrichedColumns.filter(c => isEventColumn(c.name)).map(c => c.name);
 
@@ -1113,7 +1233,7 @@ serve(async (req: Request) => {
       recommended_metrics: aiCtx?.intent?.recommended_metrics || [],
     };
 
-    console.log(`[build-modeling-dataset] Intent: ${JSON.stringify(intent)}`);
+    console.log(`[build-modeling-dataset] Intent: ${JSON.stringify(intent)}, aggregation_applied: ${aggregationApplied}`);
 
     // ==================== DETERMINE TARGET (SSOT: resolveActiveTarget → model_selection → settings → contract → auto) ====================
     // CRITICAL: Use resolveActiveTarget() for parity with preflight and train-models
@@ -1895,9 +2015,14 @@ serve(async (req: Request) => {
         coverage_pct: coveragePct,
       },
       modeling_dataset_meta: modelingPrepareMeta || null,
+      aggregation: aggregationApplied ? {
+        mode: "temporal_aggregated",
+        grain: "entity_time_monthly",
+        stats: aggregationStats,
+      } : null,
       schema_ssot: {
-        source: schemaSSOT.source,
-        schema_columns_count: schemaSSOT.schema_columns_count,
+        source: aggregationApplied ? "aggregated" : schemaSSOT.source,
+        schema_columns_count: aggregationApplied ? enrichedColumns.length : schemaSSOT.schema_columns_count,
         detected_columns_count: schemaSSOT.detected_columns_count ?? null,
       },
       blocked_reasons: allBlockedReasons,
