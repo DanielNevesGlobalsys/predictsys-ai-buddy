@@ -82,6 +82,28 @@ serve(async (req) => {
     const langMap: Record<string, string> = { pt: "Brazilian Portuguese", en: "English", es: "Spanish" };
     const lang = langMap[language] || "Brazilian Portuguese";
 
+    // ── Extract TDE resolved state to inject as authoritative context ──
+    const tdeProfile = (context as any).eda_summary?.tde_profile_result
+      || (context as any).eda_summary?.tde_profile
+      || null;
+    const tdeEntity = tdeProfile?.candidates?.entity_candidates?.[0];
+    const tdeTime = tdeProfile?.candidates?.time_candidates?.[0];
+    const tdeValue = tdeProfile?.candidates?.value_candidates?.[0];
+    const resolvedEntity = typeof tdeEntity === "string" ? tdeEntity : tdeEntity?.column || context.dataset_summary?.entity_key || null;
+    const resolvedTime = typeof tdeTime === "string" ? tdeTime : tdeTime?.column || context.dataset_summary?.time_anchor || null;
+    const resolvedValue = typeof tdeValue === "string" ? tdeValue : tdeValue?.column || null;
+    const resolvedProblemType = context.intent_contract?.problem_type || context.target_definition?.problem_type || null;
+
+    const tdeDirective = resolvedEntity || resolvedTime || resolvedValue
+      ? `\n\nIMPORTANT — Resolved State (authoritative, do NOT contradict):
+- Entity key: ${resolvedEntity || "not resolved"}
+- Time anchor: ${resolvedTime || "not resolved"}
+- Value/target candidate: ${resolvedValue || "not resolved"}
+- Problem type: ${resolvedProblemType || "not resolved"}
+You MUST use these exact values in your suggested_entity_key, suggested_time_anchor, and suggested_target fields.
+If problem_type is "regression", do NOT suggest classification as an alternative in the narrative.`
+      : "";
+
     const systemPrompt = `You are Lys, the AI synthesis engine for PredictSys. Analyze the complete project context (EDA results, Target Discovery, business intent) and provide:
 1. A business-friendly narrative summary (in ${lang})
 2. Structured operational recommendations for the pipeline
@@ -92,11 +114,12 @@ Guidelines:
 - Reference actual column names from the data
 - Connect analysis to the business objective and industry
 - Identify leakage risks (columns that directly encode the outcome)
-- Suggest the best target based on business objective + data evidence
-- Recommend entity key and time anchor when available
+- Use the resolved target, entity, time anchor and problem type from the authoritative state — do NOT override them
 - Provide a confidence score (0-1) for your overall recommendation
 - The narrative should be 3-5 paragraphs, business-friendly, in ${lang}
-- NEVER use technical ML jargon. Explain in business terms.`;
+- NEVER use technical ML jargon. Explain in business terms.
+- CRITICAL: If the resolved problem type is "regression", the narrative MUST describe a numeric prediction problem. Do NOT suggest classification as a better alternative.
+- For Agro/agricultural projects focused on captação/produção/volume, always frame the narrative around predicting quantities, volumes, or production output.${tdeDirective}`;
 
     const userPrompt = `Analyze this project context and provide synthesis:\n\n${contextBlock}`;
 
