@@ -3897,7 +3897,10 @@ serve(async (req) => {
       const targetDetection = detectTargetType(rawYForDetection);
       console.log(`[MVP-Soft] Target type detected: ${targetDetection.type} (distinct=${targetDetection.distinct_count}, strings=${targetDetection.has_strings})`);
 
-      const mismatch = validateTargetTypeMismatch(problem_type, targetDetection);
+      // Skip mismatch check for temporal_aggregated — low distinct count is sample artifact
+      const mismatch = isTemporalAggregated
+        ? { valid: true }
+        : validateTargetTypeMismatch(problem_type, targetDetection);
       if (!mismatch.valid) {
         console.error(`[MVP-Soft] TARGET_TYPE_MISMATCH: ${mismatch.message}`);
 
