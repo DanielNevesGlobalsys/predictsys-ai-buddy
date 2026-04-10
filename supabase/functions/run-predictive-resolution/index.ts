@@ -132,6 +132,11 @@ function pickAgroAggregationSourceColumn(
     || null;
 }
 
+function hasAgroNumericSignal(columnName: string | null | undefined): boolean {
+  const lower = normalizeText(columnName || "");
+  return AGRO_NUMERIC_TARGET_TOKENS.some((token) => lower.includes(normalizeText(token)));
+}
+
 function detectAgroAggregatedTargetPromotion(args: {
   isAgroRegression: boolean;
   entityKey: string | null;
@@ -263,7 +268,13 @@ Deno.serve(async (req) => {
     const objective = intentContractV3?.prediction_request?.objective
       || businessIntent?.objective || "generic_prediction";
     const objLower = (objective || "").toLowerCase();
-    const isAgroRegression = isAgro && isAgroRegressionObjective(objective);
+    const tdeValueCandidates = [
+      ...((tdeProfile?.candidates?.value_candidates || []) as any[]),
+      ...((tdeProfile?.target_candidates || []) as any[]),
+    ].map((candidate) => typeof candidate === "string" ? candidate : candidate?.column || candidate?.name || "");
+    const hasAgroValueSignal = tdeValueCandidates.some((columnName) => hasAgroNumericSignal(columnName))
+      || columns.some((column) => hasAgroNumericSignal(column.column_name));
+    const isAgroRegression = isAgro && (isAgroRegressionObjective(objective) || (!objective || objective === "generic_prediction") && hasAgroValueSignal);
 
     console.log(`[PRE] Domain: isAgro=${isAgro}, isAgroRegression=${isAgroRegression}, objective=${objective}`);
 
@@ -795,6 +806,14 @@ Deno.serve(async (req) => {
       active_predictive_resolution_id: inserted.id,
       predictive_resolution_mode: mode,
       predictive_resolution_confidence: overall,
+      recommended_target: targetDef.target_name,
+      recommended_problem_type: problemType,
+      recommended_target_reasoning: targetDef.target_reasoning,
+      recommended_target_confidence: targetDef.target_confidence || overall,
+      recommended_grain: grain,
+      recommended_split_strategy: datasetStrategy.split_suggestion,
+      recommended_time_column: timeAnchor,
+      dataset_build_mode: targetBuildMode,
       predictive_resolution_summary: {
         problem_type: problemType,
         target: targetDef.target_name,

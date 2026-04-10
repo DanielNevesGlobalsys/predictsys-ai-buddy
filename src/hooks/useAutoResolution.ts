@@ -11,6 +11,10 @@ export interface AutoResolutionResult {
   problem_type: "classification" | "regression";
   entity_key: string | null;
   time_column: string | null;
+  dataset_build_mode: string | null;
+  recommended_grain: string | null;
+  recommended_split_strategy: string | null;
+  aggregated_target_required: boolean;
   selected_features: string[];
   excluded_features: string[];
   confidence_score: number;
@@ -26,6 +30,10 @@ const EMPTY_RESULT: AutoResolutionResult = {
   problem_type: "classification",
   entity_key: null,
   time_column: null,
+  dataset_build_mode: null,
+  recommended_grain: null,
+  recommended_split_strategy: null,
+  aggregated_target_required: false,
   selected_features: [],
   excluded_features: [],
   confidence_score: 0,
@@ -65,6 +73,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       const val = res.validation || {};
       const conf = res.confidence || {};
       const expl = res.explanation || {};
+      const ds = res.dataset_strategy || {};
 
       const autoFixes: string[] = [];
 
@@ -151,6 +160,10 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         problem_type: problemType as "classification" | "regression",
         entity_key: prob.entity?.entity_key || null,
         time_column: prob.time_anchor || null,
+        dataset_build_mode: ds.target_build_mode || null,
+        recommended_grain: prob.entity?.grain || null,
+        recommended_split_strategy: ds.split_suggestion || null,
+        aggregated_target_required: ds.aggregated_target_required === true || ds.target_build_mode === "temporal_aggregated" || /^agg_/i.test(targetCol || ""),
         selected_features: includeFeatures,
         excluded_features: [...excludeFeatures, ...blockedFeatures],
         confidence_score: conf.overall || 0,
@@ -181,7 +194,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
     if (!projectId) return null;
     const { data } = await supabase
       .from("project_settings")
-      .select("target_column, problem_type, entity_key, time_anchor_column, feature_columns, excluded_columns")
+      .select("target_column, problem_type, entity_key, time_anchor_column, feature_columns, excluded_columns, dataset_build_mode")
       .eq("project_id", projectId)
       .maybeSingle();
 
@@ -193,6 +206,10 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       problem_type: d.problem_type || "classification",
       entity_key: d.entity_key || null,
       time_column: d.time_anchor_column || null,
+      dataset_build_mode: d.dataset_build_mode || null,
+      recommended_grain: d.dataset_build_mode === "temporal_aggregated" ? "entity_time" : null,
+      recommended_split_strategy: d.dataset_build_mode === "temporal_aggregated" ? "temporal" : null,
+      aggregated_target_required: d.dataset_build_mode === "temporal_aggregated" || /^agg_/i.test(d.target_column || ""),
       selected_features: Array.isArray(d.feature_columns) ? d.feature_columns : [],
       excluded_features: Array.isArray(d.excluded_columns) ? d.excluded_columns : [],
       confidence_score: d.target_column ? 0.5 : 0,
@@ -263,6 +280,10 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         features: res.selected_features.length,
       });
 
+      const isAggregatedTarget = res.dataset_build_mode === "temporal_aggregated"
+        || res.aggregated_target_required
+        || /^agg_/i.test(res.target_column || "");
+
       // 1. Update project_settings (SSOT) — includes grain/time fields
       const settingsPayload: Record<string, any> = {
         project_id: projectId,
@@ -291,7 +312,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         settingsPayload.recommended_time_column = res.time_column;
         settingsPayload.recommended_grain = "entity_time";
         settingsPayload.recommended_split_strategy = "temporal";
-        settingsPayload.dataset_build_mode = "entity_time";
+        settingsPayload.dataset_build_mode = isAggregatedTarget ? "temporal_aggregated" : "entity_time";
         settingsPayload.temporal_readiness_state = "ready";
         settingsPayload.grain_confidence = 0.85;
         settingsPayload.time_strategy_confidence = 0.9;
@@ -319,6 +340,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
           excluded_features: res.excluded_features,
           entity_key: res.entity_key,
           time_column: res.time_column,
+          dataset_build_mode: isAggregatedTarget ? "temporal_aggregated" : res.dataset_build_mode,
         },
       });
 

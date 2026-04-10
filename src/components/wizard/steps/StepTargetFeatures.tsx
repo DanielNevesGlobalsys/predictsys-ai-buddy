@@ -404,6 +404,7 @@ const StepTargetFeatures = ({
   // The SSOT is authoritative. Virtual/aggregated targets (e.g. agg_sacas_mes)
   // may not exist in project_columns, so we trust the SSOT without requiring isPhysical.
   const isAggregatedMode = ssot.dataset_build_mode === "temporal_aggregated";
+  const isVirtualAggregatedTarget = useCallback((value: string | null | undefined) => /^agg_/i.test(value || ""), []);
 
   useEffect(() => {
     if (ssotLoaded && columns.length > 0) {
@@ -411,11 +412,11 @@ const StepTargetFeatures = ({
         const isPhysical = columns.some((c) => c.name === ssot.target_column);
         const isLabel = ssot.target_column === "label";
         // In aggregated mode, trust SSOT target even if not in physical columns
-        if (isPhysical || isLabel || isAggregatedMode) {
+        if (isPhysical || isLabel || isAggregatedMode || isVirtualAggregatedTarget(ssot.target_column)) {
           setTargetColumn(ssot.target_column);
           setAppliedTargetColumn(ssot.target_column);
           // Inject virtual target into columns list so the Select shows it
-          if (!isPhysical && !isLabel && isAggregatedMode) {
+          if (!isPhysical && !isLabel && (isAggregatedMode || isVirtualAggregatedTarget(ssot.target_column))) {
             setColumns(prev => {
               if (prev.some(c => c.name === ssot.target_column)) return prev;
               return [{ name: ssot.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev];
@@ -435,20 +436,27 @@ const StepTargetFeatures = ({
       else if (!entityKey) { const suggested = suggestEntityKey(); if (suggested) setEntityKey(suggested); }
       if (ssot.industry) setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
     }
-  }, [ssotLoaded, ssot, columns, isAggregatedMode]);
+  }, [ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget]);
 
   // Fallback from useProjectSettings
   useEffect(() => {
     if (settings && ssotLoaded && columns.length > 0 && !ssot.target_column) {
       if (settings.target_column) {
         const isPhysical = columns.some((c) => c.name === settings.target_column);
-        if (isPhysical || settings.target_column === "label") { setTargetColumn(settings.target_column); setAppliedTargetColumn(settings.target_column); }
+        const isVirtualAgg = isVirtualAggregatedTarget(settings.target_column);
+        if (isPhysical || settings.target_column === "label" || isAggregatedMode || isVirtualAgg) {
+          setTargetColumn(settings.target_column);
+          setAppliedTargetColumn(settings.target_column);
+          if (!isPhysical && isVirtualAgg) {
+            setColumns(prev => prev.some(c => c.name === settings.target_column) ? prev : [{ name: settings.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev]);
+          }
+        }
       }
       if (settings.feature_columns && settings.feature_columns.length > 0) setSelectedFeatures(settings.feature_columns);
       if (settings.excluded_columns) setExcludedColumns(settings.excluded_columns);
       if (settings.problem_type) setInferredProblemType(settings.problem_type);
     }
-  }, [settings, ssotLoaded, ssot, columns]);
+  }, [settings, ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget]);
 
   // ═══ LYS PRE-CONFIG ═══
   useEffect(() => {
@@ -458,9 +466,13 @@ const StepTargetFeatures = ({
     const rec = lysSynthesis.recommendation;
     if (!rec?.suggested_target) return;
     const targetExists = columns.some(c => c.name === rec.suggested_target);
-    if (!targetExists) return;
+    const isVirtualAgg = isVirtualAggregatedTarget(rec.suggested_target) || isAggregatedMode;
+    if (!targetExists && !isVirtualAgg) return;
     lysAppliedRef.current = true;
     setTargetColumn(rec.suggested_target!);
+    if (!targetExists && isVirtualAgg) {
+      setColumns(prev => prev.some(c => c.name === rec.suggested_target) ? prev : [{ name: rec.suggested_target!, type: "numérico (agregado)", isFeature: false }, ...prev]);
+    }
     if (rec.suggested_problem_type) setInferredProblemType(rec.suggested_problem_type);
     if (rec.suggested_entity_key && columns.some(c => c.name === rec.suggested_entity_key)) setEntityKey(rec.suggested_entity_key);
     if (rec.suggested_features && rec.suggested_features.length > 0 && ssot.feature_columns.length === 0) {
@@ -472,7 +484,7 @@ const StepTargetFeatures = ({
       if (blockedCols.length > 0) setExcludedColumns(prev => [...new Set([...prev, ...blockedCols])]);
     }
     console.log("[StepTargetFeatures] Lys recommendations applied:", { target: rec.suggested_target, problem_type: rec.suggested_problem_type, entity_key: rec.suggested_entity_key, features: rec.suggested_features?.length, blocked: rec.blocked_features?.length });
-  }, [lysSynthesis.loaded, lysSynthesis.recommendation, ssotLoaded, ssot.target_column, columns, targetColumn]);
+  }, [lysSynthesis.loaded, lysSynthesis.recommendation, ssotLoaded, ssot.target_column, columns, targetColumn, isAggregatedMode, isVirtualAggregatedTarget]);
 
   // ═══ AUTO-RESOLUTION APPLY ═══
   useEffect(() => {
@@ -483,10 +495,14 @@ const StepTargetFeatures = ({
     const r = autoRes.result;
     if (!r.target_column) return;
     const targetExists = columns.some(c => c.name === r.target_column);
-    if (!targetExists) return;
+    const isVirtualAgg = r.dataset_build_mode === "temporal_aggregated" || isVirtualAggregatedTarget(r.target_column);
+    if (!targetExists && !isVirtualAgg) return;
     autoResAppliedRef.current = true;
 
     setTargetColumn(r.target_column);
+    if (!targetExists && isVirtualAgg) {
+      setColumns(prev => prev.some(c => c.name === r.target_column) ? prev : [{ name: r.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev]);
+    }
     if (r.problem_type) setInferredProblemType(r.problem_type);
     if (r.entity_key && columns.some(c => c.name === r.entity_key)) setEntityKey(r.entity_key);
     if (r.selected_features.length > 0) {
@@ -502,7 +518,7 @@ const StepTargetFeatures = ({
     autoRes.applyToSSOT(r);
 
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
-  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn]);
+  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn, isVirtualAggregatedTarget]);
 
   // ═══ RESOLVE BEST TIME COLUMN from all sources ═══
   const resolveBestTimeColumn = useCallback((): string | null => {
@@ -608,10 +624,13 @@ const StepTargetFeatures = ({
         settingsUpdate.recommended_time_column = resolvedTimeAnchor;
         settingsUpdate.temporal_readiness_state = "ready";
       }
+      const shouldForceAggregated = ssot.dataset_build_mode === "temporal_aggregated"
+        || autoRes.result.dataset_build_mode === "temporal_aggregated"
+        || isVirtualAggregatedTarget(targetColumn);
       if (entityKey && resolvedTimeAnchor) {
         settingsUpdate.recommended_grain = "entity_time";
         settingsUpdate.recommended_split_strategy = "temporal";
-        settingsUpdate.dataset_build_mode = "entity_time";
+        settingsUpdate.dataset_build_mode = shouldForceAggregated ? "temporal_aggregated" : "entity_time";
         settingsUpdate.grain_confidence = 0.85;
         settingsUpdate.time_strategy_confidence = 0.9;
       }
@@ -641,7 +660,7 @@ const StepTargetFeatures = ({
       grainTimeRanRef.current = false;
       resolveGrainTime();
     })();
-  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType]);
+  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType, ssot.dataset_build_mode, autoRes.result.dataset_build_mode, isVirtualAggregatedTarget]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
@@ -823,6 +842,11 @@ const StepTargetFeatures = ({
       settingsUpdate.grain_confidence = grainTime.resolution.grain.confidence;
       settingsUpdate.time_strategy_confidence = grainTime.resolution.time.confidence;
       settingsUpdate.temporal_readiness_state = grainTime.resolution.temporal_readiness.status;
+    }
+    if (ssot.dataset_build_mode === "temporal_aggregated" || autoRes.result.dataset_build_mode === "temporal_aggregated" || isVirtualAggregatedTarget(targetColumn)) {
+      settingsUpdate.recommended_grain = "entity_time";
+      settingsUpdate.recommended_split_strategy = "temporal";
+      settingsUpdate.dataset_build_mode = "temporal_aggregated";
     }
     await supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id);
     console.log(`[StepTargetFeatures] Persisted: entity=${entityKey}, time=${resolvedTimeAnchor}, grain=${settingsUpdate.recommended_grain || "—"}, split=${settingsUpdate.recommended_split_strategy || "—"}`);

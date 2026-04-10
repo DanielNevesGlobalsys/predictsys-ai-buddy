@@ -89,6 +89,7 @@ serve(async (req: Request) => {
       excluded_features,
       entity_key,
       time_column,
+      dataset_build_mode,
     } = body;
 
     const problem_type = normalizeProblemType(rawProblemType);
@@ -229,6 +230,7 @@ serve(async (req: Request) => {
       last_governance_action: "explicit_promotion",
       last_governance_action_at: new Date().toISOString(),
     };
+    const isAggregatedTarget = dataset_build_mode === "temporal_aggregated" || /^agg_/i.test(target_column || "");
 
     // Persist entity_key and time_column if provided
     if (entity_key !== undefined && entity_key !== null) {
@@ -237,6 +239,12 @@ serve(async (req: Request) => {
     if (time_column !== undefined && time_column !== null) {
       settingsUpsert.time_anchor_column = time_column;
       settingsUpsert.recommended_time_column = time_column;
+    }
+    if (entity_key && time_column) {
+      settingsUpsert.recommended_grain = "entity_time";
+      settingsUpsert.recommended_split_strategy = "temporal";
+      settingsUpsert.dataset_build_mode = isAggregatedTarget ? "temporal_aggregated" : (dataset_build_mode || "entity_time");
+      settingsUpsert.official_grain = "entity_time";
     }
 
     await supabase
@@ -274,7 +282,7 @@ serve(async (req: Request) => {
     if (didChange) {
       const grainVal = entity_key && time_column ? "entity_time" : "original_row";
       const splitVal = time_column ? "temporal" : "stratified";
-      const buildMode = entity_key && time_column ? "entity_time" : "row_level";
+      const buildMode = isAggregatedTarget ? "temporal_aggregated" : entity_key && time_column ? "entity_time" : "row_level";
 
       const contractPayload = {
         project_id,

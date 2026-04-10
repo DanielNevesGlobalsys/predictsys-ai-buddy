@@ -9,6 +9,21 @@ const corsHeaders = {
     "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+const AGRO_AGGREGATED_TARGET_NAME = "agg_sacas_mes";
+const AGRO_ROW_LEVEL_TARGET_TOKENS = ["qtdpes", "qtdsac", "quantidade", "peso", "volume", "sacas"];
+
+function normalizeText(value: string): string {
+  return (value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function looksLikeAgroRowLevelTarget(columnName: string | null | undefined): boolean {
+  const lower = normalizeText(columnName || "");
+  return AGRO_ROW_LEVEL_TARGET_TOKENS.some((token) => lower.includes(token));
+}
+
 /**
  * lys-synthesize-insights
  * 
@@ -57,6 +72,12 @@ serve(async (req) => {
     // ── 1. Build unified context ──
     const context = await buildProjectContext(serviceClient, project_id);
     const contextBlock = contextToPromptBlock(context);
+    const { data: settingsRow } = await serviceClient
+      .from("project_settings")
+      .select("industry, objective, dataset_build_mode, predictive_resolution_summary, tde_profile_result")
+      .eq("project_id", project_id)
+      .maybeSingle();
+    const settings = (settingsRow || {}) as Record<string, any>;
 
     // Check EDA readiness — allow virtual/external datasets to pass
     const sourceType = String(context.dataset_summary?.source_type || "").toLowerCase();
@@ -83,24 +104,35 @@ serve(async (req) => {
     const lang = langMap[language] || "Brazilian Portuguese";
 
     // ── Extract TDE resolved state to inject as authoritative context ──
-    const tdeProfile = (context as any).eda_summary?.tde_profile_result
+    const tdeProfile = settings?.tde_profile_result
+      || (context as any).eda_summary?.tde_profile_result
       || (context as any).eda_summary?.tde_profile
       || null;
+    const predictiveSummary = (settings?.predictive_resolution_summary || {}) as Record<string, any>;
     const tdeEntity = tdeProfile?.candidates?.entity_candidates?.[0];
     const tdeTime = tdeProfile?.candidates?.time_candidates?.[0];
     const tdeValue = tdeProfile?.candidates?.value_candidates?.[0];
     const resolvedEntity = typeof tdeEntity === "string" ? tdeEntity : tdeEntity?.column || context.dataset_summary?.entity_key || null;
     const resolvedTime = typeof tdeTime === "string" ? tdeTime : tdeTime?.column || context.dataset_summary?.time_anchor || null;
     const resolvedValue = typeof tdeValue === "string" ? tdeValue : tdeValue?.column || null;
-    const resolvedProblemType = context.intent_contract?.problem_type || context.target_definition?.problem_type || null;
+    const resolvedProblemType = predictiveSummary?.problem_type || context.intent_contract?.problem_type || context.target_definition?.problem_type || null;
+    const resolvedOfficialTarget = predictiveSummary?.target || context.target_definition?.target_column || null;
+    const industryText = normalizeText(String(settings?.industry || context.industry || ""));
+    const isAgro = ["agro", "agronegocio", "agriculture", "farming", "cafe", "cafe"].some((token) => industryText.includes(token));
+    const aggregatedRequired = settings?.dataset_build_mode === "temporal_aggregated"
+      || predictiveSummary?.dataset_build_mode === "temporal_aggregated"
+      || predictiveSummary?.aggregated_target_required === true
+      || (isAgro && !!resolvedEntity && !!resolvedTime && looksLikeAgroRowLevelTarget(resolvedValue || resolvedOfficialTarget));
 
     const tdeDirective = resolvedEntity || resolvedTime || resolvedValue
       ? `\n\nIMPORTANT — Resolved State (authoritative, do NOT contradict):
 - Entity key: ${resolvedEntity || "not resolved"}
 - Time anchor: ${resolvedTime || "not resolved"}
-- Value/target candidate: ${resolvedValue || "not resolved"}
+- Value candidate (row-level input): ${resolvedValue || "not resolved"}
+- Official target/build mode: ${aggregatedRequired ? `${AGRO_AGGREGATED_TARGET_NAME} / temporal_aggregated` : resolvedOfficialTarget || "not resolved"}
 - Problem type: ${resolvedProblemType || "not resolved"}
-You MUST use these exact values in your suggested_entity_key, suggested_time_anchor, and suggested_target fields.
+You MUST use these exact values in your suggested_entity_key and suggested_time_anchor fields.
+${aggregatedRequired ? `You MUST set suggested_target to ${AGRO_AGGREGATED_TARGET_NAME} and explain that ${resolvedValue || resolvedOfficialTarget || "the detected row-level measure"} is only an input for aggregation, never the final target.` : `You MUST use the resolved target as suggested_target.`}
 If problem_type is "regression", do NOT suggest classification as an alternative in the narrative.`
       : "";
 
@@ -119,6 +151,7 @@ Guidelines:
 - The narrative should be 3-5 paragraphs, business-friendly, in ${lang}
 - NEVER use technical ML jargon. Explain in business terms.
 - CRITICAL: If the resolved problem type is "regression", the narrative MUST describe a numeric prediction problem. Do NOT suggest classification as a better alternative.
+- CRITICAL: In Agro transacional with entity + time and row-level measures like QTDPES/QTDSAC, NEVER recommend the row-level measure as the final target. The final target must be the aggregated target (${AGRO_AGGREGATED_TARGET_NAME}).
 - For Agro/agricultural projects focused on captação/produção/volume, always frame the narrative around predicting quantities, volumes, or production output.${tdeDirective}`;
 
     const userPrompt = `Analyze this project context and provide synthesis:\n\n${contextBlock}`;
@@ -246,6 +279,48 @@ Guidelines:
           }
         }
       }
+    }
+
+    const mustForceAggregatedAgroTarget = isAgro
+      && !!resolvedEntity
+      && !!resolvedTime
+      && (
+        aggregatedRequired
+        || looksLikeAgroRowLevelTarget(synthesis.suggested_target)
+        || looksLikeAgroRowLevelTarget(resolvedValue)
+        || looksLikeAgroRowLevelTarget(resolvedOfficialTarget)
+      );
+
+    if (mustForceAggregatedAgroTarget) {
+      const previousSuggestedTarget = synthesis.suggested_target || resolvedValue || resolvedOfficialTarget || null;
+      const blocked = Array.isArray(synthesis.blocked_features) ? synthesis.blocked_features : [];
+      const rowLevelColumns = Array.from(new Set(
+        [previousSuggestedTarget, resolvedValue, resolvedOfficialTarget]
+          .filter((value): value is string => !!value && looksLikeAgroRowLevelTarget(value))
+      ));
+
+      synthesis.suggested_target = AGRO_AGGREGATED_TARGET_NAME;
+      synthesis.suggested_problem_type = "regression";
+      synthesis.suggested_entity_key = resolvedEntity || synthesis.suggested_entity_key;
+      synthesis.suggested_time_anchor = resolvedTime || synthesis.suggested_time_anchor;
+      synthesis.suggested_features = Array.isArray(synthesis.suggested_features)
+        ? synthesis.suggested_features.filter((feature: string) => !rowLevelColumns.includes(feature))
+        : [];
+      synthesis.blocked_features = [
+        ...blocked,
+        ...rowLevelColumns.map((column) => ({
+          column,
+          reason: "Medida row-level agro usada apenas como insumo para agregação do target oficial.",
+        })),
+      ];
+
+      const agroNarrative = language === "pt"
+        ? `Neste caso agro transacional, medidas row-level como QTDPES/QTDSAC são apenas insumo operacional. O alvo final correto é ${AGRO_AGGREGATED_TARGET_NAME}, agregado por entidade e mês.`
+        : `In this agro transactional case, row-level measures such as QTDPES/QTDSAC are operational inputs only. The correct final target is ${AGRO_AGGREGATED_TARGET_NAME}, aggregated by entity and month.`;
+
+      synthesis.narrative = synthesis.narrative
+        ? `${synthesis.narrative.trim()}\n\n${agroNarrative}`
+        : agroNarrative;
     }
 
     console.log(`[lys-synthesize] Complete. Confidence: ${synthesis.confidence_score}, Target: ${synthesis.suggested_target}`);
