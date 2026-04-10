@@ -2704,7 +2704,6 @@ serve(async (req) => {
           virtualSampledLines = aggLines;
           delimiter = ",";
           totalDatasetRows = aggLines.length;
-          totalLinesRead = aggLines.length;
 
           console.log(`[AutoML] Temporal aggregation complete: ${aggMap.size} rows (entity×month), target=agg_sacas_mes, features=${aggHeaders.length - 1}`);
           console.log(`[AutoML] Aggregated target stats: min=${Math.min(...[...aggMap.values()].map(v => v.count))}, max=${Math.max(...[...aggMap.values()].map(v => v.count))}, mean=${([...aggMap.values()].reduce((a, v) => a + v.count, 0) / aggMap.size).toFixed(1)}`);
