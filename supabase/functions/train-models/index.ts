@@ -4146,7 +4146,12 @@ serve(async (req) => {
 
       console.log(`[Trainability] trainable=${trainabilityResult.trainable}, reason=${trainabilityResult.reason_code}`);
 
-      if (!trainabilityResult.trainable) {
+      // For temporal_aggregated, bypass SAMPLE_TOO_SMALL since small count is a sample artifact
+      const skipTrainabilityBlock = isTemporalAggregated && 
+        trainabilityResult.reason_code === "TARGET_SAMPLE_TOO_SMALL" && 
+        (trainabilityResult.details?.n_non_null || 0) >= 30;
+
+      if (!trainabilityResult.trainable && !skipTrainabilityBlock) {
         const humanMsg = trainabilityHumanMessage(trainabilityResult);
         console.error(`[Trainability] ⛔ ${humanMsg}`);
 
