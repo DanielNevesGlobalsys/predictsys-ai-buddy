@@ -717,6 +717,12 @@ const StepTargetFeatures = ({
 
   const handleTargetChange = (value: string) => {
     if (isHardBlockedTarget(value)) { setTargetColumn(""); toast({ title: "Alvo inválido", description: `"${value}" é um token de sistema reservado.`, variant: "destructive" }); return; }
+    // Block degenerate row-level targets in aggregated mode
+    const DEGENERATE_ROW_TARGETS = ["qtdpes", "qtdsac", "quantidade", "peso"];
+    if (isAggregatedMode && DEGENERATE_ROW_TARGETS.some(t => value.toLowerCase().includes(t))) {
+      toast({ title: "Target bloqueado", description: `"${value}" é um valor row-level degenerado. Use o target agregado oficial.`, variant: "destructive" });
+      return;
+    }
     if (looksLikeId(value)) { setBlockedIdTarget(value); return; }
     setBlockedIdTarget(null);
     if (looksLikeLeakage(value)) { setLeakageBlock(`"${value}" parece conter informação pós-evento (leakage). Não recomendado como alvo.`); }
@@ -1029,12 +1035,24 @@ const StepTargetFeatures = ({
             <Alert className="border-destructive/30 bg-destructive/5"><Ban className="w-4 h-4 text-destructive" /><AlertDescription className="text-sm text-destructive">{leakageBlock}</AlertDescription></Alert>
           )}
 
+          {/* Aggregated mode banner */}
+          {isAggregatedMode && (
+            <Alert className="border-primary/30 bg-primary/5">
+              <Database className="w-4 h-4 text-primary" />
+              <AlertDescription className="text-sm">
+                <strong>Modo agregado ativo.</strong> O target oficial é <strong>{ssot.target_column || "agg_sacas_mes"}</strong> (agregado por entidade × mês).
+                Targets row-level como QTDPES ou QTDSAC estão bloqueados neste modo.
+              </AlertDescription>
+            </Alert>
+          )}
+
           {/* Target selection */}
           {targetSource === "manual" && (
             <div className="space-y-2">
               <Label className="text-sm font-medium flex items-center gap-2">
                 <Target className="w-4 h-4 text-primary" />
                 {t("stepVariables.targetVariable")}
+                {isAggregatedMode && <Badge variant="outline" className="text-[10px] py-0 border-primary/30 text-primary">agregado</Badge>}
               </Label>
               <Select value={targetColumn} onValueChange={handleTargetChange}>
                 <SelectTrigger className="bg-background">
@@ -1047,12 +1065,18 @@ const StepTargetFeatures = ({
                   {columns.map((col) => {
                     const inf = columnInferenceMap.current.get(col.name);
                     const isBlocked = inf && !inf.can_be_target && inf.block_reasons.length > 0;
+                    // In aggregated mode, block degenerate row-level targets
+                    const DEGENERATE_ROW_TARGETS = ["qtdpes", "qtdsac", "quantidade", "peso"];
+                    const isDegenerateRowLevel = isAggregatedMode && DEGENERATE_ROW_TARGETS.some(t => col.name.toLowerCase().includes(t));
+                    const isDisabled = isBlocked || isDegenerateRowLevel;
                     return (
-                      <SelectItem key={col.name} value={col.name} disabled={isBlocked}>
+                      <SelectItem key={col.name} value={col.name} disabled={isDisabled}>
                         <div className="flex items-center gap-2">
-                          <span className={`font-medium ${isBlocked ? "text-muted-foreground line-through" : ""}`}>{col.name}</span>
+                          <span className={`font-medium ${isDisabled ? "text-muted-foreground line-through" : ""}`}>{col.name}</span>
                           <span className="text-xs text-muted-foreground px-2 py-0.5 bg-muted rounded">{col.type}</span>
                           {col.isFeature && <Badge variant="secondary" className="text-[10px] py-0">derivado</Badge>}
+                          {isDegenerateRowLevel && <Badge variant="destructive" className="text-[10px] py-0">row-level</Badge>}
+                          {col.type === "numérico (agregado)" && <Badge className="bg-primary/20 text-primary border-primary/30 text-[10px] py-0">agregado</Badge>}
                         </div>
                       </SelectItem>
                     );
