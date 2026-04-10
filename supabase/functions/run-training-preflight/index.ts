@@ -258,6 +258,32 @@ serve(async (req: Request) => {
       canTrain = false;
     }
 
+    // ===== 4.3a AGGREGATED MODE CONSISTENCY GATE =====
+    const buildMode = projectSettings?.dataset_build_mode || null;
+    if (buildMode === "temporal_aggregated") {
+      // Validate target is aggregated, not raw row-level
+      const DEGENERATE_ROW_TARGETS = ["qtdpes", "qtdsac", "quantidade", "peso"];
+      const targetLower = (resolvedTargetCol || "").toLowerCase();
+      const isDegenerate = DEGENERATE_ROW_TARGETS.some(t => targetLower.includes(t));
+      
+      if (isDegenerate) {
+        gates.push({
+          gate: "aggregated_target",
+          status: "BLOCK",
+          message: `Target "${resolvedTargetCol}" é row-level degenerado em modo agregado. Use o target agregado oficial (ex: agg_sacas_mes).`,
+          details: { dataset_build_mode: buildMode, target: resolvedTargetCol, reason: "DEGENERATE_ROW_LEVEL" },
+        });
+        canTrain = false;
+      } else {
+        gates.push({
+          gate: "aggregated_target",
+          status: "PASS",
+          message: `Modo agregado consistente: target="${resolvedTargetCol}", build_mode=${buildMode}`,
+          details: { dataset_build_mode: buildMode, target: resolvedTargetCol },
+        });
+      }
+    }
+
     // Log SSOT divergence for diagnostics
     if (selectionTargetCol && settingsTargetCol && selectionTargetCol !== settingsTargetCol) {
       console.warn(`[preflight] SSOT divergence: model_selection.target="${selectionTargetCol}" vs settings.target="${settingsTargetCol}". Using model_selection.`);
