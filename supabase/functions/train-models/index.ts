@@ -2381,8 +2381,13 @@ serve(async (req) => {
     console.log(`Target sample size: ${TARGET_SAMPLE_SIZE.toLocaleString()}`);
     console.log(`Max linhas para leitura: ${MAX_ROWS_TO_READ.toLocaleString()}`);
 
-    if (totalDatasetRows < MIN_ROWS_FOR_TRAIN) {
-      console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${MIN_ROWS_FOR_TRAIN})`);
+    // For temporal_aggregated, lower the minimum (aggregated datasets are small by design)
+    const earlyBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const isTemporalAggregatedEarly = earlyBuildMode === "temporal_aggregated";
+    const effectiveMinRows = isTemporalAggregatedEarly ? 30 : MIN_ROWS_FOR_TRAIN;
+
+    if (totalDatasetRows < effectiveMinRows) {
+      console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${effectiveMinRows})`);
       
       // Update project status to not_enough_data
       await supabase
@@ -2394,10 +2399,10 @@ serve(async (req) => {
 
       return new Response(JSON.stringify({ 
         error: `Dados insuficientes para treinamento`,
-        details: `O dataset possui ${totalDatasetRows.toLocaleString()} linhas, mas são necessárias pelo menos ${MIN_ROWS_FOR_TRAIN.toLocaleString()} linhas para um modelo confiável.`,
+        details: `O dataset possui ${totalDatasetRows.toLocaleString()} linhas, mas são necessárias pelo menos ${effectiveMinRows.toLocaleString()} linhas para um modelo confiável.`,
         status: "not_enough_data",
         total_rows: totalDatasetRows,
-        min_required: MIN_ROWS_FOR_TRAIN
+        min_required: effectiveMinRows
       }), {
         status: 400,
         headers: { ...corsHeaders, "Content-Type": "application/json" },
@@ -2550,6 +2555,164 @@ serve(async (req) => {
       }
     }
 
+    // ==================== TEMPORAL AGGREGATION (in-memory) ====================
+    // When dataset_build_mode = temporal_aggregated, aggregate raw sample rows
+    // into entity × month grain BEFORE training. This creates the virtual target
+    // (agg_sacas_mes) and aggregated features from row-level data.
+    const datasetBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
+
+    if (isTemporalAggregated && !useVirtualSample) {
+      // Need to load sample for aggregation even if not Power BI
+      console.log(`[AutoML] temporal_aggregated mode — loading sample for in-memory aggregation`);
+      const { data: sampleDataAgg } = await supabase
+        .from("project_dataset_sample")
+        .select("sample_json, sample_rows")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (sampleDataAgg?.sample_json) {
+        const rawJsonAgg = sampleDataAgg.sample_json as any;
+        const sampleRowsAgg: Record<string, any>[] = Array.isArray(rawJsonAgg)
+          ? rawJsonAgg
+          : (Array.isArray(rawJsonAgg?.rows) ? rawJsonAgg.rows : []);
+
+        if (sampleRowsAgg.length > 0) {
+          useVirtualSample = true; // Force virtual path with aggregated data
+        }
+      }
+    }
+
+    if (isTemporalAggregated && useVirtualSample) {
+      console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
+      const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
+      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column || null;
+
+      if (aggEntityKey && aggTimeCol) {
+        // Re-load raw sample rows (they might already be in virtualSampledLines as CSV)
+        const { data: sampleDataAgg2 } = await supabase
+          .from("project_dataset_sample")
+          .select("sample_json")
+          .eq("project_id", project_id)
+          .maybeSingle();
+
+        const rawJsonAgg2 = sampleDataAgg2?.sample_json as any;
+        const rawRows: Record<string, any>[] = Array.isArray(rawJsonAgg2)
+          ? rawJsonAgg2
+          : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
+
+        if (rawRows.length > 0) {
+          // Aggregate by entity × month
+          const aggMap = new Map<string, {
+            count: number;
+            codpes_set: Set<string>;
+            codgre_vals: Map<string, number>;
+            origem_vals: Map<string, number>;
+            tipo_vals: Map<string, number>;
+            year: number;
+            monthNum: number;
+            quarter: number;
+          }>();
+
+          for (const row of rawRows) {
+            const entity = String(row[aggEntityKey] || "");
+            const rawDate = String(row[aggTimeCol] || "");
+            const month = rawDate.substring(0, 7); // "YYYY-MM"
+            if (!entity || !month || month.length < 7) continue;
+
+            const key = `${entity}|${month}`;
+            if (!aggMap.has(key)) {
+              const yr = parseInt(month.split("-")[0]) || 0;
+              const mn = parseInt(month.split("-")[1]) || 0;
+              const qt = Math.ceil(mn / 3);
+              aggMap.set(key, {
+                count: 0,
+                codpes_set: new Set(),
+                codgre_vals: new Map(),
+                origem_vals: new Map(),
+                tipo_vals: new Map(),
+                year: yr,
+                monthNum: mn,
+                quarter: qt,
+              });
+            }
+            const agg = aggMap.get(key)!;
+            agg.count += 1; // each row = 1 saca
+
+            // Track categorical modes
+            const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
+            if (codgre) agg.codgre_vals.set(codgre, (agg.codgre_vals.get(codgre) || 0) + 1);
+            const origem = String(row["Detalhe Movimentação.Origem da Movimentação"] || "");
+            if (origem) agg.origem_vals.set(origem, (agg.origem_vals.get(origem) || 0) + 1);
+            const tipo = String(row["Detalhe Movimentação.Tipo do Movimento"] || "");
+            if (tipo) agg.tipo_vals.set(tipo, (agg.tipo_vals.get(tipo) || 0) + 1);
+            const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
+            if (codpes) agg.codpes_set.add(codpes);
+
+            // Calendar fields from row (fallback)
+            if (agg.year === 0) {
+              const calAno = row["Calendário.Ano"];
+              if (calAno) agg.year = parseInt(String(calAno)) || 0;
+            }
+            if (agg.monthNum === 0) {
+              const calMes = row["Calendário.Mês Número"];
+              if (calMes) agg.monthNum = parseInt(String(calMes)) || 0;
+            }
+            if (agg.quarter === 0) {
+              const calTri = row["Calendário.Trimestre"];
+              if (calTri) agg.quarter = parseInt(String(calTri)) || Math.ceil(agg.monthNum / 3);
+            }
+          }
+
+          // Helper: get mode (most frequent value) from a frequency map
+          const getMode = (m: Map<string, number>): string => {
+            let best = ""; let bestCount = 0;
+            for (const [k, v] of m) { if (v > bestCount) { best = k; bestCount = v; } }
+            return best;
+          };
+
+          // Build aggregated rows as CSV
+          const aggHeaders = [
+            "agg_sacas_mes",
+            "Calendário.Ano",
+            "Calendário.Mês Número",
+            "Calendário.Trimestre",
+            "Detalhe Movimentação.CODGRE",
+            "Detalhe Movimentação.Origem da Movimentação",
+            "Detalhe Movimentação.Tipo do Movimento",
+          ];
+
+          const aggLines: string[] = [];
+          for (const [, v] of aggMap) {
+            const vals = [
+              String(v.count),
+              String(v.year),
+              String(v.monthNum),
+              String(v.quarter),
+              getMode(v.codgre_vals),
+              getMode(v.origem_vals),
+              getMode(v.tipo_vals),
+            ];
+            aggLines.push(vals.map(s => {
+              if (s.includes(",") || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+              return s;
+            }).join(","));
+          }
+
+          // Replace virtual sample with aggregated data
+          virtualHeaders = aggHeaders;
+          virtualSampledLines = aggLines;
+          delimiter = ",";
+          totalDatasetRows = aggLines.length;
+
+          console.log(`[AutoML] Temporal aggregation complete: ${aggMap.size} rows (entity×month), target=agg_sacas_mes, features=${aggHeaders.length - 1}`);
+          console.log(`[AutoML] Aggregated target stats: min=${Math.min(...[...aggMap.values()].map(v => v.count))}, max=${Math.max(...[...aggMap.values()].map(v => v.count))}, mean=${([...aggMap.values()].reduce((a, v) => a + v.count, 0) / aggMap.size).toFixed(1)}`);
+        }
+      } else {
+        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key or time_anchor_column`);
+      }
+    }
+
     // Detect if files are Parquet
     const useParquet = !useVirtualSample && filePaths.some(p => isParquetFile(p, sourceMetadata));
     console.log(`[AutoML] Formato detectado: ${useVirtualSample ? "Virtual (Power BI)" : useParquet ? "Parquet" : "CSV"}`);
@@ -2589,32 +2752,90 @@ serve(async (req) => {
         }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // Get numeric feature columns
-      const numericColumns = columns.filter(c =>
-        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
-      );
-      const featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
-      const baseFeatureNames = featureIndices.map(i => headers[i]);
-      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      // Get feature columns — for temporal_aggregated, use all non-target headers
+      // and encode categoricals as one-hot; for regular mode use project_columns
+      let featureIndices: number[] = [];
+      let baseFeatureNames: string[] = [];
+
+      if (isTemporalAggregated) {
+        // In aggregated mode, headers are the aggregated schema (target + features)
+        // Use model_selection selected_features to pick which ones to use
+        const selFeatures = (selection?.selected_features as string[]) || [];
+        const selSet = new Set(selFeatures.map(f => f.toLowerCase()));
+
+        for (let i = 0; i < headers.length; i++) {
+          const h = headers[i];
+          if (h.toLowerCase() === target_column.toLowerCase()) continue;
+          // If selection has features, only use selected ones; else use all non-target
+          if (selSet.size > 0 && !selSet.has(h.toLowerCase())) continue;
+          featureIndices.push(i);
+          baseFeatureNames.push(h);
+        }
+        console.log(`[AutoML] Aggregated feature selection: ${baseFeatureNames.length} features from headers: ${baseFeatureNames.join(", ")}`);
+      } else {
+        const numericColumns = columns.filter(c =>
+          (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+        );
+        featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
+        baseFeatureNames = featureIndices.map(i => headers[i]);
+      }
+
+      const engineeredFeatureNames = isTemporalAggregated ? [] : enabledFeatures.map(f => f.name);
       const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
 
       if (baseFeatureNames.length === 0) {
-        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+        return new Response(JSON.stringify({ error: "Nenhuma feature encontrada no dataset agregado." }), {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
 
       // Check if target is categorical
-      const targetColumnInfo = columns.find(c => c.column_name === target_column);
-      const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" ||
-                                    targetColumnInfo?.inferred_type === "categorico" ||
-                                    targetColumnInfo?.inferred_type === "texto";
+      const isTargetCategorical = isTemporalAggregated ? false : (
+        (columns.find(c => c.column_name === target_column)?.inferred_type || "").match(/categ|texto/i) !== null
+      );
 
-      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas`);
       console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
       console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-      // Parse CSV lines into X, y (same logic as CSV path)
+      // For aggregated mode with categorical features, build label encoders
+      // by scanning all values first
+      const catEncoders: Map<number, Map<string, number>> = new Map();
+      let expandedFeatureNames = [...allFeatureNames];
+
+      if (isTemporalAggregated) {
+        // Identify which feature indices are categorical (non-numeric)
+        const catFeatureIdxs: number[] = [];
+        // Sample first few lines to detect
+        const sampleCheckLines = virtualSampledLines.slice(0, Math.min(10, virtualSampledLines.length));
+        for (const fi of featureIndices) {
+          let numericCount = 0;
+          for (const line of sampleCheckLines) {
+            const vals = parseCSVLine(line, delimiter);
+            const v = vals[fi]?.replace(",", ".") || "";
+            if (v && !isNaN(parseFloat(v))) numericCount++;
+          }
+          if (numericCount < sampleCheckLines.length * 0.5) {
+            catFeatureIdxs.push(fi);
+          }
+        }
+
+        if (catFeatureIdxs.length > 0) {
+          console.log(`[AutoML] Detected ${catFeatureIdxs.length} categorical features in aggregated data, applying label encoding`);
+          // Build encoders
+          for (const fi of catFeatureIdxs) {
+            const valueSet = new Map<string, number>();
+            for (const line of virtualSampledLines) {
+              const vals = parseCSVLine(line, delimiter);
+              const v = (vals[fi] || "").trim();
+              if (v && !valueSet.has(v)) valueSet.set(v, valueSet.size);
+            }
+            catEncoders.set(fi, valueSet);
+          }
+        }
+      }
+
+      // Parse CSV lines into X, y
       for (const line of virtualSampledLines) {
         const values = parseCSVLine(line, delimiter);
 
@@ -2622,15 +2843,20 @@ serve(async (req) => {
         const rawRecord: Record<string, string | number | null> = {};
         headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
 
-        // Get base features
+        // Get base features (handle categoricals with label encoding)
         const baseFeatures = featureIndices.map(idx => {
+          if (catEncoders.has(idx)) {
+            const enc = catEncoders.get(idx)!;
+            const v = (values[idx] || "").trim();
+            return enc.get(v) ?? 0;
+          }
           const val = values[idx]?.replace(",", ".") || "";
           const parsed = parseFloat(val);
           return isNaN(parsed) ? 0 : parsed;
         });
 
-        // Apply engineered features
-        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        // Apply engineered features (skip for aggregated mode)
+        const engineeredValues = isTemporalAggregated ? {} : applyFeatureTransforms(rawRecord, enabledFeatures);
         const engineeredFeatures = engineeredFeatureNames.map(name => {
           const val = engineeredValues[name];
           return typeof val === "number" ? val : 0;
@@ -3671,7 +3897,10 @@ serve(async (req) => {
       const targetDetection = detectTargetType(rawYForDetection);
       console.log(`[MVP-Soft] Target type detected: ${targetDetection.type} (distinct=${targetDetection.distinct_count}, strings=${targetDetection.has_strings})`);
 
-      const mismatch = validateTargetTypeMismatch(problem_type, targetDetection);
+      // Skip mismatch check for temporal_aggregated — low distinct count is sample artifact
+      const mismatch = isTemporalAggregated
+        ? { valid: true }
+        : validateTargetTypeMismatch(problem_type, targetDetection);
       if (!mismatch.valid) {
         console.error(`[MVP-Soft] TARGET_TYPE_MISMATCH: ${mismatch.message}`);
 
@@ -3917,7 +4146,12 @@ serve(async (req) => {
 
       console.log(`[Trainability] trainable=${trainabilityResult.trainable}, reason=${trainabilityResult.reason_code}`);
 
-      if (!trainabilityResult.trainable) {
+      // For temporal_aggregated, bypass SAMPLE_TOO_SMALL since small count is a sample artifact
+      const skipTrainabilityBlock = isTemporalAggregated && 
+        trainabilityResult.reason_code === "TARGET_SAMPLE_TOO_SMALL" && 
+        (trainabilityResult.details?.n_non_null || 0) >= 30;
+
+      if (!trainabilityResult.trainable && !skipTrainabilityBlock) {
         const humanMsg = trainabilityHumanMessage(trainabilityResult);
         console.error(`[Trainability] ⛔ ${humanMsg}`);
 
