@@ -2015,9 +2015,14 @@ serve(async (req: Request) => {
         coverage_pct: coveragePct,
       },
       modeling_dataset_meta: modelingPrepareMeta || null,
+      aggregation: aggregationApplied ? {
+        mode: "temporal_aggregated",
+        grain: "entity_time_monthly",
+        stats: aggregationStats,
+      } : null,
       schema_ssot: {
-        source: schemaSSOT.source,
-        schema_columns_count: schemaSSOT.schema_columns_count,
+        source: aggregationApplied ? "aggregated" : schemaSSOT.source,
+        schema_columns_count: aggregationApplied ? enrichedColumns.length : schemaSSOT.schema_columns_count,
         detected_columns_count: schemaSSOT.detected_columns_count ?? null,
       },
       blocked_reasons: allBlockedReasons,
