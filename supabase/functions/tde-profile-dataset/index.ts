@@ -71,11 +71,14 @@ const GENERIC_ADAPTER = {
 /** Returns true if the column is a technical/measure/aggregate column that should be deprioritized */
 function isTechnicalOrMeasureColumn(name: string): boolean {
   const lower = name.toLowerCase();
+  // Extract the column part after table prefix (e.g. "Detalhe Movimentação.QTDPES" → "qtdpes")
+  const colPart = lower.includes(".") ? lower.split(".").pop()! : lower;
   // __ prefixed columns (Power BI internal measures)
-  if (name.startsWith("__")) return true;
-  // Aggregate measure patterns
-  if (/^(count|sum|avg|average|total|measure|medida|qtd|quantidade)[\s_]?/i.test(lower)) return true;
-  if (/[\s_](count|sum|avg|average|total|measure)$/i.test(lower)) return true;
+  if (colPart.startsWith("__")) return true;
+  // Aggregate measure patterns — BUT exclude qtd/quantidade which are legitimate business value columns
+  // (e.g. QTDPES = quantidade de peso, QTDSAC = quantidade de sacas)
+  if (/^(count|sum|avg|average|total|measure|medida)[\s_]/i.test(colPart)) return true;
+  if (/[\s_](count|sum|avg|average|total|measure)$/i.test(colPart)) return true;
   return false;
 }
 
@@ -100,8 +103,12 @@ function scoreEntity(
     reasons.push("Match exato no adaptador de indústria");
   }
 
-  const kw = ["id", "customer", "cliente", "patient", "paciente", "cpf", "cnpj", "matricula", "aluno", "account", "conta", "user", "prontuario"];
-  if (kw.some(k => name.includes(k))) {
+  const kw = ["id", "customer", "cliente", "patient", "paciente", "cpf", "cnpj", "matricula", "aluno", "account", "conta", "user", "prontuario",
+    // Agro entity tokens
+    "codlot", "codpes", "codgre", "cod_produtor", "cod_cooperado", "cod_fazenda", "cod_talhao", "sk_pessoa", "sk_lotecaf", "sk_filial", "lote", "produtor", "cooperado", "fazenda"];
+  // Use the column part after table prefix for matching
+  const colPart = name.includes(".") ? name.split(".").pop()!.toLowerCase() : name;
+  if (kw.some(k => colPart.includes(k) || name.includes(k))) {
     score += 3;
     reasons.push(`Token de entidade: "${name}"`);
   }
@@ -183,15 +190,22 @@ function scoreValue(
   let score = 0;
   const reasons: string[] = [];
 
-  if (col.inferred_type !== "numérico") return { column: col.column_name, score: -10, reasons: ["Não é numérico"] };
+  // Use the column part after table prefix for type checking
+  const colPart = name.includes(".") ? name.split(".").pop()!.toLowerCase() : name;
+  const colType = col.inferred_type.toLowerCase();
+  if (colType !== "numérico" && colType !== "numeric" && colType !== "integer" && colType !== "inteiro" && colType !== "float" && colType !== "number") {
+    return { column: col.column_name, score: -10, reasons: ["Não é numérico"] };
+  }
 
-  if (adapterCandidates.some(c => c.toLowerCase() === name)) {
+  if (adapterCandidates.some(c => c.toLowerCase() === name || c.toLowerCase() === colPart)) {
     score += 5;
     reasons.push("Match no adaptador de valor");
   }
 
-  const valKw = ["value", "valor", "amount", "revenue", "receita", "ticket", "price", "preco", "cost", "custo", "total", "balance", "saldo", "ltv", "lifetime", "gpa", "nota", "score"];
-  if (valKw.some(k => name.includes(k))) {
+  const valKw = ["value", "valor", "amount", "revenue", "receita", "ticket", "price", "preco", "cost", "custo", "total", "balance", "saldo", "ltv", "lifetime", "gpa", "nota", "score",
+    // Agro value tokens
+    "qtd", "sacas", "sac", "peso", "volume", "producao", "produção", "captacao", "captação", "recebimento", "rendimento", "produtividade", "tonelada", "kg", "litro", "quantidade"];
+  if (valKw.some(k => colPart.includes(k) || name.includes(k))) {
     score += 3;
     reasons.push(`Token de valor: "${name}"`);
   }
