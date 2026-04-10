@@ -2550,6 +2550,165 @@ serve(async (req) => {
       }
     }
 
+    // ==================== TEMPORAL AGGREGATION (in-memory) ====================
+    // When dataset_build_mode = temporal_aggregated, aggregate raw sample rows
+    // into entity × month grain BEFORE training. This creates the virtual target
+    // (agg_sacas_mes) and aggregated features from row-level data.
+    const datasetBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
+
+    if (isTemporalAggregated && !useVirtualSample) {
+      // Need to load sample for aggregation even if not Power BI
+      console.log(`[AutoML] temporal_aggregated mode — loading sample for in-memory aggregation`);
+      const { data: sampleDataAgg } = await supabase
+        .from("project_dataset_sample")
+        .select("sample_json, sample_rows")
+        .eq("project_id", project_id)
+        .maybeSingle();
+
+      if (sampleDataAgg?.sample_json) {
+        const rawJsonAgg = sampleDataAgg.sample_json as any;
+        const sampleRowsAgg: Record<string, any>[] = Array.isArray(rawJsonAgg)
+          ? rawJsonAgg
+          : (Array.isArray(rawJsonAgg?.rows) ? rawJsonAgg.rows : []);
+
+        if (sampleRowsAgg.length > 0) {
+          useVirtualSample = true; // Force virtual path with aggregated data
+        }
+      }
+    }
+
+    if (isTemporalAggregated && useVirtualSample) {
+      console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
+      const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
+      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column || null;
+
+      if (aggEntityKey && aggTimeCol) {
+        // Re-load raw sample rows (they might already be in virtualSampledLines as CSV)
+        const { data: sampleDataAgg2 } = await supabase
+          .from("project_dataset_sample")
+          .select("sample_json")
+          .eq("project_id", project_id)
+          .maybeSingle();
+
+        const rawJsonAgg2 = sampleDataAgg2?.sample_json as any;
+        const rawRows: Record<string, any>[] = Array.isArray(rawJsonAgg2)
+          ? rawJsonAgg2
+          : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
+
+        if (rawRows.length > 0) {
+          // Aggregate by entity × month
+          const aggMap = new Map<string, {
+            count: number;
+            codpes_set: Set<string>;
+            codgre_vals: Map<string, number>;
+            origem_vals: Map<string, number>;
+            tipo_vals: Map<string, number>;
+            year: number;
+            monthNum: number;
+            quarter: number;
+          }>();
+
+          for (const row of rawRows) {
+            const entity = String(row[aggEntityKey] || "");
+            const rawDate = String(row[aggTimeCol] || "");
+            const month = rawDate.substring(0, 7); // "YYYY-MM"
+            if (!entity || !month || month.length < 7) continue;
+
+            const key = `${entity}|${month}`;
+            if (!aggMap.has(key)) {
+              const yr = parseInt(month.split("-")[0]) || 0;
+              const mn = parseInt(month.split("-")[1]) || 0;
+              const qt = Math.ceil(mn / 3);
+              aggMap.set(key, {
+                count: 0,
+                codpes_set: new Set(),
+                codgre_vals: new Map(),
+                origem_vals: new Map(),
+                tipo_vals: new Map(),
+                year: yr,
+                monthNum: mn,
+                quarter: qt,
+              });
+            }
+            const agg = aggMap.get(key)!;
+            agg.count += 1; // each row = 1 saca
+
+            // Track categorical modes
+            const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
+            if (codgre) agg.codgre_vals.set(codgre, (agg.codgre_vals.get(codgre) || 0) + 1);
+            const origem = String(row["Detalhe Movimentação.Origem da Movimentação"] || "");
+            if (origem) agg.origem_vals.set(origem, (agg.origem_vals.get(origem) || 0) + 1);
+            const tipo = String(row["Detalhe Movimentação.Tipo do Movimento"] || "");
+            if (tipo) agg.tipo_vals.set(tipo, (agg.tipo_vals.get(tipo) || 0) + 1);
+            const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
+            if (codpes) agg.codpes_set.add(codpes);
+
+            // Calendar fields from row (fallback)
+            if (agg.year === 0) {
+              const calAno = row["Calendário.Ano"];
+              if (calAno) agg.year = parseInt(String(calAno)) || 0;
+            }
+            if (agg.monthNum === 0) {
+              const calMes = row["Calendário.Mês Número"];
+              if (calMes) agg.monthNum = parseInt(String(calMes)) || 0;
+            }
+            if (agg.quarter === 0) {
+              const calTri = row["Calendário.Trimestre"];
+              if (calTri) agg.quarter = parseInt(String(calTri)) || Math.ceil(agg.monthNum / 3);
+            }
+          }
+
+          // Helper: get mode (most frequent value) from a frequency map
+          const getMode = (m: Map<string, number>): string => {
+            let best = ""; let bestCount = 0;
+            for (const [k, v] of m) { if (v > bestCount) { best = k; bestCount = v; } }
+            return best;
+          };
+
+          // Build aggregated rows as CSV
+          const aggHeaders = [
+            "agg_sacas_mes",
+            "Calendário.Ano",
+            "Calendário.Mês Número",
+            "Calendário.Trimestre",
+            "Detalhe Movimentação.CODGRE",
+            "Detalhe Movimentação.Origem da Movimentação",
+            "Detalhe Movimentação.Tipo do Movimento",
+          ];
+
+          const aggLines: string[] = [];
+          for (const [, v] of aggMap) {
+            const vals = [
+              String(v.count),
+              String(v.year),
+              String(v.monthNum),
+              String(v.quarter),
+              getMode(v.codgre_vals),
+              getMode(v.origem_vals),
+              getMode(v.tipo_vals),
+            ];
+            aggLines.push(vals.map(s => {
+              if (s.includes(",") || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
+              return s;
+            }).join(","));
+          }
+
+          // Replace virtual sample with aggregated data
+          virtualHeaders = aggHeaders;
+          virtualSampledLines = aggLines;
+          delimiter = ",";
+          totalDatasetRows = aggLines.length;
+          totalLinesRead = aggLines.length;
+
+          console.log(`[AutoML] Temporal aggregation complete: ${aggMap.size} rows (entity×month), target=agg_sacas_mes, features=${aggHeaders.length - 1}`);
+          console.log(`[AutoML] Aggregated target stats: min=${Math.min(...[...aggMap.values()].map(v => v.count))}, max=${Math.max(...[...aggMap.values()].map(v => v.count))}, mean=${([...aggMap.values()].reduce((a, v) => a + v.count, 0) / aggMap.size).toFixed(1)}`);
+        }
+      } else {
+        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key or time_anchor_column`);
+      }
+    }
+
     // Detect if files are Parquet
     const useParquet = !useVirtualSample && filePaths.some(p => isParquetFile(p, sourceMetadata));
     console.log(`[AutoML] Formato detectado: ${useVirtualSample ? "Virtual (Power BI)" : useParquet ? "Parquet" : "CSV"}`);
