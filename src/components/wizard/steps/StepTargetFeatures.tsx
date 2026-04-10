@@ -401,15 +401,32 @@ const StepTargetFeatures = ({
   }, [hasEDA, inference, loadInference]);
 
   // ═══ SSOT REHYDRATION ═══
+  // The SSOT is authoritative. Virtual/aggregated targets (e.g. agg_sacas_mes)
+  // may not exist in project_columns, so we trust the SSOT without requiring isPhysical.
+  const isAggregatedMode = ssot.dataset_build_mode === "temporal_aggregated";
+
   useEffect(() => {
     if (ssotLoaded && columns.length > 0) {
       if (ssot.target_column) {
         const isPhysical = columns.some((c) => c.name === ssot.target_column);
         const isLabel = ssot.target_column === "label";
-        if (isPhysical || isLabel) { setTargetColumn(ssot.target_column); setAppliedTargetColumn(ssot.target_column); }
+        // In aggregated mode, trust SSOT target even if not in physical columns
+        if (isPhysical || isLabel || isAggregatedMode) {
+          setTargetColumn(ssot.target_column);
+          setAppliedTargetColumn(ssot.target_column);
+          // Inject virtual target into columns list so the Select shows it
+          if (!isPhysical && !isLabel && isAggregatedMode) {
+            setColumns(prev => {
+              if (prev.some(c => c.name === ssot.target_column)) return prev;
+              return [{ name: ssot.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev];
+            });
+          }
+        }
       }
+      // In aggregated mode, prefer SSOT features over row-level columns
       if (ssot.feature_columns.length > 0) setSelectedFeatures(ssot.feature_columns);
       if (ssot.excluded_columns.length > 0) setExcludedColumns(ssot.excluded_columns);
+      // SSOT problem_type is authoritative — always apply when present
       if (ssot.problem_type) setInferredProblemType(ssot.problem_type);
       if (ssot.target_source && ssot.target_source !== "manual") setTargetSource(ssot.target_source as any);
       if (ssot.selected_template_id) setSelectedTemplateId(ssot.selected_template_id);
@@ -418,7 +435,7 @@ const StepTargetFeatures = ({
       else if (!entityKey) { const suggested = suggestEntityKey(); if (suggested) setEntityKey(suggested); }
       if (ssot.industry) setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
     }
-  }, [ssotLoaded, ssot, columns]);
+  }, [ssotLoaded, ssot, columns, isAggregatedMode]);
 
   // Fallback from useProjectSettings
   useEffect(() => {
@@ -924,31 +941,46 @@ const StepTargetFeatures = ({
           </div>
         )}
 
-        {autoRes.resolved && autoRes.result.target_column && (
+        {(autoRes.resolved && autoRes.result.target_column) || (ssotLoaded && ssot.target_column) ? (
           <div className="rounded-xl border border-primary/20 bg-primary/5 p-4">
             <div className="flex items-start gap-3">
               <div className="p-2 rounded-lg bg-primary/10">
                 <Brain className="h-5 w-5 text-primary" />
               </div>
               <div className="flex-1 min-w-0">
+                {/* Use SSOT values when available, fallback to autoRes */}
+                {(() => {
+                  const displayTarget = ssot.target_column || autoRes.result.target_column;
+                  const displayProblem = ssot.problem_type || autoRes.result.problem_type;
+                  const displayEntity = ssot.entity_key || autoRes.result.entity_key;
+                  const displayTime = ssot.time_anchor_column || autoRes.result.time_column;
+                  const displayConfidence = autoRes.result.confidence_score;
+                  return (
+                    <>
                 <div className="flex items-center gap-2 mb-2 flex-wrap">
                   <h3 className="text-sm font-semibold">Resolução aplicada</h3>
-                  <Badge variant={autoRes.result.confidence_score >= 0.7 ? "default" : "outline"} className={`text-[10px] py-0 ${autoRes.result.confidence_score >= 0.7 ? "bg-green-500/20 text-green-600 border-green-500/30" : autoRes.result.confidence_score >= 0.5 ? "border-yellow-500/50 text-yellow-600" : "border-destructive/50 text-destructive"}`}>
-                    {Math.round(autoRes.result.confidence_score * 100)}% confiança
+                  <Badge variant={displayConfidence >= 0.7 ? "default" : "outline"} className={`text-[10px] py-0 ${displayConfidence >= 0.7 ? "bg-green-500/20 text-green-600 border-green-500/30" : displayConfidence >= 0.5 ? "border-yellow-500/50 text-yellow-600" : "border-destructive/50 text-destructive"}`}>
+                    {Math.round(displayConfidence * 100)}% confiança
                   </Badge>
                   {autoRes.result.auto_fix_applied && (
                     <Badge variant="outline" className="text-[10px] py-0"><Wand2 className="w-3 h-3 mr-1" /> Auto-fix</Badge>
                   )}
-                  {autoRes.applied && (
+                  {(autoRes.applied || ssot.target_column) && (
                     <Badge className="bg-green-500/20 text-green-600 border-green-500/30 text-[10px] py-0"><CheckCircle className="w-3 h-3 mr-0.5" /> Sincronizado</Badge>
+                  )}
+                  {isAggregatedMode && (
+                    <Badge variant="outline" className="text-[10px] py-0 border-blue-500/50 text-blue-600">Agregado</Badge>
                   )}
                 </div>
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                  <div className="text-xs"><span className="text-muted-foreground">Target:</span> <span className="font-medium">{autoRes.result.target_column}</span></div>
-                  <div className="text-xs"><span className="text-muted-foreground">Problema:</span> <span className="font-medium">{autoRes.result.problem_type === "classification" ? "Classificação" : "Regressão"}</span></div>
-                  <div className="text-xs"><span className="text-muted-foreground">Entity:</span> <span className="font-medium">{autoRes.result.entity_key || "—"}</span></div>
-                  <div className="text-xs"><span className="text-muted-foreground">Tempo:</span> <span className="font-medium">{autoRes.result.time_column || "Não detectado"}</span></div>
+                  <div className="text-xs"><span className="text-muted-foreground">Target:</span> <span className="font-medium">{displayTarget}</span></div>
+                  <div className="text-xs"><span className="text-muted-foreground">Problema:</span> <span className="font-medium">{displayProblem === "classification" ? "Classificação" : "Regressão"}</span></div>
+                  <div className="text-xs"><span className="text-muted-foreground">Entity:</span> <span className="font-medium">{displayEntity || "—"}</span></div>
+                  <div className="text-xs"><span className="text-muted-foreground">Tempo:</span> <span className="font-medium">{displayTime || "Não detectado"}</span></div>
                 </div>
+                    </>
+                  );
+                })()}
                 {autoRes.result.auto_fix_details.length > 0 && (
                   <div className="mt-2 space-y-0.5">
                     {autoRes.result.auto_fix_details.map((detail, i) => (
@@ -962,7 +994,7 @@ const StepTargetFeatures = ({
               </Button>
             </div>
           </div>
-        )}
+        ) : null}
 
         {/* ═══ BLOCO 2: CONFIGURAÇÃO EDITÁVEL ═══ */}
         <div className="rounded-xl border border-border bg-card p-5 space-y-5">
