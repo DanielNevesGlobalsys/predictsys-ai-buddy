@@ -90,6 +90,7 @@ function scoreEntity(
   allColumns: ColumnRow[],
 ): ScoredCandidate {
   const name = col.column_name.toLowerCase();
+  const colPart = name.includes(".") ? name.split(".").pop()!.toLowerCase() : name;
   let score = 0;
   const reasons: string[] = [];
 
@@ -98,16 +99,32 @@ function scoreEntity(
     return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada"] };
   }
 
+  // ── AGRO GUARDRAIL: Penalize surrogate keys (SK_*) as entity ──
+  if (/^sk_/i.test(colPart)) {
+    score -= 4;
+    reasons.push("Surrogate key (SK_*) penalizada como entidade — prefira código de negócio");
+  }
+
+  // ── AGRO GUARDRAIL: Penalize calendar-sourced columns as entity ──
+  if (/^calend[aá]rio\./i.test(name) || /^calendar\./i.test(name)) {
+    score -= 5;
+    reasons.push("Coluna de tabela calendário não é entidade de negócio");
+  }
+
   if (adapterCandidates.some(c => c.toLowerCase() === name)) {
     score += 5;
     reasons.push("Match exato no adaptador de indústria");
   }
 
-  const kw = ["id", "customer", "cliente", "patient", "paciente", "cpf", "cnpj", "matricula", "aluno", "account", "conta", "user", "prontuario",
-    // Agro entity tokens
-    "codlot", "codpes", "codgre", "cod_produtor", "cod_cooperado", "cod_fazenda", "cod_talhao", "sk_pessoa", "sk_lotecaf", "sk_filial", "lote", "produtor", "cooperado", "fazenda"];
-  // Use the column part after table prefix for matching
-  const colPart = name.includes(".") ? name.split(".").pop()!.toLowerCase() : name;
+  // Agro business entity tokens — high priority
+  const agroBusinessEntities = ["codlot", "codpes", "codgre", "cod_produtor", "cod_cooperado", "cod_fazenda", "cod_talhao", "lote", "produtor", "cooperado", "fazenda"];
+  if (agroBusinessEntities.some(k => colPart.includes(k))) {
+    score += 5;
+    reasons.push(`Token de entidade agro de negócio: "${colPart}"`);
+  }
+
+  // Generic entity tokens — lower priority
+  const kw = ["id", "customer", "cliente", "patient", "paciente", "cpf", "cnpj", "matricula", "aluno", "account", "conta", "user", "prontuario"];
   if (kw.some(k => colPart.includes(k) || name.includes(k))) {
     score += 3;
     reasons.push(`Token de entidade: "${name}"`);
@@ -119,9 +136,9 @@ function scoreEntity(
   }
 
   const techPKs = ["row_id", "index", "idx", "unnamed", "unnamed:_0"];
-  if (techPKs.includes(name)) { score -= 5; reasons.push("PK técnica"); }
+  if (techPKs.includes(colPart)) { score -= 5; reasons.push("PK técnica"); }
 
-  if (name === "id" && col.inferred_type === "numérico" &&
+  if (colPart === "id" && col.inferred_type === "numérico" &&
       allColumns.some(c => { const n = c.column_name.toLowerCase(); return n !== name && (n.includes("customer") || n.includes("client") || n.includes("user_id") || n.includes("cpf")); })) {
     score -= 3;
     reasons.push("ID numérico genérico com candidato melhor");
@@ -137,12 +154,12 @@ function scoreTime(
   totalRows: number,
 ): ScoredCandidate {
   const name = col.column_name.toLowerCase();
+  const colPart = name.includes(".") ? name.split(".").pop()!.toLowerCase() : name;
   let score = 0;
   const reasons: string[] = [];
 
   // Block technical/measure columns from being time candidates
   if (isTechnicalOrMeasureColumn(col.column_name)) {
-    console.log(`[tde-profile-dataset] tde_rejected_technical_measure_candidate time="${col.column_name}"`);
     return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada como âncora temporal"] };
   }
 
@@ -162,13 +179,31 @@ function scoreTime(
     reasons.push("Match exato no adaptador");
   }
 
+  // ── AGRO GUARDRAIL: Boost operational dates from fact tables (DATMOV, data_movimento, etc.) ──
+  const opDateTokens = ["datmov", "data_movimento", "data_movimentacao", "data_recebimento", "data_entrega", "data_pesagem", "data_colheita", "data_plantio", "dt_movimento"];
+  if (opDateTokens.some(k => colPart === k || colPart.includes(k))) {
+    score += 4;
+    reasons.push(`Data operacional de movimentação: "${colPart}" — prioridade como âncora temporal`);
+  }
+
+  // ── AGRO GUARDRAIL: Penalize calendar dimension keys as primary time anchor ──
+  if (/^calend[aá]rio\./i.test(name) || /^calendar\./i.test(name)) {
+    score -= 3;
+    reasons.push("Coluna de tabela calendário — auxiliar, não âncora principal");
+  }
+  // SK_DATA from any source is a surrogate date key, not operational
+  if (colPart === "sk_data" || colPart === "sk_date") {
+    score -= 3;
+    reasons.push("Surrogate key temporal (SK_DATA) — auxiliar, não âncora operacional");
+  }
+
   const dateKw = ["dt", "date", "data", "created_at", "appointment", "visit", "consulta", "compra", "pedido", "purchase", "order", "vencimento", "ship", "delivery", "entrega"];
-  if (dateKw.some(k => name.includes(k))) {
+  if (dateKw.some(k => colPart.includes(k))) {
     score += 3;
     reasons.push(`Token temporal: "${name}"`);
   }
 
-  if (name === "updated_at" || name === "dt_atualizacao") {
+  if (colPart === "updated_at" || colPart === "dt_atualizacao") {
     score -= 3;
     reasons.push("updated_at não é âncora");
   }
@@ -313,12 +348,26 @@ function inferDatasetShape(
   const hasTime = bestTime !== null && bestTime.score >= 3;
   const hasValue = topValues.length > 0;
 
+  // ── AGRO/MULTI-TABLE: Detect movement/transaction fact tables first ──
+  // Tables named "movimentação", "detalhe", "fato_", "fact_", "recebimento", "pesagem"
+  // indicate transactional data, even if they also have "tipo" columns.
+  const hasFactTableIndicator = columns.some(c => {
+    const n = c.column_name.toLowerCase();
+    return n.includes("movimenta") || n.includes("detalhe") || n.includes("fato_") || n.includes("fact_")
+      || n.includes("recebimento") || n.includes("pesagem") || n.includes("datmov");
+  });
+  if (hasFactTableIndicator && hasTime && hasValue && totalRows > 100) {
+    return "transactional";
+  }
+
   // events: has event/type/action column + timestamp + many rows
+  // BUT only if there's no strong fact table indicator (avoids misclassifying agro movement data)
   const hasEventCol = columns.some(c => {
     const n = c.column_name.toLowerCase();
-    return n.includes("event") || n.includes("type") || n.includes("action") || n.includes("tipo");
+    const colP = n.includes(".") ? n.split(".").pop()! : n;
+    return colP.includes("event") || colP === "type" || colP === "action";
   });
-  if (hasEventCol && hasTime && totalRows > 100) {
+  if (hasEventCol && hasTime && totalRows > 100 && !hasFactTableIndicator) {
     return "events";
   }
 
