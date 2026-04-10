@@ -22,7 +22,7 @@ export function useGrainTimeResolution(projectId: string | undefined) {
     try {
       // Fetch project data
       const [{ data: settings }, { data: cols }, { data: dsState }] = await Promise.all([
-        supabase.from("project_settings").select("objective, entity_key, time_anchor_column, problem_type, ingestion_rows_detected, ingestion_cols_detected").eq("project_id", projectId).maybeSingle(),
+        supabase.from("project_settings").select("objective, entity_key, time_anchor_column, problem_type, target_column, dataset_build_mode, predictive_resolution_summary, ingestion_rows_detected, ingestion_cols_detected").eq("project_id", projectId).maybeSingle(),
         supabase.from("project_columns").select("column_name, inferred_type, null_percent, distinct_count").eq("project_id", projectId),
         supabase.from("project_dataset_state").select("row_count, col_count, source_type").eq("project_id", projectId).maybeSingle(),
       ]);
@@ -40,6 +40,12 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       const entityKey = overrides?.entityKey !== undefined ? overrides.entityKey : (s?.entity_key || null);
       // CRITICAL: Prefer overrides.timeColumn over DB value — for new projects the DB is empty
       const timeColumn = overrides?.timeColumn !== undefined ? (overrides.timeColumn || s?.time_anchor_column || null) : (s?.time_anchor_column || null);
+      const predictiveSummary = (s?.predictive_resolution_summary || {}) as Record<string, any>;
+      const resolvedTargetColumn = overrides?.targetColumn || s?.target_column || predictiveSummary?.target || null;
+      const forceTemporalAggregated = s?.dataset_build_mode === "temporal_aggregated"
+        || predictiveSummary?.dataset_build_mode === "temporal_aggregated"
+        || predictiveSummary?.aggregated_target_required === true
+        || /^agg_/i.test(String(resolvedTargetColumn || ""));
       const totalRows = (dsState as any)?.row_count || s?.ingestion_rows_detected || 0;
       const totalCols = columns.length || (dsState as any)?.col_count || 0;
 
@@ -85,18 +91,55 @@ export function useGrainTimeResolution(projectId: string | undefined) {
       );
 
       // 5. Build combined resolution
-      const result = buildGrainTimeResolution(grainRes, timeRes, splitRes, readiness, autoFixes);
+      let result = buildGrainTimeResolution(grainRes, timeRes, splitRes, readiness, autoFixes);
+
+      if (forceTemporalAggregated && entityKey && (timeRes.time_column || timeColumn)) {
+        const resolvedTime = timeRes.time_column || timeColumn;
+        result = {
+          ...result,
+          grain: {
+            ...result.grain,
+            recommended_grain: "entity_time",
+            time_key: resolvedTime,
+            aggregation_required: true,
+            snapshot_required: true,
+            aggregation_plan: result.grain.aggregation_plan || {
+              level: `${entityKey}_periodo`,
+              method: "group_by_entity_time",
+            },
+            grain_reasoning: [...result.grain.grain_reasoning, "Fluxo agro agregado preservado a partir do SSOT/PRE."],
+            confidence: Math.max(result.grain.confidence, 0.9),
+          },
+          split: {
+            ...result.split,
+            recommended_split: "temporal",
+            split_reasoning: [...result.split.split_reasoning, "Split temporal forçado para manter coerência com target agregado oficial."],
+            confidence: Math.max(result.split.confidence, 0.9),
+          },
+          build_plan: {
+            ...result.build_plan,
+            use_original_rows: false,
+            requires_aggregation: true,
+            requires_snapshots: true,
+            requires_temporal_features: true,
+            builder_mode: "temporal_aggregated",
+            builder_reasoning: [...result.build_plan.builder_reasoning, "Builder temporal agregado preservado pelo SSOT/PRE."],
+          },
+          auto_fixes_applied: Array.from(new Set([...result.auto_fixes_applied, "FORCE_TEMPORAL_AGGREGATED_FROM_SSOT"])),
+        };
+      }
+
       setResolution(result);
 
       // 6. Persist to project_settings
       await supabase.from("project_settings").update({
-        recommended_grain: grainRes.recommended_grain,
-        grain_confidence: grainRes.confidence,
-        recommended_time_column: timeRes.time_column,
-        time_strategy_confidence: timeRes.confidence,
-        recommended_split_strategy: splitRes.recommended_split,
+        recommended_grain: result.grain.recommended_grain,
+        grain_confidence: result.grain.confidence,
+        recommended_time_column: result.time.time_column,
+        time_strategy_confidence: result.time.confidence,
+        recommended_split_strategy: result.split.recommended_split,
         dataset_build_mode: result.build_plan.builder_mode,
-        temporal_readiness_state: readiness.status,
+        temporal_readiness_state: result.temporal_readiness.status,
         updated_at: new Date().toISOString(),
       } as any).eq("project_id", projectId);
 
