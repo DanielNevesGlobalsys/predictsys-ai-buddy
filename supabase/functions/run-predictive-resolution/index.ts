@@ -53,6 +53,161 @@ function isAgroRegressionObjective(objective: string): boolean {
   return AGRO_REGRESSION_SIGNALS.some(s => lo.includes(s));
 }
 
+const AGRO_ROW_LEVEL_DEGENERATE_TOKENS = [
+  "qtdpes", "qtd_pes", "qtdsac", "qtd_sac", "qtde_sacas", "sacas", "peso",
+];
+
+const AGRO_AGGREGATED_TARGET_NAME = "agg_sacas_mes";
+
+function normalizeText(value: string): string {
+  return (value || "")
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function toNumeric(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const normalized = trimmed.replace(/\s+/g, "").replace(/\.(?=\d{3}(\D|$))/g, "").replace(",", ".");
+  const parsed = Number(normalized);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function buildNumericSampleStats(rows: Array<Record<string, unknown>>, columnName: string | null): {
+  sample_count: number;
+  unique_count: number;
+  dominant_ratio: number;
+  mean: number;
+  std: number;
+} | null {
+  if (!columnName || rows.length === 0) return null;
+  const values = rows
+    .map((row) => toNumeric(row[columnName]))
+    .filter((value): value is number => value !== null);
+
+  if (values.length === 0) return null;
+
+  const frequencies = new Map<string, number>();
+  for (const value of values) {
+    const key = value.toFixed(6);
+    frequencies.set(key, (frequencies.get(key) || 0) + 1);
+  }
+
+  const dominant = Math.max(...Array.from(frequencies.values()));
+  const mean = values.reduce((acc, value) => acc + value, 0) / values.length;
+  const variance = values.reduce((acc, value) => acc + (value - mean) ** 2, 0) / values.length;
+
+  return {
+    sample_count: values.length,
+    unique_count: frequencies.size,
+    dominant_ratio: dominant / values.length,
+    mean,
+    std: Math.sqrt(variance),
+  };
+}
+
+function isLikelyAgroRowLevelValueColumn(columnName: string | null): boolean {
+  const lower = normalizeText(columnName || "");
+  return AGRO_ROW_LEVEL_DEGENERATE_TOKENS.some((token) => lower.includes(token));
+}
+
+function isAllowedCalendarDimension(columnName: string): boolean {
+  const lower = normalizeText(columnName);
+  const fromCalendarTable = lower.includes("calendario.") || lower.includes("calendar.");
+  const isCalendarDimension = ["ano", "mes", "month", "trimestre", "quarter"].some((token) => lower.includes(token));
+  return fromCalendarTable && isCalendarDimension;
+}
+
+function pickAgroAggregationSourceColumn(
+  columns: Array<{ column_name: string }>,
+  currentTarget: string | null,
+): string | null {
+  const names = columns.map((column) => column.column_name);
+  return names.find((name) => /qtdsac|sacas/i.test(name))
+    || currentTarget
+    || names.find((name) => /qtdpes|peso/i.test(name))
+    || null;
+}
+
+function detectAgroAggregatedTargetPromotion(args: {
+  isAgroRegression: boolean;
+  entityKey: string | null;
+  timeAnchor: string | null;
+  grain: string;
+  currentTarget: string | null;
+  columns: Array<{ column_name: string }>;
+  sampleRows: Array<Record<string, unknown>>;
+}) {
+  const { isAgroRegression, entityKey, timeAnchor, grain, currentTarget, columns, sampleRows } = args;
+  if (!isAgroRegression || !entityKey || !timeAnchor) return null;
+  if (!["entity_time", "entity_product_time"].includes(grain)) return null;
+  if (currentTarget === AGRO_AGGREGATED_TARGET_NAME) return null;
+
+  const sourceColumn = pickAgroAggregationSourceColumn(columns, currentTarget);
+  const targetStats = buildNumericSampleStats(sampleRows, currentTarget);
+  const sourceStats = buildNumericSampleStats(sampleRows, sourceColumn);
+  const stats = targetStats || sourceStats;
+
+  const tokenSuggestsRowLevel = isLikelyAgroRowLevelValueColumn(currentTarget) || isLikelyAgroRowLevelValueColumn(sourceColumn);
+  const statsSuggestDegenerate = !!stats && (
+    stats.unique_count <= 2 ||
+    stats.dominant_ratio >= 0.9 ||
+    stats.std <= 1e-9
+  );
+
+  if (!tokenSuggestsRowLevel && !statsSuggestDegenerate) return null;
+
+  const baseColumn = sourceColumn || currentTarget;
+  const aggregationFormula = baseColumn && /qtdsac|sacas/i.test(baseColumn)
+    ? `SUM(${baseColumn}) GROUP BY ${entityKey}, month(${timeAnchor})`
+    : `COUNT(*) GROUP BY ${entityKey}, month(${timeAnchor})`;
+
+  return {
+    target_name: AGRO_AGGREGATED_TARGET_NAME,
+    source_column: currentTarget,
+    aggregation_base_column: baseColumn,
+    grain: "entity_time",
+    dataset_build_mode: "temporal_aggregated",
+    split_strategy: "temporal",
+    aggregation_formula: aggregationFormula,
+    evidence: {
+      token_suggests_row_level: tokenSuggestsRowLevel,
+      sample_stats: stats,
+    },
+    reason: baseColumn && /qtdsac|sacas/i.test(baseColumn)
+      ? `Caso agro transacional com medida row-level degenerada. O target oficial deve ser ${AGRO_AGGREGATED_TARGET_NAME} = SUM(${baseColumn}) por ${entityKey} × mês.`
+      : `Caso agro transacional com medida row-level degenerada. O target oficial deve ser ${AGRO_AGGREGATED_TARGET_NAME} por ${entityKey} × mês, com builder temporal agregado.`,
+  };
+}
+
+function getAgroAggregatedFeatureBlockReason(
+  columnName: string,
+  inferredType: string,
+  entityKey: string | null,
+  timeAnchor: string | null,
+  aggregationBaseColumn: string | null,
+): string | null {
+  const lower = normalizeText(columnName);
+  const blockedStructural = new Set(
+    [entityKey, timeAnchor, aggregationBaseColumn, AGRO_AGGREGATED_TARGET_NAME]
+      .filter(Boolean)
+      .map((value) => normalizeText(String(value))),
+  );
+
+  if (blockedStructural.has(lower)) return "coluna estrutural do caso agregado";
+  if (isAllowedCalendarDimension(columnName)) return null;
+  if (lower.startsWith("sk_") || lower.startsWith("__")) return "chave substituta";
+  if (lower.includes("codlot")) return "identificador da entidade";
+  if (isDateColumn(columnName, inferredType || "")) return "coluna temporal operacional";
+  if (["qtdpes", "qtdsac", "sacas", "peso", "volume", "quantidade"].some((token) => lower.includes(token))) {
+    return "medida operacional row-level/proxy do target";
+  }
+  return null;
+}
+
 // ═══ Main ══════════════════════════════════════════════════════
 
 Deno.serve(async (req) => {
@@ -91,6 +246,10 @@ Deno.serve(async (req) => {
     const columns = (columnsRes.data || []) as Array<{ column_name: string; inferred_type: string; [k: string]: any }>;
     const modelSelection = selectionRes.data as Record<string, any> | null;
     const datasetState = datasetStateRes.data as Record<string, any> | null;
+    const sampleJson = (sampleRes.data as Record<string, any> | null)?.sample_json as Record<string, any> | null;
+    const sampleRows = Array.isArray(sampleJson?.rows)
+      ? (sampleJson.rows as Array<Record<string, unknown>>).slice(0, 1000)
+      : [];
 
     const intentContractV3 = settings?.intent_contract_v3 || null;
     const edaProfile = settings?.eda_profile_json || null;
@@ -368,7 +527,7 @@ Deno.serve(async (req) => {
     const best = candidates[0];
     const THRESHOLD = 0.6;
 
-    const targetDef = (!best || best.score < THRESHOLD)
+    let targetDef = (!best || best.score < THRESHOLD)
       ? { mode: "blocked", target_name: null, target_source_column: null, target_rule: null, target_kind: "unknown", target_confidence: 0,
           target_reasoning: "Nenhum target com confiança suficiente.", alternatives: candidates }
       : { mode: best.mode, target_name: best.column, target_source_column: best.column, target_rule: best.reasoning,
@@ -390,11 +549,55 @@ Deno.serve(async (req) => {
       grainReasoning = "Forecast temporal.";
     }
 
+    const aggregationPromotion = detectAgroAggregatedTargetPromotion({
+      isAgroRegression,
+      entityKey,
+      timeAnchor,
+      grain,
+      currentTarget: targetDef.target_name,
+      columns,
+      sampleRows,
+    });
+
+    if (aggregationPromotion) {
+      targetDef = {
+        mode: "derived_aggregation",
+        target_name: aggregationPromotion.target_name,
+        target_source_column: aggregationPromotion.aggregation_base_column,
+        target_rule: aggregationPromotion.aggregation_formula,
+        target_kind: "continuous",
+        target_confidence: Math.max(targetDef.target_confidence || 0, 0.92),
+        target_reasoning: aggregationPromotion.reason,
+        alternatives: [
+          ...(targetDef.target_name
+            ? [{
+              column: targetDef.target_name,
+              problem_type: problemType,
+              strategy: targetDef.mode,
+              confidence: targetDef.target_confidence || 0,
+              reasoning: targetDef.target_reasoning,
+            }]
+            : []),
+          ...candidates.slice(0, 4),
+        ],
+        aggregation_metadata: aggregationPromotion,
+      };
+      grain = aggregationPromotion.grain;
+      grainReasoning = "Caso agro transacional com medida row-level degenerada — target promovido para agregação temporal por entidade × mês.";
+    }
+
     const dataShape = intentContractV3?.data_expectations?.expected_data_shape || "unknown";
 
     // ── Dataset strategy ───────────────────────────────────────
-    const needsAgg = grain === "aggregated" || grain === "entity_product_time";
+    const needsAgg = !!aggregationPromotion || grain === "aggregated" || grain === "entity_product_time";
     const snapshotReq = grain === "entity_time" && !!timeAnchor && dataShape === "multiple_rows_per_entity";
+    const targetBuildMode = aggregationPromotion
+      ? "temporal_aggregated"
+      : needsAgg && !!timeAnchor
+        ? "temporal_aggregated"
+        : snapshotReq
+          ? "entity_time"
+          : "row_level";
 
     // Detect multi-table context for agro
     const hasMultiTable = columns.some(c => c.column_name.includes("."));
@@ -422,11 +625,14 @@ Deno.serve(async (req) => {
 
     const datasetStrategy = {
       needs_aggregation: needsAgg,
-      aggregation_level: needsAgg ? "entity" : null,
+      aggregation_level: needsAgg ? "entity_time_month" : null,
       snapshot_required: snapshotReq,
       temporal_strategy: snapshotReq ? "multi_period" : (timeAnchor ? "snapshot" : "none"),
       multi_table_strategy: isAgro && hasMultiTable ? { primary_table: primaryTable, auxiliary_table: auxiliaryTable, calendar_role: "temporal_enrichment" } : null,
       split_suggestion: timeAnchor ? "temporal" : "stratified",
+      target_build_mode: targetBuildMode,
+      aggregated_target_required: !!aggregationPromotion,
+      aggregated_target_plan: aggregationPromotion,
     };
 
     // ── Feature plan ───────────────────────────────────────────
@@ -441,6 +647,19 @@ Deno.serve(async (req) => {
       const nm = col.column_name;
       const lo = nm.toLowerCase();
       if (nm === (targetDef.target_name || "") || nm === entityKey || nm === timeAnchor) { excludeFeatures.push(nm); continue; }
+      if (aggregationPromotion) {
+        const blockReason = getAgroAggregatedFeatureBlockReason(
+          nm,
+          col.inferred_type || "",
+          entityKey,
+          timeAnchor,
+          aggregationPromotion.aggregation_base_column,
+        );
+        if (blockReason) {
+          excludeFeatures.push(nm);
+          continue;
+        }
+      }
       if (forbidden.has(nm)) { blockedFeatures.push(nm); continue; }
       if (knownLeak.has(nm)) { leakageFlags.push(nm); blockedFeatures.push(nm); continue; }
       if (LEAKAGE_TOKENS.some((t: string) => lo.includes(t)) && nm !== targetDef.target_name) { leakageFlags.push(nm); excludeFeatures.push(nm); continue; }
@@ -509,6 +728,7 @@ Deno.serve(async (req) => {
             : `Objetivo "${objective}" = valor numérico → regressão.`,
         why_this_target: targetDef.target_reasoning,
         why_this_grain: grainReasoning,
+        why_aggregate_target: aggregationPromotion?.reason,
         why_not_status: isAgroRegression ? "Colunas de status/evento foram penalizadas pois o objetivo é previsão contínua de volume agro." : undefined,
         why_not_date_target: "Colunas temporais são BLOQUEADAS como variável alvo — servem apenas como âncora temporal.",
         main_risks: [
@@ -537,6 +757,7 @@ Deno.serve(async (req) => {
         `TARGET_MODE_${targetDef.mode.toUpperCase()}`,
         `GRAIN_${grain.toUpperCase()}`,
         isAgroRegression && "AGRO_REGRESSION_OVERRIDE",
+        aggregationPromotion && "AGRO_AGGREGATED_TARGET_PROMOTION",
         hasMultiTable && "MULTI_TABLE_DETECTED",
       ].filter(Boolean),
       created_at: new Date().toISOString(),
@@ -580,11 +801,13 @@ Deno.serve(async (req) => {
         entity_key: entityKey,
         time_anchor: timeAnchor,
         grain,
+        dataset_build_mode: targetBuildMode,
         confidence: overall,
         training_ready: blocking.length === 0,
         domain: isAgro ? "agro" : "generic",
         primary_table: primaryTable,
         auxiliary_table: auxiliaryTable,
+        aggregated_target_required: !!aggregationPromotion,
       },
     }).eq("project_id", project_id);
 
