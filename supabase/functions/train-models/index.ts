@@ -2382,7 +2382,9 @@ serve(async (req) => {
     console.log(`Max linhas para leitura: ${MAX_ROWS_TO_READ.toLocaleString()}`);
 
     // For temporal_aggregated, lower the minimum (aggregated datasets are small by design)
-    const effectiveMinRows = isTemporalAggregated ? 30 : MIN_ROWS_FOR_TRAIN;
+    const earlyBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const isTemporalAggregatedEarly = earlyBuildMode === "temporal_aggregated";
+    const effectiveMinRows = isTemporalAggregatedEarly ? 30 : MIN_ROWS_FOR_TRAIN;
 
     if (totalDatasetRows < effectiveMinRows) {
       console.log(`[AutoML] Dataset muito pequeno (${totalDatasetRows} < ${effectiveMinRows})`);
