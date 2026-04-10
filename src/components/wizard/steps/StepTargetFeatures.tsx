@@ -648,12 +648,14 @@ const StepTargetFeatures = ({
   }, [projectData.target_column]);
 
   // Auto-select all features when no SSOT features
+  // In aggregated mode, do NOT auto-fill with row-level columns — wait for SSOT features
   useEffect(() => {
+    if (isAggregatedMode) return; // SSOT features are authoritative in aggregated mode
     if (columns.length > 0 && selectedFeatures.length === 0 && ssotLoaded && ssot.feature_columns.length === 0) {
       const features = columns.filter((c) => c.name !== targetColumn && !c.featureHasError).map((c) => c.name);
       setSelectedFeatures(features);
     }
-  }, [columns, targetColumn, ssotLoaded, ssot.feature_columns]);
+  }, [columns, targetColumn, ssotLoaded, ssot.feature_columns, isAggregatedMode]);
 
   const checkEDA = async () => {
     if (!projectData.id) return;
