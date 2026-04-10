@@ -116,11 +116,21 @@ function scoreEntity(
     reasons.push("Match exato no adaptador de indústria");
   }
 
-  // Agro business entity tokens — high priority
-  const agroBusinessEntities = ["codlot", "codpes", "codgre", "cod_produtor", "cod_cooperado", "cod_fazenda", "cod_talhao", "lote", "produtor", "cooperado", "fazenda"];
-  if (agroBusinessEntities.some(k => colPart.includes(k))) {
+  // Agro business entity tokens — tiered priority (operational unit > person > group)
+  // CODLOT (lote/operação) is the primary operational grain in agro captação/produção
+  const agroTier1 = ["codlot", "cod_lote", "lote", "cod_talhao", "talhao"]; // operational unit = highest
+  const agroTier2 = ["codpes", "cod_pesagem", "cod_produtor", "produtor", "cooperado", "cod_cooperado", "fazenda", "cod_fazenda"]; // person/farm
+  const agroTier3 = ["codgre", "cod_gre", "cod_grupo", "grupo_economico"]; // group = lowest
+
+  if (agroTier1.some(k => colPart.includes(k))) {
+    score += 7;
+    reasons.push(`Entidade agro operacional primária (lote/talhão): "${colPart}"`);
+  } else if (agroTier2.some(k => colPart.includes(k))) {
     score += 5;
-    reasons.push(`Token de entidade agro de negócio: "${colPart}"`);
+    reasons.push(`Entidade agro de produtor/fazenda: "${colPart}"`);
+  } else if (agroTier3.some(k => colPart.includes(k))) {
+    score += 3;
+    reasons.push(`Entidade agro de grupo econômico (agrupador): "${colPart}"`);
   }
 
   // Generic entity tokens — lower priority
