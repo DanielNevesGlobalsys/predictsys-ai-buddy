@@ -194,9 +194,10 @@ Guidelines:
         console.log(`[lys-synthesize] GUARDRAIL: Replaced with numeric alternative: ${numericAlt.column}`);
       } else {
         // Check suggested_features for numeric columns
+        const AGRO_VALUE_TOKENS = ["qtd", "sacas", "peso", "volume", "quantidade", "producao", "captacao", "rendimento", "produção", "captação", "tonelada", "kg", "litro"];
         const numericFeature = (synthesis.suggested_features || []).find((f: string) => {
           const lo = f.toLowerCase();
-          return ["qtd", "sacas", "peso", "volume", "quantidade", "producao", "captacao", "rendimento"].some(t => lo.includes(t));
+          return AGRO_VALUE_TOKENS.some(t => lo.includes(t));
         });
         if (numericFeature) {
           synthesis.suggested_target = numericFeature;
@@ -204,8 +205,22 @@ Guidelines:
           synthesis.suggested_features = (synthesis.suggested_features || []).filter((f: string) => f !== numericFeature);
           console.log(`[lys-synthesize] GUARDRAIL: Promoted numeric feature as target: ${numericFeature}`);
         } else {
-          synthesis.suggested_target = null;
-          console.log(`[lys-synthesize] GUARDRAIL: No valid alternative found, target set to null`);
+          // Last resort: check TDE profile value candidates from context
+          const tdeValues = context.eda_summary?.tde_profile_result?.candidates?.value_candidates
+            || context.eda_summary?.tde_profile?.candidates?.value_candidates || [];
+          const tdeValueCol = tdeValues.find((v: any) => {
+            const col = typeof v === "string" ? v : v?.column || "";
+            return AGRO_VALUE_TOKENS.some(t => col.toLowerCase().includes(t));
+          });
+          if (tdeValueCol) {
+            const colName = typeof tdeValueCol === "string" ? tdeValueCol : tdeValueCol.column;
+            synthesis.suggested_target = colName;
+            synthesis.suggested_problem_type = "regression";
+            console.log(`[lys-synthesize] GUARDRAIL: Promoted TDE value candidate as target: ${colName}`);
+          } else {
+            synthesis.suggested_target = null;
+            console.log(`[lys-synthesize] GUARDRAIL: No valid alternative found, target set to null`);
+          }
         }
       }
     }
