@@ -2748,17 +2748,39 @@ serve(async (req) => {
         }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
       }
 
-      // Get numeric feature columns
-      const numericColumns = columns.filter(c =>
-        (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
-      );
-      const featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
-      const baseFeatureNames = featureIndices.map(i => headers[i]);
-      const engineeredFeatureNames = enabledFeatures.map(f => f.name);
+      // Get feature columns — for temporal_aggregated, use all non-target headers
+      // and encode categoricals as one-hot; for regular mode use project_columns
+      let featureIndices: number[] = [];
+      let baseFeatureNames: string[] = [];
+
+      if (isTemporalAggregated) {
+        // In aggregated mode, headers are the aggregated schema (target + features)
+        // Use model_selection selected_features to pick which ones to use
+        const selFeatures = (selection?.selected_features as string[]) || [];
+        const selSet = new Set(selFeatures.map(f => f.toLowerCase()));
+
+        for (let i = 0; i < headers.length; i++) {
+          const h = headers[i];
+          if (h.toLowerCase() === target_column.toLowerCase()) continue;
+          // If selection has features, only use selected ones; else use all non-target
+          if (selSet.size > 0 && !selSet.has(h.toLowerCase())) continue;
+          featureIndices.push(i);
+          baseFeatureNames.push(h);
+        }
+        console.log(`[AutoML] Aggregated feature selection: ${baseFeatureNames.length} features from headers: ${baseFeatureNames.join(", ")}`);
+      } else {
+        const numericColumns = columns.filter(c =>
+          (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
+        );
+        featureIndices = numericColumns.map(c => findHeaderIndex(headers, c.column_name)).filter(i => i !== -1);
+        baseFeatureNames = featureIndices.map(i => headers[i]);
+      }
+
+      const engineeredFeatureNames = isTemporalAggregated ? [] : enabledFeatures.map(f => f.name);
       const allFeatureNames = [...baseFeatureNames, ...engineeredFeatureNames];
 
       if (baseFeatureNames.length === 0) {
-        return new Response(JSON.stringify({ error: "Nenhuma feature numérica encontrada." }), {
+        return new Response(JSON.stringify({ error: "Nenhuma feature encontrada no dataset agregado." }), {
           status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" }
         });
       }
