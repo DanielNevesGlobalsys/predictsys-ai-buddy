@@ -2786,16 +2786,52 @@ serve(async (req) => {
       }
 
       // Check if target is categorical
-      const targetColumnInfo = columns.find(c => c.column_name === target_column);
-      const isTargetCategorical = targetColumnInfo?.inferred_type === "categórico" ||
-                                    targetColumnInfo?.inferred_type === "categorico" ||
-                                    targetColumnInfo?.inferred_type === "texto";
+      const isTargetCategorical = isTemporalAggregated ? false : (
+        (columns.find(c => c.column_name === target_column)?.inferred_type || "").match(/categ|texto/i) !== null
+      );
 
-      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas numéricas`);
+      console.log(`\nFeatures base: ${baseFeatureNames.length} colunas`);
       console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
       console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
 
-      // Parse CSV lines into X, y (same logic as CSV path)
+      // For aggregated mode with categorical features, build label encoders
+      // by scanning all values first
+      const catEncoders: Map<number, Map<string, number>> = new Map();
+      let expandedFeatureNames = [...allFeatureNames];
+
+      if (isTemporalAggregated) {
+        // Identify which feature indices are categorical (non-numeric)
+        const catFeatureIdxs: number[] = [];
+        // Sample first few lines to detect
+        const sampleCheckLines = virtualSampledLines.slice(0, Math.min(10, virtualSampledLines.length));
+        for (const fi of featureIndices) {
+          let numericCount = 0;
+          for (const line of sampleCheckLines) {
+            const vals = parseCSVLine(line, delimiter);
+            const v = vals[fi]?.replace(",", ".") || "";
+            if (v && !isNaN(parseFloat(v))) numericCount++;
+          }
+          if (numericCount < sampleCheckLines.length * 0.5) {
+            catFeatureIdxs.push(fi);
+          }
+        }
+
+        if (catFeatureIdxs.length > 0) {
+          console.log(`[AutoML] Detected ${catFeatureIdxs.length} categorical features in aggregated data, applying label encoding`);
+          // Build encoders
+          for (const fi of catFeatureIdxs) {
+            const valueSet = new Map<string, number>();
+            for (const line of virtualSampledLines) {
+              const vals = parseCSVLine(line, delimiter);
+              const v = (vals[fi] || "").trim();
+              if (v && !valueSet.has(v)) valueSet.set(v, valueSet.size);
+            }
+            catEncoders.set(fi, valueSet);
+          }
+        }
+      }
+
+      // Parse CSV lines into X, y
       for (const line of virtualSampledLines) {
         const values = parseCSVLine(line, delimiter);
 
@@ -2803,15 +2839,20 @@ serve(async (req) => {
         const rawRecord: Record<string, string | number | null> = {};
         headers.forEach((h, idx) => { rawRecord[h] = values[idx] || null; });
 
-        // Get base features
+        // Get base features (handle categoricals with label encoding)
         const baseFeatures = featureIndices.map(idx => {
+          if (catEncoders.has(idx)) {
+            const enc = catEncoders.get(idx)!;
+            const v = (values[idx] || "").trim();
+            return enc.get(v) ?? 0;
+          }
           const val = values[idx]?.replace(",", ".") || "";
           const parsed = parseFloat(val);
           return isNaN(parsed) ? 0 : parsed;
         });
 
-        // Apply engineered features
-        const engineeredValues = applyFeatureTransforms(rawRecord, enabledFeatures);
+        // Apply engineered features (skip for aggregated mode)
+        const engineeredValues = isTemporalAggregated ? {} : applyFeatureTransforms(rawRecord, enabledFeatures);
         const engineeredFeatures = engineeredFeatureNames.map(name => {
           const val = engineeredValues[name];
           return typeof val === "number" ? val : 0;
