@@ -82,6 +82,62 @@ function isTechnicalOrMeasureColumn(name: string): boolean {
   return false;
 }
 
+// ═══ Multi-table fact/dimension classification ════════════════
+
+const AGRO_FACT_TABLE_TOKENS = [
+  "movimenta", "detalhe", "fato", "fact", "recebimento", "pesagem",
+  "lote", "lote_cafe", "lotecaf", "movimento", "transacao", "operacao",
+];
+
+const AGRO_DIMENSION_TABLE_TOKENS = [
+  "cooperado", "safra", "calendario", "calendar", "filial", "produto",
+  "representante", "origem", "produtor", "fazenda", "regiao", "municipio",
+  "grupo_economico", "dim_", "lookup",
+];
+
+function classifyTableRole(tableName: string): "fact" | "dimension" | "unknown" {
+  const lo = tableName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (AGRO_FACT_TABLE_TOKENS.some(t => lo.includes(t))) return "fact";
+  if (AGRO_DIMENSION_TABLE_TOKENS.some(t => lo.includes(t))) return "dimension";
+  return "unknown";
+}
+
+function getTableName(colName: string): string | null {
+  return colName.includes(".") ? colName.split(".")[0] : null;
+}
+
+function isFromFactTable(colName: string): boolean {
+  const table = getTableName(colName);
+  return table ? classifyTableRole(table) === "fact" : false;
+}
+
+function isFromDimensionTable(colName: string): boolean {
+  const table = getTableName(colName);
+  return table ? classifyTableRole(table) === "dimension" : false;
+}
+
+// ═══ Agro multi-table dimension feature blockers ═════════════
+
+const AGRO_DIMENSION_BLOCKED_FEATURES = [
+  "celcpr", "cel_cpr", "celular", "telefone", "phone", "fone",
+  "matricula", "matric", "codemp", "cod_emp", "codigo_empresa",
+  "codpes", "sk_cooperado", "sk_pessoa", "sk_filial", "sk_produto",
+  "sk_representante", "sk_origem", "sk_safra",
+  "cpf", "cnpj", "rg", "email", "endereco", "address", "cep",
+  "nome", "name", "razao_social", "fantasia",
+];
+
+function isDimensionBlockedFeature(colName: string): boolean {
+  const colPart = colName.includes(".") ? colName.split(".").pop()!.toLowerCase() : colName.toLowerCase();
+  // SK_* from any dimension table
+  if (/^sk_/i.test(colPart)) return true;
+  // Known administrative/ID columns
+  if (AGRO_DIMENSION_BLOCKED_FEATURES.some(t => colPart === t || colPart.includes(t))) return true;
+  return false;
+}
+
+// ═══ Entity/Time/Value scoring with multi-table awareness ═════
+
 function scoreEntity(
   col: ColumnRow,
   adapterCandidates: string[],
@@ -99,6 +155,15 @@ function scoreEntity(
     return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada"] };
   }
 
+  // ── MULTI-TABLE: Boost fact table columns, penalize dimension table columns ──
+  if (isFromFactTable(col.column_name)) {
+    score += 3;
+    reasons.push("Coluna de tabela fato — prioridade como entidade operacional");
+  } else if (isFromDimensionTable(col.column_name)) {
+    score -= 4;
+    reasons.push("Coluna de tabela dimensão — não deve ser entidade principal");
+  }
+
   // ── AGRO GUARDRAIL: Penalize surrogate keys (SK_*) as entity ──
   if (/^sk_/i.test(colPart)) {
     score -= 4;
@@ -109,6 +174,12 @@ function scoreEntity(
   if (/^calend[aá]rio\./i.test(name) || /^calendar\./i.test(name)) {
     score -= 5;
     reasons.push("Coluna de tabela calendário não é entidade de negócio");
+  }
+
+  // ── AGRO GUARDRAIL: Block administrative IDs from dimension tables ──
+  if (isFromDimensionTable(col.column_name) && isDimensionBlockedFeature(col.column_name)) {
+    score -= 6;
+    reasons.push(`ID administrativo de dimensão bloqueado: "${colPart}"`);
   }
 
   if (adapterCandidates.some(c => c.toLowerCase() === name)) {
@@ -126,8 +197,10 @@ function scoreEntity(
     score += 7;
     reasons.push(`Entidade agro operacional primária (lote/talhão): "${colPart}"`);
   } else if (agroTier2.some(k => colPart.includes(k))) {
-    score += 5;
-    reasons.push(`Entidade agro de produtor/fazenda: "${colPart}"`);
+    // Only boost person/farm if from fact table, not dimension
+    const boost = isFromDimensionTable(col.column_name) ? 1 : 5;
+    score += boost;
+    reasons.push(`Entidade agro de produtor/fazenda: "${colPart}" (boost=${boost})`);
   } else if (agroTier3.some(k => colPart.includes(k))) {
     score += 3;
     reasons.push(`Entidade agro de grupo econômico (agrupador): "${colPart}"`);
@@ -178,6 +251,15 @@ function scoreTime(
     return { column: col.column_name, score: -5, reasons: ["Nome de tabela calendário, não é âncora temporal"] };
   }
 
+  // ── MULTI-TABLE: Boost fact table dates, heavily penalize dimension table dates ──
+  if (isFromFactTable(col.column_name)) {
+    score += 4;
+    reasons.push("Data de tabela fato — prioridade como âncora temporal operacional");
+  } else if (isFromDimensionTable(col.column_name)) {
+    score -= 5;
+    reasons.push("Data de tabela dimensão — não deve ser âncora temporal principal");
+  }
+
   const dateTypes = ["data", "date", "datetime", "timestamp"];
   if (dateTypes.some(dt => col.inferred_type.toLowerCase().includes(dt))) {
     score += 5;
@@ -205,6 +287,16 @@ function scoreTime(
   if (colPart === "sk_data" || colPart === "sk_date") {
     score -= 3;
     reasons.push("Surrogate key temporal (SK_DATA) — auxiliar, não âncora operacional");
+  }
+
+  // ── AGRO GUARDRAIL: Penalize derived/cadastral dates from dimension tables ──
+  // e.g. "Cooperado.Data Ult. Ent. Café", "Cooperado.Data Ult. Compra"
+  if (isFromDimensionTable(col.column_name)) {
+    const derivedTokens = ["ult", "ultimo", "última", "ultima", "cadastro", "nascimento", "admissao", "desligamento"];
+    if (derivedTokens.some(t => colPart.includes(t))) {
+      score -= 4;
+      reasons.push(`Data derivada/cadastral de dimensão: "${colPart}" — não é âncora operacional`);
+    }
   }
 
   const dateKw = ["dt", "date", "data", "created_at", "appointment", "visit", "consulta", "compra", "pedido", "purchase", "order", "vencimento", "ship", "delivery", "entrega"];
