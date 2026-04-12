@@ -1905,6 +1905,17 @@ serve(async (req: Request) => {
       }
     }
 
+    if (aggregationApplied && (settings as any)?.dataset_build_mode !== "temporal_aggregated") {
+      try {
+        await supabase.from("project_settings")
+          .update({ dataset_build_mode: "temporal_aggregated" } as any)
+          .eq("project_id", project_id);
+        console.log("[build-modeling-dataset] Synced project_settings.dataset_build_mode=temporal_aggregated");
+      } catch (modeErr) {
+        console.warn("[build-modeling-dataset] Failed to sync dataset_build_mode after aggregation (non-blocking):", modeErr);
+      }
+    }
+
     // ── POST-BUILD: Observability events ──
     try {
       const eventType = modelingDatasetReady ? "modeling_dataset_built_success" : "modeling_dataset_built_failed";

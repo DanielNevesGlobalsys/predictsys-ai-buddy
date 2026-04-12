@@ -31,6 +31,67 @@ function safeFire(query: PromiseLike<any>): void {
   Promise.resolve(query).catch((e) => console.warn("[safeFire] suppressed:", e));
 }
 
+function uniqueNonEmptyColumns(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+
+  return out;
+}
+
+function getModelingDatasetSchemaColumns(modelingDataset: any): string[] {
+  if (!modelingDataset || modelingDataset.is_current === false) return [];
+
+  const featureNames = Array.isArray(modelingDataset.features_final)
+    ? modelingDataset.features_final.filter((value: unknown) => typeof value === "string")
+    : [];
+
+  const generatedFeatureNames = Array.isArray(modelingDataset.features_generated)
+    ? modelingDataset.features_generated
+        .map((feature: any) => {
+          if (typeof feature === "string") return feature;
+          if (feature && typeof feature === "object" && typeof feature.name === "string") return feature.name;
+          return null;
+        })
+        .filter(Boolean)
+    : [];
+
+  return uniqueNonEmptyColumns([
+    modelingDataset.target_column,
+    ...featureNames,
+    ...generatedFeatureNames,
+  ]);
+}
+
+function resolveEffectiveDatasetBuildMode(activeTargetSettings: any, targetColumn: string, modelingDataset: any): string {
+  const settingsBuildMode = activeTargetSettings?.dataset_build_mode || null;
+  const targetIsAggregated = typeof targetColumn === "string" && targetColumn.startsWith("agg_");
+  const builderTargetIsAggregated = typeof modelingDataset?.target_column === "string" && modelingDataset.target_column.startsWith("agg_");
+  const builderHasAggregatedFeatures = Array.isArray(modelingDataset?.features_final)
+    && modelingDataset.features_final.some((feature: unknown) => typeof feature === "string" && feature.startsWith("agg_"));
+
+  if (
+    settingsBuildMode === "temporal_aggregated"
+    || targetIsAggregated
+    || builderTargetIsAggregated
+    || builderHasAggregatedFeatures
+  ) {
+    return "temporal_aggregated";
+  }
+
+  return settingsBuildMode || "original_row";
+}
+
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -1742,6 +1803,23 @@ serve(async (req) => {
       .eq("project_id", project_id)
       .maybeSingle();
 
+    const effectiveDatasetBuildMode = resolveEffectiveDatasetBuildMode(activeTargetSettings, target_column, modelingDataset);
+    const consolidatedSchemaColumns = getModelingDatasetSchemaColumns(modelingDataset);
+
+    if (((activeTargetSettings as any)?.dataset_build_mode || null) !== effectiveDatasetBuildMode) {
+      console.warn(`[Gating] dataset_build_mode mismatch: settings=${(activeTargetSettings as any)?.dataset_build_mode || "null"}, effective=${effectiveDatasetBuildMode}, selection_target=${target_column}, builder_target=${modelingDataset?.target_column || "null"}`);
+      safeFire(
+        supabase
+          .from("project_settings")
+          .update({ dataset_build_mode: effectiveDatasetBuildMode } as any)
+          .eq("project_id", project_id)
+      );
+    }
+
+    if (consolidatedSchemaColumns.length > 0) {
+      console.log(`[Gating] Consolidated builder schema available: ${consolidatedSchemaColumns.length} cols`);
+    }
+
     // ── Gate 2: Entity Key validation ──
     const entityKey = (activeTargetSettings as any)?.entity_key || null;
     if (!entityKey) {
@@ -1856,14 +1934,20 @@ serve(async (req) => {
     {
       // Detect temporal_aggregated mode — virtual targets (agg_*) are materialized
       // in-memory AFTER this gate, so they won't exist in the raw schema yet.
-      const buildModeForGate = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+      const buildModeForGate = effectiveDatasetBuildMode;
       const isAggregatedTarget = buildModeForGate === "temporal_aggregated" && target_column.startsWith("agg_");
 
       let schemaColumns: string[] = [];
       let schemaSource = "unknown";
 
+      // Priority 0: consolidated schema from current builder artifact
+      if (consolidatedSchemaColumns.length > 0) {
+        schemaColumns = consolidatedSchemaColumns;
+        schemaSource = "modeling_dataset";
+      }
+
       // Priority 1: active_schema_json from project_dataset_state
-      if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
+      if (schemaColumns.length === 0 && dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
         schemaColumns = Object.keys(dsState.active_schema_json).filter(k => !k.startsWith("_"));
         schemaSource = "active_schema_json";
       }
@@ -1961,7 +2045,9 @@ serve(async (req) => {
       const selectedFeatures = selection?.selected_features as string[] || [];
       if (selectedFeatures.length > 0) {
         let schemaCols = new Set<string>();
-        if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
+        if (consolidatedSchemaColumns.length > 0) {
+          schemaCols = new Set(consolidatedSchemaColumns);
+        } else if (dsState?.active_schema_json && typeof dsState.active_schema_json === "object") {
           schemaCols = new Set(Object.keys(dsState.active_schema_json).filter((k: string) => !k.startsWith("_")));
         }
         if (schemaCols.size > 0) {
@@ -2389,7 +2475,7 @@ serve(async (req) => {
     console.log(`Max linhas para leitura: ${MAX_ROWS_TO_READ.toLocaleString()}`);
 
     // For temporal_aggregated, lower the minimum (aggregated datasets are small by design)
-    const earlyBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const earlyBuildMode = effectiveDatasetBuildMode;
     const isTemporalAggregatedEarly = earlyBuildMode === "temporal_aggregated";
     const effectiveMinRows = isTemporalAggregatedEarly ? 30 : MIN_ROWS_FOR_TRAIN;
 
@@ -2566,7 +2652,7 @@ serve(async (req) => {
     // When dataset_build_mode = temporal_aggregated, aggregate raw sample rows
     // into entity × month grain BEFORE training. This creates the virtual target
     // (agg_sacas_mes) and aggregated features from row-level data.
-    const datasetBuildMode = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+    const datasetBuildMode = effectiveDatasetBuildMode;
     const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
 
     if (isTemporalAggregated && !useVirtualSample) {
