@@ -723,7 +723,7 @@ Deno.serve(async (req) => {
       aggregation_level: needsAgg ? "entity_time_month" : null,
       snapshot_required: snapshotReq,
       temporal_strategy: snapshotReq ? "multi_period" : (timeAnchor ? "snapshot" : "none"),
-      multi_table_strategy: isAgro && hasMultiTable ? { primary_table: primaryTable, auxiliary_table: auxiliaryTable, calendar_role: "temporal_enrichment" } : null,
+      multi_table_strategy: hasMultiTable ? { primary_table: primaryTable, auxiliary_tables: auxiliaryTables, dimension_tables: auxiliaryTables.filter(t => DIMENSION_TABLE_TOKENS.some(tok => t.toLowerCase().includes(tok))), calendar_role: "temporal_enrichment" } : null,
       split_suggestion: timeAnchor ? "temporal" : "stratified",
       target_build_mode: targetBuildMode,
       aggregated_target_required: !!aggregationPromotion,
