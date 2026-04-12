@@ -1854,6 +1854,11 @@ serve(async (req) => {
     // ── Gate 2.5: Schema SSOT Validation ──
     // Validate that target/features exist in the consolidated schema
     {
+      // Detect temporal_aggregated mode — virtual targets (agg_*) are materialized
+      // in-memory AFTER this gate, so they won't exist in the raw schema yet.
+      const buildModeForGate = (activeTargetSettings as any)?.dataset_build_mode || "original_row";
+      const isAggregatedTarget = buildModeForGate === "temporal_aggregated" && target_column.startsWith("agg_");
+
       let schemaColumns: string[] = [];
       let schemaSource = "unknown";
 
@@ -1886,9 +1891,11 @@ serve(async (req) => {
         const schemaLower = new Set(schemaColumns.map(c => c.toLowerCase()));
         const missing: string[] = [];
 
-        // Check target (skip virtual targets like "label", "_label_")
+        // Check target — skip virtual targets (label, _label_, and aggregated agg_*)
         if (!useHumanLabelsAsTarget && target_column !== "label" && target_column !== "_label_") {
-          if (!schemaLower.has(target_column.toLowerCase())) {
+          if (isAggregatedTarget) {
+            console.log(`[Gating] Skipping schema check for aggregated virtual target "${target_column}" (will be materialized in-memory)`);
+          } else if (!schemaLower.has(target_column.toLowerCase())) {
             missing.push(`target: ${target_column}`);
           }
         }

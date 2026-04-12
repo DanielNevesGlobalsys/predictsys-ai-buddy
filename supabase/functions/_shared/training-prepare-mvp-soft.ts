@@ -457,7 +457,9 @@ export function validateSchemaSelection(
     return { valid: false, code: "INVALID_ENTITY_KEY", message: `Entity Key "${entityKey}" não existe no schema.`, missing: [entityKey] };
   }
 
-  if (targetCol && targetCol !== "_label_" && targetCol !== "label" && !schemaLower.has(targetCol.toLowerCase())) {
+  // Skip aggregated virtual targets (agg_*) — they are materialized in-memory during temporal aggregation
+  const isAggVirtual = targetCol?.startsWith("agg_") ?? false;
+  if (targetCol && targetCol !== "_label_" && targetCol !== "label" && !isAggVirtual && !schemaLower.has(targetCol.toLowerCase())) {
     missing.push(targetCol);
   }
 
