@@ -148,6 +148,8 @@ const StepTargetFeatures = ({
   // Builder version tracking
   const [builderVersionUsed, setBuilderVersionUsed] = useState<number | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  // Builder's final schema — authoritative source of valid features
+  const [builderFinalSchema, setBuilderFinalSchema] = useState<Set<string> | null>(null);
 
   // Column inference
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
