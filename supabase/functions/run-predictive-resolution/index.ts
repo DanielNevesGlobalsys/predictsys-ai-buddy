@@ -752,7 +752,7 @@ Deno.serve(async (req) => {
       aggregation_level: needsAgg ? "entity_time_month" : null,
       snapshot_required: snapshotReq,
       temporal_strategy: snapshotReq ? "multi_period" : (timeAnchor ? "snapshot" : "none"),
-      multi_table_strategy: hasMultiTable ? { primary_table: primaryTable, auxiliary_tables: auxiliaryTables, dimension_tables: auxiliaryTables.filter(t => DIMENSION_TABLE_TOKENS.some(tok => t.toLowerCase().includes(tok))), calendar_role: "temporal_enrichment" } : null,
+      multi_table_strategy: hasMultiTable ? { primary_table: primaryTable, auxiliary_tables: auxiliaryTables, dimension_tables: auxiliaryTables.filter(t => CORE_DIMENSION_TOKENS.some(tok => t.toLowerCase().includes(tok))), calendar_role: "temporal_enrichment" } : null,
       split_suggestion: timeAnchor ? "temporal" : "stratified",
       target_build_mode: targetBuildMode,
       aggregated_target_required: !!aggregationPromotion,
@@ -767,37 +767,35 @@ Deno.serve(async (req) => {
     const blockedFeatures: string[] = [];
     const leakageFlags: string[] = [];
 
-    // Multi-table dimension feature blockers
-    const DIMENSION_BLOCKED_COLPARTS = [
-      "celcpr", "cel_cpr", "celular", "telefone", "phone", "fone",
-      "matricula", "matric", "codemp", "cod_emp",
-      "cpf", "cnpj", "rg", "email", "endereco", "cep",
-      "razao_social", "fantasia",
-    ];
-
+    // Universal multi-table feature blocking (applies to ALL domains)
     for (const col of columns) {
       const nm = col.column_name;
       const lo = nm.toLowerCase();
       const colPart = lo.includes(".") ? lo.split(".").pop()! : lo;
       const tableName = lo.includes(".") ? lo.split(".")[0] : null;
-      const isFromDim = tableName && DIMENSION_TABLE_TOKENS.some(t => tableName.includes(t));
+      const tableRole = tableName ? classifyTableRolePRE(tableName) : null;
+      const isFromDim = tableRole === "dimension";
 
       if (nm === (targetDef.target_name || "") || nm === entityKey || nm === timeAnchor) { excludeFeatures.push(nm); continue; }
 
-      // ── MULTI-TABLE: Block SK_* and administrative IDs from dimension tables ──
-      if (hasMultiTable && isAgro) {
-        if (/^sk_/i.test(colPart)) {
+      // ── UNIVERSAL: Block SK_*, PK_*, FK_*, __ prefixed from everywhere ──
+      if (/^(sk_|pk_|fk_|__)/i.test(colPart)) {
+        excludeFeatures.push(nm);
+        continue;
+      }
+
+      // ── UNIVERSAL: Block admin IDs from dimension tables ──
+      if (hasMultiTable && isFromDim) {
+        if (UNIVERSAL_ADMIN_BLOCKED.some(t => colPart === t || colPart.includes(t))) {
           excludeFeatures.push(nm);
           continue;
         }
-        if (isFromDim && DIMENSION_BLOCKED_COLPARTS.some(t => colPart === t || colPart.includes(t))) {
+        // Block raw FK entity codes from dimension tables
+        if (["codpes", "codlot", "codgre", "cod_produtor", "cod_cooperado", "cod_cliente", "customer_id", "patient_id"].some(t => colPart.includes(t))) {
           excludeFeatures.push(nm);
           continue;
         }
-        // Block raw entity codes from dimension tables (CODPES, CODLOT from dim are FK keys, not features)
-        if (isFromDim && ["codpes", "codlot", "codgre", "cod_produtor", "cod_cooperado"].some(t => colPart.includes(t))) {
-          excludeFeatures.push(nm);
-          continue;
+      }
         }
       }
 
