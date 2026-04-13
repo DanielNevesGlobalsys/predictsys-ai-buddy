@@ -231,7 +231,7 @@ const StepTargetFeatures = ({
     // ── MULTI-TABLE RULE: Prefer entity from fact table, never from dimension ──
     const FACT_TOKENS = ["fato", "fact", "moviment", "detalhe", "detail", "lote", "pedido", "venda", "transacao", "evento", "operacao", "recebimento", "pesagem"];
     const DIM_TOKENS = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
-    const ADMIN_BLOCKED = /^(sk_|pk_|fk_|__|celcpr|matricula|codemp|cpf|cnpj|email|telefone)/i;
+    const ADMIN_BLOCKED = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|cpf|cnpj|rg|email|e_mail|telefone|phone|celular)/i;
 
     const getTable = (name: string) => name.includes(".") ? name.split(".")[0] : null;
     const isFactTable = (t: string | null) => t ? FACT_TOKENS.some(f => t.toLowerCase().includes(f)) : false;
@@ -262,9 +262,15 @@ const StepTargetFeatures = ({
       });
       if (match) return match.name;
     }
-    // Final fallback: any match including dimension (backward compat)
+    // Final fallback: any match BUT still block dimension admin IDs
     for (const p of patterns) {
-      const match = columns.find(c => c.name.toLowerCase().includes(p.toLowerCase()) && !ADMIN_BLOCKED.test(colPart(c.name)));
+      const match = columns.find(c => {
+        const cp = colPart(c.name);
+        if (ADMIN_BLOCKED.test(cp)) return false;
+        // In multi-table: NEVER fall back to dimension entity
+        if (hasMultiTable && isDimTable(getTable(c.name))) return false;
+        return cp.toLowerCase().includes(p.toLowerCase());
+      });
       if (match) return match.name;
     }
     return null;
@@ -561,7 +567,7 @@ const StepTargetFeatures = ({
     // ── MULTI-TABLE FILTER: reject dimension-sourced and admin/SK dates ──
     const FACT_TOKENS = ["fato", "fact", "moviment", "detalhe", "detail", "lote", "pedido", "venda", "transacao", "evento", "operacao", "recebimento", "pesagem"];
     const DIM_TOKENS = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
-    const BLOCKED_TIME_TOKENS = /^(sk_|pk_|fk_|__|ult|ultimo|última|ultima|cadastro|nascimento)/i;
+    const BLOCKED_TIME_TOKENS = /^(sk_|pk_|fk_|__|ult|ultimo|última|ultima|cadastro|nascimento|data_cad|dt_cad|data_ult|dt_ult)/i;
     const hasMultiTable = columns.some(c => c.name.includes("."));
     const getTable = (name: string) => name.includes(".") ? name.split(".")[0] : null;
     const isFactTable = (t: string | null) => t ? FACT_TOKENS.some(f => t.toLowerCase().includes(f)) : false;
@@ -878,7 +884,7 @@ const StepTargetFeatures = ({
     const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
 
     // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before save ──
-    const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+    const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
     const sanitizedFeatures = cleanFeatures.filter(f => {
       const cp = f.includes(".") ? f.split(".").pop()! : f;
       return !ADMIN_BLOCK_RE.test(cp);
