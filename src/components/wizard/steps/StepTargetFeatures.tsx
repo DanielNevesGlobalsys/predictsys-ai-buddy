@@ -880,8 +880,27 @@ const StepTargetFeatures = ({
     if (cleanFeatures.length === 0) { toast({ title: t("common.error"), description: "Selecione ao menos 1 feature.", variant: "destructive" }); return false; }
     const problemType = inferredProblemType || projectData.problem_type;
 
-    // Resolve time anchor from all available sources
-    const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
+    // Resolve time anchor from all available sources — apply multi-table filter
+    const rawTimeCandidates = [
+      ssot.time_anchor_column,
+      grainTime.resolution?.time?.time_column,
+      autoRes.result.time_column,
+      contractHints?.time_anchor_column,
+    ].filter(Boolean) as string[];
+
+    const SAVE_BLOCKED_TIME = /^(sk_|pk_|fk_|__|ult|ultimo|última|ultima|cadastro|nascimento|data_cad|dt_cad|data_ult|dt_ult)/i;
+    const DIM_TOKENS_SAVE = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
+    const hasMultiTableSave = columns.some(c => c.name.includes("."));
+
+    const resolvedTimeAnchor = rawTimeCandidates.find(c => {
+      const cp = c.includes(".") ? c.split(".").pop()! : c;
+      if (SAVE_BLOCKED_TIME.test(cp)) return false;
+      if (hasMultiTableSave) {
+        const tbl = c.includes(".") ? c.split(".")[0] : null;
+        if (tbl && DIM_TOKENS_SAVE.some(d => tbl.toLowerCase().includes(d))) return false;
+      }
+      return true;
+    }) || rawTimeCandidates[0] || null;
 
     // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before save ──
     const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
