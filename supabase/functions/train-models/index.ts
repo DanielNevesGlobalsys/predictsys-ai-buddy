@@ -2884,6 +2884,7 @@ serve(async (req) => {
               console.log(`[AutoML] Temporal aggregation: ${aggMap.size} rows`);
             }
           }
+        }
       } else {
         console.warn(`[AutoML] temporal_aggregated mode but missing entity_key (${aggEntityKey}) — cannot aggregate`);
       }
