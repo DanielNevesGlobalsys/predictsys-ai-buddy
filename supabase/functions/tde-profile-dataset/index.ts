@@ -82,23 +82,51 @@ function isTechnicalOrMeasureColumn(name: string): boolean {
   return false;
 }
 
-// ═══ Multi-table fact/dimension classification ════════════════
+// ═══ Universal Multi-Table Structural Resolution (Core Platform) ═══
 
-const AGRO_FACT_TABLE_TOKENS = [
-  "movimenta", "detalhe", "fato", "fact", "recebimento", "pesagem",
-  "lote", "lote_cafe", "lotecaf", "movimento", "transacao", "operacao",
+// Core fact table tokens (domain-agnostic)
+const CORE_FACT_TOKENS = [
+  "fato", "fact", "fact_", "f_", "transacao", "transacoes", "transaction",
+  "moviment", "movimento", "detalhe", "detail", "evento", "event",
+  "pedido", "order", "venda", "vendas", "sale", "sales",
+  "compra", "purchase", "lancamento", "entry", "operacao", "operacoes",
+  "ticket", "sinistro", "claim", "atendimento", "visit", "internacao",
+  "admission", "remessa", "shipment", "pagamento", "payment",
+  "recebimento", "pesagem", "lote", "lote_cafe", "lotecaf",
 ];
 
-const AGRO_DIMENSION_TABLE_TOKENS = [
-  "cooperado", "safra", "calendario", "calendar", "filial", "produto",
-  "representante", "origem", "produtor", "fazenda", "regiao", "municipio",
-  "grupo_economico", "dim_", "lookup",
+// Core dimension table tokens (domain-agnostic)
+const CORE_DIMENSION_TOKENS = [
+  "dim_", "d_", "cadastro", "master", "cliente", "customer",
+  "produto", "product", "filial", "branch", "store", "loja",
+  "fornecedor", "supplier", "funcionario", "employee", "medico", "doctor",
+  "aluno", "student", "paciente", "patient", "cooperado",
+  "regiao", "region", "categoria", "category", "departamento",
+  "calendario", "calendar", "dimdate", "dimcalendar", "dim_date",
+  "lookup", "lkp_", "ref_", "origem", "origin", "representante",
+  "safra", "fazenda", "farm", "produtor", "producer", "municipio",
+  "grupo_economico", "segmento", "segment",
 ];
 
-function classifyTableRole(tableName: string): "fact" | "dimension" | "unknown" {
-  const lo = tableName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-  if (AGRO_FACT_TABLE_TOKENS.some(t => lo.includes(t))) return "fact";
-  if (AGRO_DIMENSION_TABLE_TOKENS.some(t => lo.includes(t))) return "dimension";
+// Universal admin ID patterns (blocked as features across all domains)
+const UNIVERSAL_ADMIN_ID_PATTERNS = [
+  "celcpr", "cel_cpr", "celular", "telefone", "phone", "fone", "mobile",
+  "matricula", "matric", "codemp", "cod_emp", "codigo_empresa",
+  "cpf", "cnpj", "rg", "email", "e_mail", "endereco", "address", "cep",
+  "nome", "name", "razao_social", "fantasia", "full_name", "first_name", "last_name",
+  "zipcode", "zip", "registration",
+];
+
+function normalizeTableName(name: string): string {
+  return (name || "").toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+}
+
+function classifyTableRole(tableName: string, domainFactTokens: string[] = [], domainDimTokens: string[] = []): "fact" | "dimension" | "unknown" {
+  const lo = normalizeTableName(tableName);
+  const allFact = [...CORE_FACT_TOKENS, ...domainFactTokens];
+  const allDim = [...CORE_DIMENSION_TOKENS, ...domainDimTokens];
+  if (allFact.some(t => lo.includes(t))) return "fact";
+  if (allDim.some(t => lo.includes(t))) return "dimension";
   return "unknown";
 }
 
@@ -106,34 +134,31 @@ function getTableName(colName: string): string | null {
   return colName.includes(".") ? colName.split(".")[0] : null;
 }
 
-function isFromFactTable(colName: string): boolean {
+function isFromFactTable(colName: string, domainFactTokens: string[] = [], domainDimTokens: string[] = []): boolean {
   const table = getTableName(colName);
-  return table ? classifyTableRole(table) === "fact" : false;
+  return table ? classifyTableRole(table, domainFactTokens, domainDimTokens) === "fact" : false;
 }
 
-function isFromDimensionTable(colName: string): boolean {
+function isFromDimensionTable(colName: string, domainFactTokens: string[] = [], domainDimTokens: string[] = []): boolean {
   const table = getTableName(colName);
-  return table ? classifyTableRole(table) === "dimension" : false;
+  return table ? classifyTableRole(table, domainFactTokens, domainDimTokens) === "dimension" : false;
 }
 
-// ═══ Agro multi-table dimension feature blockers ═════════════
+// ═══ Universal feature blockers (admin IDs + surrogate keys) ══
 
-const AGRO_DIMENSION_BLOCKED_FEATURES = [
-  "celcpr", "cel_cpr", "celular", "telefone", "phone", "fone",
-  "matricula", "matric", "codemp", "cod_emp", "codigo_empresa",
-  "codpes", "sk_cooperado", "sk_pessoa", "sk_filial", "sk_produto",
-  "sk_representante", "sk_origem", "sk_safra",
-  "cpf", "cnpj", "rg", "email", "endereco", "address", "cep",
-  "nome", "name", "razao_social", "fantasia",
-];
-
-function isDimensionBlockedFeature(colName: string): boolean {
+function isAdminIdBlocked(colName: string, domainAdminPatterns: string[] = []): boolean {
   const colPart = colName.includes(".") ? colName.split(".").pop()!.toLowerCase() : colName.toLowerCase();
-  // SK_* from any dimension table
-  if (/^sk_/i.test(colPart)) return true;
-  // Known administrative/ID columns
-  if (AGRO_DIMENSION_BLOCKED_FEATURES.some(t => colPart === t || colPart.includes(t))) return true;
+  // Surrogate keys (SK_*, PK_*, FK_*, __ prefixed)
+  if (/^(sk_|pk_|fk_|__)/i.test(colPart)) return true;
+  // Universal admin patterns
+  const allPatterns = [...UNIVERSAL_ADMIN_ID_PATTERNS, ...domainAdminPatterns];
+  if (allPatterns.some(t => colPart === t || colPart.includes(t))) return true;
   return false;
+}
+
+// Backward-compatible alias
+function isDimensionBlockedFeature(colName: string): boolean {
+  return isAdminIdBlocked(colName);
 }
 
 // ═══ Entity/Time/Value scoring with multi-table awareness ═════
