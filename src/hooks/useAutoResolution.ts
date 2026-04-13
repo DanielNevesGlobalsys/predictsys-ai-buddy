@@ -44,6 +44,49 @@ const EMPTY_RESULT: AutoResolutionResult = {
   insights: [],
 };
 
+// ═══ UNIVERSAL MULTI-TABLE STRUCTURAL RULES ═══════════════════════════
+
+const FACT_TABLE_TOKENS = [
+  "fato", "fact", "transacao", "transaction", "moviment", "movimento",
+  "detalhe", "detail", "evento", "event", "pedido", "order", "venda", "sale",
+  "compra", "purchase", "lancamento", "operacao", "ticket", "sinistro",
+  "atendimento", "visit", "internacao", "remessa", "pagamento", "payment",
+  "recebimento", "pesagem", "lote", "lotecaf",
+];
+
+const DIMENSION_TABLE_TOKENS = [
+  "dim_", "cadastro", "master", "cliente", "customer", "produto", "product",
+  "filial", "branch", "store", "loja", "fornecedor", "supplier",
+  "funcionario", "employee", "cooperado", "calendario", "calendar",
+  "origem", "origin", "representante", "safra", "produtor", "municipio",
+  "regiao", "region", "categoria", "category", "grupo_economico", "segmento",
+];
+
+function classifyTable(tableName: string): "fact" | "dimension" | "unknown" {
+  const lo = tableName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+  if (FACT_TABLE_TOKENS.some(t => lo.includes(t))) return "fact";
+  if (DIMENSION_TABLE_TOKENS.some(t => lo.includes(t))) return "dimension";
+  return "unknown";
+}
+
+function isFromDimensionTable(columnName: string): boolean {
+  if (!columnName.includes(".")) return false;
+  const table = columnName.split(".")[0];
+  return classifyTable(table) === "dimension";
+}
+
+function isFromFactTable(columnName: string): boolean {
+  if (!columnName.includes(".")) return true; // single-table = fact by default
+  const table = columnName.split(".")[0];
+  return classifyTable(table) === "fact" || classifyTable(table) === "unknown";
+}
+
+// Universal admin ID block pattern
+const ADMIN_BLOCK_PATTERNS = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+
+// Cadastral/dimension time patterns to block
+const BAD_TIME_PATTERNS = /\b(data_cad|dt_cad|data_ult|dt_ult|nascimento|birth|cadastro|registro|admiss|data_nasc|ultima_compra|last_purchase|ult_ent|ult_compra|ult_pedido)\b/i;
+
 export function useAutoResolution(projectId: string | undefined, organizationId: string | undefined) {
   const [result, setResult] = useState<AutoResolutionResult>(EMPTY_RESULT);
   const [resolving, setResolving] = useState(false);
@@ -115,7 +158,62 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         }
       }
 
-      // ── AUTO-FIX 3: Features cleanup ──
+      // ── AUTO-FIX 3: Entity/Time — enforce fact table priority ──
+      let resolvedEntity = prob.entity?.entity_key || null;
+      let resolvedTime = prob.time_anchor || null;
+
+      // If entity came from a dimension table, try to find one from the fact table
+      if (resolvedEntity && isFromDimensionTable(resolvedEntity)) {
+        const { data: allCols } = await supabase
+          .from("project_columns")
+          .select("column_name")
+          .eq("project_id", projectId);
+        if (allCols) {
+          const factEntityPatterns = ["codlot", "cod_lote", "lote", "id_cliente", "customer_id", "order_id", "contract_id"];
+          const factCols = (allCols as any[]).filter(c => isFromFactTable(c.column_name));
+          for (const pattern of factEntityPatterns) {
+            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+            if (match) {
+              autoFixes.push(`Entity corrigida: ${resolvedEntity} (dimensão) → ${match.column_name} (fato)`);
+              resolvedEntity = match.column_name;
+              break;
+            }
+          }
+        }
+      }
+
+      // If time came from a dimension table or is a cadastral date, find operational date from fact
+      if (resolvedTime && (isFromDimensionTable(resolvedTime) || BAD_TIME_PATTERNS.test(resolvedTime))) {
+        const { data: allCols } = await supabase
+          .from("project_columns")
+          .select("column_name, inferred_type")
+          .eq("project_id", projectId);
+        if (allCols) {
+          const opDateTokens = ["datmov", "dt_mov", "data_mov", "data_movimentacao", "data_compra", "data_pedido", "data_venda", "data_recebimento", "data_entrada", "data_pesagem"];
+          const factCols = (allCols as any[]).filter(c => isFromFactTable(c.column_name));
+          for (const pattern of opDateTokens) {
+            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+            if (match) {
+              autoFixes.push(`Tempo corrigido: ${resolvedTime} (dimensão/cadastral) → ${match.column_name} (fato)`);
+              resolvedTime = match.column_name;
+              break;
+            }
+          }
+          // Fallback: any date column from fact table
+          if (resolvedTime && (isFromDimensionTable(resolvedTime) || BAD_TIME_PATTERNS.test(resolvedTime))) {
+            const factDate = factCols.find(c => {
+              const ty = ((c as any).inferred_type || "").toLowerCase();
+              return ["date", "datetime", "timestamp", "data", "temporal"].some(d => ty.includes(d));
+            });
+            if (factDate) {
+              autoFixes.push(`Tempo corrigido (fallback): ${resolvedTime} → ${factDate.column_name} (fato)`);
+              resolvedTime = factDate.column_name;
+            }
+          }
+        }
+      }
+
+      // ── AUTO-FIX 4: Features cleanup ──
       let includeFeatures = fp.include_features || [];
       let excludeFeatures = fp.exclude_features || [];
       const blockedFeatures = fp.blocked_features || [];
@@ -129,9 +227,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
           .eq("project_id", projectId);
         
         if (allCols) {
-          const entityKey = prob.entity?.entity_key;
-          const timeAnchor = prob.time_anchor;
-          const structural = new Set([targetCol, entityKey, timeAnchor].filter(Boolean));
+          const structural = new Set([targetCol, resolvedEntity, resolvedTime].filter(Boolean));
           const ID_PATTERNS = /^(id|_id|key|uuid|pk|sk|index|row_number|__)/i;
           const LEAKAGE_PATTERNS = /^(label|target|y_true|y_pred|predicted|score_final|resultado|outcome|status_final)/i;
 
@@ -149,6 +245,12 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         }
       }
 
+      // ── Determine dataset_build_mode ──
+      const isAggTarget = /^agg_/i.test(targetCol || "");
+      const resolvedBuildMode = isAggTarget
+        ? "temporal_aggregated"
+        : ds.target_build_mode || (ds.aggregated_target_required ? "temporal_aggregated" : null);
+
       const insights: AutoResolutionResult["insights"] = [
         { label: "Target definido", detail: targetCol || "Não encontrado", ok: !!targetCol },
         { label: "Dataset válido", detail: `${prob.dataset_shape_detected || "desconhecido"}`, ok: val.training_ready !== false },
@@ -158,12 +260,12 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       const finalResult: AutoResolutionResult = {
         target_column: targetCol,
         problem_type: problemType as "classification" | "regression",
-        entity_key: prob.entity?.entity_key || null,
-        time_column: prob.time_anchor || null,
-        dataset_build_mode: ds.target_build_mode || null,
+        entity_key: resolvedEntity,
+        time_column: resolvedTime,
+        dataset_build_mode: resolvedBuildMode,
         recommended_grain: prob.entity?.grain || null,
         recommended_split_strategy: ds.split_suggestion || null,
-        aggregated_target_required: ds.aggregated_target_required === true || ds.target_build_mode === "temporal_aggregated" || /^agg_/i.test(targetCol || ""),
+        aggregated_target_required: ds.aggregated_target_required === true || isAggTarget,
         selected_features: includeFeatures,
         excluded_features: [...excludeFeatures, ...blockedFeatures],
         confidence_score: conf.overall || 0,
@@ -200,16 +302,17 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
 
     if (!data) return null;
     const d = data as any;
+    const isAggTarget = /^agg_/i.test(d.target_column || "");
     const fallback: AutoResolutionResult = {
       ...EMPTY_RESULT,
       target_column: d.target_column || null,
       problem_type: d.problem_type || "classification",
       entity_key: d.entity_key || null,
       time_column: d.time_anchor_column || null,
-      dataset_build_mode: d.dataset_build_mode || null,
+      dataset_build_mode: isAggTarget ? "temporal_aggregated" : (d.dataset_build_mode || null),
       recommended_grain: d.dataset_build_mode === "temporal_aggregated" ? "entity_time" : null,
       recommended_split_strategy: d.dataset_build_mode === "temporal_aggregated" ? "temporal" : null,
-      aggregated_target_required: d.dataset_build_mode === "temporal_aggregated" || /^agg_/i.test(d.target_column || ""),
+      aggregated_target_required: isAggTarget || d.dataset_build_mode === "temporal_aggregated",
       selected_features: Array.isArray(d.feature_columns) ? d.feature_columns : [],
       excluded_features: Array.isArray(d.excluded_columns) ? d.excluded_columns : [],
       confidence_score: d.target_column ? 0.5 : 0,
@@ -228,7 +331,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
 
   /**
    * ATOMIC apply: writes to project_settings + project_model_selection + triggers builder.
-   * This is the critical fix — ensures preflight reads the same state shown in the UI.
+   * Enforces fact-table priority for entity/time and forces temporal_aggregated for agg_* targets.
    */
   const applyToSSOT = useCallback(async (res: AutoResolutionResult, force = false) => {
     if (!projectId || (applied && !force)) return;
@@ -245,14 +348,12 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
       const officialTarget = (currentSettings as any)?.official_target || null;
       const officialProblemType = (currentSettings as any)?.official_problem_type || null;
 
-      // If there's an official target and the new resolution differs, flag a governance conflict
       if (officialTarget && (officialTarget !== res.target_column || (officialProblemType && officialProblemType !== res.problem_type))) {
         console.log("[useAutoResolution] GOVERNANCE CONFLICT: official differs from recommended", {
           official: { target: officialTarget, problem: officialProblemType },
           recommended: { target: res.target_column, problem: res.problem_type },
         });
 
-        // Write ONLY to recommended fields — do NOT overwrite official
         await supabase.from("project_settings").update({
           recommended_target: res.target_column,
           recommended_problem_type: res.problem_type,
@@ -273,63 +374,132 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         return;
       }
 
+      // ── STRUCTURAL VALIDATION: entity/time must not come from dimension ──
+      let finalEntity = res.entity_key;
+      let finalTime = res.time_column;
+
+      if (finalEntity && isFromDimensionTable(finalEntity)) {
+        console.warn(`[useAutoResolution] BLOCKING dimension entity: ${finalEntity}`);
+        // Try to find fact entity from project_columns
+        const { data: cols } = await supabase
+          .from("project_columns")
+          .select("column_name")
+          .eq("project_id", projectId);
+        if (cols) {
+          const factEntityPatterns = ["codlot", "cod_lote", "lote", "id_cliente", "customer_id", "order_id"];
+          const factCols = (cols as any[]).filter(c => isFromFactTable(c.column_name));
+          for (const pattern of factEntityPatterns) {
+            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+            if (match) {
+              console.log(`[useAutoResolution] Entity override: ${finalEntity} → ${match.column_name}`);
+              finalEntity = match.column_name;
+              break;
+            }
+          }
+        }
+        // If still from dimension after trying, null it out rather than persist wrong
+        if (finalEntity && isFromDimensionTable(finalEntity)) {
+          console.warn(`[useAutoResolution] Could not find fact entity, nulling dimension entity`);
+          finalEntity = null;
+        }
+      }
+
+      if (finalTime && (isFromDimensionTable(finalTime) || BAD_TIME_PATTERNS.test(finalTime))) {
+        console.warn(`[useAutoResolution] BLOCKING dimension/cadastral time: ${finalTime}`);
+        const { data: cols } = await supabase
+          .from("project_columns")
+          .select("column_name, inferred_type")
+          .eq("project_id", projectId);
+        if (cols) {
+          const opDateTokens = ["datmov", "dt_mov", "data_mov", "data_movimentacao", "data_compra", "data_pedido", "data_venda", "data_recebimento"];
+          const factCols = (cols as any[]).filter(c => isFromFactTable(c.column_name));
+          for (const pattern of opDateTokens) {
+            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+            if (match) {
+              console.log(`[useAutoResolution] Time override: ${finalTime} → ${match.column_name}`);
+              finalTime = match.column_name;
+              break;
+            }
+          }
+          if (finalTime && (isFromDimensionTable(finalTime) || BAD_TIME_PATTERNS.test(finalTime))) {
+            const factDate = factCols.find(c => {
+              const ty = ((c as any).inferred_type || "").toLowerCase();
+              return ["date", "datetime", "timestamp", "data"].some(d => ty.includes(d));
+            });
+            if (factDate) {
+              finalTime = factDate.column_name;
+            } else {
+              finalTime = null;
+            }
+          }
+        }
+      }
+
       console.log("[useAutoResolution] Applying atomically to SSOT...", {
         target: res.target_column,
         problem: res.problem_type,
-        entity: res.entity_key,
+        entity: finalEntity,
+        time: finalTime,
         features: res.selected_features.length,
       });
 
-      const isAggregatedTarget = res.dataset_build_mode === "temporal_aggregated"
-        || res.aggregated_target_required
-        || /^agg_/i.test(res.target_column || "");
+      const isAggregatedTarget = /^agg_/i.test(res.target_column || "")
+        || res.dataset_build_mode === "temporal_aggregated"
+        || res.aggregated_target_required;
 
-      // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before persisting ──
-      const ADMIN_BLOCK_PATTERNS = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+      // ── UNIVERSAL FEATURE SANITIZATION ──
       const sanitizedFeatures = res.selected_features.filter(f => {
         const colPart = f.includes(".") ? f.split(".").pop()! : f;
-        return !ADMIN_BLOCK_PATTERNS.test(colPart);
+        if (ADMIN_BLOCK_PATTERNS.test(colPart)) return false;
+        // Block dimension FKs that aren't the official entity
+        if (f !== finalEntity && isFromDimensionTable(f)) {
+          const cp = colPart.toLowerCase();
+          if (["codpes", "codlot", "codgre", "cod_produtor", "cod_cooperado"].some(t => cp.includes(t))) return false;
+        }
+        return true;
       });
       const removedAdminFeatures = res.selected_features.filter(f => !sanitizedFeatures.includes(f));
       if (removedAdminFeatures.length > 0) {
         console.log("[useAutoResolution] Sanitized admin IDs from features:", removedAdminFeatures);
       }
 
-      // 1. Update project_settings (SSOT) — includes grain/time fields
+      // ── FORCE dataset_build_mode for aggregated targets ──
+      const finalBuildMode = isAggregatedTarget ? "temporal_aggregated" : (res.dataset_build_mode || "row_level");
+
+      // 1. Update project_settings (SSOT)
       const settingsPayload: Record<string, any> = {
         project_id: projectId,
         target_column: res.target_column,
         active_target_column: res.target_column,
         problem_type: res.problem_type,
-        entity_key: res.entity_key,
-        time_anchor_column: res.time_column,
+        entity_key: finalEntity,
+        time_anchor_column: finalTime,
         feature_columns: sanitizedFeatures,
         excluded_columns: [...res.excluded_features, ...removedAdminFeatures],
         target_state: "ready",
         active_target_mode: "column",
         target_source: "manual",
         predictive_resolution_state: "applied",
-        // Set official fields on first apply (no prior official exists)
         official_target: res.target_column,
         official_problem_type: res.problem_type,
-        official_entity_key: res.entity_key,
-        official_time_column: res.time_column,
+        official_entity_key: finalEntity,
+        official_time_column: finalTime,
         governance_conflict: false,
-        // Force dataset_build_mode for aggregated targets
-        dataset_build_mode: isAggregatedTarget ? "temporal_aggregated" : (res.dataset_build_mode || "row_level"),
+        dataset_build_mode: finalBuildMode,
         updated_at: new Date().toISOString(),
       };
 
-      // If time_column is set, also persist recommended grain/time/split
-      if (res.time_column && res.entity_key) {
-        settingsPayload.recommended_time_column = res.time_column;
+      if (finalTime && finalEntity) {
+        settingsPayload.recommended_time_column = finalTime;
         settingsPayload.recommended_grain = "entity_time";
         settingsPayload.recommended_split_strategy = "temporal";
-        settingsPayload.dataset_build_mode = isAggregatedTarget ? "temporal_aggregated" : "entity_time";
         settingsPayload.temporal_readiness_state = "ready";
         settingsPayload.grain_confidence = 0.85;
         settingsPayload.time_strategy_confidence = 0.9;
         settingsPayload.official_grain = "entity_time";
+        if (isAggregatedTarget) {
+          settingsPayload.dataset_build_mode = "temporal_aggregated";
+        }
       }
 
       await supabase
@@ -338,12 +508,13 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
 
       console.log("[useAutoResolution] project_settings updated:", {
         target: res.target_column,
-        entity: res.entity_key,
-        time: res.time_column,
+        entity: finalEntity,
+        time: finalTime,
+        build_mode: finalBuildMode,
         grain: settingsPayload.recommended_grain || "original_row",
       });
 
-      // 2. Sync project_model_selection via atomic RPC (this is what preflight reads!)
+      // 2. Sync project_model_selection via atomic RPC
       const upsertRes = await supabase.functions.invoke("upsert-model-selection", {
         body: {
           project_id: projectId,
@@ -351,9 +522,9 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
           problem_type: res.problem_type,
           selected_features: sanitizedFeatures,
           excluded_features: [...res.excluded_features, ...removedAdminFeatures],
-          entity_key: res.entity_key,
-          time_column: res.time_column,
-          dataset_build_mode: isAggregatedTarget ? "temporal_aggregated" : res.dataset_build_mode,
+          entity_key: finalEntity,
+          time_column: finalTime,
+          dataset_build_mode: finalBuildMode,
         },
       });
 
