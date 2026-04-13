@@ -2656,23 +2656,18 @@ serve(async (req) => {
           ? rawJson
           : (Array.isArray(rawJson?.rows) ? rawJson.rows : []);
 
-        // Detect multi-table stacked rows: rows from different __source_table values
-        // only have their own table's columns. We need ALL columns in every row.
+        // Ensure all rows have all declared columns (flat join normalization)
         const declaredColumns: string[] = Array.isArray(rawJson?.columns) ? rawJson.columns : [];
         if (sampleRows.length > 0 && declaredColumns.length > 0) {
-          const sourceTables = new Set(sampleRows.map(r => r.__source_table).filter(Boolean));
-          if (sourceTables.size > 1) {
-            console.log(`[AutoML] Multi-table sample detected: ${sourceTables.size} tables (${[...sourceTables].join(", ")}). Merging rows with all ${declaredColumns.length} columns.`);
-            // Each row needs all declared columns; fill missing with empty string
-            sampleRows = sampleRows.map(row => {
-              const merged: Record<string, any> = {};
-              for (const col of declaredColumns) {
-                merged[col] = row[col] !== undefined ? row[col] : "";
-              }
-              if (row.__source_table) merged.__source_table = row.__source_table;
-              return merged;
-            });
-          }
+          // Normalize: every row gets every declared column, fill missing with ""
+          sampleRows = sampleRows.map(row => {
+            const merged: Record<string, any> = {};
+            for (const col of declaredColumns) {
+              merged[col] = row[col] !== undefined ? row[col] : "";
+            }
+            return merged;
+          });
+          console.log(`[AutoML] Normalized ${sampleRows.length} rows to ${declaredColumns.length} declared columns`);
         }
 
         console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}, declaredCols=${declaredColumns.length}`);
