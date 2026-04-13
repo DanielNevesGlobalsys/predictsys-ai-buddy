@@ -1102,7 +1102,17 @@ serve(async (req: Request) => {
     });
 
     // ==================== TEMPORAL AGGREGATION MODE ====================
-    const datasetBuildMode = (settings as any)?.dataset_build_mode || "original_row";
+    let datasetBuildMode = (settings as any)?.dataset_build_mode || "original_row";
+    const targetFromSettings = (settings as any)?.target_column || modelSelection?.target_column || null;
+
+    // ── AUTO-PROMOTE: If target is agg_* but mode is not temporal_aggregated, fix it ──
+    if (/^agg_/i.test(targetFromSettings || "") && datasetBuildMode !== "temporal_aggregated") {
+      console.log(`[build-modeling-dataset] AUTO-PROMOTE: target="${targetFromSettings}" requires temporal_aggregated mode (was "${datasetBuildMode}")`);
+      datasetBuildMode = "temporal_aggregated";
+      // Persist the fix to SSOT
+      await supabase.from("project_settings").update({ dataset_build_mode: "temporal_aggregated" } as any).eq("project_id", project_id);
+    }
+
     const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
     let aggregationApplied = false;
     let aggregationStats: Record<string, any> | null = null;
