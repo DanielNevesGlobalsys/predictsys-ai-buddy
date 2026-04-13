@@ -148,6 +148,8 @@ const StepTargetFeatures = ({
   // Builder version tracking
   const [builderVersionUsed, setBuilderVersionUsed] = useState<number | null>(null);
   const [isRebuilding, setIsRebuilding] = useState(false);
+  // Builder's final schema — authoritative source of valid features
+  const [builderFinalSchema, setBuilderFinalSchema] = useState<Set<string> | null>(null);
 
   // Column inference
   const [columnInference, setColumnInference] = useState<ColumnInferenceRow[]>([]);
@@ -526,9 +528,25 @@ const StepTargetFeatures = ({
 
   const loadBuilderVersion = async () => {
     if (!projectData.id) return;
-    const { data } = await supabase.from("project_modeling_datasets" as any).select("selection_version_used").eq("project_id", projectData.id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (data) setBuilderVersionUsed((data as any).selection_version_used ?? null);
-    else setBuilderVersionUsed(null);
+    const { data } = await supabase.from("project_modeling_datasets" as any).select("selection_version_used, features_final, features_generated, target_column").eq("project_id", projectData.id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (data) {
+      setBuilderVersionUsed((data as any).selection_version_used ?? null);
+      // Build authoritative schema set from builder's final output
+      const schemaSet = new Set<string>();
+      const ff = (data as any).features_final;
+      if (Array.isArray(ff)) ff.forEach((f: string) => schemaSet.add(f.toLowerCase()));
+      const fg = (data as any).features_generated;
+      if (Array.isArray(fg)) fg.forEach((f: any) => {
+        const name = typeof f === "string" ? f : f?.name;
+        if (name) schemaSet.add(name.toLowerCase());
+      });
+      const tc = (data as any).target_column;
+      if (tc) schemaSet.add(tc.toLowerCase());
+      if (schemaSet.size > 0) setBuilderFinalSchema(schemaSet);
+    } else {
+      setBuilderVersionUsed(null);
+      setBuilderFinalSchema(null);
+    }
   };
 
   const loadSelectionVersion = async () => {
@@ -600,9 +618,24 @@ const StepTargetFeatures = ({
         }
       }
       // In aggregated mode, prefer SSOT features over row-level columns
-      if (sanitizedSSOTFeatures.length > 0) setSelectedFeatures(sanitizedSSOTFeatures);
-      if (ssot.excluded_columns.length > 0 || removedSSOTFeatures.length > 0) {
-        setExcludedColumns(Array.from(new Set([...ssot.excluded_columns, ...removedSSOTFeatures])));
+      // CRITICAL: Filter features against builder's final schema if available
+      let finalFeatures = sanitizedSSOTFeatures;
+      if (builderFinalSchema && builderFinalSchema.size > 0 && finalFeatures.length > 0) {
+        const beforeCount = finalFeatures.length;
+        finalFeatures = finalFeatures.filter(f => builderFinalSchema.has(f.toLowerCase()));
+        if (finalFeatures.length < beforeCount) {
+          console.log(`[StepTargetFeatures] Builder schema filter: ${beforeCount} → ${finalFeatures.length} features`);
+        }
+        // If all features were filtered out, fall back to sanitized features (avoid empty state)
+        if (finalFeatures.length === 0 && sanitizedSSOTFeatures.length > 0) {
+          console.warn(`[StepTargetFeatures] Builder schema filter removed ALL features — falling back to sanitized SSOT`);
+          finalFeatures = sanitizedSSOTFeatures;
+        }
+      }
+      if (finalFeatures.length > 0) setSelectedFeatures(finalFeatures);
+      const allRemoved = [...removedSSOTFeatures, ...sanitizedSSOTFeatures.filter(f => !finalFeatures.includes(f))];
+      if (ssot.excluded_columns.length > 0 || allRemoved.length > 0) {
+        setExcludedColumns(Array.from(new Set([...ssot.excluded_columns, ...allRemoved])));
       }
       // SSOT problem_type is authoritative — always apply when present
       if (ssot.problem_type) setInferredProblemType(ssot.problem_type);
