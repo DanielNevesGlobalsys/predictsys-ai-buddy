@@ -2001,13 +2001,62 @@ serve(async (req) => {
           }
         }
 
-        // Check selected features if available
+        // Check selected features if available — AUTO-RECONCILE invalid ones
         const selectedFeatures = selection?.selected_features;
         if (Array.isArray(selectedFeatures) && selectedFeatures.length > 0) {
           const featureList = selectedFeatures as string[];
+          const validFeatures: string[] = [];
+          const invalidFeatures: string[] = [];
+          
           for (const f of featureList) {
-            if (!schemaLower.has(f.toLowerCase())) {
-              missing.push(`feature: ${f}`);
+            if (schemaLower.has(f.toLowerCase())) {
+              validFeatures.push(f);
+            } else {
+              invalidFeatures.push(f);
+            }
+          }
+
+          if (invalidFeatures.length > 0) {
+            console.warn(`[Gating] FEATURE_AUTO_RECONCILE: ${invalidFeatures.length} features not in builder schema: ${invalidFeatures.slice(0, 10).join(", ")}`);
+            
+            // If we still have enough valid features, auto-fix the selection instead of blocking
+            if (validFeatures.length >= 3) {
+              console.log(`[Gating] FEATURE_AUTO_RECONCILE: Fixing selection: ${featureList.length} → ${validFeatures.length} features`);
+              
+              // Persist the reconciled list
+              safeFire(
+                supabase.from("project_model_selection")
+                  .update({ selected_features: validFeatures, updated_at: new Date().toISOString() } as any)
+                  .eq("project_id", project_id)
+              );
+              safeFire(
+                supabase.from("project_settings")
+                  .update({ feature_columns: validFeatures, updated_at: new Date().toISOString() } as any)
+                  .eq("project_id", project_id)
+              );
+              safeFire(
+                supabase.from("platform_events").insert({
+                  event_type: "feature_auto_reconciled",
+                  project_id,
+                  status: "info",
+                  source: "edge",
+                  metadata: {
+                    before_count: featureList.length,
+                    after_count: validFeatures.length,
+                    removed: invalidFeatures.slice(0, 30),
+                    schema_source: schemaSource,
+                  },
+                })
+              );
+              
+              // Update the in-memory selection for the rest of training
+              selection.selected_features = validFeatures;
+              trainingWarningsGlobal.push(`${invalidFeatures.length} feature(s) removida(s) por reconciliação com schema do builder.`);
+            } else {
+              // Not enough valid features — block
+              for (const f of invalidFeatures) {
+                missing.push(`feature: ${f}`);
+              }
             }
           }
         }
