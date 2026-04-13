@@ -1528,9 +1528,17 @@ Deno.serve(async (req) => {
 
         let sampleRowsArr: Record<string, unknown>[] = [];
         let sampleSource = "persisted_sample";
+        let existingSampleIsFlat = false;
 
         if (sampleData?.sample_json) {
           const sj = sampleData.sample_json as any;
+          // Check if this is already a flat joined sample — never overwrite it
+          if (sj && typeof sj === "object" && typeof sj.source === "string" && 
+              (sj.source.includes("flat_join") || sj.source.includes("flat") || sj.source === "powerbi_flat_join")) {
+            existingSampleIsFlat = true;
+            sampleSource = sj.source;
+            console.log(`[calculate-eda] Existing sample is FLAT (source=${sj.source}) — preserving it, no fallback needed`);
+          }
           if (Array.isArray(sj)) {
             sampleRowsArr = sj;
           } else if (sj && typeof sj === "object" && Array.isArray(sj.rows)) {
@@ -1538,7 +1546,8 @@ Deno.serve(async (req) => {
           }
         }
 
-        if (sampleRowsArr.length === 0) {
+        // Only fetch fallback if no rows AND sample is NOT already flat
+        if (sampleRowsArr.length === 0 && !existingSampleIsFlat) {
           const fallbackSample = await fetchPowerBISampleRowsFromConnection(supabase, {
             sourceMetadata: virtualDatasetContext.sourceMetadata,
             sourcePointer: virtualDatasetContext.sourcePointer,
