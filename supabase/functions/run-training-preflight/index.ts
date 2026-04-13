@@ -79,7 +79,7 @@ serve(async (req: Request) => {
       }),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_split_policies").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
-      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result, active_target_mode, active_target_column, active_target_ref, target_column, entity_key, time_anchor_column, recommended_time_column, recommended_grain, recommended_split_strategy, dataset_build_mode, industry, objective, target_state, target_intent_resolution, builder_state").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_settings").select("target_source, problem_type, label_build_result, selected_template_id, target_quality_report, weak_label_config, weak_label_result, human_label_config, human_label_result, active_target_mode, active_target_column, active_target_ref, target_column, entity_key, official_entity_key, time_anchor_column, recommended_time_column, recommended_grain, recommended_split_strategy, dataset_build_mode, industry, objective, target_state, target_intent_resolution, builder_state").eq("project_id", project_id).maybeSingle(),
     ]);
 
     const datasetState = datasetStateRes.data;
