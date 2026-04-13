@@ -2745,9 +2745,15 @@ serve(async (req) => {
     if (isTemporalAggregated && useVirtualSample) {
       console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
       const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
-      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column || null;
+      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column
+        || (activeTargetSettings as any)?.official_time_column
+        || (activeTargetSettings as any)?.recommended_time_column
+        || null;
 
-      if (aggEntityKey && aggTimeCol) {
+      // Determine if we can aggregate using calendar fields (Ano + Mês) when no date column exists
+      const useCalendarFields = !aggTimeCol;
+
+      if (aggEntityKey && (aggTimeCol || useCalendarFields)) {
         // Re-load raw sample rows (they might already be in virtualSampledLines as CSV)
         const { data: sampleDataAgg2 } = await supabase
           .from("project_dataset_sample")
@@ -2761,8 +2767,24 @@ serve(async (req) => {
           : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
 
         if (rawRows.length > 0) {
+          // Auto-detect calendar year/month columns from sample keys
+          const sampleKeys = Object.keys(rawRows[0] || {});
+          const calYearCol = sampleKeys.find(k => /Calend[aá]rio\.Ano$/i.test(k)) || "Calendário.Ano";
+          const calMonthCol = sampleKeys.find(k => /Calend[aá]rio\.M[eê]s N[uú]mero$/i.test(k)) || "Calendário.Mês Número";
+          const calQuarterCol = sampleKeys.find(k => /Calend[aá]rio\.Trimestre$/i.test(k)) || "Calendário.Trimestre";
+
+          if (useCalendarFields) {
+            console.log(`[AutoML] No date column available — using calendar fields: year=${calYearCol}, month=${calMonthCol}`);
+          }
+
+          // Also detect the volume column for SUM-based target (QTDSAC, QTDPES, etc.)
+          const volumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
+          const volumeCol = volumeCandidates.find(c => sampleKeys.includes(c)) || null;
+          console.log(`[AutoML] Volume column for agg_sacas_mes: ${volumeCol || "COUNT (fallback)"}`);
+
           // Aggregate by entity × month
           const aggMap = new Map<string, {
+            sum_volume: number;
             count: number;
             codpes_set: Set<string>;
             codgre_vals: Map<string, number>;
@@ -2775,16 +2797,29 @@ serve(async (req) => {
 
           for (const row of rawRows) {
             const entity = String(row[aggEntityKey] || "");
-            const rawDate = String(row[aggTimeCol] || "");
-            const month = rawDate.substring(0, 7); // "YYYY-MM"
-            if (!entity || !month || month.length < 7) continue;
+            if (!entity) continue;
 
-            const key = `${entity}|${month}`;
+            // Resolve year/month either from date column or calendar fields
+            let yr = 0;
+            let mn = 0;
+            if (aggTimeCol) {
+              const rawDate = String(row[aggTimeCol] || "");
+              const month = rawDate.substring(0, 7); // "YYYY-MM"
+              if (!month || month.length < 7) continue;
+              yr = parseInt(month.split("-")[0]) || 0;
+              mn = parseInt(month.split("-")[1]) || 0;
+            } else {
+              // Use calendar dimension fields
+              yr = parseInt(String(row[calYearCol] || "0")) || 0;
+              mn = parseInt(String(row[calMonthCol] || "0")) || 0;
+              if (yr === 0 || mn === 0) continue;
+            }
+
+            const key = `${entity}|${yr}-${String(mn).padStart(2, "0")}`;
             if (!aggMap.has(key)) {
-              const yr = parseInt(month.split("-")[0]) || 0;
-              const mn = parseInt(month.split("-")[1]) || 0;
               const qt = Math.ceil(mn / 3);
               aggMap.set(key, {
+                sum_volume: 0,
                 count: 0,
                 codpes_set: new Set(),
                 codgre_vals: new Map(),
@@ -2796,7 +2831,12 @@ serve(async (req) => {
               });
             }
             const agg = aggMap.get(key)!;
-            agg.count += 1; // each row = 1 saca
+            // Use SUM of volume column if available, otherwise COUNT
+            if (volumeCol) {
+              const vol = parseFloat(String(row[volumeCol] || "0")) || 0;
+              agg.sum_volume += vol;
+            }
+            agg.count += 1;
 
             // Track categorical modes
             const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
@@ -2808,17 +2848,9 @@ serve(async (req) => {
             const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
             if (codpes) agg.codpes_set.add(codpes);
 
-            // Calendar fields from row (fallback)
-            if (agg.year === 0) {
-              const calAno = row["Calendário.Ano"];
-              if (calAno) agg.year = parseInt(String(calAno)) || 0;
-            }
-            if (agg.monthNum === 0) {
-              const calMes = row["Calendário.Mês Número"];
-              if (calMes) agg.monthNum = parseInt(String(calMes)) || 0;
-            }
+            // Calendar fields from row (fallback for quarter)
             if (agg.quarter === 0) {
-              const calTri = row["Calendário.Trimestre"];
+              const calTri = row[calQuarterCol];
               if (calTri) agg.quarter = parseInt(String(calTri)) || Math.ceil(agg.monthNum / 3);
             }
           }
@@ -2843,8 +2875,9 @@ serve(async (req) => {
 
           const aggLines: string[] = [];
           for (const [, v] of aggMap) {
+            const targetValue = volumeCol ? v.sum_volume : v.count;
             const vals = [
-              String(v.count),
+              String(targetValue),
               String(v.year),
               String(v.monthNum),
               String(v.quarter),
@@ -2864,11 +2897,12 @@ serve(async (req) => {
           delimiter = ",";
           totalDatasetRows = aggLines.length;
 
+          const targetVals = [...aggMap.values()].map(v => volumeCol ? v.sum_volume : v.count);
           console.log(`[AutoML] Temporal aggregation complete: ${aggMap.size} rows (entity×month), target=agg_sacas_mes, features=${aggHeaders.length - 1}`);
-          console.log(`[AutoML] Aggregated target stats: min=${Math.min(...[...aggMap.values()].map(v => v.count))}, max=${Math.max(...[...aggMap.values()].map(v => v.count))}, mean=${([...aggMap.values()].reduce((a, v) => a + v.count, 0) / aggMap.size).toFixed(1)}`);
+          console.log(`[AutoML] Aggregated target stats: min=${Math.min(...targetVals)}, max=${Math.max(...targetVals)}, mean=${(targetVals.reduce((a, b) => a + b, 0) / targetVals.length).toFixed(1)}`);
         }
       } else {
-        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key or time_anchor_column`);
+        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key (${aggEntityKey}) — cannot aggregate`);
       }
     }
 
