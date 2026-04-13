@@ -2745,9 +2745,15 @@ serve(async (req) => {
     if (isTemporalAggregated && useVirtualSample) {
       console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
       const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
-      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column || null;
+      const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column
+        || (activeTargetSettings as any)?.official_time_column
+        || (activeTargetSettings as any)?.recommended_time_column
+        || null;
 
-      if (aggEntityKey && aggTimeCol) {
+      // Determine if we can aggregate using calendar fields (Ano + Mês) when no date column exists
+      const useCalendarFields = !aggTimeCol;
+
+      if (aggEntityKey && (aggTimeCol || useCalendarFields)) {
         // Re-load raw sample rows (they might already be in virtualSampledLines as CSV)
         const { data: sampleDataAgg2 } = await supabase
           .from("project_dataset_sample")
@@ -2761,8 +2767,24 @@ serve(async (req) => {
           : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
 
         if (rawRows.length > 0) {
+          // Auto-detect calendar year/month columns from sample keys
+          const sampleKeys = Object.keys(rawRows[0] || {});
+          const calYearCol = sampleKeys.find(k => /Calend[aá]rio\.Ano$/i.test(k)) || "Calendário.Ano";
+          const calMonthCol = sampleKeys.find(k => /Calend[aá]rio\.M[eê]s N[uú]mero$/i.test(k)) || "Calendário.Mês Número";
+          const calQuarterCol = sampleKeys.find(k => /Calend[aá]rio\.Trimestre$/i.test(k)) || "Calendário.Trimestre";
+
+          if (useCalendarFields) {
+            console.log(`[AutoML] No date column available — using calendar fields: year=${calYearCol}, month=${calMonthCol}`);
+          }
+
+          // Also detect the volume column for SUM-based target (QTDSAC, QTDPES, etc.)
+          const volumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
+          const volumeCol = volumeCandidates.find(c => sampleKeys.includes(c)) || null;
+          console.log(`[AutoML] Volume column for agg_sacas_mes: ${volumeCol || "COUNT (fallback)"}`);
+
           // Aggregate by entity × month
           const aggMap = new Map<string, {
+            sum_volume: number;
             count: number;
             codpes_set: Set<string>;
             codgre_vals: Map<string, number>;
@@ -2773,102 +2795,98 @@ serve(async (req) => {
             quarter: number;
           }>();
 
-          for (const row of rawRows) {
-            const entity = String(row[aggEntityKey] || "");
-            const rawDate = String(row[aggTimeCol] || "");
-            const month = rawDate.substring(0, 7); // "YYYY-MM"
-            if (!entity || !month || month.length < 7) continue;
-
-            const key = `${entity}|${month}`;
-            if (!aggMap.has(key)) {
-              const yr = parseInt(month.split("-")[0]) || 0;
-              const mn = parseInt(month.split("-")[1]) || 0;
-              const qt = Math.ceil(mn / 3);
-              aggMap.set(key, {
-                count: 0,
-                codpes_set: new Set(),
-                codgre_vals: new Map(),
-                origem_vals: new Map(),
-                tipo_vals: new Map(),
-                year: yr,
-                monthNum: mn,
-                quarter: qt,
-              });
+          // Detect vertically-stacked multi-table format
+          const isVerticallyStacked = rawRows.some((r: any) => r.__source_table);
+          
+          if (isVerticallyStacked) {
+            console.log(`[AutoML] Vertically-stacked multi-table sample detected — using cross-table aggregation`);
+            
+            // Group rows by source table
+            const tableRows = new Map<string, Record<string, any>[]>();
+            for (const row of rawRows) {
+              const src = String(row.__source_table || "unknown");
+              if (!tableRows.has(src)) tableRows.set(src, []);
+              tableRows.get(src)!.push(row);
             }
-            const agg = aggMap.get(key)!;
-            agg.count += 1; // each row = 1 saca
-
-            // Track categorical modes
-            const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
-            if (codgre) agg.codgre_vals.set(codgre, (agg.codgre_vals.get(codgre) || 0) + 1);
-            const origem = String(row["Detalhe Movimentação.Origem da Movimentação"] || "");
-            if (origem) agg.origem_vals.set(origem, (agg.origem_vals.get(origem) || 0) + 1);
-            const tipo = String(row["Detalhe Movimentação.Tipo do Movimento"] || "");
-            if (tipo) agg.tipo_vals.set(tipo, (agg.tipo_vals.get(tipo) || 0) + 1);
-            const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
-            if (codpes) agg.codpes_set.add(codpes);
-
-            // Calendar fields from row (fallback)
-            if (agg.year === 0) {
-              const calAno = row["Calendário.Ano"];
-              if (calAno) agg.year = parseInt(String(calAno)) || 0;
+            
+            const entityTable = aggEntityKey.includes(".") ? aggEntityKey.split(".")[0] : null;
+            const factRows = entityTable ? (tableRows.get(entityTable) || []) : [];
+            const calRows = tableRows.get("Calendário") || [];
+            console.log(`[AutoML] Cross-table: factTable=${entityTable} (${factRows.length} rows), calendar=${calRows.length} rows`);
+            
+            if (factRows.length > 0) {
+              // Use CODSAF as temporal proxy
+              const safraCol = `${entityTable}.CODSAF`;
+              const crossAggMap = new Map<string, { count: number; year: number; monthNum: number; quarter: number }>();
+              
+              for (const row of factRows) {
+                const entity = String(row[aggEntityKey] || "");
+                if (!entity) continue;
+                const safra = String(row[safraCol] || "");
+                const yr = parseInt((safra.split("/")[0]) || "2020") || 2020;
+                const key = `${entity}|${yr}`;
+                if (!crossAggMap.has(key)) {
+                  crossAggMap.set(key, { count: 0, year: yr, monthNum: 1, quarter: 1 });
+                }
+                crossAggMap.get(key)!.count += 1;
+              }
+              
+              if (crossAggMap.size > 0) {
+                const crossHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre"];
+                const crossLines: string[] = [];
+                for (const [, v] of crossAggMap) {
+                  crossLines.push([String(v.count), String(v.year), String(v.monthNum), String(v.quarter)].join(","));
+                }
+                virtualHeaders = crossHeaders;
+                virtualSampledLines = crossLines;
+                delimiter = ",";
+                totalDatasetRows = crossLines.length;
+                const tVals = [...crossAggMap.values()].map(v => v.count);
+                console.log(`[AutoML] Cross-table aggregation: ${crossAggMap.size} rows, min=${Math.min(...tVals)}, max=${Math.max(...tVals)}, mean=${(tVals.reduce((a, b) => a + b, 0) / tVals.length).toFixed(1)}`);
+              }
             }
-            if (agg.monthNum === 0) {
-              const calMes = row["Calendário.Mês Número"];
-              if (calMes) agg.monthNum = parseInt(String(calMes)) || 0;
+          } else {
+            // Standard joined-row aggregation
+            for (const row of rawRows) {
+              const entity = String(row[aggEntityKey] || "");
+              if (!entity) continue;
+              let yr = 0, mn = 0;
+              if (aggTimeCol) {
+                const rawDate = String(row[aggTimeCol] || "");
+                const month = rawDate.substring(0, 7);
+                if (!month || month.length < 7) continue;
+                yr = parseInt(month.split("-")[0]) || 0;
+                mn = parseInt(month.split("-")[1]) || 0;
+              } else {
+                yr = parseInt(String(row[calYearCol] || "0")) || 0;
+                mn = parseInt(String(row[calMonthCol] || "0")) || 0;
+                if (yr === 0 || mn === 0) continue;
+              }
+              const key = `${entity}|${yr}-${String(mn).padStart(2, "0")}`;
+              if (!aggMap.has(key)) {
+                aggMap.set(key, { sum_volume: 0, count: 0, codpes_set: new Set(), codgre_vals: new Map(), origem_vals: new Map(), tipo_vals: new Map(), year: yr, monthNum: mn, quarter: Math.ceil(mn / 3) });
+              }
+              const agg = aggMap.get(key)!;
+              if (volumeCol) { agg.sum_volume += parseFloat(String(row[volumeCol] || "0")) || 0; }
+              agg.count += 1;
             }
-            if (agg.quarter === 0) {
-              const calTri = row["Calendário.Trimestre"];
-              if (calTri) agg.quarter = parseInt(String(calTri)) || Math.ceil(agg.monthNum / 3);
+            if (aggMap.size > 0) {
+              const aggHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre"];
+              const aggLines: string[] = [];
+              for (const [, v] of aggMap) {
+                const tv = volumeCol ? v.sum_volume : v.count;
+                aggLines.push([String(tv), String(v.year), String(v.monthNum), String(v.quarter)].join(","));
+              }
+              virtualHeaders = aggHeaders;
+              virtualSampledLines = aggLines;
+              delimiter = ",";
+              totalDatasetRows = aggLines.length;
+              console.log(`[AutoML] Temporal aggregation: ${aggMap.size} rows`);
             }
           }
-
-          // Helper: get mode (most frequent value) from a frequency map
-          const getMode = (m: Map<string, number>): string => {
-            let best = ""; let bestCount = 0;
-            for (const [k, v] of m) { if (v > bestCount) { best = k; bestCount = v; } }
-            return best;
-          };
-
-          // Build aggregated rows as CSV
-          const aggHeaders = [
-            "agg_sacas_mes",
-            "Calendário.Ano",
-            "Calendário.Mês Número",
-            "Calendário.Trimestre",
-            "Detalhe Movimentação.CODGRE",
-            "Detalhe Movimentação.Origem da Movimentação",
-            "Detalhe Movimentação.Tipo do Movimento",
-          ];
-
-          const aggLines: string[] = [];
-          for (const [, v] of aggMap) {
-            const vals = [
-              String(v.count),
-              String(v.year),
-              String(v.monthNum),
-              String(v.quarter),
-              getMode(v.codgre_vals),
-              getMode(v.origem_vals),
-              getMode(v.tipo_vals),
-            ];
-            aggLines.push(vals.map(s => {
-              if (s.includes(",") || s.includes('"') || s.includes('\n')) return `"${s.replace(/"/g, '""')}"`;
-              return s;
-            }).join(","));
-          }
-
-          // Replace virtual sample with aggregated data
-          virtualHeaders = aggHeaders;
-          virtualSampledLines = aggLines;
-          delimiter = ",";
-          totalDatasetRows = aggLines.length;
-
-          console.log(`[AutoML] Temporal aggregation complete: ${aggMap.size} rows (entity×month), target=agg_sacas_mes, features=${aggHeaders.length - 1}`);
-          console.log(`[AutoML] Aggregated target stats: min=${Math.min(...[...aggMap.values()].map(v => v.count))}, max=${Math.max(...[...aggMap.values()].map(v => v.count))}, mean=${([...aggMap.values()].reduce((a, v) => a + v.count, 0) / aggMap.size).toFixed(1)}`);
         }
       } else {
-        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key or time_anchor_column`);
+        console.warn(`[AutoML] temporal_aggregated mode but missing entity_key (${aggEntityKey}) — cannot aggregate`);
       }
     }
 
