@@ -618,9 +618,24 @@ const StepTargetFeatures = ({
         }
       }
       // In aggregated mode, prefer SSOT features over row-level columns
-      if (sanitizedSSOTFeatures.length > 0) setSelectedFeatures(sanitizedSSOTFeatures);
-      if (ssot.excluded_columns.length > 0 || removedSSOTFeatures.length > 0) {
-        setExcludedColumns(Array.from(new Set([...ssot.excluded_columns, ...removedSSOTFeatures])));
+      // CRITICAL: Filter features against builder's final schema if available
+      let finalFeatures = sanitizedSSOTFeatures;
+      if (builderFinalSchema && builderFinalSchema.size > 0 && finalFeatures.length > 0) {
+        const beforeCount = finalFeatures.length;
+        finalFeatures = finalFeatures.filter(f => builderFinalSchema.has(f.toLowerCase()));
+        if (finalFeatures.length < beforeCount) {
+          console.log(`[StepTargetFeatures] Builder schema filter: ${beforeCount} → ${finalFeatures.length} features`);
+        }
+        // If all features were filtered out, fall back to sanitized features (avoid empty state)
+        if (finalFeatures.length === 0 && sanitizedSSOTFeatures.length > 0) {
+          console.warn(`[StepTargetFeatures] Builder schema filter removed ALL features — falling back to sanitized SSOT`);
+          finalFeatures = sanitizedSSOTFeatures;
+        }
+      }
+      if (finalFeatures.length > 0) setSelectedFeatures(finalFeatures);
+      const allRemoved = [...removedSSOTFeatures, ...sanitizedSSOTFeatures.filter(f => !finalFeatures.includes(f))];
+      if (ssot.excluded_columns.length > 0 || allRemoved.length > 0) {
+        setExcludedColumns(Array.from(new Set([...ssot.excluded_columns, ...allRemoved])));
       }
       // SSOT problem_type is authoritative — always apply when present
       if (ssot.problem_type) setInferredProblemType(ssot.problem_type);
