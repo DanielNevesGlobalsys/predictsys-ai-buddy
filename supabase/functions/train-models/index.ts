@@ -73,6 +73,11 @@ function getModelingDatasetSchemaColumns(modelingDataset: any): string[] {
   ]);
 }
 
+function isReadyModelingDataset(modelingDataset: any): boolean {
+  if (!modelingDataset) return false;
+  return modelingDataset.is_current !== false && (modelingDataset.status === "ready" || modelingDataset.status === "warning");
+}
+
 function resolveEffectiveDatasetBuildMode(activeTargetSettings: any, targetColumn: string, modelingDataset: any): string {
   const settingsBuildMode = activeTargetSettings?.dataset_build_mode || null;
   const targetIsAggregated = typeof targetColumn === "string" && targetColumn.startsWith("agg_");
@@ -2028,7 +2033,7 @@ serve(async (req) => {
 
     const dsState = dsStateRes.data as any;
     const selection = selectionRes.data as any;
-    const modelingDataset = modelingDatasetRes.data as any;
+    let modelingDataset = modelingDatasetRes.data as any;
     const modelingContract = contractRes.data as any;
     const trainAiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
     const classBalanceMethod = trainAiCtx.class_balance?.method || "none";
@@ -2071,6 +2076,41 @@ serve(async (req) => {
       console.warn(`[Gating] Using legacy project.target_column (no selection record)`);
     } else {
       return blockResponse("NO_TARGET_SELECTED", "Nenhum target selecionado. Volte à Etapa 3.", { label: "Selecionar target", go_to_step: 3 });
+    }
+
+    // ── Canonical Builder Resolution (same contract as preflight) ──
+    {
+      const diagnostics = (dsState?.diagnostics as Record<string, any> | null) || {};
+      const ssotBuilderDatasetId = typeof diagnostics.builder_dataset_id === "string" ? diagnostics.builder_dataset_id : null;
+
+      if (currentSelectionVersion > 0) {
+        const { data: versionMatchedDataset } = await supabase
+          .from("project_modeling_datasets")
+          .select("*")
+          .eq("project_id", project_id)
+          .eq("selection_version_used", currentSelectionVersion)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        if (versionMatchedDataset && (!modelingDataset || !isReadyModelingDataset(modelingDataset) || modelingDataset.id !== versionMatchedDataset.id)) {
+          modelingDataset = versionMatchedDataset;
+          console.log(`[Gating] Canonical builder resolved by selection_version=${currentSelectionVersion}: ${modelingDataset.id}`);
+        }
+      }
+
+      if (ssotBuilderDatasetId && (!modelingDataset || modelingDataset.id !== ssotBuilderDatasetId)) {
+        const { data: ssotDataset } = await supabase
+          .from("project_modeling_datasets")
+          .select("*")
+          .eq("id", ssotBuilderDatasetId)
+          .maybeSingle();
+
+        if (ssotDataset) {
+          modelingDataset = ssotDataset;
+          console.log(`[Gating] Canonical builder resolved by project_dataset_state.diagnostics: ${modelingDataset.id}`);
+        }
+      }
     }
 
     // ── ACTIVE TARGET RESOLUTION (SSOT) ──
@@ -2537,6 +2577,13 @@ serve(async (req) => {
       builderDatasetId = modelingDataset.id;
       console.log(`[Gating] Builder OK: id=${builderDatasetId}, sel_v=${builderSelVersion}, status=${builderStatus}`);
     } else {
+      if (effectiveDatasetBuildMode === "temporal_aggregated" || target_column.startsWith("agg_")) {
+        return blockResponse(
+          "MODELING_DATASET_NOT_READY",
+          `O treino esperava o dataset modelável final do builder para o target \"${target_column}\", mas nenhum artefato canônico pronto foi encontrado.`,
+          { label: "Gerar Builder", go_to_step: 3 }
+        );
+      }
       // No builder — warn but don't block (legacy path allows direct training)
       trainingWarningsGlobal.push("Feature Builder não foi executado. Treinando com features brutas.");
       console.warn(`[Gating] No modeling_dataset found. Training with raw features (legacy path).`);
@@ -2940,6 +2987,25 @@ serve(async (req) => {
           : buildColumnListFromRows(sampleRows).filter((column) => column !== "__source_table");
 
         const requiresAggregatedSignals = effectiveDatasetBuildMode === "temporal_aggregated" && target_column.startsWith("agg_");
+        const shouldPreferDirectPowerBIRefresh = requiresAggregatedSignals
+          && Boolean(sourceMetadata?.connection_id && sourceMetadata?.workspace_id && sourceMetadata?.dataset_id)
+          && Array.isArray(sourceMetadata?.materialized_tables)
+          && sourceMetadata.materialized_tables.length > 1;
+
+        if (shouldPreferDirectPowerBIRefresh) {
+          console.log(`[AutoML] Aggregated Power BI training — refreshing sample directly from connection to honor canonical builder schema`);
+          const refreshedSample = await fetchPowerBISampleRowsFromConnection(supabase, sourceMetadata || {});
+          if (refreshedSample.rows.length > 0) {
+            sampleRows = refreshedSample.rows as Record<string, any>[];
+            declaredColumns = buildColumnListFromRows(sampleRows).filter((column) => column !== "__source_table");
+            powerBiSampleRefreshed = true;
+            trainingWarningsGlobal.push("Amostra Power BI recarregada diretamente da conexão para treino agregado.");
+            console.log(`[AutoML] Direct Power BI refresh: source=${refreshedSample.source}, rows=${sampleRows.length}, cols=${declaredColumns.length}`);
+          } else {
+            console.warn(`[AutoML] Direct Power BI refresh returned no rows (${refreshedSample.error || "unknown_error"})`);
+          }
+        }
+
         const persistedTimeCandidates = [
           (activeTargetSettings as any)?.time_anchor_column,
           (activeTargetSettings as any)?.official_time_column,
@@ -2947,7 +3013,7 @@ serve(async (req) => {
           ...declaredColumns.filter((column) => /Calend[aá]rio\.(Ano|M[eê]s N[uú]mero|Trimestre)/i.test(column)),
         ];
         const persistedVolumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
-        const needsPowerBiRefresh = requiresAggregatedSignals && (
+        const needsPowerBiRefresh = !powerBiSampleRefreshed && requiresAggregatedSignals && (
           sampleRows.length === 0
           || !hasAnyNonEmptyValue(sampleRows, persistedTimeCandidates)
           || !hasAnyNonEmptyValue(sampleRows, persistedVolumeCandidates)
@@ -2969,15 +3035,18 @@ serve(async (req) => {
 
         // Ensure all rows have all declared columns (flat join normalization)
         if (sampleRows.length > 0 && declaredColumns.length > 0) {
+          const sourceTableColumns = buildColumnListFromRows(sampleRows).filter((column) => column === "__source_table");
+          const normalizedColumns = uniqueNonEmptyColumns([...declaredColumns, ...sourceTableColumns]);
           // Normalize: every row gets every declared column, fill missing with ""
           sampleRows = sampleRows.map(row => {
             const merged: Record<string, any> = {};
-            for (const col of declaredColumns) {
+            for (const col of normalizedColumns) {
               merged[col] = row[col] !== undefined ? row[col] : "";
             }
+            if (row.__source_table !== undefined) merged.__source_table = row.__source_table;
             return merged;
           });
-          console.log(`[AutoML] Normalized ${sampleRows.length} rows to ${declaredColumns.length} declared columns`);
+          console.log(`[AutoML] Normalized ${sampleRows.length} rows to ${normalizedColumns.length} declared columns`);
         }
 
         virtualSampleRows = sampleRows;
@@ -3375,6 +3444,16 @@ serve(async (req) => {
       // Find target column index
       const targetIndex = useHumanLabelsAsTarget ? -1 : findHeaderIndex(headers, target_column);
       if (!useHumanLabelsAsTarget && targetIndex === -1) {
+        if (isTemporalAggregated && target_column.startsWith("agg_") && modelingDataset?.target_column === target_column) {
+          console.error(`[AutoML] Aggregated target missing after materialization. This indicates raw/transacional data reached training instead of the canonical modeling dataset.`);
+          return new Response(JSON.stringify({
+            error: `O treino recebeu um dataset raw/transacional. Era esperado o dataset modelável agregado contendo o target \"${target_column}\".`,
+            code: "RAW_DATASET_RECEIVED",
+            expected_target: target_column,
+            builder_dataset_id: builderDatasetId,
+            available_columns: headers.slice(0, 20)
+          }), { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        }
         console.error(`Coluna alvo "${target_column}" não encontrada. Colunas: ${headers.slice(0, 20).join(", ")}`);
         return new Response(JSON.stringify({
           error: `Coluna alvo "${target_column}" não encontrada no dataset.`,
