@@ -285,7 +285,7 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         || /^agg_/i.test(res.target_column || "");
 
       // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before persisting ──
-      const ADMIN_BLOCK_PATTERNS = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+      const ADMIN_BLOCK_PATTERNS = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
       const sanitizedFeatures = res.selected_features.filter(f => {
         const colPart = f.includes(".") ? f.split(".").pop()! : f;
         return !ADMIN_BLOCK_PATTERNS.test(colPart);

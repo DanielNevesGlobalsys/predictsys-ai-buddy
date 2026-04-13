@@ -1121,8 +1121,9 @@ serve(async (req: Request) => {
       console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
       const aggEntityKey = (settings as any)?.entity_key || null;
       const aggTimeCol = (settings as any)?.time_anchor_column || null;
-      const aggTargetCol = (settings as any)?.target_column || "agg_sacas_mes";
+      const aggTargetCol = targetFromSettings || "agg_sacas_mes";
 
+      // ── RESILIENT AGGREGATION: proceed even without entity/time, injecting virtual target ──
       if (aggEntityKey && aggTimeCol) {
         // Load sample to compute aggregation stats
         const { data: sampleDataAgg } = await supabase
