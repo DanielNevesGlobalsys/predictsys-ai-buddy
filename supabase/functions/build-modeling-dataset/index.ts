@@ -1970,6 +1970,52 @@ serve(async (req: Request) => {
 
     console.log(`[build-modeling-dataset] Synced project_dataset_state: model_ready=${modelingDatasetReady}, builder_dataset_id=${saved.id}`);
 
+    // ── POST-BUILD: RECONCILE selected_features in project_model_selection against builder's final schema ──
+    // This is the critical sync that prevents INVALID_SCHEMA_SELECTION errors in train-models.
+    if (modelSelection && modelingDatasetReady) {
+      const builderSchemaSet = new Set<string>();
+      // Add all columns the builder considers valid
+      for (const f of report.features_final) builderSchemaSet.add(f.toLowerCase());
+      for (const fg of report.features_generated) {
+        const name = typeof fg === "string" ? fg : (fg as any).name;
+        if (name) builderSchemaSet.add(name.toLowerCase());
+      }
+      if (targetColumn) builderSchemaSet.add(targetColumn.toLowerCase());
+
+      const oldFeatures = (modelSelection.selected_features as string[]) || [];
+      const reconciledFeatures = oldFeatures.filter(f => builderSchemaSet.has(f.toLowerCase()));
+      const removedFeatures = oldFeatures.filter(f => !builderSchemaSet.has(f.toLowerCase()));
+
+      console.log(`[build-modeling-dataset] FEATURE_RECONCILIATION: before=${oldFeatures.length}, after=${reconciledFeatures.length}, removed=${removedFeatures.length}`);
+      if (removedFeatures.length > 0) {
+        console.log(`[build-modeling-dataset] FEATURE_RECONCILIATION_REMOVED: ${removedFeatures.slice(0, 15).join(", ")}${removedFeatures.length > 15 ? ` (+${removedFeatures.length - 15})` : ""}`);
+      }
+
+      if (removedFeatures.length > 0) {
+        // If ALL old features were invalid, replace with builder's features_final
+        const finalFeatures = reconciledFeatures.length >= 3
+          ? reconciledFeatures
+          : report.features_final;
+
+        await supabase.from("project_model_selection")
+          .update({
+            selected_features: finalFeatures,
+            updated_at: new Date().toISOString(),
+          } as any)
+          .eq("project_id", project_id);
+
+        // Also sync to project_settings.feature_columns
+        await supabase.from("project_settings")
+          .update({
+            feature_columns: finalFeatures,
+            updated_at: new Date().toISOString(),
+          } as any)
+          .eq("project_id", project_id);
+
+        console.log(`[build-modeling-dataset] FEATURE_RECONCILIATION_PERSISTED: ${finalFeatures.length} features synced to model_selection + settings`);
+      }
+    }
+
     // ── SSOT State Machine: Update builder_state + dataset_version ──
     try {
       const builderFinalState = modelingDatasetReady ? "ready" : (status === "blocked" ? "blocked" : "draft");
