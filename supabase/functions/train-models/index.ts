@@ -2790,52 +2790,198 @@ serve(async (req) => {
             quarter: number;
           }>();
 
-          // Legacy stacked format is no longer produced — all samples are flat.
-          // If somehow a stacked sample arrives, log warning and proceed with flat aggregation.
+          // ── Stacked → Flat in-memory join ──────────────────────────
           const hasSourceTableTag = rawRows.some((r: any) => r.__source_table);
+          let workingRows: Record<string, any>[] = rawRows;
+
           if (hasSourceTableTag) {
-            console.log(`[AutoML] WARNING: Legacy __source_table tags detected in sample. Ignoring tags and treating as flat rows.`);
+            console.log(`[AutoML] Stacked __source_table sample detected — performing in-memory cross-table join`);
+
+            // Group rows by source table
+            const tableGroups = new Map<string, Record<string, any>[]>();
+            for (const row of rawRows) {
+              const tbl = String(row.__source_table || "__unknown__");
+              if (!tableGroups.has(tbl)) tableGroups.set(tbl, []);
+              tableGroups.get(tbl)!.push(row);
+            }
+            console.log(`[AutoML] Stacked tables: ${[...tableGroups.keys()].join(", ")} (${[...tableGroups.values()].map(v => v.length).join(", ")} rows)`);
+
+            // Identify fact table: the one containing the entity key column
+            const entityKeyTable = aggEntityKey.includes(".") ? aggEntityKey.split(".")[0] : null;
+            let factTableName = "";
+            let factRows: Record<string, any>[] = [];
+
+            if (entityKeyTable && tableGroups.has(entityKeyTable)) {
+              factTableName = entityKeyTable;
+              factRows = tableGroups.get(entityKeyTable)!;
+            } else {
+              // Fallback: table with most rows
+              let maxLen = 0;
+              for (const [name, rows] of tableGroups) {
+                if (rows.length > maxLen) { maxLen = rows.length; factTableName = name; factRows = rows; }
+              }
+            }
+            console.log(`[AutoML] Fact table for join: "${factTableName}" (${factRows.length} rows)`);
+
+            // Build dimension lookups using SK columns or common base-name columns
+            const factColNames = factRows.length > 0 ? Object.keys(factRows[0]).filter(k => k !== "__source_table") : [];
+            const factColBases = new Map<string, string>(); // baseName(lower) → fullColName
+            for (const fc of factColNames) {
+              const base = fc.includes(".") ? fc.split(".").pop()!.toLowerCase() : fc.toLowerCase();
+              factColBases.set(base, fc);
+            }
+
+            const dimLookups: Array<{ factKey: string; dimKey: string; lookup: Map<string, Record<string, any>> }> = [];
+            const allDimColNames: string[] = [];
+
+            for (const [tblName, tblRows] of tableGroups) {
+              if (tblName === factTableName || tblRows.length === 0) continue;
+              const dimCols = Object.keys(tblRows[0]).filter(k => k !== "__source_table");
+              allDimColNames.push(...dimCols);
+
+              // Find a common join key (SK_ columns, or matching base name)
+              let joined = false;
+              for (const dimCol of dimCols) {
+                const dimBase = dimCol.includes(".") ? dimCol.split(".").pop()!.toLowerCase() : dimCol.toLowerCase();
+                if (factColBases.has(dimBase)) {
+                  const factKey = factColBases.get(dimBase)!;
+                  const lookup = new Map<string, Record<string, any>>();
+                  for (const row of tblRows) {
+                    const keyVal = String(row[dimCol] ?? "");
+                    if (keyVal && !lookup.has(keyVal)) lookup.set(keyVal, row);
+                  }
+                  dimLookups.push({ factKey, dimKey: dimCol, lookup });
+                  console.log(`[AutoML] Dim join: ${tblName} on ${dimCol} ↔ ${factKey} (${lookup.size} unique keys)`);
+                  joined = true;
+                  break;
+                }
+              }
+              if (!joined) {
+                console.log(`[AutoML] Dim "${tblName}": no common key with fact — columns will be padded empty`);
+              }
+            }
+
+            // Build flat rows
+            const flatRows: Record<string, any>[] = [];
+            for (const factRow of factRows) {
+              const flat: Record<string, any> = {};
+              // Copy fact columns
+              for (const [k, v] of Object.entries(factRow)) {
+                if (k === "__source_table") continue;
+                flat[k] = v;
+              }
+              // Join dimension columns
+              for (const dl of dimLookups) {
+                const keyVal = String(factRow[dl.factKey] ?? "");
+                const dimRow = dl.lookup.get(keyVal);
+                if (dimRow) {
+                  for (const [k, v] of Object.entries(dimRow)) {
+                    if (k === "__source_table") continue;
+                    flat[k] = v;
+                  }
+                }
+              }
+              // Pad missing dim columns
+              for (const dc of allDimColNames) {
+                if (!(dc in flat)) flat[dc] = "";
+              }
+              flatRows.push(flat);
+            }
+
+            workingRows = flatRows;
+            console.log(`[AutoML] Flat join result: ${flatRows.length} rows, ${Object.keys(flatRows[0] || {}).length} cols`);
+
+            // Re-detect columns after join
+            const joinedKeys = Object.keys(flatRows[0] || {});
+            const newVolumeCol = volumeCandidates.find(c => joinedKeys.includes(c)) || null;
+            if (newVolumeCol && newVolumeCol !== volumeCol) {
+              console.log(`[AutoML] Volume column updated after join: ${newVolumeCol}`);
+              // volumeCol is const, we'll use newVolumeCol below
+            }
           }
 
-          // Standard flat joined-row aggregation (works for all formats now)
-          {
-            // Standard joined-row aggregation
-            for (const row of rawRows) {
+          // ── Temporal aggregation on (now flat) working rows ─────────
+          // Re-detect volume col from working rows
+          const workingKeys = Object.keys(workingRows[0] || {});
+          const effectiveVolumeCol = volumeCandidates.find(c => workingKeys.includes(c)) || volumeCol;
+          if (effectiveVolumeCol !== volumeCol) {
+            console.log(`[AutoML] Effective volume column: ${effectiveVolumeCol}`);
+          }
+
+          for (const row of workingRows) {
+            const entity = String(row[aggEntityKey] || "");
+            if (!entity) continue;
+            let yr = 0, mn = 0;
+            if (aggTimeCol) {
+              const rawDate = String(row[aggTimeCol] || "");
+              const month = rawDate.substring(0, 7);
+              if (!month || month.length < 7) continue;
+              yr = parseInt(month.split("-")[0]) || 0;
+              mn = parseInt(month.split("-")[1]) || 0;
+            } else {
+              yr = parseInt(String(row[calYearCol] || "0")) || 0;
+              mn = parseInt(String(row[calMonthCol] || "0")) || 0;
+              if (yr === 0 || mn === 0) continue;
+            }
+            const key = `${entity}|${yr}-${String(mn).padStart(2, "0")}`;
+            if (!aggMap.has(key)) {
+              aggMap.set(key, { sum_volume: 0, count: 0, codpes_set: new Set(), codgre_vals: new Map(), origem_vals: new Map(), tipo_vals: new Map(), year: yr, monthNum: mn, quarter: Math.ceil(mn / 3) });
+            }
+            const agg = aggMap.get(key)!;
+            if (effectiveVolumeCol) { agg.sum_volume += parseFloat(String(row[effectiveVolumeCol] || "0")) || 0; }
+            agg.count += 1;
+          }
+
+          if (aggMap.size > 0) {
+            // Build feature columns from working rows (dimensions that vary across entities)
+            const featureCandidates: string[] = [];
+            for (const k of workingKeys) {
+              if (k === "__source_table") continue;
+              if (k === aggEntityKey) continue;
+              if (k === effectiveVolumeCol) continue;
+              // Skip calendar columns already in output
+              if (/Calend[aá]rio\./i.test(k)) continue;
+              featureCandidates.push(k);
+            }
+
+            // Pick top categorical/numeric features (limit to avoid explosion)
+            const MAX_EXTRA_FEATURES = 8;
+            const extraFeatures = featureCandidates.slice(0, MAX_EXTRA_FEATURES);
+
+            // Build aggregated entity-level feature map
+            const entityFeatures = new Map<string, Record<string, any>>();
+            for (const row of workingRows) {
               const entity = String(row[aggEntityKey] || "");
               if (!entity) continue;
-              let yr = 0, mn = 0;
-              if (aggTimeCol) {
-                const rawDate = String(row[aggTimeCol] || "");
-                const month = rawDate.substring(0, 7);
-                if (!month || month.length < 7) continue;
-                yr = parseInt(month.split("-")[0]) || 0;
-                mn = parseInt(month.split("-")[1]) || 0;
-              } else {
-                yr = parseInt(String(row[calYearCol] || "0")) || 0;
-                mn = parseInt(String(row[calMonthCol] || "0")) || 0;
-                if (yr === 0 || mn === 0) continue;
+              if (!entityFeatures.has(entity)) {
+                const fmap: Record<string, any> = {};
+                for (const f of extraFeatures) {
+                  fmap[f] = row[f] ?? "";
+                }
+                entityFeatures.set(entity, fmap);
               }
-              const key = `${entity}|${yr}-${String(mn).padStart(2, "0")}`;
-              if (!aggMap.has(key)) {
-                aggMap.set(key, { sum_volume: 0, count: 0, codpes_set: new Set(), codgre_vals: new Map(), origem_vals: new Map(), tipo_vals: new Map(), year: yr, monthNum: mn, quarter: Math.ceil(mn / 3) });
-              }
-              const agg = aggMap.get(key)!;
-              if (volumeCol) { agg.sum_volume += parseFloat(String(row[volumeCol] || "0")) || 0; }
-              agg.count += 1;
             }
-            if (aggMap.size > 0) {
-              const aggHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre"];
-              const aggLines: string[] = [];
-              for (const [, v] of aggMap) {
-                const tv = volumeCol ? v.sum_volume : v.count;
-                aggLines.push([String(tv), String(v.year), String(v.monthNum), String(v.quarter)].join(","));
+
+            const aggHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre", ...extraFeatures];
+            const aggLines: string[] = [];
+            for (const [compositeKey, v] of aggMap) {
+              const entityId = compositeKey.split("|")[0];
+              const tv = effectiveVolumeCol ? v.sum_volume : v.count;
+              const baseCols = [String(tv), String(v.year), String(v.monthNum), String(v.quarter)];
+              // Append entity features
+              const ef = entityFeatures.get(entityId) || {};
+              for (const f of extraFeatures) {
+                baseCols.push(String(ef[f] ?? "").replace(/,/g, ";"));
               }
-              virtualHeaders = aggHeaders;
-              virtualSampledLines = aggLines;
-              delimiter = ",";
-              totalDatasetRows = aggLines.length;
-              console.log(`[AutoML] Temporal aggregation: ${aggMap.size} rows`);
+              aggLines.push(baseCols.join(","));
             }
+            virtualHeaders = aggHeaders;
+            virtualSampledLines = aggLines;
+            delimiter = ",";
+            totalDatasetRows = aggLines.length;
+            console.log(`[AutoML] Temporal aggregation: ${aggMap.size} rows, ${aggHeaders.length} cols (inc. ${extraFeatures.length} entity features)`);
+          } else {
+            console.warn(`[AutoML] Temporal aggregation produced 0 rows. Entity key "${aggEntityKey}" may not exist in working rows. Available keys: ${workingKeys.slice(0, 10).join(", ")}`);
           }
         }
       } else {
