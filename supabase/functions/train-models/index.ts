@@ -2656,23 +2656,18 @@ serve(async (req) => {
           ? rawJson
           : (Array.isArray(rawJson?.rows) ? rawJson.rows : []);
 
-        // Detect multi-table stacked rows: rows from different __source_table values
-        // only have their own table's columns. We need ALL columns in every row.
+        // Ensure all rows have all declared columns (flat join normalization)
         const declaredColumns: string[] = Array.isArray(rawJson?.columns) ? rawJson.columns : [];
         if (sampleRows.length > 0 && declaredColumns.length > 0) {
-          const sourceTables = new Set(sampleRows.map(r => r.__source_table).filter(Boolean));
-          if (sourceTables.size > 1) {
-            console.log(`[AutoML] Multi-table sample detected: ${sourceTables.size} tables (${[...sourceTables].join(", ")}). Merging rows with all ${declaredColumns.length} columns.`);
-            // Each row needs all declared columns; fill missing with empty string
-            sampleRows = sampleRows.map(row => {
-              const merged: Record<string, any> = {};
-              for (const col of declaredColumns) {
-                merged[col] = row[col] !== undefined ? row[col] : "";
-              }
-              if (row.__source_table) merged.__source_table = row.__source_table;
-              return merged;
-            });
-          }
+          // Normalize: every row gets every declared column, fill missing with ""
+          sampleRows = sampleRows.map(row => {
+            const merged: Record<string, any> = {};
+            for (const col of declaredColumns) {
+              merged[col] = row[col] !== undefined ? row[col] : "";
+            }
+            return merged;
+          });
+          console.log(`[AutoML] Normalized ${sampleRows.length} rows to ${declaredColumns.length} declared columns`);
         }
 
         console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}, declaredCols=${declaredColumns.length}`);
@@ -2795,57 +2790,15 @@ serve(async (req) => {
             quarter: number;
           }>();
 
-          // Detect vertically-stacked multi-table format
-          const isVerticallyStacked = rawRows.some((r: any) => r.__source_table);
-          
-          if (isVerticallyStacked) {
-            console.log(`[AutoML] Vertically-stacked multi-table sample detected — using cross-table aggregation`);
-            
-            // Group rows by source table
-            const tableRows = new Map<string, Record<string, any>[]>();
-            for (const row of rawRows) {
-              const src = String(row.__source_table || "unknown");
-              if (!tableRows.has(src)) tableRows.set(src, []);
-              tableRows.get(src)!.push(row);
-            }
-            
-            const entityTable = aggEntityKey.includes(".") ? aggEntityKey.split(".")[0] : null;
-            const factRows = entityTable ? (tableRows.get(entityTable) || []) : [];
-            const calRows = tableRows.get("Calendário") || [];
-            console.log(`[AutoML] Cross-table: factTable=${entityTable} (${factRows.length} rows), calendar=${calRows.length} rows`);
-            
-            if (factRows.length > 0) {
-              // Use CODSAF as temporal proxy
-              const safraCol = `${entityTable}.CODSAF`;
-              const crossAggMap = new Map<string, { count: number; year: number; monthNum: number; quarter: number }>();
-              
-              for (const row of factRows) {
-                const entity = String(row[aggEntityKey] || "");
-                if (!entity) continue;
-                const safra = String(row[safraCol] || "");
-                const yr = parseInt((safra.split("/")[0]) || "2020") || 2020;
-                const key = `${entity}|${yr}`;
-                if (!crossAggMap.has(key)) {
-                  crossAggMap.set(key, { count: 0, year: yr, monthNum: 1, quarter: 1 });
-                }
-                crossAggMap.get(key)!.count += 1;
-              }
-              
-              if (crossAggMap.size > 0) {
-                const crossHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre"];
-                const crossLines: string[] = [];
-                for (const [, v] of crossAggMap) {
-                  crossLines.push([String(v.count), String(v.year), String(v.monthNum), String(v.quarter)].join(","));
-                }
-                virtualHeaders = crossHeaders;
-                virtualSampledLines = crossLines;
-                delimiter = ",";
-                totalDatasetRows = crossLines.length;
-                const tVals = [...crossAggMap.values()].map(v => v.count);
-                console.log(`[AutoML] Cross-table aggregation: ${crossAggMap.size} rows, min=${Math.min(...tVals)}, max=${Math.max(...tVals)}, mean=${(tVals.reduce((a, b) => a + b, 0) / tVals.length).toFixed(1)}`);
-              }
-            }
-          } else {
+          // Legacy stacked format is no longer produced — all samples are flat.
+          // If somehow a stacked sample arrives, log warning and proceed with flat aggregation.
+          const hasSourceTableTag = rawRows.some((r: any) => r.__source_table);
+          if (hasSourceTableTag) {
+            console.log(`[AutoML] WARNING: Legacy __source_table tags detected in sample. Ignoring tags and treating as flat rows.`);
+          }
+
+          // Standard flat joined-row aggregation (works for all formats now)
+          {
             // Standard joined-row aggregation
             for (const row of rawRows) {
               const entity = String(row[aggEntityKey] || "");

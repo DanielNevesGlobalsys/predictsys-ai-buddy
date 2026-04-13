@@ -406,36 +406,95 @@ async function fetchPowerBISampleRowsFromConnection(
       return parsed?.results?.[0]?.tables?.[0]?.rows || [];
     };
 
-    // Multi-table: fetch from each table and prefix keys
+    // Multi-table: fetch each table then JOIN in-memory (flat)
     if (isMultiTable) {
-      const allRows: Record<string, unknown>[] = [];
       const usePrefix = materializedTables.length > 1;
 
+      // Fetch all tables independently
+      const tableData: Array<{ name: string; rows: Record<string, unknown>[]; colNames: string[] }> = [];
       for (const tblEntry of materializedTables) {
         const tblName = typeof tblEntry === "string" ? tblEntry : (tblEntry as any)?.table_name;
         if (!tblName) continue;
-
         const cleanName = tblName.replace(/^\$+/, "").trim();
         if (!cleanName) continue;
 
         const query = `EVALUATE TOPN(200, ${escapeDaxTable(cleanName)})`;
         const rawRows = await executeDaxQuery(query);
-
-        for (const row of rawRows) {
+        const prefixedRows = rawRows.map((row) => {
           const prefixed: Record<string, unknown> = {};
           for (const [key, value] of Object.entries(row || {})) {
             const cleanKey = cleanupPowerBIColumnKey(key);
             prefixed[usePrefix ? `${cleanName}.${cleanKey}` : cleanKey] = value;
           }
-          // Tag source table for per-table grouping
-          prefixed["__source_table"] = cleanName;
-          allRows.push(prefixed);
-        }
-
-        console.log(`[calculate-eda] multi-table sample: ${cleanName} → ${rawRows.length} rows`);
+          return prefixed;
+        });
+        const colNames = prefixedRows.length > 0 ? Object.keys(prefixedRows[0]) : [];
+        tableData.push({ name: cleanName, rows: prefixedRows, colNames });
+        console.log(`[calculate-eda] multi-table sample: ${cleanName} → ${rawRows.length} rows, ${colNames.length} cols`);
       }
 
-      return { rows: allRows, source: "powerbi_executequeries_multi" };
+      if (tableData.length === 0) {
+        return { rows: [], source: "powerbi_executequeries_multi_flat", error: "no_tables_fetched" };
+      }
+
+      // Identify fact table (most rows) and dims
+      const sorted = [...tableData].sort((a, b) => b.rows.length - a.rows.length);
+      const factTbl = sorted[0];
+      const dimTbls = sorted.slice(1);
+
+      // Build dimension lookups by common key columns
+      const factColNamesLower = new Set(factTbl.colNames.map(c => {
+        const parts = c.split(".");
+        return (parts.length > 1 ? parts[1] : parts[0]).toLowerCase();
+      }));
+
+      const dimLookups: Array<{ dimName: string; factKey: string; dimKey: string; lookup: Map<string, Record<string, unknown>> }> = [];
+      for (const dim of dimTbls) {
+        // Find common column by base name
+        for (const dimCol of dim.colNames) {
+          const dimBase = dimCol.split(".").pop()!.toLowerCase();
+          if (factColNamesLower.has(dimBase)) {
+            // Found common key
+            const factKey = factTbl.colNames.find(fc => {
+              const fb = fc.split(".").pop()!.toLowerCase();
+              return fb === dimBase;
+            }) || dimCol;
+            const lookup = new Map<string, Record<string, unknown>>();
+            for (const row of dim.rows) {
+              const keyVal = String(row[dimCol] ?? "");
+              if (keyVal && !lookup.has(keyVal)) {
+                lookup.set(keyVal, row);
+              }
+            }
+            dimLookups.push({ dimName: dim.name, factKey, dimKey: dimCol, lookup });
+            break; // one key per dim is enough
+          }
+        }
+      }
+
+      // All dim columns for padding
+      const allDimCols = dimTbls.flatMap(d => d.colNames);
+
+      // Build flat rows from fact + dimension lookups
+      const flatRows: Record<string, unknown>[] = [];
+      for (const factRow of factTbl.rows) {
+        const flat: Record<string, unknown> = { ...factRow };
+        for (const dl of dimLookups) {
+          const keyVal = String(factRow[dl.factKey] ?? "");
+          const dimRow = dl.lookup.get(keyVal);
+          if (dimRow) {
+            Object.assign(flat, dimRow);
+          }
+        }
+        // Fill any missing dim columns with empty string
+        for (const dc of allDimCols) {
+          if (!(dc in flat)) flat[dc] = "";
+        }
+        flatRows.push(flat);
+      }
+
+      console.log(`[calculate-eda] multi-table FLAT join: ${flatRows.length} rows, ${Object.keys(flatRows[0] || {}).length} cols, dim_lookups=${dimLookups.length}`);
+      return { rows: flatRows, source: "powerbi_executequeries_multi_flat" };
     }
 
     // Single table path
@@ -1534,7 +1593,7 @@ Deno.serve(async (req) => {
           const sj = sampleData.sample_json as any;
           // Check if this is already a flat joined sample — never overwrite it
           if (sj && typeof sj === "object" && typeof sj.source === "string" && 
-              (sj.source.includes("flat_join") || sj.source.includes("flat") || sj.source === "powerbi_flat_join")) {
+              (sj.source.includes("flat") || sj.source === "powerbi_flat_join" || sj.source.includes("multi_flat"))) {
             existingSampleIsFlat = true;
             sampleSource = sj.source;
             console.log(`[calculate-eda] Existing sample is FLAT (source=${sj.source}) — preserving it, no fallback needed`);
