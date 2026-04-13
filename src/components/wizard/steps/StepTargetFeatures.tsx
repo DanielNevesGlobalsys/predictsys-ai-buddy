@@ -528,9 +528,25 @@ const StepTargetFeatures = ({
 
   const loadBuilderVersion = async () => {
     if (!projectData.id) return;
-    const { data } = await supabase.from("project_modeling_datasets" as any).select("selection_version_used").eq("project_id", projectData.id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
-    if (data) setBuilderVersionUsed((data as any).selection_version_used ?? null);
-    else setBuilderVersionUsed(null);
+    const { data } = await supabase.from("project_modeling_datasets" as any).select("selection_version_used, features_final, features_generated, target_column").eq("project_id", projectData.id).eq("is_current", true).order("created_at", { ascending: false }).limit(1).maybeSingle();
+    if (data) {
+      setBuilderVersionUsed((data as any).selection_version_used ?? null);
+      // Build authoritative schema set from builder's final output
+      const schemaSet = new Set<string>();
+      const ff = (data as any).features_final;
+      if (Array.isArray(ff)) ff.forEach((f: string) => schemaSet.add(f.toLowerCase()));
+      const fg = (data as any).features_generated;
+      if (Array.isArray(fg)) fg.forEach((f: any) => {
+        const name = typeof f === "string" ? f : f?.name;
+        if (name) schemaSet.add(name.toLowerCase());
+      });
+      const tc = (data as any).target_column;
+      if (tc) schemaSet.add(tc.toLowerCase());
+      if (schemaSet.size > 0) setBuilderFinalSchema(schemaSet);
+    } else {
+      setBuilderVersionUsed(null);
+      setBuilderFinalSchema(null);
+    }
   };
 
   const loadSelectionVersion = async () => {
