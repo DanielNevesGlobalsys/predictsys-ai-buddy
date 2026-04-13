@@ -877,8 +877,20 @@ const StepTargetFeatures = ({
     // Resolve time anchor from all available sources
     const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
 
+    // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before save ──
+    const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+    const sanitizedFeatures = cleanFeatures.filter(f => {
+      const cp = f.includes(".") ? f.split(".").pop()! : f;
+      return !ADMIN_BLOCK_RE.test(cp);
+    });
+    const removedAdminIds = cleanFeatures.filter(f => !sanitizedFeatures.includes(f));
+    if (removedAdminIds.length > 0) {
+      console.log("[StepTargetFeatures] Sanitized admin IDs from features:", removedAdminIds);
+      setExcludedColumns(prev => [...new Set([...prev, ...removedAdminIds])]);
+    }
+
     // 1. Save via atomic model_selection RPC — includes entity_key + time_column
-    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
+    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: sanitizedFeatures, excluded_columns: [...excludedColumns, ...removedAdminIds], suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
     if (!saved) return false;
 
     // 2. Persist grain/time strategy + target_state to project_settings
