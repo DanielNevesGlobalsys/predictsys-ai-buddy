@@ -1136,9 +1136,32 @@ serve(async (req: Request) => {
         const sampleRowsAgg: Record<string, any>[] = sampleJsonAgg?.rows ? (sampleJsonAgg.rows as any[]).slice(0, 1000) : [];
 
         if (sampleRowsAgg.length > 0) {
-          // Aggregate sample by entity × month
-          const aggMap = new Map<string, { count: number; codpes_set: Set<string>; codgre_set: Set<string>; origem_set: Set<string>; tipo_set: Set<string> }>();
+          // ── FIND the actual numeric source column for aggregation ──
+          // Priority: QTDSAC > sacas > QTDPES > peso > any numeric measure
+          const AGG_SOURCE_CANDIDATES = ["qtdsac", "sacas", "qtd_sacas", "qtdpes", "peso", "volume", "quantidade"];
+          const allSampleKeys = Object.keys(sampleRowsAgg[0] || {});
+          let aggSourceCol: string | null = null;
+          for (const token of AGG_SOURCE_CANDIDATES) {
+            const match = allSampleKeys.find(k => k.toLowerCase().includes(token));
+            if (match) { aggSourceCol = match; break; }
+          }
+          // Fallback: search with table prefix
+          if (!aggSourceCol) {
+            for (const token of AGG_SOURCE_CANDIDATES) {
+              const match = allSampleKeys.find(k => {
+                const colPart = k.includes(".") ? k.split(".").pop()!.toLowerCase() : k.toLowerCase();
+                return colPart.includes(token);
+              });
+              if (match) { aggSourceCol = match; break; }
+            }
+          }
+
+          console.log(`[build-modeling-dataset] AGG_SOURCE: column="${aggSourceCol}", entity="${aggEntityKey}", time="${aggTimeCol}"`);
+
+          // Aggregate sample by entity × month using SUM of source column
+          const aggMap = new Map<string, { sum_value: number; count: number; codpes_set: Set<string>; codgre_set: Set<string>; origem_set: Set<string>; tipo_set: Set<string> }>();
           let minDate = "9999-12"; let maxDate = "0000-01";
+          let sourceValueCount = 0;
 
           for (const row of sampleRowsAgg) {
             const entity = String(row[aggEntityKey] || "");
@@ -1146,12 +1169,24 @@ serve(async (req: Request) => {
             const month = rawDate.substring(0, 7); // "YYYY-MM"
             if (!entity || !month || month.length < 7) continue;
 
+            // Get the numeric value from the source column
+            let numericValue = 1; // fallback = count
+            if (aggSourceCol) {
+              const rawVal = row[aggSourceCol];
+              const parsed = typeof rawVal === "number" ? rawVal : parseFloat(String(rawVal || "0").replace(",", "."));
+              if (Number.isFinite(parsed) && parsed > 0) {
+                numericValue = parsed;
+                sourceValueCount++;
+              }
+            }
+
             const key = `${entity}|${month}`;
             if (!aggMap.has(key)) {
-              aggMap.set(key, { count: 0, codpes_set: new Set(), codgre_set: new Set(), origem_set: new Set(), tipo_set: new Set() });
+              aggMap.set(key, { sum_value: 0, count: 0, codpes_set: new Set(), codgre_set: new Set(), origem_set: new Set(), tipo_set: new Set() });
             }
             const agg = aggMap.get(key)!;
-            agg.count += 1; // each row = 1 saca
+            agg.sum_value += numericValue;
+            agg.count += 1;
             const codpes = String(row["Detalhe Movimentação.CODPES"] || row["CODPES"] || "");
             if (codpes) agg.codpes_set.add(codpes);
             const codgre = String(row["Detalhe Movimentação.CODGRE"] || row["CODGRE"] || "");
@@ -1164,12 +1199,12 @@ serve(async (req: Request) => {
             if (month > maxDate) maxDate = month;
           }
 
-          // Compute aggregated stats
+          // Compute aggregated rows using SUM (not COUNT)
           const aggRows = Array.from(aggMap.entries()).map(([key, v]) => ({
             key,
             entity: key.split("|")[0],
             month: key.split("|")[1],
-            agg_sacas_mes: v.count,
+            agg_sacas_mes: v.sum_value, // THIS IS THE FIX: SUM instead of COUNT
             agg_movimentacoes: v.count,
             agg_codpes_distintos: v.codpes_set.size,
             codgre: v.codgre_set.values().next().value || "",
@@ -1180,35 +1215,74 @@ serve(async (req: Request) => {
           const targetValues = aggRows.map(r => r.agg_sacas_mes);
           const targetMean = targetValues.reduce((a, b) => a + b, 0) / targetValues.length;
           const targetStd = Math.sqrt(targetValues.reduce((a, b) => a + (b - targetMean) ** 2, 0) / targetValues.length);
-          const targetMin = Math.min(...targetValues);
-          const targetMax = Math.max(...targetValues);
-          const targetMedian = targetValues.sort((a, b) => a - b)[Math.floor(targetValues.length / 2)];
+          const sortedValues = [...targetValues].sort((a, b) => a - b);
+          const targetMin = sortedValues[0] || 0;
+          const targetMax = sortedValues[sortedValues.length - 1] || 0;
+          const targetMedian = sortedValues[Math.floor(sortedValues.length / 2)] || 0;
           const distinctEntities = new Set(aggRows.map(r => r.entity)).size;
           const distinctMonths = new Set(aggRows.map(r => r.month)).size;
+          const uniqueTargetValues = new Set(targetValues.map(v => v.toFixed(2))).size;
+
+          // Top 10 frequency distribution
+          const freqMap = new Map<string, number>();
+          for (const v of targetValues) {
+            const key = v.toFixed(2);
+            freqMap.set(key, (freqMap.get(key) || 0) + 1);
+          }
+          const top10Freq = Array.from(freqMap.entries())
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 10)
+            .map(([val, count]) => ({ value: val, count, pct: ((count / targetValues.length) * 100).toFixed(1) + "%" }));
 
           // Estimate total aggregated rows from full dataset
-          // Sample ratio: sampleRowsAgg.length / totalRows
           const sampleRatio = totalRows > 0 ? sampleRowsAgg.length / totalRows : 1;
           const estimatedAggRows = sampleRatio > 0 ? Math.round(aggRows.length / sampleRatio) : aggRows.length;
-          totalRows = estimatedAggRows; // Override for downstream
+          totalRows = estimatedAggRows;
 
           aggregationStats = {
+            source_column: aggSourceCol || "COUNT(*)",
+            formula: aggSourceCol ? `SUM(${aggSourceCol}) GROUP BY ${aggEntityKey}, MONTH(${aggTimeCol})` : `COUNT(*) GROUP BY ${aggEntityKey}, MONTH(${aggTimeCol})`,
+            entity_used: aggEntityKey,
+            time_used: aggTimeCol,
+            truncation: "month",
             sample_raw_rows: sampleRowsAgg.length,
             sample_agg_rows: aggRows.length,
+            source_values_found: sourceValueCount,
             estimated_total_agg_rows: estimatedAggRows,
             distinct_entities: distinctEntities,
             distinct_months: distinctMonths,
             month_range: `${minDate} → ${maxDate}`,
-            target_stats: { mean: targetMean, std: targetStd, min: targetMin, max: targetMax, median: targetMedian },
+            target_stats: {
+              mean: targetMean,
+              std: targetStd,
+              min: targetMin,
+              max: targetMax,
+              median: targetMedian,
+              unique_values: uniqueTargetValues,
+              top_10_freq: top10Freq,
+            },
           };
 
-          console.log(`[build-modeling-dataset] Aggregation: ${aggRows.length} agg rows from ${sampleRowsAgg.length} raw, ${distinctEntities} entities, ${distinctMonths} months, target mean=${targetMean.toFixed(2)}, std=${targetStd.toFixed(2)}`);
+          console.log(`[build-modeling-dataset] AGG_STATS: source="${aggSourceCol}", formula=SUM, groups=${aggRows.length}, entities=${distinctEntities}, months=${distinctMonths}`);
+          console.log(`[build-modeling-dataset] AGG_TARGET: mean=${targetMean.toFixed(2)}, std=${targetStd.toFixed(2)}, min=${targetMin}, max=${targetMax}, median=${targetMedian}, unique=${uniqueTargetValues}`);
+          console.log(`[build-modeling-dataset] AGG_TOP10: ${JSON.stringify(top10Freq.slice(0, 5))}`);
+
+          // ── VARIANCE DIAGNOSTIC: if std ≈ 0, explain why ──
+          if (targetStd < 1e-6) {
+            console.error(`[build-modeling-dataset] DEGENERATE_TARGET_DIAGNOSTIC: std=${targetStd}, all values=${uniqueTargetValues === 1 ? "IDENTICAL" : "near-identical"}`);
+            console.error(`[build-modeling-dataset] DEGENERATE_CAUSE: source_col=${aggSourceCol}, source_values_found=${sourceValueCount}/${sampleRowsAgg.length}`);
+            if (sourceValueCount === 0) {
+              console.error(`[build-modeling-dataset] DEGENERATE_ROOT: Source column "${aggSourceCol}" has NO numeric values in sample → falling back to COUNT(*) which may be constant`);
+            } else if (uniqueTargetValues <= 2) {
+              console.error(`[build-modeling-dataset] DEGENERATE_ROOT: Only ${uniqueTargetValues} distinct SUM values across ${aggRows.length} groups`);
+            }
+          }
 
           // Replace enrichedColumns with aggregated schema
           enrichedColumns.length = 0;
           enrichedColumns.push(
-            { name: aggTargetCol, type: "numeric", distinct_count: targetValues.length, mean: targetMean, std: targetStd },
-            { name: "agg_movimentacoes", type: "numeric", distinct_count: new Set(targetValues).size, mean: targetMean, std: targetStd },
+            { name: aggTargetCol, type: "numeric", distinct_count: uniqueTargetValues, mean: targetMean, std: targetStd },
+            { name: "agg_movimentacoes", type: "numeric", distinct_count: new Set(aggRows.map(r => r.agg_movimentacoes)).size, mean: aggRows.reduce((a, r) => a + r.agg_movimentacoes, 0) / aggRows.length, std: 1 },
             { name: "agg_codpes_distintos", type: "numeric", distinct_count: new Set(aggRows.map(r => r.agg_codpes_distintos)).size, mean: aggRows.reduce((a, r) => a + r.agg_codpes_distintos, 0) / aggRows.length, std: 1 },
             { name: "ref_month", type: "numeric", distinct_count: distinctMonths },
             { name: "ref_year", type: "numeric", distinct_count: new Set(aggRows.map(r => parseInt(r.month.split("-")[0]))).size },
@@ -1231,7 +1305,6 @@ serve(async (req: Request) => {
         }
       } else {
         // Entity/time not set but mode is temporal_aggregated — inject virtual target into schema
-        // so validation doesn't block with "target not found"
         console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED: entity/time missing but injecting virtual target "${aggTargetCol}" into schema`);
         if (!enrichedColumns.find(c => c.name === aggTargetCol)) {
           enrichedColumns.push({ name: aggTargetCol, type: "numeric", distinct_count: 100, mean: 50, std: 30 });
