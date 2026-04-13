@@ -610,107 +610,136 @@ Deno.serve(async (req) => {
           ? "entity_time"
           : "row_level";
 
-    // Detect multi-table context for agro
-    const hasMultiTable = columns.some(c => c.column_name.includes("."));
+    // ── Universal Multi-Table Structural Resolution ───────────
+    const hasMultiTable = columns.some((c: any) => c.column_name.includes("."));
     let primaryTable: string | null = null;
     let auxiliaryTables: string[] = [];
 
-    // Multi-table fact/dimension classification
-    const FACT_TABLE_TOKENS = ["movimenta", "detalhe", "fato", "fact", "recebimento", "pesagem", "lote", "lotecaf", "movimento", "transacao", "operacao"];
-    const DIMENSION_TABLE_TOKENS = ["cooperado", "safra", "calendario", "calendar", "filial", "produto", "representante", "origem", "produtor", "fazenda", "regiao", "municipio", "grupo", "dim_", "lookup"];
+    // Universal fact/dimension tokens (core platform)
+    const CORE_FACT_TOKENS = [
+      "fato", "fact", "fact_", "transacao", "transaction", "moviment", "movimento",
+      "detalhe", "detail", "evento", "event", "pedido", "order", "venda", "sale",
+      "compra", "purchase", "lancamento", "entry", "operacao", "ticket", "sinistro",
+      "claim", "atendimento", "visit", "internacao", "admission", "remessa", "shipment",
+      "pagamento", "payment", "recebimento", "pesagem", "lote", "lotecaf",
+    ];
+    const CORE_DIMENSION_TOKENS = [
+      "dim_", "cadastro", "master", "cliente", "customer", "produto", "product",
+      "filial", "branch", "store", "loja", "fornecedor", "supplier",
+      "funcionario", "employee", "medico", "doctor", "aluno", "student",
+      "paciente", "patient", "cooperado", "regiao", "region", "categoria", "category",
+      "calendario", "calendar", "dimdate", "dimcalendar", "lookup", "ref_",
+      "origem", "origin", "representante", "safra", "fazenda", "farm",
+      "produtor", "producer", "municipio", "grupo_economico", "segmento",
+    ];
+    // Universal admin ID blockers
+    const UNIVERSAL_ADMIN_BLOCKED = [
+      "celcpr", "cel_cpr", "celular", "telefone", "phone", "fone", "mobile",
+      "matricula", "matric", "codemp", "cod_emp", "cpf", "cnpj", "rg",
+      "email", "endereco", "cep", "razao_social", "fantasia", "nome", "name",
+    ];
+
+    function classifyTableRolePRE(tableName: string): "fact" | "dimension" | "unknown" {
+      const lo = tableName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+      if (CORE_FACT_TOKENS.some(t => lo.includes(t))) return "fact";
+      if (CORE_DIMENSION_TOKENS.some(t => lo.includes(t))) return "dimension";
+      return "unknown";
+    }
 
     if (hasMultiTable) {
-      const tableNames = [...new Set(columns.map(c => c.column_name.split(".")[0]).filter(Boolean))];
+      const tableNames = [...new Set(columns.map((c: any) => c.column_name.split(".")[0]).filter(Boolean))];
       const tableRoles: Record<string, "fact" | "dimension" | "unknown"> = {};
 
       for (const t of tableNames) {
-        const lo = t.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-        if (FACT_TABLE_TOKENS.some(tok => lo.includes(tok))) {
-          tableRoles[t] = "fact";
-        } else if (DIMENSION_TABLE_TOKENS.some(tok => lo.includes(tok))) {
-          tableRoles[t] = "dimension";
-        } else {
-          tableRoles[t] = "unknown";
-        }
+        tableRoles[t] = classifyTableRolePRE(t);
       }
 
-      // Pick primary fact table (prefer movement/lote)
+      // Pick primary fact table
       const factTables = tableNames.filter(t => tableRoles[t] === "fact");
       if (factTables.length > 0) {
-        // Prefer tables with movement/detalhe/lote keywords
+        // Prefer tables with operational keywords (movement/detail/lot)
         primaryTable = factTables.find(t => {
           const lo = t.toLowerCase();
-          return lo.includes("movimenta") || lo.includes("detalhe") || lo.includes("lote");
+          return ["movimenta", "detalhe", "lote", "pedido", "venda", "transacao", "atendimento"].some(k => lo.includes(k));
         }) || factTables[0];
       } else {
-        // No explicit fact table — pick first unknown (non-dimension) table
         primaryTable = tableNames.find(t => tableRoles[t] === "unknown") || tableNames[0];
       }
 
       auxiliaryTables = tableNames.filter(t => t !== primaryTable);
-      console.log(`[PRE] AGRO_MULTI_TABLE: primary="${primaryTable}" (${tableRoles[primaryTable!]}), dimensions=[${auxiliaryTables.map(t => `${t}(${tableRoles[t]})`).join(", ")}]`);
+      console.log(`[PRE] MULTI_TABLE: primary="${primaryTable}" (${tableRoles[primaryTable!]}), aux=[${auxiliaryTables.map(t => `${t}(${tableRoles[t]})`).join(", ")}]`);
 
-      // ── MULTI-TABLE ENTITY/TIME OVERRIDE ──
+      // ── UNIVERSAL MULTI-TABLE ENTITY/TIME OVERRIDE ──
       // If entity/time came from a dimension table but a fact table exists, re-resolve
-      if (isAgro && primaryTable) {
-        const entityFromDimension = entityKey && !entityKey.startsWith(primaryTable + ".");
-        const entityTableRole = entityKey && entityKey.includes(".") ? tableRoles[entityKey.split(".")[0]] : null;
+      if (primaryTable) {
+        const entityTableName = entityKey && entityKey.includes(".") ? entityKey.split(".")[0] : null;
+        const entityTableRole = entityTableName ? tableRoles[entityTableName] : null;
 
-        if (entityFromDimension && entityTableRole === "dimension") {
-          // Re-resolve entity from fact table columns only
-          const factEntityPatterns = ["codlot", "cod_lote", "lote", "cod_talhao"];
-          const factCols = columns.filter(c => c.column_name.startsWith(primaryTable + "."));
-          for (const pattern of factEntityPatterns) {
-            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+        if (entityTableRole === "dimension" && entityKey) {
+          // Re-resolve entity from fact table columns
+          const factCols = columns.filter((c: any) => c.column_name.startsWith(primaryTable + "."));
+          // Try known entity patterns (universal)
+          const entityPatterns = isAgro
+            ? ["codlot", "cod_lote", "lote", "cod_talhao"]
+            : ["id_cliente", "customer_id", "client_id", "patient_id", "id_paciente", "account_id", "order_id", "contract_id"];
+          for (const pattern of entityPatterns) {
+            const match = factCols.find((c: any) => c.column_name.toLowerCase().includes(pattern));
             if (match) {
               console.log(`[PRE] MULTI_TABLE_ENTITY_OVERRIDE: ${entityKey} → ${match.column_name} (dimension → fact table)`);
               entityKey = match.column_name;
               entityConfidence = 0.95;
-              entityReasoning = `Re-resolved: entity de tabela fato "${primaryTable}" tem prioridade sobre dimensão.`;
+              entityReasoning = `Re-resolved: entity from fact table "${primaryTable}" has priority over dimension.`;
               break;
             }
           }
-          // If no specific match, try generic entity from fact table
-          if (entityFromDimension && entityKey && entityKey.includes(".") && tableRoles[entityKey.split(".")[0]] === "dimension") {
-            const genericFactEntity = factCols.find(c => {
+          // Generic fallback: any non-SK ID from fact table
+          if (entityKey && entityKey.includes(".") && tableRoles[entityKey.split(".")[0]] === "dimension") {
+            const genericFactEntity = factCols.find((c: any) => {
               const cp = c.column_name.split(".").pop()!.toLowerCase();
-              return ["codlot", "cod_lote", "id", "codigo"].some(k => cp.includes(k)) && !/^sk_/i.test(cp);
+              return ["cod", "id", "codigo", "key"].some(k => cp.includes(k)) && !/^(sk_|pk_|fk_|__)/i.test(cp);
             });
             if (genericFactEntity) {
               console.log(`[PRE] MULTI_TABLE_ENTITY_OVERRIDE_GENERIC: ${entityKey} → ${genericFactEntity.column_name}`);
               entityKey = genericFactEntity.column_name;
               entityConfidence = 0.85;
-              entityReasoning = `Re-resolved: entidade genérica de tabela fato "${primaryTable}".`;
+              entityReasoning = `Re-resolved: generic entity from fact table "${primaryTable}".`;
             }
           }
         }
 
-        // Time: override if from dimension table
-        const timeFromDimension = timeAnchor && timeAnchor.includes(".") && tableRoles[timeAnchor.split(".")[0]] === "dimension";
-        if (timeFromDimension) {
-          const factCols = columns.filter(c => c.column_name.startsWith(primaryTable + "."));
-          const opDateTokens = ["datmov", "dt_mov", "data_mov", "data_movimento", "data_recebimento", "data_entrada", "data_pesagem"];
+        // Time: override if from dimension table (universal rule)
+        const timeTableName = timeAnchor && timeAnchor.includes(".") ? timeAnchor.split(".")[0] : null;
+        const timeTableRole = timeTableName ? tableRoles[timeTableName] : null;
+        if (timeTableRole === "dimension" && timeAnchor) {
+          const factCols = columns.filter((c: any) => c.column_name.startsWith(primaryTable + "."));
+          // Universal operational date tokens
+          const opDateTokens = [
+            "datmov", "dt_mov", "data_mov", "data_movimento", "data_movimentacao",
+            "data_compra", "purchase_date", "order_date", "data_pedido", "data_venda",
+            "data_recebimento", "data_entrada", "data_pesagem", "data_transacao",
+            "data_internacao", "data_consulta", "data_sinistro", "data_embarque",
+          ];
           for (const pattern of opDateTokens) {
-            const match = factCols.find(c => c.column_name.toLowerCase().includes(pattern));
+            const match = factCols.find((c: any) => c.column_name.toLowerCase().includes(pattern));
             if (match) {
               console.log(`[PRE] MULTI_TABLE_TIME_OVERRIDE: ${timeAnchor} → ${match.column_name} (dimension → fact table)`);
               timeAnchor = match.column_name;
               timeConfidence = 0.95;
-              timeReasoning = `Re-resolved: âncora temporal de tabela fato "${primaryTable}" tem prioridade sobre dimensão.`;
+              timeReasoning = `Re-resolved: operational date from fact table "${primaryTable}" has priority over dimension.`;
               break;
             }
           }
           // Fallback: any date column from fact table
           if (timeAnchor && timeAnchor.includes(".") && tableRoles[timeAnchor.split(".")[0]] === "dimension") {
-            const factDate = factCols.find(c => {
-              const ty = (c.inferred_type || "").toLowerCase();
+            const factDate = factCols.find((c: any) => {
+              const ty = ((c as any).inferred_type || "").toLowerCase();
               return ["date", "datetime", "timestamp", "data"].some(d => ty.includes(d));
             });
             if (factDate) {
               console.log(`[PRE] MULTI_TABLE_TIME_OVERRIDE_FALLBACK: ${timeAnchor} → ${factDate.column_name}`);
               timeAnchor = factDate.column_name;
               timeConfidence = 0.8;
-              timeReasoning = `Re-resolved: data da tabela fato "${primaryTable}" como fallback.`;
+              timeReasoning = `Re-resolved: date from fact table "${primaryTable}" as fallback.`;
             }
           }
         }
