@@ -1588,25 +1588,32 @@ Deno.serve(async (req) => {
         let sampleRowsArr: Record<string, unknown>[] = [];
         let sampleSource = "persisted_sample";
         let existingSampleIsFlat = false;
+        let existingSampleNeedsRefresh = false;
 
         if (sampleData?.sample_json) {
           const sj = sampleData.sample_json as any;
-          // Check if this is already a flat joined sample — never overwrite it
-          if (sj && typeof sj === "object" && typeof sj.source === "string" && 
-              (sj.source.includes("flat") || sj.source === "powerbi_flat_join" || sj.source.includes("multi_flat"))) {
-            existingSampleIsFlat = true;
-            sampleSource = sj.source;
-            console.log(`[calculate-eda] Existing sample is FLAT (source=${sj.source}) — preserving it, no fallback needed`);
-          }
           if (Array.isArray(sj)) {
             sampleRowsArr = sj;
           } else if (sj && typeof sj === "object" && Array.isArray(sj.rows)) {
             sampleRowsArr = sj.rows;
           }
+
+          const persistedSource = sj && typeof sj === "object" && typeof sj.source === "string" ? sj.source : "persisted_sample";
+          const existingSampleIsStacked = sampleRowsArr.some((row) => row && typeof row === "object" && "__source_table" in row);
+
+          if (persistedSource.includes("flat") || persistedSource === "powerbi_flat_join" || persistedSource.includes("multi_flat")) {
+            existingSampleIsFlat = true;
+            sampleSource = persistedSource;
+            console.log(`[calculate-eda] Existing sample is FLAT (source=${persistedSource}) — preserving it, no fallback needed`);
+          } else if (existingSampleIsStacked || persistedSource.includes("executequeries_multi")) {
+            existingSampleNeedsRefresh = true;
+            sampleSource = persistedSource;
+            console.log(`[calculate-eda] Existing sample is STACKED/legacy (source=${persistedSource}) — refreshing with flat joined fallback`);
+          }
         }
 
-        // Only fetch fallback if no rows AND sample is NOT already flat
-        if (sampleRowsArr.length === 0 && !existingSampleIsFlat) {
+        // Fetch fallback when sample is missing OR when persisted sample is legacy stacked
+        if (!existingSampleIsFlat && (sampleRowsArr.length === 0 || existingSampleNeedsRefresh)) {
           const fallbackSample = await fetchPowerBISampleRowsFromConnection(supabase, {
             sourceMetadata: virtualDatasetContext.sourceMetadata,
             sourcePointer: virtualDatasetContext.sourcePointer,
