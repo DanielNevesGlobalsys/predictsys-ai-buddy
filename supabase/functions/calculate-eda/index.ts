@@ -406,11 +406,86 @@ async function fetchPowerBISampleRowsFromConnection(
       return parsed?.results?.[0]?.tables?.[0]?.rows || [];
     };
 
-    // Multi-table: fetch each table then JOIN in-memory (flat)
+    // Multi-table: try DAX CROSSJOIN/SUMMARIZECOLUMNS first, then fall back to table-by-table
     if (isMultiTable) {
       const usePrefix = materializedTables.length > 1;
 
-      // Fetch all tables independently
+      // ── Strategy 1: DAX CROSSJOIN via ADDCOLUMNS + RELATED() ──────────
+      // This leverages Power BI's internal relationships to produce a truly flat sample.
+      // We need to know which tables exist and build a query that picks columns from each.
+      // Try fetching project_settings for entity_key / time hints to guide the query.
+      let summarizeAttempted = false;
+      let summarizeRows: Record<string, unknown>[] = [];
+
+      try {
+        // Build a DAX query that selects columns from all tables using NATURALLEFTOUTERJOIN
+        // or ADDCOLUMNS with RELATED (works when Power BI model has defined relationships)
+        const tableNames = materializedTables
+          .map((t: any) => typeof t === "string" ? t : t?.table_name)
+          .filter((t: any): t is string => !!t)
+          .map((t: string) => t.replace(/^\$+/, "").trim())
+          .filter((t: string) => t.length > 0);
+
+        if (tableNames.length >= 2) {
+          // Find the primary/fact table: prefer tables NOT named like common dimensions
+          const dimPatterns = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+          const factCandidates = tableNames.filter(t => !dimPatterns.test(t));
+          const factTable = factCandidates.length > 0 ? factCandidates[0] : tableNames[0];
+          const dimTables = tableNames.filter(t => t !== factTable);
+
+          // Build ADDCOLUMNS query: start from fact table, add RELATED columns from dims
+          // First, discover columns for each dimension table
+          const dimColsMap: Record<string, string[]> = {};
+          for (const dim of dimTables) {
+            const colQuery = `EVALUATE TOPN(1, ${escapeDaxTable(dim)})`;
+            const colRows = await executeDaxQuery(colQuery);
+            if (colRows.length > 0) {
+              dimColsMap[dim] = Object.keys(colRows[0]).map(k => cleanupPowerBIColumnKey(k));
+            }
+          }
+
+          // Build ADDCOLUMNS expression with RELATED()
+          const relatedCols: string[] = [];
+          for (const [dim, cols] of Object.entries(dimColsMap)) {
+            for (const col of cols.slice(0, 15)) { // Limit columns per dim
+              const alias = `${dim}.${col}`;
+              relatedCols.push(`"${alias}", RELATED(${escapeDaxTable(dim)}[${col}])`);
+            }
+          }
+
+          if (relatedCols.length > 0) {
+            const addColsExpr = relatedCols.join(", ");
+            const daxQuery = `EVALUATE TOPN(500, ADDCOLUMNS(${escapeDaxTable(factTable)}, ${addColsExpr}))`;
+            console.log(`[calculate-eda] Trying DAX ADDCOLUMNS+RELATED: fact=${factTable}, dims=${dimTables.join(",")}`);
+
+            summarizeAttempted = true;
+            const rawRows = await executeDaxQuery(daxQuery);
+
+            if (rawRows.length > 0) {
+              summarizeRows = rawRows.map((row) => {
+                const cleaned: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(row || {})) {
+                  const cleanKey = cleanupPowerBIColumnKey(key);
+                  // Prefix fact table columns
+                  const fullKey = key.includes("[") && !key.includes(".") 
+                    ? `${factTable}.${cleanKey}` 
+                    : cleanKey;
+                  cleaned[usePrefix ? fullKey : cleanKey] = value;
+                }
+                return cleaned;
+              });
+              console.log(`[calculate-eda] DAX ADDCOLUMNS+RELATED success: ${summarizeRows.length} flat rows, ${Object.keys(summarizeRows[0] || {}).length} cols`);
+              return { rows: summarizeRows, source: "powerbi_dax_addcolumns_flat" };
+            } else {
+              console.log(`[calculate-eda] DAX ADDCOLUMNS+RELATED returned 0 rows — falling back to table-by-table`);
+            }
+          }
+        }
+      } catch (daxErr: any) {
+        console.log(`[calculate-eda] DAX ADDCOLUMNS+RELATED failed (expected for models without relationships): ${daxErr?.message || daxErr}`);
+      }
+
+      // ── Strategy 2: Fetch tables independently and join in-memory ──────
       const tableData: Array<{ name: string; rows: Record<string, unknown>[]; colNames: string[] }> = [];
       for (const tblEntry of materializedTables) {
         const tblName = typeof tblEntry === "string" ? tblEntry : (tblEntry as any)?.table_name;
@@ -418,7 +493,7 @@ async function fetchPowerBISampleRowsFromConnection(
         const cleanName = tblName.replace(/^\$+/, "").trim();
         if (!cleanName) continue;
 
-        const query = `EVALUATE TOPN(200, ${escapeDaxTable(cleanName)})`;
+        const query = `EVALUATE TOPN(500, ${escapeDaxTable(cleanName)})`;
         const rawRows = await executeDaxQuery(query);
         const prefixedRows = rawRows.map((row) => {
           const prefixed: Record<string, unknown> = {};
@@ -437,12 +512,18 @@ async function fetchPowerBISampleRowsFromConnection(
         return { rows: [], source: "powerbi_executequeries_multi_flat", error: "no_tables_fetched" };
       }
 
-      // Identify fact table (most rows) and dims
-      const sorted = [...tableData].sort((a, b) => b.rows.length - a.rows.length);
-      const factTbl = sorted[0];
-      const dimTbls = sorted.slice(1);
+      // Identify fact table: prefer tables with most rows AND that are not common dimensions
+      const dimPatterns2 = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+      const sortedByFactScore = [...tableData].sort((a, b) => {
+        const aIsDim = dimPatterns2.test(a.name) ? 1 : 0;
+        const bIsDim = dimPatterns2.test(b.name) ? 1 : 0;
+        if (aIsDim !== bIsDim) return aIsDim - bIsDim; // non-dim first
+        return b.rows.length - a.rows.length; // then most rows
+      });
+      const factTbl = sortedByFactScore[0];
+      const dimTbls = sortedByFactScore.slice(1);
 
-      // Build dimension lookups by common key columns
+      // Build dimension lookups by common key columns (SK_, CODE, etc.)
       const factColNamesLower = new Set(factTbl.colNames.map(c => {
         const parts = c.split(".");
         return (parts.length > 1 ? parts[1] : parts[0]).toLowerCase();
@@ -450,11 +531,16 @@ async function fetchPowerBISampleRowsFromConnection(
 
       const dimLookups: Array<{ dimName: string; factKey: string; dimKey: string; lookup: Map<string, Record<string, unknown>> }> = [];
       for (const dim of dimTbls) {
-        // Find common column by base name
-        for (const dimCol of dim.colNames) {
+        // Find common column by base name (prioritize SK_ columns)
+        const skCols = dim.colNames.filter(c => {
+          const base = c.split(".").pop()!.toLowerCase();
+          return base.startsWith("sk_") && factColNamesLower.has(base);
+        });
+        const matchCols = skCols.length > 0 ? skCols : dim.colNames;
+        
+        for (const dimCol of matchCols) {
           const dimBase = dimCol.split(".").pop()!.toLowerCase();
           if (factColNamesLower.has(dimBase)) {
-            // Found common key
             const factKey = factTbl.colNames.find(fc => {
               const fb = fc.split(".").pop()!.toLowerCase();
               return fb === dimBase;
@@ -467,7 +553,8 @@ async function fetchPowerBISampleRowsFromConnection(
               }
             }
             dimLookups.push({ dimName: dim.name, factKey, dimKey: dimCol, lookup });
-            break; // one key per dim is enough
+            console.log(`[calculate-eda] Dim join: ${dim.name} on ${dimCol} ↔ ${factKey} (${lookup.size} keys)`);
+            break;
           }
         }
       }
@@ -493,7 +580,7 @@ async function fetchPowerBISampleRowsFromConnection(
         flatRows.push(flat);
       }
 
-      console.log(`[calculate-eda] multi-table FLAT join: ${flatRows.length} rows, ${Object.keys(flatRows[0] || {}).length} cols, dim_lookups=${dimLookups.length}`);
+      console.log(`[calculate-eda] multi-table FLAT join: ${flatRows.length} rows, ${Object.keys(flatRows[0] || {}).length} cols, dim_lookups=${dimLookups.length}, fact=${factTbl.name}`);
       return { rows: flatRows, source: "powerbi_executequeries_multi_flat" };
     }
 
