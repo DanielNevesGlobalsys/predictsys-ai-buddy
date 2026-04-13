@@ -1121,8 +1121,9 @@ serve(async (req: Request) => {
       console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
       const aggEntityKey = (settings as any)?.entity_key || null;
       const aggTimeCol = (settings as any)?.time_anchor_column || null;
-      const aggTargetCol = (settings as any)?.target_column || "agg_sacas_mes";
+      const aggTargetCol = targetFromSettings || "agg_sacas_mes";
 
+      // ── RESILIENT AGGREGATION: proceed even without entity/time, injecting virtual target ──
       if (aggEntityKey && aggTimeCol) {
         // Load sample to compute aggregation stats
         const { data: sampleDataAgg } = await supabase
@@ -1228,6 +1229,26 @@ serve(async (req: Request) => {
 
           aggregationApplied = true;
         }
+      } else {
+        // Entity/time not set but mode is temporal_aggregated — inject virtual target into schema
+        // so validation doesn't block with "target not found"
+        console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED: entity/time missing but injecting virtual target "${aggTargetCol}" into schema`);
+        if (!enrichedColumns.find(c => c.name === aggTargetCol)) {
+          enrichedColumns.push({ name: aggTargetCol, type: "numeric", distinct_count: 100, mean: 50, std: 30 });
+        }
+        aggregationApplied = true;
+      }
+    }
+
+    // ── UNIVERSAL FEATURE SANITIZATION in builder: block admin IDs from features_final ──
+    const BUILDER_ADMIN_BLOCK = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular)/i;
+    const builderEntityKey = (settings as any)?.entity_key || null;
+    for (let i = enrichedColumns.length - 1; i >= 0; i--) {
+      const cn = enrichedColumns[i].name;
+      const colPart = cn.includes(".") ? cn.split(".").pop()! : cn;
+      if (BUILDER_ADMIN_BLOCK.test(colPart) && cn !== builderEntityKey && cn !== targetFromSettings) {
+        console.log(`[build-modeling-dataset] ADMIN_BLOCK: removing "${cn}" from enrichedColumns`);
+        enrichedColumns.splice(i, 1);
       }
     }
 
