@@ -224,6 +224,108 @@ const StepTargetFeatures = ({
     return candidates.some(c => lower === c || lower.includes(c));
   }, [businessContract]);
 
+  const MULTI_FACT_HINTS = ["fato", "fact", "moviment", "detalhe", "detail", "lote", "pedido", "venda", "transacao", "evento", "operacao", "recebimento", "pesagem"];
+  const MULTI_DIM_HINTS = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
+  const MULTI_ADMIN_ID_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular)/i;
+  const MULTI_BAD_TIME_RE = /(^(sk_|pk_|fk_|__)|ult\.?|ultima|ultimo|cadastro|recadastr|nascimento|admiss|demiss|compra|entrega|data_ult|dt_ult|data_cad|dt_cad)/i;
+
+  const getTableName = useCallback((name: string): string | null => name.includes(".") ? name.split(".")[0] : null, []);
+  const getColumnNamePart = useCallback((name: string): string => name.includes(".") ? name.split(".").pop()! : name, []);
+  const isFactTableName = useCallback((table: string | null): boolean => table ? MULTI_FACT_HINTS.some(token => table.toLowerCase().includes(token)) : false, []);
+  const isDimensionTableName = useCallback((table: string | null): boolean => table ? MULTI_DIM_HINTS.some(token => table.toLowerCase().includes(token)) : false, []);
+  const isBlockedAdminColumn = useCallback((name: string): boolean => MULTI_ADMIN_ID_RE.test(getColumnNamePart(name)), [getColumnNamePart]);
+  const isBlockedStructuralTime = useCallback((name: string): boolean => MULTI_BAD_TIME_RE.test(getColumnNamePart(name).toLowerCase()), [getColumnNamePart]);
+
+  const resolveAuthoritativeEntityKey = useCallback((candidates: Array<string | null | undefined>): string | null => {
+    const hasMultiTable = columns.some(c => c.name.includes("."));
+    const uniqueCandidates = Array.from(new Set(candidates.filter((value): value is string => !!value)));
+
+    const preferredCandidate = uniqueCandidates.find((name) => {
+      const table = getTableName(name);
+      const part = getColumnNamePart(name).toLowerCase();
+      return /codlot|cod_lote|lote/.test(part)
+        && !isBlockedAdminColumn(name)
+        && (!hasMultiTable || isFactTableName(table));
+    });
+    if (preferredCandidate) return preferredCandidate;
+
+    const factCandidate = uniqueCandidates.find((name) => {
+      const table = getTableName(name);
+      return !isBlockedAdminColumn(name) && (!hasMultiTable || isFactTableName(table));
+    });
+    if (factCandidate) return factCandidate;
+
+    const factColumns = columns
+      .map((column) => column.name)
+      .filter((name) => !isBlockedAdminColumn(name) && (!hasMultiTable || isFactTableName(getTableName(name))));
+
+    const inferredFactEntity = factColumns.find((name) => /codlot|cod_lote|lote/.test(getColumnNamePart(name).toLowerCase()))
+      || factColumns.find((name) => /cod|id|codigo|key/.test(getColumnNamePart(name).toLowerCase()));
+    if (inferredFactEntity) return inferredFactEntity;
+
+    return uniqueCandidates.find((name) => {
+      const table = getTableName(name);
+      return !isBlockedAdminColumn(name) && (!hasMultiTable || !isDimensionTableName(table));
+    }) || null;
+  }, [columns, getColumnNamePart, getTableName, isBlockedAdminColumn, isDimensionTableName, isFactTableName]);
+
+  const resolveAuthoritativeTimeColumn = useCallback((candidates: Array<string | null | undefined>): string | null => {
+    const hasMultiTable = columns.some(c => c.name.includes("."));
+    const uniqueCandidates = Array.from(new Set(candidates.filter((value): value is string => !!value)));
+    const DATE_TYPES = ["date", "datetime", "timestamp", "temporal", "data", "date/time"];
+
+    const isValidTimeCandidate = (name: string) => {
+      const col = columns.find(c => c.name === name);
+      const type = (col?.type || "").toLowerCase();
+      if (!DATE_TYPES.includes(type)) return false;
+      if (isBlockedStructuralTime(name)) return false;
+      const table = getTableName(name);
+      if (hasMultiTable && table && isDimensionTableName(table)) return false;
+      return true;
+    };
+
+    const preferredFactTime = uniqueCandidates.find((name) => {
+      const part = getColumnNamePart(name).toLowerCase();
+      return isValidTimeCandidate(name)
+        && (!hasMultiTable || isFactTableName(getTableName(name)))
+        && /(datmov|dt_mov|data_mov|moviment|receb|entrada|operac|pedido|venda|transac)/.test(part);
+    });
+    if (preferredFactTime) return preferredFactTime;
+
+    const inferredFactTime = columns.find((column) => {
+      const type = (column.type || "").toLowerCase();
+      return DATE_TYPES.includes(type)
+        && !isBlockedStructuralTime(column.name)
+        && (!hasMultiTable || isFactTableName(getTableName(column.name)));
+    });
+    if (inferredFactTime) return inferredFactTime.name;
+
+    if (!hasMultiTable) {
+      return uniqueCandidates.find((name) => {
+        const col = columns.find(c => c.name === name);
+        return !!col && DATE_TYPES.includes((col.type || "").toLowerCase()) && !isBlockedStructuralTime(name);
+      }) || null;
+    }
+
+    return null;
+  }, [columns, getColumnNamePart, getTableName, isBlockedStructuralTime, isDimensionTableName, isFactTableName]);
+
+  const sanitizeFeatureSelection = useCallback((features: string[], structural?: { target?: string | null; entity?: string | null; time?: string | null }) => {
+    const hasMultiTable = columns.some(c => c.name.includes("."));
+    const blocked = new Set([structural?.target, structural?.entity, structural?.time].filter(Boolean) as string[]);
+    return Array.from(new Set(features.filter((name) => {
+      if (!name || blocked.has(name)) return false;
+      if (isBlockedAdminColumn(name)) return false;
+      if (isBlockedStructuralTime(name)) return false;
+      const table = getTableName(name);
+      const part = getColumnNamePart(name).toLowerCase();
+      if (hasMultiTable && table && isDimensionTableName(table) && /(codpes|codgre|codlot|cod_cooperado|cod_cliente|customer_id|patient_id)/i.test(part)) {
+        return false;
+      }
+      return true;
+    })));
+  }, [columns, getColumnNamePart, getTableName, isBlockedAdminColumn, isBlockedStructuralTime, isDimensionTableName]);
+
   const suggestEntityKey = useCallback((): string | null => {
     if (!businessContract || columns.length === 0) return null;
     const patterns = businessContract.entity_key_hint_patterns;
@@ -450,6 +552,26 @@ const StepTargetFeatures = ({
 
   useEffect(() => {
     if (ssotLoaded && columns.length > 0) {
+      const resolvedSSOTEntity = resolveAuthoritativeEntityKey([
+        ssot.official_entity_key,
+        ssot.entity_key,
+        autoRes.result.entity_key,
+        contractHints?.entity_key,
+      ]);
+      const resolvedSSOTTime = resolveAuthoritativeTimeColumn([
+        ssot.official_time_column,
+        ssot.time_anchor_column,
+        autoRes.result.time_column,
+        grainTime.resolution?.time?.time_column,
+        contractHints?.time_anchor_column,
+      ]);
+      const sanitizedSSOTFeatures = sanitizeFeatureSelection(ssot.feature_columns, {
+        target: ssot.target_column,
+        entity: resolvedSSOTEntity,
+        time: resolvedSSOTTime,
+      });
+      const removedSSOTFeatures = ssot.feature_columns.filter((feature) => !sanitizedSSOTFeatures.includes(feature));
+
       if (ssot.target_column) {
         const isPhysical = columns.some((c) => c.name === ssot.target_column);
         const isLabel = ssot.target_column === "label";
@@ -467,22 +589,36 @@ const StepTargetFeatures = ({
         }
       }
       // In aggregated mode, prefer SSOT features over row-level columns
-      if (ssot.feature_columns.length > 0) setSelectedFeatures(ssot.feature_columns);
-      if (ssot.excluded_columns.length > 0) setExcludedColumns(ssot.excluded_columns);
+      if (sanitizedSSOTFeatures.length > 0) setSelectedFeatures(sanitizedSSOTFeatures);
+      if (ssot.excluded_columns.length > 0 || removedSSOTFeatures.length > 0) {
+        setExcludedColumns(Array.from(new Set([...ssot.excluded_columns, ...removedSSOTFeatures])));
+      }
       // SSOT problem_type is authoritative — always apply when present
       if (ssot.problem_type) setInferredProblemType(ssot.problem_type);
       if (ssot.target_source && ssot.target_source !== "manual") setTargetSource(ssot.target_source as any);
       if (ssot.selected_template_id) setSelectedTemplateId(ssot.selected_template_id);
       setSelectionVersion(ssot.selection_version || null);
-      if (ssot.entity_key) { setEntityKey(ssot.entity_key); }
+      if (resolvedSSOTEntity) { setEntityKey(resolvedSSOTEntity); }
       else if (!entityKey) { const suggested = suggestEntityKey(); if (suggested) setEntityKey(suggested); }
       if (ssot.industry) setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
     }
-  }, [ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget]);
+  }, [ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget, autoRes.result.entity_key, autoRes.result.time_column, contractHints?.entity_key, contractHints?.time_anchor_column, grainTime.resolution?.time?.time_column, resolveAuthoritativeEntityKey, resolveAuthoritativeTimeColumn, sanitizeFeatureSelection]);
 
   // Fallback from useProjectSettings
   useEffect(() => {
     if (settings && ssotLoaded && columns.length > 0 && !ssot.target_column) {
+      const resolvedSettingsEntity = resolveAuthoritativeEntityKey([
+        ssot.official_entity_key,
+        ssot.entity_key,
+        autoRes.result.entity_key,
+        contractHints?.entity_key,
+      ]);
+      const resolvedSettingsTime = resolveAuthoritativeTimeColumn([
+        ssot.official_time_column,
+        ssot.time_anchor_column,
+        autoRes.result.time_column,
+        contractHints?.time_anchor_column,
+      ]);
       if (settings.target_column) {
         const isPhysical = columns.some((c) => c.name === settings.target_column);
         const isVirtualAgg = isVirtualAggregatedTarget(settings.target_column);
@@ -494,11 +630,18 @@ const StepTargetFeatures = ({
           }
         }
       }
-      if (settings.feature_columns && settings.feature_columns.length > 0) setSelectedFeatures(settings.feature_columns);
+      if (settings.feature_columns && settings.feature_columns.length > 0) {
+        const sanitizedSettingsFeatures = sanitizeFeatureSelection(settings.feature_columns, {
+          target: settings.target_column,
+          entity: resolvedSettingsEntity,
+          time: resolvedSettingsTime,
+        });
+        if (sanitizedSettingsFeatures.length > 0) setSelectedFeatures(sanitizedSettingsFeatures);
+      }
       if (settings.excluded_columns) setExcludedColumns(settings.excluded_columns);
       if (settings.problem_type) setInferredProblemType(settings.problem_type);
     }
-  }, [settings, ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget]);
+  }, [settings, ssotLoaded, ssot, columns, isAggregatedMode, isVirtualAggregatedTarget, autoRes.result.entity_key, autoRes.result.time_column, contractHints?.entity_key, contractHints?.time_anchor_column, resolveAuthoritativeEntityKey, resolveAuthoritativeTimeColumn, sanitizeFeatureSelection]);
 
   // ═══ LYS PRE-CONFIG ═══
   useEffect(() => {
@@ -541,26 +684,51 @@ const StepTargetFeatures = ({
     if (!targetExists && !isVirtualAgg) return;
     autoResAppliedRef.current = true;
 
+    const resolvedAutoEntity = resolveAuthoritativeEntityKey([
+      r.entity_key,
+      ssot.official_entity_key,
+      ssot.entity_key,
+      contractHints?.entity_key,
+    ]);
+    const resolvedAutoTime = resolveAuthoritativeTimeColumn([
+      r.time_column,
+      ssot.official_time_column,
+      ssot.time_anchor_column,
+      contractHints?.time_anchor_column,
+    ]);
+    const sanitizedAutoFeatures = sanitizeFeatureSelection(r.selected_features, {
+      target: r.target_column,
+      entity: resolvedAutoEntity,
+      time: resolvedAutoTime,
+    }).filter(f => columns.some(c => c.name === f));
+    const removedAutoFeatures = r.selected_features.filter(f => !sanitizedAutoFeatures.includes(f));
+
     setTargetColumn(r.target_column);
     if (!targetExists && isVirtualAgg) {
       setColumns(prev => prev.some(c => c.name === r.target_column) ? prev : [{ name: r.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev]);
     }
     if (r.problem_type) setInferredProblemType(r.problem_type);
-    if (r.entity_key && columns.some(c => c.name === r.entity_key)) setEntityKey(r.entity_key);
-    if (r.selected_features.length > 0) {
-      const validFeatures = r.selected_features.filter(f => columns.some(c => c.name === f));
-      if (validFeatures.length > 0) setSelectedFeatures(validFeatures);
+    if (resolvedAutoEntity && columns.some(c => c.name === resolvedAutoEntity)) setEntityKey(resolvedAutoEntity);
+    if (sanitizedAutoFeatures.length > 0) {
+      setSelectedFeatures(sanitizedAutoFeatures);
     }
-    if (r.excluded_features.length > 0) {
-      const validExcluded = r.excluded_features.filter(f => columns.some(c => c.name === f));
+    if (r.excluded_features.length > 0 || removedAutoFeatures.length > 0) {
+      const validExcluded = [...new Set([...r.excluded_features, ...removedAutoFeatures])].filter(f => columns.some(c => c.name === f));
       if (validExcluded.length > 0) setExcludedColumns(prev => [...new Set([...prev, ...validExcluded])]);
     }
 
     // ATOMIC: persist to project_settings + project_model_selection + trigger builder
-    autoRes.applyToSSOT(r);
+    autoRes.applyToSSOT({
+      ...r,
+      entity_key: resolvedAutoEntity,
+      time_column: resolvedAutoTime,
+      selected_features: sanitizedAutoFeatures,
+      excluded_features: [...new Set([...r.excluded_features, ...removedAutoFeatures])],
+      dataset_build_mode: r.dataset_build_mode === "temporal_aggregated" || isVirtualAggregatedTarget(r.target_column) ? "temporal_aggregated" : r.dataset_build_mode,
+    });
 
     console.log("[StepTargetFeatures] Auto-resolution applied:", { target: r.target_column, problem_type: r.problem_type, entity_key: r.entity_key, features: r.selected_features.length, confidence: r.confidence_score });
-  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, targetColumn, isVirtualAggregatedTarget]);
+  }, [autoRes.resolved, autoRes.resolving, autoRes.result, columns, ssot.target_column, ssot.entity_key, ssot.official_entity_key, ssot.time_anchor_column, ssot.official_time_column, targetColumn, contractHints?.entity_key, contractHints?.time_anchor_column, isVirtualAggregatedTarget, resolveAuthoritativeEntityKey, resolveAuthoritativeTimeColumn, sanitizeFeatureSelection]);
 
   // ═══ RESOLVE BEST TIME COLUMN from all sources ═══
   const resolveBestTimeColumn = useCallback((): string | null => {
@@ -658,17 +826,36 @@ const StepTargetFeatures = ({
     // Only auto-promote if there's NO official selection yet
     if (selectionVersion && selectionVersion > 0) return;
     // Need target + entity + features to promote
-    if (!targetColumn || !entityKey || selectedFeatures.length === 0) return;
+    if (!targetColumn || selectedFeatures.length === 0) return;
     // Wait for auto-resolution to finish applying
     if (autoRes.resolving) return;
 
+    const resolvedEntityKey = resolveAuthoritativeEntityKey([
+      entityKey,
+      ssot.official_entity_key,
+      ssot.entity_key,
+      autoRes.result.entity_key,
+      contractHints?.entity_key,
+    ]);
+    const resolvedTimeAnchor = resolveAuthoritativeTimeColumn([
+      ssot.official_time_column,
+      ssot.time_anchor_column,
+      autoRes.result.time_column,
+      grainTime.resolution?.time?.time_column,
+      contractHints?.time_anchor_column,
+    ]);
+    const structuralFeatures = sanitizeFeatureSelection(selectedFeatures.filter(f => f !== targetColumn), {
+      target: targetColumn,
+      entity: resolvedEntityKey,
+      time: resolvedTimeAnchor,
+    });
+    const removedStructuralFeatures = selectedFeatures.filter(f => f !== targetColumn && !structuralFeatures.includes(f));
+    if (!resolvedEntityKey || structuralFeatures.length === 0) return;
+
     autoPromoteRef.current = true;
 
-    // Resolve time column from all sources BEFORE promoting
-    const resolvedTimeAnchor = resolveBestTimeColumn();
-
     console.log("[StepTargetFeatures] AUTO-PROMOTE: Creating official project_model_selection", {
-      target: targetColumn, entity: entityKey, features: selectedFeatures.length,
+      target: targetColumn, entity: resolvedEntityKey, features: structuralFeatures.length,
       problem: inferredProblemType, time: resolvedTimeAnchor,
     });
 
@@ -677,10 +864,10 @@ const StepTargetFeatures = ({
       const saved = await saveSettings({
         target_column: targetColumn,
         problem_type: inferredProblemType || "classification",
-        feature_columns: selectedFeatures.filter(f => f !== targetColumn),
-        excluded_columns: excludedColumns,
+        feature_columns: structuralFeatures,
+        excluded_columns: [...new Set([...excludedColumns, ...removedStructuralFeatures])],
         suggestion: null,
-        entity_key: entityKey,
+        entity_key: resolvedEntityKey,
         time_column: resolvedTimeAnchor,
       });
 
@@ -689,11 +876,16 @@ const StepTargetFeatures = ({
 
       // Persist grain/time/split to project_settings
       const settingsUpdate: Record<string, any> = {
+        entity_key: resolvedEntityKey,
         target_state: "ready",
         active_target_column: targetColumn,
         active_target_mode: "column",
         target_source: "manual",
         predictive_resolution_state: "applied",
+        official_entity_key: resolvedEntityKey,
+        official_time_column: resolvedTimeAnchor,
+        feature_columns: structuralFeatures,
+        excluded_columns: [...new Set([...excludedColumns, ...removedStructuralFeatures])],
       };
       if (resolvedTimeAnchor) {
         settingsUpdate.time_anchor_column = resolvedTimeAnchor;
@@ -717,8 +909,7 @@ const StepTargetFeatures = ({
       });
 
       // Auto-trigger builder
-      const cleanFeatures = selectedFeatures.filter(f => f !== targetColumn);
-      if (cleanFeatures.length >= 3) {
+      if (structuralFeatures.length >= 3) {
         setIsRebuilding(true);
         try {
           const builderRes = await supabase.functions.invoke("build-modeling-dataset", { body: { project_id: projectData.id } });
@@ -736,7 +927,83 @@ const StepTargetFeatures = ({
       grainTimeRanRef.current = false;
       resolveGrainTime();
     })();
-  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType, ssot.dataset_build_mode, autoRes.result.dataset_build_mode, isVirtualAggregatedTarget]);
+  }, [ssotLoaded, columns.length, selectionVersion, targetColumn, entityKey, selectedFeatures, autoRes.resolving, inferredProblemType, ssot.dataset_build_mode, ssot.entity_key, ssot.official_entity_key, ssot.time_anchor_column, ssot.official_time_column, autoRes.result.dataset_build_mode, autoRes.result.entity_key, autoRes.result.time_column, contractHints?.entity_key, contractHints?.time_anchor_column, grainTime.resolution?.time?.time_column, excludedColumns, isVirtualAggregatedTarget, resolveAuthoritativeEntityKey, resolveAuthoritativeTimeColumn, sanitizeFeatureSelection]);
+
+  const structuralRepairAppliedRef = useRef(false);
+
+  useEffect(() => {
+    if (structuralRepairAppliedRef.current) return;
+    if (!projectData.id || !ssotLoaded || columns.length === 0) return;
+
+    const effectiveTarget = ssot.target_column || targetColumn;
+    if (!effectiveTarget) return;
+
+    const repairedEntity = resolveAuthoritativeEntityKey([
+      ssot.official_entity_key,
+      ssot.entity_key,
+      entityKey,
+      autoRes.result.entity_key,
+      contractHints?.entity_key,
+    ]);
+    const repairedTime = resolveAuthoritativeTimeColumn([
+      ssot.official_time_column,
+      ssot.time_anchor_column,
+      autoRes.result.time_column,
+      grainTime.resolution?.time?.time_column,
+      contractHints?.time_anchor_column,
+    ]);
+    const baseFeatures = (ssot.feature_columns.length > 0 ? ssot.feature_columns : selectedFeatures).filter(f => f !== effectiveTarget);
+    const repairedFeatures = sanitizeFeatureSelection(baseFeatures, {
+      target: effectiveTarget,
+      entity: repairedEntity,
+      time: repairedTime,
+    });
+    const removedFeatures = baseFeatures.filter(feature => !repairedFeatures.includes(feature));
+    const shouldForceAggregated = ssot.dataset_build_mode === "temporal_aggregated" || isVirtualAggregatedTarget(effectiveTarget);
+    const repairedExcluded = Array.from(new Set([...ssot.excluded_columns, ...excludedColumns, ...removedFeatures]));
+    const hasDrift = !!repairedEntity && (
+      ssot.entity_key !== repairedEntity
+      || ssot.official_entity_key !== repairedEntity
+      || ssot.time_anchor_column !== repairedTime
+      || ssot.official_time_column !== repairedTime
+      || removedFeatures.length > 0
+      || (shouldForceAggregated && ssot.dataset_build_mode !== "temporal_aggregated")
+    );
+
+    if (!repairedEntity || repairedFeatures.length === 0 || !hasDrift) return;
+
+    structuralRepairAppliedRef.current = true;
+
+    (async () => {
+      await saveSettings({
+        target_column: effectiveTarget,
+        problem_type: inferredProblemType || ssot.problem_type || "classification",
+        feature_columns: repairedFeatures,
+        excluded_columns: repairedExcluded,
+        suggestion: null,
+        entity_key: repairedEntity,
+        time_column: repairedTime,
+      });
+
+      await supabase.from("project_settings").update({
+        entity_key: repairedEntity,
+        official_entity_key: repairedEntity,
+        time_anchor_column: repairedTime,
+        official_time_column: repairedTime,
+        feature_columns: repairedFeatures,
+        excluded_columns: repairedExcluded,
+        dataset_build_mode: shouldForceAggregated ? "temporal_aggregated" : ssot.dataset_build_mode,
+        recommended_grain: repairedEntity && repairedTime ? "entity_time" : ssot.recommended_grain,
+        recommended_split_strategy: repairedTime ? "temporal" : ssot.recommended_split_strategy,
+        updated_at: new Date().toISOString(),
+      } as any).eq("project_id", projectData.id);
+
+      setEntityKey(repairedEntity);
+      setSelectedFeatures(repairedFeatures);
+      setExcludedColumns(repairedExcluded);
+      await Promise.all([loadSSOT(), loadSelectionVersion()]);
+    })();
+  }, [projectData.id, ssotLoaded, ssot, columns, targetColumn, selectedFeatures, excludedColumns, entityKey, inferredProblemType, autoRes.result.entity_key, autoRes.result.time_column, contractHints?.entity_key, contractHints?.time_anchor_column, grainTime.resolution?.time?.time_column, isVirtualAggregatedTarget, resolveAuthoritativeEntityKey, resolveAuthoritativeTimeColumn, sanitizeFeatureSelection, saveSettings, loadSSOT]);
 
   useEffect(() => {
     if (projectData.target_column && initialTargetRef.current === null) initialTargetRef.current = projectData.target_column;
@@ -875,52 +1142,46 @@ const StepTargetFeatures = ({
    */
   const handleSaveSettings = async (): Promise<boolean> => {
     if (!projectData.id || !targetColumn) return false;
-    if (!entityKey) { toast({ title: "Entity Key obrigatória", description: "Selecione a coluna que identifica a entidade antes de salvar.", variant: "destructive" }); return false; }
-    const cleanFeatures = selectedFeatures.filter((f) => f !== targetColumn);
-    if (cleanFeatures.length === 0) { toast({ title: t("common.error"), description: "Selecione ao menos 1 feature.", variant: "destructive" }); return false; }
+    const resolvedEntityKey = resolveAuthoritativeEntityKey([
+      entityKey,
+      ssot.official_entity_key,
+      ssot.entity_key,
+      autoRes.result.entity_key,
+      contractHints?.entity_key,
+    ]);
+    if (!resolvedEntityKey) { toast({ title: "Entity Key obrigatória", description: "Selecione a coluna da fato antes de salvar.", variant: "destructive" }); return false; }
     const problemType = inferredProblemType || projectData.problem_type;
 
     // Resolve time anchor from all available sources — apply multi-table filter
     const rawTimeCandidates = [
+      ssot.official_time_column,
       ssot.time_anchor_column,
       grainTime.resolution?.time?.time_column,
       autoRes.result.time_column,
       contractHints?.time_anchor_column,
     ].filter(Boolean) as string[];
-
-    const SAVE_BLOCKED_TIME = /^(sk_|pk_|fk_|__|ult|ultimo|última|ultima|cadastro|nascimento|data_cad|dt_cad|data_ult|dt_ult)/i;
-    const DIM_TOKENS_SAVE = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
-    const hasMultiTableSave = columns.some(c => c.name.includes("."));
-
-    const resolvedTimeAnchor = rawTimeCandidates.find(c => {
-      const cp = c.includes(".") ? c.split(".").pop()! : c;
-      if (SAVE_BLOCKED_TIME.test(cp)) return false;
-      if (hasMultiTableSave) {
-        const tbl = c.includes(".") ? c.split(".")[0] : null;
-        if (tbl && DIM_TOKENS_SAVE.some(d => tbl.toLowerCase().includes(d))) return false;
-      }
-      return true;
-    }) || rawTimeCandidates[0] || null;
+    const resolvedTimeAnchor = resolveAuthoritativeTimeColumn(rawTimeCandidates);
 
     // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before save ──
-    const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|codpes|codgre|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
-    const sanitizedFeatures = cleanFeatures.filter(f => {
-      const cp = f.includes(".") ? f.split(".").pop()! : f;
-      return !ADMIN_BLOCK_RE.test(cp);
+    const sanitizedFeatures = sanitizeFeatureSelection(selectedFeatures.filter((f) => f !== targetColumn), {
+      target: targetColumn,
+      entity: resolvedEntityKey,
+      time: resolvedTimeAnchor,
     });
-    const removedAdminIds = cleanFeatures.filter(f => !sanitizedFeatures.includes(f));
+    if (sanitizedFeatures.length === 0) { toast({ title: t("common.error"), description: "Selecione ao menos 1 feature válida.", variant: "destructive" }); return false; }
+    const removedAdminIds = selectedFeatures.filter(f => f !== targetColumn && !sanitizedFeatures.includes(f));
     if (removedAdminIds.length > 0) {
       console.log("[StepTargetFeatures] Sanitized admin IDs from features:", removedAdminIds);
       setExcludedColumns(prev => [...new Set([...prev, ...removedAdminIds])]);
     }
 
     // 1. Save via atomic model_selection RPC — includes entity_key + time_column
-    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: sanitizedFeatures, excluded_columns: [...excludedColumns, ...removedAdminIds], suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
+    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: sanitizedFeatures, excluded_columns: [...excludedColumns, ...removedAdminIds], suggestion: null, entity_key: resolvedEntityKey, time_column: resolvedTimeAnchor });
     if (!saved) return false;
 
     // 2. Persist grain/time strategy + target_state to project_settings
     const settingsUpdate: Record<string, any> = {
-      entity_key: entityKey,
+      entity_key: resolvedEntityKey,
       target_state: "ready",
       active_target_column: targetColumn,
       target_column: targetColumn,
@@ -931,12 +1192,14 @@ const StepTargetFeatures = ({
       // GOVERNANCE: Explicit save = official confirmation
       official_target: targetColumn,
       official_problem_type: problemType,
-      official_entity_key: entityKey,
+      official_entity_key: resolvedEntityKey,
       official_time_column: resolvedTimeAnchor,
       governance_conflict: false,
       governance_conflict_details: null,
       last_governance_action: "explicit_save",
       last_governance_action_at: new Date().toISOString(),
+      feature_columns: sanitizedFeatures,
+      excluded_columns: [...new Set([...excludedColumns, ...removedAdminIds])],
     };
     if (resolvedTimeAnchor) {
       settingsUpdate.time_anchor_column = resolvedTimeAnchor;
@@ -956,10 +1219,10 @@ const StepTargetFeatures = ({
       settingsUpdate.dataset_build_mode = "temporal_aggregated";
     }
     await supabase.from("project_settings").update(settingsUpdate as any).eq("project_id", projectData.id);
-    console.log(`[StepTargetFeatures] Persisted: entity=${entityKey}, time=${resolvedTimeAnchor}, grain=${settingsUpdate.recommended_grain || "—"}, split=${settingsUpdate.recommended_split_strategy || "—"}`);
+    console.log(`[StepTargetFeatures] Persisted: entity=${resolvedEntityKey}, time=${resolvedTimeAnchor}, grain=${settingsUpdate.recommended_grain || "—"}, split=${settingsUpdate.recommended_split_strategy || "—"}`);
 
     // 3. Auto-trigger builder
-    if (cleanFeatures.length >= 3) {
+    if (sanitizedFeatures.length >= 3) {
       setIsRebuilding(true);
       try {
         const builderRes = await supabase.functions.invoke("build-modeling-dataset", { body: { project_id: projectData.id } });
@@ -969,8 +1232,8 @@ const StepTargetFeatures = ({
     }
 
     appendContext("targeting", {
-      selected_problem: problemType || "", selected_target: targetColumn, entity_key: entityKey,
-      recommended_features: cleanFeatures, excluded_features: excludedColumns,
+      selected_problem: problemType || "", selected_target: targetColumn, entity_key: resolvedEntityKey,
+      recommended_features: sanitizedFeatures, excluded_features: [...new Set([...excludedColumns, ...removedAdminIds])],
       justification: inference?.suggested_targets.find((t) => t.column === targetColumn)?.why_this_target || "Manual.",
     }).catch(() => {});
 
