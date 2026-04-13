@@ -917,6 +917,9 @@ Deno.serve(async (req) => {
     // ── Persist ────────────────────────────────────────────────
     const selectionVersion = modelSelection?.selection_version || 0;
 
+    // ── FINAL STRUCTURAL LOG: what PRE decided ──
+    console.log(`[PRE] FINAL_DECISION: entity="${entityKey}", time="${timeAnchor}", target="${targetDef.target_name}", build_mode="${targetBuildMode}", grain="${grain}", reason="${targetDef.target_reasoning?.substring(0, 100)}"`);
+
     const { data: inserted, error: insertErr } = await sb
       .from("project_predictive_resolutions")
       .insert({
@@ -940,8 +943,9 @@ Deno.serve(async (req) => {
       });
     }
 
-    // Update SSOT
-    await sb.from("project_settings").update({
+    // ── STRUCTURAL SSOT SYNC: force fact-anchored values ──
+    // This is the authoritative write — must not be overridden by UI fallbacks
+    const ssotPayload: Record<string, any> = {
       predictive_resolution_state: "resolved",
       active_predictive_resolution_id: inserted.id,
       predictive_resolution_mode: mode,
@@ -954,6 +958,9 @@ Deno.serve(async (req) => {
       recommended_split_strategy: datasetStrategy.split_suggestion,
       recommended_time_column: timeAnchor,
       dataset_build_mode: targetBuildMode,
+      // Write entity/time to the authoritative fields so UI/builder reads correct values
+      entity_key: entityKey,
+      time_anchor_column: timeAnchor,
       predictive_resolution_summary: {
         problem_type: problemType,
         target: targetDef.target_name,
@@ -968,7 +975,19 @@ Deno.serve(async (req) => {
         auxiliary_table: auxiliaryTable,
         aggregated_target_required: !!aggregationPromotion,
       },
-    }).eq("project_id", project_id);
+    };
+
+    // If target is agg_*, force temporal_aggregated in SSOT
+    if (/^agg_/i.test(targetDef.target_name || "")) {
+      ssotPayload.dataset_build_mode = "temporal_aggregated";
+      ssotPayload.target_column = targetDef.target_name;
+      ssotPayload.active_target_column = targetDef.target_name;
+      ssotPayload.official_target = targetDef.target_name;
+      ssotPayload.official_problem_type = problemType;
+      console.log(`[PRE] FORCE_AGG_SSOT: target="${targetDef.target_name}" → dataset_build_mode=temporal_aggregated`);
+    }
+
+    await sb.from("project_settings").update(ssotPayload).eq("project_id", project_id);
 
     console.log(`[PRE] Resolution created: id=${inserted.id} confidence=${overall} target=${targetDef.target_name} domain=${isAgro ? "agro" : "generic"}`);
 
