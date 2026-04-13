@@ -284,6 +284,17 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         || res.aggregated_target_required
         || /^agg_/i.test(res.target_column || "");
 
+      // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before persisting ──
+      const ADMIN_BLOCK_PATTERNS = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+      const sanitizedFeatures = res.selected_features.filter(f => {
+        const colPart = f.includes(".") ? f.split(".").pop()! : f;
+        return !ADMIN_BLOCK_PATTERNS.test(colPart);
+      });
+      const removedAdminFeatures = res.selected_features.filter(f => !sanitizedFeatures.includes(f));
+      if (removedAdminFeatures.length > 0) {
+        console.log("[useAutoResolution] Sanitized admin IDs from features:", removedAdminFeatures);
+      }
+
       // 1. Update project_settings (SSOT) — includes grain/time fields
       const settingsPayload: Record<string, any> = {
         project_id: projectId,
@@ -292,8 +303,8 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         problem_type: res.problem_type,
         entity_key: res.entity_key,
         time_anchor_column: res.time_column,
-        feature_columns: res.selected_features,
-        excluded_columns: res.excluded_features,
+        feature_columns: sanitizedFeatures,
+        excluded_columns: [...res.excluded_features, ...removedAdminFeatures],
         target_state: "ready",
         active_target_mode: "column",
         target_source: "manual",
@@ -304,6 +315,8 @@ export function useAutoResolution(projectId: string | undefined, organizationId:
         official_entity_key: res.entity_key,
         official_time_column: res.time_column,
         governance_conflict: false,
+        // Force dataset_build_mode for aggregated targets
+        dataset_build_mode: isAggregatedTarget ? "temporal_aggregated" : (res.dataset_build_mode || "row_level"),
         updated_at: new Date().toISOString(),
       };
 
