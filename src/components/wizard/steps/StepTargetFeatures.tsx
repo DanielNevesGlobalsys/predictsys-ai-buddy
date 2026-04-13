@@ -552,12 +552,23 @@ const StepTargetFeatures = ({
 
   useEffect(() => {
     if (ssotLoaded && columns.length > 0) {
-      const resolvedSSOTEntity = resolveAuthoritativeEntityKey([
-        ssot.official_entity_key,
-        ssot.entity_key,
-        autoRes.result.entity_key,
-        contractHints?.entity_key,
-      ]);
+      // ── ENTITY KEY: SSOT is authoritative. Use persisted value DIRECTLY without heuristic filtering. ──
+      // Only fall back to heuristic resolution if SSOT has no persisted entity at all.
+      const persistedEntity = ssot.entity_key || ssot.official_entity_key || null;
+      const resolvedSSOTEntity = persistedEntity
+        || resolveAuthoritativeEntityKey([
+          autoRes.result.entity_key,
+          contractHints?.entity_key,
+        ]);
+
+      // Inject entity into columns list if it's not physically present (like virtual targets)
+      if (resolvedSSOTEntity && !columns.some(c => c.name === resolvedSSOTEntity)) {
+        setColumns(prev => {
+          if (prev.some(c => c.name === resolvedSSOTEntity)) return prev;
+          return [...prev, { name: resolvedSSOTEntity, type: "id (entidade)", isFeature: false }];
+        });
+      }
+
       const resolvedSSOTTime = resolveAuthoritativeTimeColumn([
         ssot.official_time_column,
         ssot.time_anchor_column,
@@ -598,6 +609,7 @@ const StepTargetFeatures = ({
       if (ssot.target_source && ssot.target_source !== "manual") setTargetSource(ssot.target_source as any);
       if (ssot.selected_template_id) setSelectedTemplateId(ssot.selected_template_id);
       setSelectionVersion(ssot.selection_version || null);
+      // ENTITY KEY: always use persisted/resolved value. Never leave empty if SSOT has it.
       if (resolvedSSOTEntity) { setEntityKey(resolvedSSOTEntity); }
       else if (!entityKey) { const suggested = suggestEntityKey(); if (suggested) setEntityKey(suggested); }
       if (ssot.industry) setIntentInfo(prev => ({ ...prev, industry: ssot.industry! }));
@@ -708,7 +720,13 @@ const StepTargetFeatures = ({
       setColumns(prev => prev.some(c => c.name === r.target_column) ? prev : [{ name: r.target_column!, type: "numérico (agregado)", isFeature: false }, ...prev]);
     }
     if (r.problem_type) setInferredProblemType(r.problem_type);
-    if (resolvedAutoEntity && columns.some(c => c.name === resolvedAutoEntity)) setEntityKey(resolvedAutoEntity);
+    if (resolvedAutoEntity) {
+      // Inject entity into columns if not present
+      if (!columns.some(c => c.name === resolvedAutoEntity)) {
+        setColumns(prev => prev.some(c => c.name === resolvedAutoEntity) ? prev : [...prev, { name: resolvedAutoEntity, type: "id (entidade)", isFeature: false }]);
+      }
+      setEntityKey(resolvedAutoEntity);
+    }
     if (sanitizedAutoFeatures.length > 0) {
       setSelectedFeatures(sanitizedAutoFeatures);
     }
@@ -1142,13 +1160,14 @@ const StepTargetFeatures = ({
    */
   const handleSaveSettings = async (): Promise<boolean> => {
     if (!projectData.id || !targetColumn) return false;
-    const resolvedEntityKey = resolveAuthoritativeEntityKey([
-      entityKey,
-      ssot.official_entity_key,
-      ssot.entity_key,
-      autoRes.result.entity_key,
-      contractHints?.entity_key,
-    ]);
+    // ENTITY KEY: Use local state first (user selection), then persisted SSOT directly, then heuristic
+    const resolvedEntityKey = entityKey
+      || ssot.entity_key
+      || ssot.official_entity_key
+      || resolveAuthoritativeEntityKey([
+        autoRes.result.entity_key,
+        contractHints?.entity_key,
+      ]);
     if (!resolvedEntityKey) { toast({ title: "Entity Key obrigatória", description: "Selecione a coluna da fato antes de salvar.", variant: "destructive" }); return false; }
     const problemType = inferredProblemType || projectData.problem_type;
 
