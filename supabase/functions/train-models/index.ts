@@ -1821,7 +1821,11 @@ serve(async (req) => {
     }
 
     // ── Gate 2: Entity Key validation ──
-    const entityKey = (activeTargetSettings as any)?.entity_key || null;
+    // Hierarchy: entity_key > official_entity_key (both from project_settings)
+    const entityKey = (activeTargetSettings as any)?.entity_key
+      || (activeTargetSettings as any)?.official_entity_key
+      || null;
+    console.log(`[Gating] Entity Key resolution: entity_key=${(activeTargetSettings as any)?.entity_key || "null"}, official_entity_key=${(activeTargetSettings as any)?.official_entity_key || "null"}, resolved=${entityKey}`);
     if (!entityKey) {
       console.error(`[Gating] MISSING_ENTITY_KEY for project ${project_id}`);
       await supabase.from("platform_events").insert({
@@ -1831,11 +1835,19 @@ serve(async (req) => {
         source: "edge",
         metadata: {
           dataset_id: dsState?.active_dataset_ref || null,
-          schema_source: dsState?.active_schema_json ? "active_schema_json" : "unknown",
-          schema_cols_count: dsState?.active_schema_json ? Object.keys(dsState.active_schema_json).filter((k: string) => !k.startsWith("_")).length : 0,
+          entity_key_field: (activeTargetSettings as any)?.entity_key || null,
+          official_entity_key_field: (activeTargetSettings as any)?.official_entity_key || null,
         },
       });
       return blockResponse("MISSING_ENTITY_KEY", "Selecione a chave da entidade (Entity Key) antes de treinar.", { label: "Definir Entity Key", go_to_step: 3 });
+    }
+
+    // If entity_key field is empty but official_entity_key has a value, sync it back
+    if (!(activeTargetSettings as any)?.entity_key && (activeTargetSettings as any)?.official_entity_key) {
+      console.log(`[Gating] Syncing official_entity_key → entity_key: "${entityKey}"`);
+      await supabase.from("project_settings")
+        .update({ entity_key: entityKey } as any)
+        .eq("project_id", project_id);
     }
 
     // Validate entity_key exists in schema
