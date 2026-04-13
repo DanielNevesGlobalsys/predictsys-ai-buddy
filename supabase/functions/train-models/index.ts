@@ -1858,7 +1858,11 @@ serve(async (req) => {
       }
       if (schemaCols.length > 0) {
         const schemaLower = new Set(schemaCols.map((c: string) => c.toLowerCase()));
-        if (!schemaLower.has(entityKey.toLowerCase())) {
+        // Support qualified names: "Lote Café.CODLOT" → also check "CODLOT"
+        const entityLower = entityKey.toLowerCase();
+        const entityPart = entityKey.includes(".") ? entityKey.split(".").pop()!.toLowerCase() : entityLower;
+        const entityFound = schemaLower.has(entityLower) || schemaLower.has(entityPart);
+        if (!entityFound) {
           console.error(`[Gating] INVALID_ENTITY_KEY: "${entityKey}" not in schema (${schemaCols.length} cols)`);
           await supabase.from("platform_events").insert({
             event_type: "entity_key_invalid",
@@ -1867,6 +1871,7 @@ serve(async (req) => {
             source: "edge",
             metadata: {
               entity_key: entityKey,
+              entity_part: entityPart,
               schema_cols_count: schemaCols.length,
               first_20_cols: schemaCols.slice(0, 20),
             },
@@ -1874,13 +1879,13 @@ serve(async (req) => {
           return blockResponse("INVALID_ENTITY_KEY", `Entity Key "${entityKey}" não existe no schema consolidado (${schemaCols.length} colunas).`, { label: "Corrigir Entity Key", go_to_step: 3 });
         }
       }
-      console.log(`[Gating] Entity Key OK: "${entityKey}"`);
+      console.log(`[Gating] Entity Key OK: "${entityKey}" (source: ${(activeTargetSettings as any)?.entity_key ? "entity_key" : "official_entity_key"})`);
       await supabase.from("platform_events").insert({
         event_type: "entity_key_validated",
         project_id: project_id,
         status: "success",
         source: "edge",
-        metadata: { entity_key: entityKey },
+        metadata: { entity_key: entityKey, source: (activeTargetSettings as any)?.entity_key ? "entity_key" : "official_entity_key" },
       });
     }
     
