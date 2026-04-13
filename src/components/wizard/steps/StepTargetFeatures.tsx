@@ -1355,7 +1355,7 @@ const StepTargetFeatures = ({
                   const displayTarget = ssot.target_column || autoRes.result.target_column;
                   const displayProblem = ssot.problem_type || autoRes.result.problem_type;
                   const displayEntity = ssot.entity_key || autoRes.result.entity_key;
-                  const displayTime = ssot.time_anchor_column || autoRes.result.time_column;
+                  const displayTime = ssot.time_anchor_column || ssot.official_time_column || autoRes.result.time_column || grainTime.resolution?.time?.time_column || contractHints?.time_anchor_column || resolveBestTimeColumn();
                   const displayConfidence = autoRes.result.confidence_score;
                   return (
                     <>
@@ -1544,10 +1544,12 @@ const StepTargetFeatures = ({
               </Label>
               <div className="p-3 bg-background rounded-lg border border-border/50 text-sm">
                 {(() => {
-                  const resolvedTime = ssot.time_anchor_column 
-                    || grainTime.resolution?.time?.time_column 
+                   const resolvedTime = ssot.time_anchor_column 
+                    || ssot.official_time_column
                     || autoRes.result.time_column 
+                    || grainTime.resolution?.time?.time_column 
                     || contractHints?.time_anchor_column 
+                    || resolveBestTimeColumn()
                     || null;
                   if (resolvedTime) {
                     return (
