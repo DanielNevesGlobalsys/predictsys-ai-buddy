@@ -784,18 +784,17 @@ Deno.serve(async (req) => {
         continue;
       }
 
-      // ── UNIVERSAL: Block admin IDs from dimension tables ──
+      // ── UNIVERSAL: Block admin IDs — from dimension tables AND everywhere ──
+      if (UNIVERSAL_ADMIN_BLOCKED.some(t => colPart === t || colPart.includes(t))) {
+        excludeFeatures.push(nm);
+        continue;
+      }
+
+      // ── UNIVERSAL: Block raw FK entity codes from dimension tables ──
       if (hasMultiTable && isFromDim) {
-        if (UNIVERSAL_ADMIN_BLOCKED.some(t => colPart === t || colPart.includes(t))) {
-          excludeFeatures.push(nm);
-          continue;
-        }
-        // Block raw FK entity codes from dimension tables
         if (["codpes", "codlot", "codgre", "cod_produtor", "cod_cooperado", "cod_cliente", "customer_id", "patient_id"].some(t => colPart.includes(t))) {
           excludeFeatures.push(nm);
           continue;
-        }
-      }
         }
       }
 
