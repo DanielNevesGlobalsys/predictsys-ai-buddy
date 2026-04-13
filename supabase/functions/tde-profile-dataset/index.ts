@@ -266,6 +266,11 @@ function scoreTime(
   let score = 0;
   const reasons: string[] = [];
 
+  // ── UNIVERSAL: Block SK_* and surrogate keys as time candidates ──
+  if (/^(sk_|pk_|fk_|__)/i.test(colPart)) {
+    return { column: col.column_name, score: -10, reasons: ["Surrogate/technical key (SK_*/PK_*/FK_*) bloqueada como âncora temporal"] };
+  }
+
   // Block technical/measure columns from being time candidates
   if (isTechnicalOrMeasureColumn(col.column_name)) {
     return { column: col.column_name, score: -10, reasons: ["Coluna técnica/measure rejeitada como âncora temporal"] };

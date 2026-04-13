@@ -227,8 +227,44 @@ const StepTargetFeatures = ({
   const suggestEntityKey = useCallback((): string | null => {
     if (!businessContract || columns.length === 0) return null;
     const patterns = businessContract.entity_key_hint_patterns;
+
+    // ── MULTI-TABLE RULE: Prefer entity from fact table, never from dimension ──
+    const FACT_TOKENS = ["fato", "fact", "moviment", "detalhe", "detail", "lote", "pedido", "venda", "transacao", "evento", "operacao", "recebimento", "pesagem"];
+    const DIM_TOKENS = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
+    const ADMIN_BLOCKED = /^(sk_|pk_|fk_|__|celcpr|matricula|codemp|cpf|cnpj|email|telefone)/i;
+
+    const getTable = (name: string) => name.includes(".") ? name.split(".")[0] : null;
+    const isFactTable = (t: string | null) => t ? FACT_TOKENS.some(f => t.toLowerCase().includes(f)) : false;
+    const isDimTable = (t: string | null) => t ? DIM_TOKENS.some(d => t.toLowerCase().includes(d)) : false;
+    const colPart = (name: string) => name.includes(".") ? name.split(".").pop()! : name;
+
+    // First pass: try patterns on fact table columns only
+    const hasMultiTable = columns.some(c => c.name.includes("."));
+    if (hasMultiTable) {
+      const factCols = columns.filter(c => isFactTable(getTable(c.name)));
+      for (const p of patterns) {
+        const match = factCols.find(c => colPart(c.name).toLowerCase().includes(p.toLowerCase()) && !ADMIN_BLOCKED.test(colPart(c.name)));
+        if (match) return match.name;
+      }
+      // If no pattern match, any non-admin ID from fact table
+      const factEntity = factCols.find(c => {
+        const cp = colPart(c.name).toLowerCase();
+        return ["cod", "id", "codigo", "key"].some(k => cp.includes(k)) && !ADMIN_BLOCKED.test(cp);
+      });
+      if (factEntity) return factEntity.name;
+    }
+
+    // Fallback: original logic but skip dimension admin IDs
     for (const p of patterns) {
-      const match = columns.find(c => c.name.toLowerCase().includes(p.toLowerCase()));
+      const match = columns.find(c => {
+        const cp = colPart(c.name);
+        return cp.toLowerCase().includes(p.toLowerCase()) && !ADMIN_BLOCKED.test(cp) && !isDimTable(getTable(c.name));
+      });
+      if (match) return match.name;
+    }
+    // Final fallback: any match including dimension (backward compat)
+    for (const p of patterns) {
+      const match = columns.find(c => c.name.toLowerCase().includes(p.toLowerCase()) && !ADMIN_BLOCKED.test(colPart(c.name)));
       if (match) return match.name;
     }
     return null;
@@ -522,6 +558,23 @@ const StepTargetFeatures = ({
 
   // ═══ RESOLVE BEST TIME COLUMN from all sources ═══
   const resolveBestTimeColumn = useCallback((): string | null => {
+    // ── MULTI-TABLE FILTER: reject dimension-sourced and admin/SK dates ──
+    const FACT_TOKENS = ["fato", "fact", "moviment", "detalhe", "detail", "lote", "pedido", "venda", "transacao", "evento", "operacao", "recebimento", "pesagem"];
+    const DIM_TOKENS = ["cooperado", "cliente", "customer", "produto", "filial", "calendario", "calendar", "safra", "representante", "origem", "fornecedor", "cadastro"];
+    const BLOCKED_TIME_TOKENS = /^(sk_|pk_|fk_|__|ult|ultimo|última|ultima|cadastro|nascimento)/i;
+    const hasMultiTable = columns.some(c => c.name.includes("."));
+    const getTable = (name: string) => name.includes(".") ? name.split(".")[0] : null;
+    const isFactTable = (t: string | null) => t ? FACT_TOKENS.some(f => t.toLowerCase().includes(f)) : false;
+    const isDimTable = (t: string | null) => t ? DIM_TOKENS.some(d => t.toLowerCase().includes(d)) : false;
+    const colPart = (name: string) => name.includes(".") ? name.split(".").pop()! : name;
+
+    const isValidTimeCandidate = (name: string) => {
+      const cp = colPart(name);
+      if (BLOCKED_TIME_TOKENS.test(cp)) return false;
+      if (hasMultiTable && isDimTable(getTable(name))) return false;
+      return true;
+    };
+
     // Priority: SSOT > auto-resolution > grain engine > contract hints > column heuristic
     const candidates = [
       ssot.time_anchor_column,
@@ -529,16 +582,33 @@ const StepTargetFeatures = ({
       grainTime.resolution?.time?.time_column,
       contractHints?.time_anchor_column,
     ].filter(Boolean) as string[];
-    if (candidates.length > 0) return candidates[0];
+
+    // Return the first candidate that passes multi-table validation
+    for (const c of candidates) {
+      if (isValidTimeCandidate(c)) return c;
+    }
+    // If all pre-resolved candidates are from dimension, still use the first one (backward compat for single-table)
+    if (candidates.length > 0 && !hasMultiTable) return candidates[0];
 
     // Heuristic fallback: scan columns for date-like columns matching snapshot patterns
-    const SNAPSHOT_HINTS = ["dt_ref", "data_ref", "reference_date", "data_referencia", "snapshot_date", "data_base"];
+    const SNAPSHOT_HINTS = ["dt_ref", "data_ref", "reference_date", "data_referencia", "snapshot_date", "data_base", "datmov", "data_mov", "data_movimento"];
     const DATE_TYPES = ["date", "datetime", "timestamp", "temporal", "data", "date/time"];
+
+    // Prefer fact table dates first
+    if (hasMultiTable) {
+      const factDateCols = columns.filter(c => isFactTable(getTable(c.name)) && DATE_TYPES.includes((c.type || "").toLowerCase()) && isValidTimeCandidate(c.name));
+      if (factDateCols.length > 0) return factDateCols[0].name;
+    }
+
     for (const hint of SNAPSHOT_HINTS) {
-      const match = columns.find(c => c.name.toLowerCase() === hint.toLowerCase());
+      const match = columns.find(c => c.name.toLowerCase() === hint.toLowerCase() && isValidTimeCandidate(c.name));
       if (match) return match.name;
     }
-    // Any date column
+    // Any valid date column
+    for (const col of columns) {
+      if (DATE_TYPES.includes((col.type || "").toLowerCase()) && isValidTimeCandidate(col.name)) return col.name;
+    }
+    // Absolute fallback
     for (const col of columns) {
       if (DATE_TYPES.includes((col.type || "").toLowerCase())) return col.name;
     }
@@ -807,8 +877,20 @@ const StepTargetFeatures = ({
     // Resolve time anchor from all available sources
     const resolvedTimeAnchor = ssot.time_anchor_column || grainTime.resolution?.time?.time_column || autoRes.result.time_column || contractHints?.time_anchor_column || null;
 
+    // ── UNIVERSAL FEATURE SANITIZATION: Remove admin IDs before save ──
+    const ADMIN_BLOCK_RE = /^(sk_|pk_|fk_|__|celcpr|cel_cpr|matricula|matric|codemp|cod_emp|cpf|cnpj|rg|email|e_mail|telefone|phone|celular|endereco|cep|nome|name|razao_social|fantasia)/i;
+    const sanitizedFeatures = cleanFeatures.filter(f => {
+      const cp = f.includes(".") ? f.split(".").pop()! : f;
+      return !ADMIN_BLOCK_RE.test(cp);
+    });
+    const removedAdminIds = cleanFeatures.filter(f => !sanitizedFeatures.includes(f));
+    if (removedAdminIds.length > 0) {
+      console.log("[StepTargetFeatures] Sanitized admin IDs from features:", removedAdminIds);
+      setExcludedColumns(prev => [...new Set([...prev, ...removedAdminIds])]);
+    }
+
     // 1. Save via atomic model_selection RPC — includes entity_key + time_column
-    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: cleanFeatures, excluded_columns: excludedColumns, suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
+    const saved = await saveSettings({ target_column: targetColumn, problem_type: problemType, feature_columns: sanitizedFeatures, excluded_columns: [...excludedColumns, ...removedAdminIds], suggestion: null, entity_key: entityKey || null, time_column: resolvedTimeAnchor });
     if (!saved) return false;
 
     // 2. Persist grain/time strategy + target_state to project_settings
