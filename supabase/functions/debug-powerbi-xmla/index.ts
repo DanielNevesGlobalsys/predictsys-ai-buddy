@@ -705,17 +705,16 @@ serve(async (req) => {
         },
       });
 
-      // MULTI-TABLE MATERIALIZATION
+      // MULTI-TABLE MATERIALIZATION — FLAT JOIN via DAX ADDCOLUMNS+RELATED
       let multiMaterialized = false;
       const canMultiMaterialize = allTablesOk && tableDetails.every((t) => t.row_count > 0);
 
       if (materialize && canMultiMaterialize) {
         const started = Date.now();
         const usePrefix = tableDetails.length > 1;
-        const allColumns: Array<ColumnInfo & { source_table: string }> = [];
-        let totalRows = 0;
-        const allSampleRows: Record<string, unknown>[] = [];
 
+        // Build column registry
+        const allColumns: Array<ColumnInfo & { source_table: string }> = [];
         for (const td of tableDetails) {
           for (const col of td.columns) {
             const cleanCol = cleanupColumnKey(col.column_name);
@@ -726,15 +725,122 @@ serve(async (req) => {
               source_table: td.table_name,
             });
           }
-          totalRows += td.row_count;
-          for (const row of td.sample_rows) {
-            const prefixed: Record<string, unknown> = { __source_table: td.table_name };
-            for (const [k, v] of Object.entries(row)) {
-              const cleanKey = cleanupColumnKey(k);
-              prefixed[usePrefix ? `${td.table_name}.${cleanKey}` : cleanKey] = v;
+        }
+
+        // Identify fact table (most rows) and dimension tables
+        const sortedByRows = [...tableDetails].sort((a, b) => b.row_count - a.row_count);
+        const factTable = sortedByRows[0];
+        const dimTables = sortedByRows.slice(1);
+
+        // Try DAX ADDCOLUMNS + RELATED for flat join
+        let flatRows: Record<string, unknown>[] = [];
+        let flatJoinMethod = "none";
+        let totalRows = factTable.row_count; // fact row count is the authority
+
+        if (dimTables.length > 0) {
+          // Build ADDCOLUMNS expression with RELATED() for each dim column
+          const relatedCols: string[] = [];
+          for (const dim of dimTables) {
+            for (const col of dim.columns) {
+              const cleanCol = cleanupColumnKey(col.column_name);
+              const prefixedName = usePrefix ? `${dim.table_name}.${cleanCol}` : cleanCol;
+              relatedCols.push(`${escapeDaxString(prefixedName)}, RELATED(${escapeDaxTable(dim.table_name)}[${cleanCol}])`);
             }
-            allSampleRows.push(prefixed);
           }
+
+          const daxQuery = `EVALUATE TOPN(200, ADDCOLUMNS(${escapeDaxTable(factTable.table_name)}, ${relatedCols.join(", ")}))`;
+          console.log(`[PowerBI] Attempting flat join DAX: ${daxQuery.substring(0, 300)}...`);
+
+          const joinResult = await executeDax(daxQuery);
+          if (joinResult.ok && joinResult.rows.length > 0) {
+            flatJoinMethod = "DAX_ADDCOLUMNS_RELATED";
+            flatRows = joinResult.rows.map((row) => {
+              const flat: Record<string, unknown> = {};
+              for (const [k, v] of Object.entries(row)) {
+                const cleanKey = cleanupColumnKey(k);
+                // Check if it's a fact column (no prefix in DAX result) or already prefixed dim column
+                const existsAsIs = allColumns.some(c => c.column_name === cleanKey || c.column_name === k);
+                if (existsAsIs) {
+                  flat[cleanKey] = v;
+                } else {
+                  // Fact table column — add prefix
+                  flat[usePrefix ? `${factTable.table_name}.${cleanKey}` : cleanKey] = v;
+                }
+              }
+              return flat;
+            });
+            console.log(`[PowerBI] Flat join succeeded: ${flatRows.length} rows, ${Object.keys(flatRows[0] || {}).length} cols`);
+          } else {
+            console.log(`[PowerBI] DAX ADDCOLUMNS+RELATED failed: ${joinResult.error || "no rows"}. Falling back to in-memory join.`);
+          }
+        }
+
+        // Fallback: in-memory key-based join if DAX join failed
+        if (flatRows.length === 0) {
+          // Try to find common keys between fact and dims
+          const factColNames = new Set(factTable.columns.map(c => cleanupColumnKey(c.column_name).toLowerCase()));
+
+          // Build dimension lookup maps by common key columns
+          const dimLookups: Array<{ dimName: string; keyCol: string; factKeyCol: string; lookup: Map<string, Record<string, unknown>> }> = [];
+          for (const dim of dimTables) {
+            const dimColNames = dim.columns.map(c => cleanupColumnKey(c.column_name));
+            // Find common column names (potential join keys)
+            const commonKeys = dimColNames.filter(cn => factColNames.has(cn.toLowerCase()));
+            if (commonKeys.length > 0) {
+              const joinKey = commonKeys[0]; // Use first common key
+              const lookup = new Map<string, Record<string, unknown>>();
+              for (const row of dim.sample_rows) {
+                const keyVal = String(row[Object.keys(row).find(k => cleanupColumnKey(k).toLowerCase() === joinKey.toLowerCase()) || ""] ?? "");
+                if (keyVal) {
+                  const prefixed: Record<string, unknown> = {};
+                  for (const [k, v] of Object.entries(row)) {
+                    const cleanK = cleanupColumnKey(k);
+                    prefixed[usePrefix ? `${dim.table_name}.${cleanK}` : cleanK] = v;
+                  }
+                  lookup.set(keyVal, prefixed);
+                }
+              }
+              // Find the actual key in fact rows
+              const factKeyCol = [...factColNames].find(fn => fn === joinKey.toLowerCase()) || joinKey;
+              dimLookups.push({ dimName: dim.table_name, keyCol: joinKey, factKeyCol, lookup });
+            }
+          }
+
+          // Build flat rows from fact + lookups
+          for (const row of factTable.sample_rows) {
+            const flat: Record<string, unknown> = {};
+            // Add fact columns
+            for (const [k, v] of Object.entries(row)) {
+              const cleanK = cleanupColumnKey(k);
+              flat[usePrefix ? `${factTable.table_name}.${cleanK}` : cleanK] = v;
+            }
+            // Join dimension columns
+            for (const dl of dimLookups) {
+              const rawKey = Object.keys(row).find(k => cleanupColumnKey(k).toLowerCase() === dl.factKeyCol.toLowerCase());
+              const keyVal = rawKey ? String(row[rawKey] ?? "") : "";
+              const dimRow = dl.lookup.get(keyVal);
+              if (dimRow) {
+                Object.assign(flat, dimRow);
+              } else {
+                // Fill with empty strings for missing dim rows
+                for (const col of allColumns.filter(c => c.source_table === dl.dimName)) {
+                  if (!(col.column_name in flat)) flat[col.column_name] = "";
+                }
+              }
+            }
+            // For dims with no common key, fill empty
+            for (const dim of dimTables) {
+              const hasLookup = dimLookups.some(dl => dl.dimName === dim.table_name);
+              if (!hasLookup) {
+                for (const col of allColumns.filter(c => c.source_table === dim.table_name)) {
+                  if (!(col.column_name in flat)) flat[col.column_name] = "";
+                }
+              }
+            }
+            flatRows.push(flat);
+          }
+          flatJoinMethod = dimLookups.length > 0 ? "IN_MEMORY_KEY_JOIN" : "IN_MEMORY_NO_KEYS";
+          console.log(`[PowerBI] In-memory join: ${flatRows.length} rows, method=${flatJoinMethod}, dim_lookups=${dimLookups.length}`);
         }
 
         const schemaJson = allColumns.map((col, index) => ({
@@ -764,13 +870,16 @@ serve(async (req) => {
               storage_path: `powerbi_materialized/${project_id}/${tableNames[0]}`,
               file_size_bytes: 0,
               total_rows: totalRows,
-              sample_rows: allSampleRows.length,
+              sample_rows: flatRows.length,
               columns_count: allColumns.length,
               is_active: true,
               source_type: PBI_SOURCE_TYPE,
               source_metadata: {
                 connector_type: "powerbi",
                 connection_mode: "executequeries",
+                join_method: flatJoinMethod,
+                fact_table: factTable.table_name,
+                dim_tables: dimTables.map(d => d.table_name),
                 materialized_tables: tableDetails.map((t) => ({
                   table_name: t.table_name,
                   columns: t.columns.length,
@@ -823,16 +932,19 @@ serve(async (req) => {
             { onConflict: "project_id" },
           );
 
-          // Persist sample
-          if (allSampleRows.length > 0) {
+          // Persist FLAT sample (no __source_table tags)
+          if (flatRows.length > 0) {
             await supabaseAdmin.from("project_dataset_sample").upsert(
               {
                 project_id,
                 sample_json: {
-                  rows: allSampleRows,
+                  rows: flatRows,
                   columns: allColumns.map((c) => c.column_name),
+                  source: "powerbi_flat_join",
+                  join_method: flatJoinMethod,
+                  fact_table: factTable.table_name,
                 },
-                sample_rows: allSampleRows.length,
+                sample_rows: flatRows.length,
                 updated_at: new Date().toISOString(),
               },
               { onConflict: "project_id" },
