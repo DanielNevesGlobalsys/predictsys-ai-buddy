@@ -2790,57 +2790,15 @@ serve(async (req) => {
             quarter: number;
           }>();
 
-          // Detect vertically-stacked multi-table format
-          const isVerticallyStacked = rawRows.some((r: any) => r.__source_table);
-          
-          if (isVerticallyStacked) {
-            console.log(`[AutoML] Vertically-stacked multi-table sample detected — using cross-table aggregation`);
-            
-            // Group rows by source table
-            const tableRows = new Map<string, Record<string, any>[]>();
-            for (const row of rawRows) {
-              const src = String(row.__source_table || "unknown");
-              if (!tableRows.has(src)) tableRows.set(src, []);
-              tableRows.get(src)!.push(row);
-            }
-            
-            const entityTable = aggEntityKey.includes(".") ? aggEntityKey.split(".")[0] : null;
-            const factRows = entityTable ? (tableRows.get(entityTable) || []) : [];
-            const calRows = tableRows.get("Calendário") || [];
-            console.log(`[AutoML] Cross-table: factTable=${entityTable} (${factRows.length} rows), calendar=${calRows.length} rows`);
-            
-            if (factRows.length > 0) {
-              // Use CODSAF as temporal proxy
-              const safraCol = `${entityTable}.CODSAF`;
-              const crossAggMap = new Map<string, { count: number; year: number; monthNum: number; quarter: number }>();
-              
-              for (const row of factRows) {
-                const entity = String(row[aggEntityKey] || "");
-                if (!entity) continue;
-                const safra = String(row[safraCol] || "");
-                const yr = parseInt((safra.split("/")[0]) || "2020") || 2020;
-                const key = `${entity}|${yr}`;
-                if (!crossAggMap.has(key)) {
-                  crossAggMap.set(key, { count: 0, year: yr, monthNum: 1, quarter: 1 });
-                }
-                crossAggMap.get(key)!.count += 1;
-              }
-              
-              if (crossAggMap.size > 0) {
-                const crossHeaders = ["agg_sacas_mes", "Calendário.Ano", "Calendário.Mês Número", "Calendário.Trimestre"];
-                const crossLines: string[] = [];
-                for (const [, v] of crossAggMap) {
-                  crossLines.push([String(v.count), String(v.year), String(v.monthNum), String(v.quarter)].join(","));
-                }
-                virtualHeaders = crossHeaders;
-                virtualSampledLines = crossLines;
-                delimiter = ",";
-                totalDatasetRows = crossLines.length;
-                const tVals = [...crossAggMap.values()].map(v => v.count);
-                console.log(`[AutoML] Cross-table aggregation: ${crossAggMap.size} rows, min=${Math.min(...tVals)}, max=${Math.max(...tVals)}, mean=${(tVals.reduce((a, b) => a + b, 0) / tVals.length).toFixed(1)}`);
-              }
-            }
-          } else {
+          // Legacy stacked format is no longer produced — all samples are flat.
+          // If somehow a stacked sample arrives, log warning and proceed with flat aggregation.
+          const hasSourceTableTag = rawRows.some((r: any) => r.__source_table);
+          if (hasSourceTableTag) {
+            console.log(`[AutoML] WARNING: Legacy __source_table tags detected in sample. Ignoring tags and treating as flat rows.`);
+          }
+
+          // Standard flat joined-row aggregation (works for all formats now)
+          {
             // Standard joined-row aggregation
             for (const row of rawRows) {
               const entity = String(row[aggEntityKey] || "");
