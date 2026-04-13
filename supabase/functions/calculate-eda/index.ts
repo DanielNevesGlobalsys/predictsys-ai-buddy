@@ -1593,7 +1593,7 @@ Deno.serve(async (req) => {
           const sj = sampleData.sample_json as any;
           // Check if this is already a flat joined sample — never overwrite it
           if (sj && typeof sj === "object" && typeof sj.source === "string" && 
-              (sj.source.includes("flat_join") || sj.source.includes("flat") || sj.source === "powerbi_flat_join")) {
+              (sj.source.includes("flat") || sj.source === "powerbi_flat_join" || sj.source.includes("multi_flat"))) {
             existingSampleIsFlat = true;
             sampleSource = sj.source;
             console.log(`[calculate-eda] Existing sample is FLAT (source=${sj.source}) — preserving it, no fallback needed`);
