@@ -92,6 +92,284 @@ function resolveEffectiveDatasetBuildMode(activeTargetSettings: any, targetColum
   return settingsBuildMode || "original_row";
 }
 
+function buildColumnListFromRows(rows: Record<string, any>[]): string[] {
+  return uniqueNonEmptyColumns(
+    rows.flatMap((row) => (row && typeof row === "object" ? Object.keys(row) : []))
+  );
+}
+
+function hasAnyNonEmptyValue(
+  rows: Record<string, any>[],
+  candidateColumns: Array<string | null | undefined>,
+): boolean {
+  const columns = candidateColumns.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (rows.length === 0 || columns.length === 0) return false;
+
+  return rows.some((row) => columns.some((column) => {
+    const value = row?.[column];
+    return value !== null && value !== undefined && String(value).trim() !== "";
+  }));
+}
+
+function normalizeStringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function cleanupPowerBIColumnKey(key: string): string {
+  const matches = key.match(/\[([^\]]+)\]/g);
+  if (matches && matches.length > 0) {
+    return matches[matches.length - 1].replace(/^\[/, "").replace(/\]$/, "").trim();
+  }
+
+  const noQuotes = key.replace(/^'+|'+$/g, "").replace(/^\[|\]$/g, "");
+  const dotParts = noQuotes.split(".");
+  return (dotParts[dotParts.length - 1] || noQuotes).trim();
+}
+
+function escapeDaxTable(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+
+async function fetchPowerBISampleRowsFromConnection(
+  supabase: any,
+  sourceMetadata: Record<string, unknown>,
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string }> {
+  try {
+    const connectionId = normalizeStringValue(sourceMetadata.connection_id);
+    const workspaceId = normalizeStringValue(sourceMetadata.workspace_id);
+    const datasetId = normalizeStringValue(sourceMetadata.dataset_id);
+    const materializedTables = Array.isArray(sourceMetadata.materialized_tables) ? sourceMetadata.materialized_tables : null;
+    const isMultiTable = Boolean(materializedTables && materializedTables.length > 0);
+    const tableNameRaw =
+      normalizeStringValue(sourceMetadata.effective_query_table_name) ||
+      normalizeStringValue(sourceMetadata.discovered_table_name) ||
+      normalizeStringValue(sourceMetadata.table_name);
+
+    if (!connectionId || !workspaceId || !datasetId) {
+      return { rows: [], source: "none", error: "missing_connection_metadata" };
+    }
+
+    if (!isMultiTable && !tableNameRaw) {
+      return { rows: [], source: "none", error: "missing_table_name" };
+    }
+
+    const { data: conn, error: connError } = await supabase
+      .from("external_connections")
+      .select("metadata, data_sources!external_connections_data_source_id_fkey(connection_config)")
+      .eq("id", connectionId)
+      .maybeSingle();
+
+    if (connError || !conn) {
+      return { rows: [], source: "none", error: `connection_lookup_failed:${connError?.message || "not_found"}` };
+    }
+
+    const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
+    const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
+
+    const clientId = normalizeStringValue(cfg.client_id);
+    const clientSecret = normalizeStringValue(cfg.client_secret);
+    const tenantId = normalizeStringValue(cfg.tenant_id);
+
+    if (!clientId || !clientSecret || !tenantId) {
+      return { rows: [], source: "none", error: "missing_powerbi_credentials" };
+    }
+
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://analysis.windows.net/powerbi/api/.default",
+      }).toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const tokenError = await tokenResp.text();
+      return { rows: [], source: "none", error: `token_failed:${tokenResp.status}:${tokenError.slice(0, 200)}` };
+    }
+
+    const tokenJson = await tokenResp.json();
+    const accessToken = tokenJson?.access_token as string | undefined;
+    if (!accessToken) {
+      return { rows: [], source: "none", error: "token_missing_access_token" };
+    }
+
+    const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`;
+    const executeDaxQuery = async (query: string): Promise<Record<string, unknown>[]> => {
+      const resp = await fetch(executeUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          queries: [{ query }],
+          serializerSettings: { includeNulls: true },
+        }),
+      });
+      const rawBody = await resp.text();
+      if (!resp.ok) {
+        console.warn(`[AutoML] Power BI executeQueries failed (${resp.status}): ${rawBody.slice(0, 200)}`);
+        return [];
+      }
+      const parsed = JSON.parse(rawBody);
+      return parsed?.results?.[0]?.tables?.[0]?.rows || [];
+    };
+
+    if (isMultiTable) {
+      const usePrefix = materializedTables!.length > 1;
+      const tableNames = materializedTables!
+        .map((entry: any) => typeof entry === "string" ? entry : entry?.table_name)
+        .filter((name: any): name is string => !!name)
+        .map((name: string) => name.replace(/^\$+/, "").trim())
+        .filter((name: string) => name.length > 0);
+
+      try {
+        if (tableNames.length >= 2) {
+          const dimPatterns = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+          const factCandidates = tableNames.filter((name) => !dimPatterns.test(name));
+          const factTable = factCandidates.length > 0 ? factCandidates[0] : tableNames[0];
+          const dimTables = tableNames.filter((name) => name !== factTable);
+
+          const dimColsMap: Record<string, string[]> = {};
+          for (const dim of dimTables) {
+            const colRows = await executeDaxQuery(`EVALUATE TOPN(1, ${escapeDaxTable(dim)})`);
+            if (colRows.length > 0) {
+              dimColsMap[dim] = Object.keys(colRows[0]).map((key) => cleanupPowerBIColumnKey(key));
+            }
+          }
+
+          const relatedCols: string[] = [];
+          for (const [dim, cols] of Object.entries(dimColsMap)) {
+            for (const col of cols.slice(0, 15)) {
+              relatedCols.push(`"${dim}.${col}", RELATED(${escapeDaxTable(dim)}[${col}])`);
+            }
+          }
+
+          if (relatedCols.length > 0) {
+            const daxQuery = `EVALUATE TOPN(500, ADDCOLUMNS(${escapeDaxTable(factTable)}, ${relatedCols.join(", ")}))`;
+            const rawRows = await executeDaxQuery(daxQuery);
+            if (rawRows.length > 0) {
+              const joinedRows = rawRows.map((row) => {
+                const cleaned: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(row || {})) {
+                  const cleanKey = cleanupPowerBIColumnKey(key);
+                  const fullKey = key.includes("[") && !key.includes(".") ? `${factTable}.${cleanKey}` : cleanKey;
+                  cleaned[usePrefix ? fullKey : cleanKey] = value;
+                }
+                return cleaned;
+              });
+              return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+            }
+          }
+        }
+      } catch (daxError) {
+        console.warn(`[AutoML] Power BI ADDCOLUMNS fallback failed:`, daxError);
+      }
+
+      const tableData: Array<{ name: string; rows: Record<string, unknown>[]; colNames: string[] }> = [];
+      for (const entry of materializedTables!) {
+        const tableName = typeof entry === "string" ? entry : entry?.table_name;
+        if (!tableName) continue;
+        const cleanName = tableName.replace(/^\$+/, "").trim();
+        if (!cleanName) continue;
+
+        const rawRows = await executeDaxQuery(`EVALUATE TOPN(500, ${escapeDaxTable(cleanName)})`);
+        const prefixedRows = rawRows.map((row) => {
+          const prefixed: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(row || {})) {
+            const cleanKey = cleanupPowerBIColumnKey(key);
+            prefixed[usePrefix ? `${cleanName}.${cleanKey}` : cleanKey] = value;
+          }
+          return prefixed;
+        });
+        tableData.push({
+          name: cleanName,
+          rows: prefixedRows,
+          colNames: prefixedRows.length > 0 ? Object.keys(prefixedRows[0]) : [],
+        });
+      }
+
+      if (tableData.length === 0) {
+        return { rows: [], source: "powerbi_executequeries_multi_flat", error: "no_tables_fetched" };
+      }
+
+      const dimPatterns2 = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+      const sortedByFactScore = [...tableData].sort((a, b) => {
+        const aIsDim = dimPatterns2.test(a.name) ? 1 : 0;
+        const bIsDim = dimPatterns2.test(b.name) ? 1 : 0;
+        if (aIsDim !== bIsDim) return aIsDim - bIsDim;
+        return b.rows.length - a.rows.length;
+      });
+      const factTbl = sortedByFactScore[0];
+      const dimTbls = sortedByFactScore.slice(1);
+
+      const factColNamesLower = new Set(factTbl.colNames.map((column) => {
+        const parts = column.split(".");
+        return (parts.length > 1 ? parts[1] : parts[0]).toLowerCase();
+      }));
+
+      const dimLookups: Array<{ factKey: string; lookup: Map<string, Record<string, unknown>> }> = [];
+      for (const dim of dimTbls) {
+        const skCols = dim.colNames.filter((column) => {
+          const base = column.split(".").pop()!.toLowerCase();
+          return base.startsWith("sk_") && factColNamesLower.has(base);
+        });
+        const matchCols = skCols.length > 0 ? skCols : dim.colNames;
+
+        for (const dimCol of matchCols) {
+          const dimBase = dimCol.split(".").pop()!.toLowerCase();
+          if (!factColNamesLower.has(dimBase)) continue;
+
+          const factKey = factTbl.colNames.find((column) => column.split(".").pop()!.toLowerCase() === dimBase) || dimCol;
+          const lookup = new Map<string, Record<string, unknown>>();
+          for (const row of dim.rows) {
+            const keyVal = String(row[dimCol] ?? "");
+            if (keyVal && !lookup.has(keyVal)) lookup.set(keyVal, row);
+          }
+          dimLookups.push({ factKey, lookup });
+          break;
+        }
+      }
+
+      const allDimCols = dimTbls.flatMap((dim) => dim.colNames);
+      const flatRows = factTbl.rows.map((factRow) => {
+        const flat: Record<string, unknown> = { ...factRow };
+        for (const dimLookup of dimLookups) {
+          const dimRow = dimLookup.lookup.get(String(factRow[dimLookup.factKey] ?? ""));
+          if (dimRow) Object.assign(flat, dimRow);
+        }
+        for (const dimCol of allDimCols) {
+          if (!(dimCol in flat)) flat[dimCol] = "";
+        }
+        return flat;
+      });
+
+      return { rows: flatRows, source: "powerbi_executequeries_multi_flat" };
+    }
+
+    const rawRows = await executeDaxQuery(`EVALUATE TOPN(500, ${escapeDaxTable(tableNameRaw!)})`);
+    const normalizedRows = rawRows.map((row) => {
+      const normalized: Record<string, unknown> = {};
+      for (const [key, value] of Object.entries(row || {})) {
+        normalized[cleanupPowerBIColumnKey(key)] = value;
+      }
+      return normalized;
+    });
+    return { rows: normalizedRows, source: "powerbi_executequeries" };
+  } catch (error) {
+    return {
+      rows: [],
+      source: "none",
+      error: `powerbi_sample_exception:${(error as Error).message}`,
+    };
+  }
+}
+
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
@@ -2640,6 +2918,8 @@ serve(async (req) => {
     let useVirtualSample = false;
     let virtualHeaders: string[] = [];
     let virtualSampledLines: string[] = [];
+    let virtualSampleRows: Record<string, any>[] = [];
+    let powerBiSampleRefreshed = false;
 
     if (isPowerBIMaterialized) {
       console.log(`[AutoML] Power BI materialized dataset detected — reading from project_dataset_sample`);
@@ -2655,9 +2935,39 @@ serve(async (req) => {
         let sampleRows: Record<string, any>[] = Array.isArray(rawJson)
           ? rawJson
           : (Array.isArray(rawJson?.rows) ? rawJson.rows : []);
+        let declaredColumns: string[] = Array.isArray(rawJson?.columns)
+          ? rawJson.columns.filter((column: unknown): column is string => typeof column === "string" && column !== "__source_table")
+          : buildColumnListFromRows(sampleRows).filter((column) => column !== "__source_table");
+
+        const requiresAggregatedSignals = effectiveDatasetBuildMode === "temporal_aggregated" && target_column.startsWith("agg_");
+        const persistedTimeCandidates = [
+          (activeTargetSettings as any)?.time_anchor_column,
+          (activeTargetSettings as any)?.official_time_column,
+          (activeTargetSettings as any)?.recommended_time_column,
+          ...declaredColumns.filter((column) => /Calend[aá]rio\.(Ano|M[eê]s N[uú]mero|Trimestre)/i.test(column)),
+        ];
+        const persistedVolumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
+        const needsPowerBiRefresh = requiresAggregatedSignals && (
+          sampleRows.length === 0
+          || !hasAnyNonEmptyValue(sampleRows, persistedTimeCandidates)
+          || !hasAnyNonEmptyValue(sampleRows, persistedVolumeCandidates)
+        );
+
+        if (needsPowerBiRefresh) {
+          console.warn(`[AutoML] Persisted Power BI sample lacks aggregated signals — refreshing directly from connection`);
+          const refreshedSample = await fetchPowerBISampleRowsFromConnection(supabase, sourceMetadata || {});
+          if (refreshedSample.rows.length > 0) {
+            sampleRows = refreshedSample.rows as Record<string, any>[];
+            declaredColumns = buildColumnListFromRows(sampleRows).filter((column) => column !== "__source_table");
+            powerBiSampleRefreshed = true;
+            trainingWarningsGlobal.push("Amostra Power BI recomposta no treino para materializar o target agregado.");
+            console.log(`[AutoML] Refreshed Power BI sample: source=${refreshedSample.source}, rows=${sampleRows.length}, cols=${declaredColumns.length}`);
+          } else {
+            console.warn(`[AutoML] Power BI sample refresh returned no rows (${refreshedSample.error || "unknown_error"})`);
+          }
+        }
 
         // Ensure all rows have all declared columns (flat join normalization)
-        const declaredColumns: string[] = Array.isArray(rawJson?.columns) ? rawJson.columns : [];
         if (sampleRows.length > 0 && declaredColumns.length > 0) {
           // Normalize: every row gets every declared column, fill missing with ""
           sampleRows = sampleRows.map(row => {
@@ -2669,6 +2979,8 @@ serve(async (req) => {
           });
           console.log(`[AutoML] Normalized ${sampleRows.length} rows to ${declaredColumns.length} declared columns`);
         }
+
+        virtualSampleRows = sampleRows;
 
         console.log(`[AutoML] sample_json type=${typeof rawJson}, isArray=${Array.isArray(rawJson)}, extracted rows=${sampleRows.length}, declaredCols=${declaredColumns.length}`);
         if (sampleRows.length > 0) {
@@ -2732,6 +3044,7 @@ serve(async (req) => {
           : (Array.isArray(rawJsonAgg?.rows) ? rawJsonAgg.rows : []);
 
         if (sampleRowsAgg.length > 0) {
+          virtualSampleRows = sampleRowsAgg;
           useVirtualSample = true; // Force virtual path with aggregated data
         }
       }
@@ -2749,19 +3062,43 @@ serve(async (req) => {
       const useCalendarFields = !aggTimeCol;
 
       if (aggEntityKey && (aggTimeCol || useCalendarFields)) {
-        // Re-load raw sample rows (they might already be in virtualSampledLines as CSV)
-        const { data: sampleDataAgg2 } = await supabase
-          .from("project_dataset_sample")
-          .select("sample_json")
-          .eq("project_id", project_id)
-          .maybeSingle();
+        let rawRows: Record<string, any>[] = virtualSampleRows;
+        if (rawRows.length === 0) {
+          const { data: sampleDataAgg2 } = await supabase
+            .from("project_dataset_sample")
+            .select("sample_json")
+            .eq("project_id", project_id)
+            .maybeSingle();
 
-        const rawJsonAgg2 = sampleDataAgg2?.sample_json as any;
-        const rawRows: Record<string, any>[] = Array.isArray(rawJsonAgg2)
-          ? rawJsonAgg2
-          : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
+          const rawJsonAgg2 = sampleDataAgg2?.sample_json as any;
+          rawRows = Array.isArray(rawJsonAgg2)
+            ? rawJsonAgg2
+            : (Array.isArray(rawJsonAgg2?.rows) ? rawJsonAgg2.rows : []);
+          virtualSampleRows = rawRows;
+        }
 
         if (rawRows.length > 0) {
+          const rawDeclaredColumns = buildColumnListFromRows(rawRows);
+          const refreshTimeCandidates = [
+            aggTimeCol,
+            ...rawDeclaredColumns.filter((column) => /Calend[aá]rio\.(Ano|M[eê]s N[uú]mero|Trimestre)/i.test(column)),
+          ];
+          const refreshVolumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
+          if (isPowerBIMaterialized && !powerBiSampleRefreshed && (
+            !hasAnyNonEmptyValue(rawRows, refreshTimeCandidates) || !hasAnyNonEmptyValue(rawRows, refreshVolumeCandidates)
+          )) {
+            const refreshedSample = await fetchPowerBISampleRowsFromConnection(supabase, sourceMetadata || {});
+            if (refreshedSample.rows.length > 0) {
+              rawRows = refreshedSample.rows as Record<string, any>[];
+              virtualSampleRows = rawRows;
+              powerBiSampleRefreshed = true;
+              trainingWarningsGlobal.push("Amostra Power BI refeita no treino após detectar sinais vazios para agregação temporal.");
+              console.log(`[AutoML] Power BI aggregation refresh: source=${refreshedSample.source}, rows=${rawRows.length}`);
+            } else {
+              console.warn(`[AutoML] Power BI aggregation refresh failed (${refreshedSample.error || "unknown_error"})`);
+            }
+          }
+
           // Auto-detect calendar year/month columns from sample keys
           const sampleKeys = Object.keys(rawRows[0] || {});
           const calYearCol = sampleKeys.find(k => /Calend[aá]rio\.Ano$/i.test(k)) || "Calendário.Ano";
@@ -2933,20 +3270,29 @@ serve(async (req) => {
           }
 
           if (aggMap.size > 0) {
-            // Build feature columns from working rows (dimensions that vary across entities)
-            const featureCandidates: string[] = [];
-            for (const k of workingKeys) {
-              if (k === "__source_table") continue;
-              if (k === aggEntityKey) continue;
-              if (k === effectiveVolumeCol) continue;
-              // Skip calendar columns already in output
-              if (/Calend[aá]rio\./i.test(k)) continue;
-              featureCandidates.push(k);
-            }
+            const builderFeatureNames = Array.isArray(modelingDataset?.features_final)
+              ? modelingDataset.features_final.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+              : [];
+            const selectedFeatureNames = Array.isArray(selection?.selected_features)
+              ? selection.selected_features.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+              : [];
+            const canonicalFeatureNames = uniqueNonEmptyColumns([
+              ...builderFeatureNames,
+              ...selectedFeatureNames,
+            ]).filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
 
-            // Pick top categorical/numeric features (limit to avoid explosion)
-            const MAX_EXTRA_FEATURES = 8;
-            const extraFeatures = featureCandidates.slice(0, MAX_EXTRA_FEATURES);
+            const fallbackFeatureCandidates = workingKeys.filter((column) => {
+              if (column === "__source_table") return false;
+              if (column === aggEntityKey) return false;
+              if (column === effectiveVolumeCol) return false;
+              if ([calYearCol, calMonthCol, calQuarterCol].includes(column)) return false;
+              return true;
+            });
+
+            const extraFeatures = canonicalFeatureNames.filter((featureName) => workingKeys.includes(featureName));
+            if (extraFeatures.length === 0) {
+              extraFeatures.push(...fallbackFeatureCandidates.slice(0, 8));
+            }
 
             // Build aggregated entity-level feature map
             const entityFeatures = new Map<string, Record<string, any>>();
@@ -2954,11 +3300,19 @@ serve(async (req) => {
               const entity = String(row[aggEntityKey] || "");
               if (!entity) continue;
               if (!entityFeatures.has(entity)) {
-                const fmap: Record<string, any> = {};
-                for (const f of extraFeatures) {
-                  fmap[f] = row[f] ?? "";
+                entityFeatures.set(entity, {});
+              }
+              const fmap = entityFeatures.get(entity)!;
+              for (const featureName of extraFeatures) {
+                const currentValue = fmap[featureName];
+                const nextValue = row[featureName];
+                const currentFilled = currentValue !== undefined && currentValue !== null && String(currentValue).trim() !== "";
+                const nextFilled = nextValue !== undefined && nextValue !== null && String(nextValue).trim() !== "";
+                if (!currentFilled && nextFilled) {
+                  fmap[featureName] = nextValue;
+                } else if (currentValue === undefined) {
+                  fmap[featureName] = nextValue ?? "";
                 }
-                entityFeatures.set(entity, fmap);
               }
             }
 
