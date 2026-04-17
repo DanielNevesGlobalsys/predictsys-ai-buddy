@@ -158,6 +158,15 @@ function getFirstExistingValue(
   return undefined;
 }
 
+function splitCanonicalTableColumn(canonical: string): { table: string; column: string } {
+  const idx = canonical.indexOf(".");
+  if (idx === -1) return { table: "", column: canonical.trim() };
+  return {
+    table: canonical.substring(0, idx).trim(),
+    column: canonical.substring(idx + 1).trim(),
+  };
+}
+
 function escapeDaxTable(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
 }
@@ -420,6 +429,7 @@ async function fetchPowerBITemporalAggregateFromConnection(
   entityKey: string, // e.g. "Lote Café.CODLOT"
   volumeCandidates: string[], // e.g. ["Lote Café.QTDSAC", "Lote Café.QTDPES"]
   measureCandidates: string[],
+  requestedFeatureColumns: string[],
   calendarCandidates: { year: string; month: string; quarter?: string }, // e.g. { year: "Calendário.Ano", month: "Calendário.Mês Número" }
 ): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string; volumeColUsed?: string | null; usedCountFallback?: boolean }> {
   try {
@@ -486,15 +496,20 @@ async function fetchPowerBITemporalAggregateFromConnection(
       return { ok: true, rows: parsed?.results?.[0]?.tables?.[0]?.rows || [] };
     };
 
-    // Parse table.column from canonical names
-    const splitTableCol = (canonical: string): { table: string; column: string } => {
-      const idx = canonical.indexOf(".");
-      return { table: canonical.substring(0, idx), column: canonical.substring(idx + 1) };
-    };
-
-    const entityParts = splitTableCol(entityKey);
-    const yearParts = splitTableCol(calendarCandidates.year);
-    const monthParts = splitTableCol(calendarCandidates.month);
+    const entityParts = splitCanonicalTableColumn(entityKey);
+    const yearParts = splitCanonicalTableColumn(calendarCandidates.year);
+    const monthParts = splitCanonicalTableColumn(calendarCandidates.month);
+    const quarterParts = calendarCandidates.quarter ? splitCanonicalTableColumn(calendarCandidates.quarter) : null;
+    const requestedGroupColumns = uniqueNonEmptyColumns(requestedFeatureColumns)
+      .filter((feature) => feature.includes("."))
+      .filter((feature) => feature.toLowerCase() !== entityKey.toLowerCase())
+      .filter((feature) => feature.toLowerCase() !== calendarCandidates.year.toLowerCase())
+      .filter((feature) => feature.toLowerCase() !== calendarCandidates.month.toLowerCase())
+      .filter((feature) => !calendarCandidates.quarter || feature.toLowerCase() !== calendarCandidates.quarter.toLowerCase());
+    const requestedGroupParts = requestedGroupColumns.map((feature) => ({
+      canonical: feature,
+      ...splitCanonicalTableColumn(feature),
+    })).filter((feature) => feature.table && feature.column);
 
     // Try volume candidates in order; first that succeeds wins
     const tryMeasures: Array<{ label: string; expr: string; isCountFallback: boolean; volumeColUsed: string | null }> = [
@@ -510,7 +525,7 @@ async function fetchPowerBITemporalAggregateFromConnection(
         };
       }),
       ...volumeCandidates.map((volCandidate) => {
-        const volParts = splitTableCol(volCandidate);
+        const volParts = splitCanonicalTableColumn(volCandidate);
         return {
           label: volCandidate,
           expr: `SUM(${escapeDaxTable(volParts.table)}[${volParts.column}])`,
@@ -530,15 +545,20 @@ async function fetchPowerBITemporalAggregateFromConnection(
     for (const measureCandidate of tryMeasures) {
       const measureExpr = measureCandidate.expr;
       const measureAlias = "agg_sacas_mes";
+      const summarizeArgs = [
+        `${escapeDaxTable(entityParts.table)}[${entityParts.column}]`,
+        `${escapeDaxTable(yearParts.table)}[${yearParts.column}]`,
+        `${escapeDaxTable(monthParts.table)}[${monthParts.column}]`,
+        ...(quarterParts ? [`${escapeDaxTable(quarterParts.table)}[${quarterParts.column}]`] : []),
+        ...requestedGroupParts.map((feature) => `${escapeDaxTable(feature.table)}[${feature.column}]`),
+        `"${measureAlias}", ${measureExpr}`,
+      ];
 
       const dax = `EVALUATE
 TOPN(
   50000,
   SUMMARIZECOLUMNS(
-    ${escapeDaxTable(entityParts.table)}[${entityParts.column}],
-    ${escapeDaxTable(yearParts.table)}[${yearParts.column}],
-    ${escapeDaxTable(monthParts.table)}[${monthParts.column}],
-    "${measureAlias}", ${measureExpr}
+    ${summarizeArgs.join(",\n    ")}
   ),
   ${escapeDaxTable(yearParts.table)}[${yearParts.column}], ASC,
   ${escapeDaxTable(monthParts.table)}[${monthParts.column}], ASC
@@ -3367,6 +3387,19 @@ serve(async (req) => {
           "Medidas Amostra.Qtd. Saca Amostra",
           "Detalhe Amostra.Sacas Captadas das Amostras",
         ];
+        const builderFeatureNames = Array.isArray(modelingDataset?.features_final)
+          ? modelingDataset.features_final.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+          : [];
+        const selectedFeatureNames = Array.isArray(selection?.selected_features)
+          ? selection.selected_features.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
+          : [];
+        const requestedAggregatedFeatures = uniqueNonEmptyColumns([
+          ...builderFeatureNames,
+          ...selectedFeatureNames,
+          calCandidates.year,
+          calCandidates.month,
+          calCandidates.quarter,
+        ]).filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
 
         const aggResult = await fetchPowerBITemporalAggregateFromConnection(
           supabase,
@@ -3374,6 +3407,7 @@ serve(async (req) => {
           aggEntityKey,
           volCandidates,
           measureCandidates,
+          requestedAggregatedFeatures,
           calCandidates,
         );
 
@@ -3381,31 +3415,41 @@ serve(async (req) => {
           const aggRows = aggResult.rows;
           const yearKey = calCandidates.year;
           const monthKey = calCandidates.month;
+          const quarterKey = calCandidates.quarter || "ref_quarter";
           const yearAliases = [yearKey, "Ano", "ref_year"];
           const monthAliases = [monthKey, "Mês Número", "Mes Número", "Mes Numero", "ref_month"];
+          const quarterAliases = [quarterKey, "Trimestre", "ref_quarter"];
           const entityAliases = [aggEntityKey, aggEntityKey.split(".").pop() || aggEntityKey];
           const targetKey = "agg_sacas_mes";
+          const extraFeatureHeaders = requestedAggregatedFeatures.filter((featureName) =>
+            featureName.includes(".")
+            && featureName.toLowerCase() !== aggEntityKey.toLowerCase()
+            && featureName.toLowerCase() !== yearKey.toLowerCase()
+            && featureName.toLowerCase() !== monthKey.toLowerCase()
+            && featureName.toLowerCase() !== quarterKey.toLowerCase()
+          );
 
           if (aggResult.usedCountFallback) {
             console.warn(`[AutoML] SUMMARIZECOLUMNS used COUNTROWS fallback for ${targetKey}; refusing to treat this as canonical volume aggregation.`);
           }
 
-          const aggHeaders = [targetKey, "ref_year", "ref_month", "ref_quarter", aggEntityKey];
+          const aggHeaders = [targetKey, yearKey, monthKey, quarterKey, ...extraFeatureHeaders];
           const aggLines: string[] = [];
 
           for (const r of aggRows) {
             const tv = Number(getFirstExistingValue(r, [targetKey]) ?? 0);
             const yr = Number(getFirstExistingValue(r, yearAliases) ?? 0);
             const mn = Number(getFirstExistingValue(r, monthAliases) ?? 0);
-            const qt = mn > 0 ? Math.ceil(mn / 3) : 0;
+            const qt = Number(getFirstExistingValue(r, quarterAliases) ?? (mn > 0 ? Math.ceil(mn / 3) : 0));
             const ent = String(getFirstExistingValue(r, entityAliases) ?? "");
             if (!ent || yr === 0 || mn === 0) continue;
+            const extraValues = extraFeatureHeaders.map((featureName) => String(r[featureName] ?? "").replace(/,/g, ";"));
             aggLines.push([
               String(tv),
               String(yr),
               String(mn),
               String(qt),
-              ent.replace(/,/g, ";"),
+              ...extraValues,
             ].join(","));
           }
 
