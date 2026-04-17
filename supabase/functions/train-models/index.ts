@@ -5819,6 +5819,11 @@ serve(async (req) => {
     // ============ DUAL MODEL TRAINING ============
     console.log(`\n=== Dual Model Training ===`);
     
+    const isLargeVirtualAggregatedTraining = useVirtualSample && effectiveDatasetBuildMode === "temporal_aggregated" && Xfinal.length >= 8000;
+    if (isLargeVirtualAggregatedTraining) {
+      console.log(`[resource_guard] Large virtual aggregated training detected (${Xfinal.length} rows) — enabling lightweight training path`);
+    }
+
     // Model A: Linear (Ridge / Logistic)
     const strategyA: ModelStrategy = isClassification
       ? {
@@ -5826,7 +5831,7 @@ serve(async (req) => {
           name: "Regressão Logística Regularizada",
           type: "classification",
           algorithm: "logistic_regression",
-          params: { epochs: 100, lambda: 0.1 },
+          params: { epochs: 100, lambda: 0.1, maxTrainRows: isLargeVirtualAggregatedTraining ? 5000 : undefined },
           reason: "Modelo A (linear) para comparação."
         }
       : {
@@ -5834,7 +5839,7 @@ serve(async (req) => {
           name: "Regressão Linear Regularizada (Ridge)",
           type: "regression",
           algorithm: "linear_regression",
-          params: { epochs: 100, lambda: 0.1 },
+          params: { epochs: 100, lambda: 0.1, maxTrainRows: isLargeVirtualAggregatedTraining ? 5000 : undefined },
           reason: "Modelo A (linear) para comparação."
         };
 
@@ -5845,9 +5850,10 @@ serve(async (req) => {
       type: isClassification ? "classification" : "regression",
       algorithm: "gradient_boosting",
       params: {
-        nEstimators: Math.min(8, Math.max(3, Math.floor(Xtrain.length / 800))),
-        maxDepth: 3,
-        learningRate: 0.15,
+        nEstimators: isLargeVirtualAggregatedTraining ? 3 : Math.min(8, Math.max(3, Math.floor(Xtrain.length / 800))),
+        maxDepth: isLargeVirtualAggregatedTraining ? 2 : 3,
+        learningRate: isLargeVirtualAggregatedTraining ? 0.2 : 0.15,
+        maxTrainRows: isLargeVirtualAggregatedTraining ? 1500 : 2500,
       },
       reason: "Modelo B (não-linear) para comparação."
     };
@@ -5858,8 +5864,23 @@ serve(async (req) => {
     console.log(`[AutoML] Treinando Modelo A: ${strategyA.name}`);
     const resultA = trainSingleModel(strategyA, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
     
-    console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
-    const resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+    let resultB: TrainResult;
+    if (isLargeVirtualAggregatedTraining) {
+      console.log(`[resource_guard] Skipping non-linear challenger for large virtual aggregated dataset to avoid worker timeout`);
+      resultB = {
+        model: { weights: [...(resultA.model.weights || [])], bias: resultA.model.bias || 0 },
+        predictions: [...resultA.predictions],
+        metrics: { ...resultA.metrics },
+        featureImportances: [...resultA.featureImportances],
+        sanity: {
+          ...resultA.sanity,
+          fail_reasons: [...resultA.sanity.fail_reasons, "skipped_non_linear_resource_guard"],
+        },
+      };
+    } else {
+      console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
+      resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+    }
 
     // ==================== RESOLVE METRICS PROFILE ====================
     const intentContract = trainAiCtx?.intent_contract || trainAiCtx?.intent || {};
