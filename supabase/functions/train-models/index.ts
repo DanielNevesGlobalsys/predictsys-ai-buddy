@@ -3402,11 +3402,9 @@ serve(async (req) => {
             }
           } catch (_) { /* ignore */ }
         }
-        // CRITICAL: For DAX SUMMARIZECOLUMNS, we must NOT pass all selected features as group-by
-        // (causes cartesian explosion → WORKER_RESOURCE_LIMIT). The temporal aggregation grain is
-        // entity × time. Extra features will be joined back in-memory after aggregation OR derived
-        // from low-cardinality keys only. Here we pass an empty list to keep DAX minimal.
-        console.log(`[AutoML] AGG-DAX feature inputs (deferred): builder=${builderFeatureNames.length}, selection=${selectedFeatureNames.length}. Sending only entity+time to DAX to avoid cartesian explosion.`);
+        // Keep DAX at entity × time grain to avoid cartesian explosion, then reattach
+        // entity-level features from the materialized Power BI sample when available.
+        console.log(`[AutoML] AGG-DAX feature inputs: builder=${builderFeatureNames.length}, selection=${selectedFeatureNames.length}. Aggregating only entity+time and reattaching entity features from sample.`);
         const requestedAggregatedFeatures: string[] = [
           calCandidates.year,
           calCandidates.month,
@@ -3434,13 +3432,160 @@ serve(async (req) => {
           const quarterAliases = [quarterKey, "Trimestre", "ref_quarter"];
           const entityAliases = [aggEntityKey, aggEntityKey.split(".").pop() || aggEntityKey];
           const targetKey = "agg_sacas_mes";
-          const extraFeatureHeaders = requestedAggregatedFeatures.filter((featureName) =>
-            featureName.includes(".")
-            && featureName.toLowerCase() !== aggEntityKey.toLowerCase()
-            && featureName.toLowerCase() !== yearKey.toLowerCase()
-            && featureName.toLowerCase() !== monthKey.toLowerCase()
-            && featureName.toLowerCase() !== quarterKey.toLowerCase()
+
+          let featureSourceRows: Record<string, any>[] = Array.isArray(virtualSampleRows) ? virtualSampleRows : [];
+          if (featureSourceRows.length === 0) {
+            const refreshedSample = await fetchPowerBISampleRowsFromConnection(supabase, sourceMetadata || {});
+            if (refreshedSample.rows.length > 0) {
+              featureSourceRows = refreshedSample.rows as Record<string, any>[];
+              virtualSampleRows = featureSourceRows;
+              powerBiSampleRefreshed = true;
+              console.log(`[AutoML] Power BI sample loaded for AGG-DAX feature reattachment: ${featureSourceRows.length} rows (${refreshedSample.source})`);
+            }
+          }
+
+          let featureWorkingRows = featureSourceRows;
+          if (featureWorkingRows.some((row) => Boolean((row as any)?.__source_table))) {
+            const tableGroups = new Map<string, Record<string, any>[]>();
+            for (const row of featureWorkingRows) {
+              const tbl = String(row.__source_table || "__unknown__");
+              if (!tableGroups.has(tbl)) tableGroups.set(tbl, []);
+              tableGroups.get(tbl)!.push(row);
+            }
+
+            const entityKeyTable = aggEntityKey.includes(".") ? aggEntityKey.split(".")[0] : null;
+            let factTableName = "";
+            let factRows: Record<string, any>[] = [];
+            if (entityKeyTable && tableGroups.has(entityKeyTable)) {
+              factTableName = entityKeyTable;
+              factRows = tableGroups.get(entityKeyTable)!;
+            } else {
+              let maxLen = 0;
+              for (const [name, rows] of tableGroups) {
+                if (rows.length > maxLen) {
+                  maxLen = rows.length;
+                  factTableName = name;
+                  factRows = rows;
+                }
+              }
+            }
+
+            const factColNames = factRows.length > 0 ? Object.keys(factRows[0]).filter((key) => key !== "__source_table") : [];
+            const factColBases = new Map<string, string>();
+            for (const factCol of factColNames) {
+              const base = factCol.includes(".") ? factCol.split(".").pop()!.toLowerCase() : factCol.toLowerCase();
+              factColBases.set(base, factCol);
+            }
+
+            const dimLookups: Array<{ factKey: string; lookup: Map<string, Record<string, any>> }> = [];
+            const allDimColNames: string[] = [];
+            for (const [tblName, tblRows] of tableGroups) {
+              if (tblName === factTableName || tblRows.length === 0) continue;
+              const dimCols = Object.keys(tblRows[0]).filter((key) => key !== "__source_table");
+              allDimColNames.push(...dimCols);
+
+              for (const dimCol of dimCols) {
+                const dimBase = dimCol.includes(".") ? dimCol.split(".").pop()!.toLowerCase() : dimCol.toLowerCase();
+                if (!factColBases.has(dimBase)) continue;
+
+                const factKey = factColBases.get(dimBase)!;
+                const lookup = new Map<string, Record<string, any>>();
+                for (const row of tblRows) {
+                  const keyVal = String(row[dimCol] ?? "");
+                  if (keyVal && !lookup.has(keyVal)) lookup.set(keyVal, row);
+                }
+                dimLookups.push({ factKey, lookup });
+                break;
+              }
+            }
+
+            featureWorkingRows = factRows.map((factRow) => {
+              const flat: Record<string, any> = {};
+              for (const [key, value] of Object.entries(factRow)) {
+                if (key === "__source_table") continue;
+                flat[key] = value;
+              }
+              for (const dimLookup of dimLookups) {
+                const keyVal = String(factRow[dimLookup.factKey] ?? "");
+                const dimRow = dimLookup.lookup.get(keyVal);
+                if (dimRow) {
+                  for (const [key, value] of Object.entries(dimRow)) {
+                    if (key === "__source_table") continue;
+                    flat[key] = value;
+                  }
+                }
+              }
+              for (const dimCol of allDimColNames) {
+                if (!(dimCol in flat)) flat[dimCol] = "";
+              }
+              return flat;
+            });
+          }
+
+          const featureWorkingKeys = buildColumnListFromRows(featureWorkingRows);
+          const featureKeyByLower = new Map<string, string>();
+          for (const key of featureWorkingKeys) {
+            const keyLower = key.toLowerCase();
+            if (!featureKeyByLower.has(keyLower)) featureKeyByLower.set(keyLower, key);
+          }
+
+          const canonicalFeatureNames = uniqueNonEmptyColumns([
+            ...builderFeatureNames,
+            ...selectedFeatureNames,
+          ]).filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
+
+          const excludedFeatureLowers = new Set(
+            uniqueNonEmptyColumns([
+              targetKey,
+              aggEntityKey,
+              aggEntityKey.split(".").pop() || aggEntityKey,
+              yearKey,
+              monthKey,
+              quarterKey,
+              ...volCandidates,
+            ]).map((value) => value.toLowerCase())
           );
+
+          const resolvedCanonicalFeatures = uniqueNonEmptyColumns(
+            canonicalFeatureNames.flatMap((featureName) => {
+              const aliases = uniqueNonEmptyColumns([
+                featureName,
+                featureName.includes(".") ? featureName.split(".").pop() || "" : "",
+              ]);
+              return aliases
+                .map((alias) => featureKeyByLower.get(alias.toLowerCase()) || null)
+                .filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+            })
+          ).filter((featureName) => !excludedFeatureLowers.has(featureName.toLowerCase()));
+
+          const fallbackFeatureCandidates = featureWorkingKeys.filter((column) => !excludedFeatureLowers.has(column.toLowerCase()));
+          const extraFeatureHeaders = resolvedCanonicalFeatures.length > 0
+            ? resolvedCanonicalFeatures
+            : fallbackFeatureCandidates.slice(0, 8);
+
+          const actualEntityFeatureKey = entityAliases
+            .map((alias) => featureKeyByLower.get(alias.toLowerCase()) || null)
+            .find((value): value is string => typeof value === "string" && value.trim().length > 0)
+            || aggEntityKey;
+
+          const entityFeatures = new Map<string, Record<string, any>>();
+          for (const row of featureWorkingRows) {
+            const entityValue = String(getFirstExistingValue(row, [actualEntityFeatureKey, ...entityAliases]) ?? "").trim();
+            if (!entityValue) continue;
+            if (!entityFeatures.has(entityValue)) entityFeatures.set(entityValue, {});
+            const fmap = entityFeatures.get(entityValue)!;
+            for (const featureName of extraFeatureHeaders) {
+              const currentValue = fmap[featureName];
+              const nextValue = row[featureName];
+              const currentFilled = currentValue !== undefined && currentValue !== null && String(currentValue).trim() !== "";
+              const nextFilled = nextValue !== undefined && nextValue !== null && String(nextValue).trim() !== "";
+              if (!currentFilled && nextFilled) {
+                fmap[featureName] = nextValue;
+              } else if (currentValue === undefined) {
+                fmap[featureName] = nextValue ?? "";
+              }
+            }
+          }
 
           if (aggResult.usedCountFallback) {
             console.warn(`[AutoML] SUMMARIZECOLUMNS used COUNTROWS fallback for ${targetKey}; refusing to treat this as canonical volume aggregation.`);
@@ -3448,15 +3593,16 @@ serve(async (req) => {
 
           const aggHeaders = [targetKey, yearKey, monthKey, quarterKey, ...extraFeatureHeaders];
           const aggLines: string[] = [];
-
           for (const r of aggRows) {
             const tv = Number(getFirstExistingValue(r, [targetKey]) ?? 0);
             const yr = Number(getFirstExistingValue(r, yearAliases) ?? 0);
             const mn = Number(getFirstExistingValue(r, monthAliases) ?? 0);
             const qt = Number(getFirstExistingValue(r, quarterAliases) ?? (mn > 0 ? Math.ceil(mn / 3) : 0));
-            const ent = String(getFirstExistingValue(r, entityAliases) ?? "");
+            const ent = String(getFirstExistingValue(r, entityAliases) ?? "").trim();
             if (!ent || yr === 0 || mn === 0) continue;
-            const extraValues = extraFeatureHeaders.map((featureName) => String(r[featureName] ?? "").replace(/,/g, ";"));
+
+            const entityFeatureRow = entityFeatures.get(ent) || {};
+            const extraValues = extraFeatureHeaders.map((featureName) => String(entityFeatureRow[featureName] ?? "").replace(/,/g, ";"));
             aggLines.push([
               String(tv),
               String(yr),
@@ -3466,18 +3612,23 @@ serve(async (req) => {
             ].join(","));
           }
 
-          if (aggLines.length > 0 && !aggResult.usedCountFallback) {
+          const minimumAttachedFeatures = canonicalFeatureNames.length > 0 ? Math.min(3, canonicalFeatureNames.length) : 0;
+          const hasEnoughAttachedFeatures = extraFeatureHeaders.length >= minimumAttachedFeatures;
+
+          if (aggLines.length > 0 && !aggResult.usedCountFallback && hasEnoughAttachedFeatures) {
             virtualHeaders = aggHeaders;
             virtualSampledLines = aggLines;
             delimiter = ",";
             totalDatasetRows = aggLines.length;
             trainingWarningsGlobal.push(
-              `Treino agregado via Power BI SUMMARIZECOLUMNS (${aggLines.length} linhas) usando volume ${aggResult.volumeColUsed || "COUNTROWS"}.`
+              `Treino agregado via Power BI SUMMARIZECOLUMNS (${aggLines.length} linhas) usando volume ${aggResult.volumeColUsed || "COUNTROWS"} e ${extraFeatureHeaders.length} features reanexadas.`
             );
-            console.log(`[AutoML] ✅ SUMMARIZECOLUMNS aggregation succeeded — skipping in-memory join (${aggLines.length} rows, volume=${aggResult.volumeColUsed || "COUNTROWS"})`);
+            console.log(`[AutoML] ✅ SUMMARIZECOLUMNS aggregation succeeded — skipping in-memory join (${aggLines.length} rows, volume=${aggResult.volumeColUsed || "COUNTROWS"}, extra_features=${extraFeatureHeaders.length}, feature_source_rows=${featureWorkingRows.length})`);
             skipInMemoryAgg = true;
           } else if (aggLines.length > 0 && aggResult.usedCountFallback) {
             console.warn(`[AutoML] SUMMARIZECOLUMNS produced ${aggLines.length} grouped rows, but only with COUNTROWS fallback; falling back to stricter in-memory aggregation`);
+          } else if (aggLines.length > 0 && !hasEnoughAttachedFeatures) {
+            console.warn(`[AutoML] SUMMARIZECOLUMNS attached only ${extraFeatureHeaders.length} non-temporal features (minimum expected ${minimumAttachedFeatures}); falling back to in-memory aggregation to avoid collapsed model`);
           } else {
             console.warn(`[AutoML] SUMMARIZECOLUMNS returned ${aggRows.length} raw rows but 0 valid after filtering`);
           }
