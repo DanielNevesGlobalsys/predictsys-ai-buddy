@@ -1601,6 +1601,7 @@ serve(async (req: Request) => {
             sample_raw_rows: sampleRowsAgg.length,
             sample_agg_rows: aggRows.length,
             source_values_found: sourceValueCount,
+            used_count_fallback: !aggSourceCol || sourceValueCount === 0,
             estimated_total_agg_rows: estimatedAggRows,
             distinct_entities: distinctEntities,
             distinct_months: distinctMonths,
@@ -1664,7 +1665,17 @@ serve(async (req: Request) => {
             }
           }
 
-          aggregationApplied = true;
+          const requiresCanonicalVolumeSignal = /^agg_/i.test(aggTargetCol);
+          const usedCountFallback = !aggSourceCol || sourceValueCount === 0;
+
+          if (requiresCanonicalVolumeSignal && usedCountFallback) {
+            temporalAggregationBlockedReasons.push(
+              `Modo temporal_aggregated não encontrou coluna volumétrica real para materializar "${aggTargetCol}"; COUNT(*) não é aceito como target canônico.`
+            );
+            console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: canonical target ${aggTargetCol} fell back to COUNT(*)`);
+          } else {
+            aggregationApplied = true;
+          }
         } else {
           temporalAggregationBlockedReasons.push(`Modo temporal_aggregated não conseguiu materializar linhas agregadas para "${aggTargetCol}".`);
           console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: aggregation produced zero rows for ${aggTargetCol}`);
