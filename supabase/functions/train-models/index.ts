@@ -2168,10 +2168,10 @@ serve(async (req) => {
   try {
     _parsedBody = await req.json();
   } catch { _parsedBody = {}; }
-  const { project_id } = _parsedBody;
+  const { project_id, ui_request_id, _background, _queued_run_id } = _parsedBody;
+  const isBackgroundRun = _background === true;
 
   try {
-    
     if (!project_id) {
       return new Response(JSON.stringify({ error: "project_id é obrigatório" }), {
         status: 400,
@@ -2179,15 +2179,72 @@ serve(async (req) => {
       });
     }
 
+    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
+    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
+
+    if (!isBackgroundRun) {
+      const queuedRunId = _queued_run_id || crypto.randomUUID();
+      const backgroundPayload = {
+        ..._parsedBody,
+        _background: true,
+        _queued_run_id: queuedRunId,
+      };
+
+      EdgeRuntime.waitUntil((async () => {
+        try {
+          const response = await fetch(`${supabaseUrl}/functions/v1/train-models`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${supabaseServiceKey}`,
+              apikey: supabaseServiceKey,
+            },
+            body: JSON.stringify(backgroundPayload),
+          });
+          const raw = await response.text();
+          if (!response.ok) {
+            console.error(`[train-models] Background invoke failed (${response.status}): ${raw.slice(0, 500)}`);
+          }
+        } catch (backgroundError) {
+          console.error("[train-models] Background invoke exception:", backgroundError);
+          const sb = createClient(supabaseUrl, supabaseServiceKey);
+          await sb.from("platform_events").insert({
+            project_id,
+            event_type: "job_error",
+            status: "error",
+            source: "edge",
+            metadata: {
+              code: "TRAINING_QUEUE_FAILED",
+              run_id: queuedRunId,
+              ui_request_id: ui_request_id || null,
+              error_message: backgroundError instanceof Error ? backgroundError.message : String(backgroundError),
+            },
+            timestamp: new Date().toISOString(),
+          });
+        }
+      })());
+
+      return new Response(JSON.stringify({
+        success: true,
+        status: "queued",
+        queued: true,
+        run_id: queuedRunId,
+        ui_request_id: ui_request_id || null,
+        message: "Treinamento iniciado em background.",
+        message_user: "Treinamento iniciado em background.",
+      }), {
+        status: 202,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
     const startMs = Date.now();
-    const run_id = crypto.randomUUID();
+    const run_id = _queued_run_id || crypto.randomUUID();
     console.log(`\n========================================`);
     console.log(`[AutoML] Iniciando treinamento para projeto: ${project_id}`);
     console.log(`[AutoML] run_id: ${run_id}`);
     console.log(`========================================\n`);
 
-    const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
-    const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
     // ── Auto-recovery: check for stale states ──
@@ -2217,7 +2274,7 @@ serve(async (req) => {
       project_id: project_id,
       status: "info",
       source: "edge",
-      metadata: { run_id },
+      metadata: { run_id, ui_request_id: ui_request_id || null },
     }));
 
     // Helper to return structured block response (HTTP 200 per reliability standards)
