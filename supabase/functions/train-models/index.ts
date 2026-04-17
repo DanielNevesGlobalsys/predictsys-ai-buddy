@@ -385,6 +385,157 @@ async function fetchPowerBISampleRowsFromConnection(
   }
 }
 
+// ==================== POWER BI TEMPORAL AGGREGATE (SUMMARIZECOLUMNS) ====================
+// For temporal_aggregated targets, query Power BI directly with SUMMARIZECOLUMNS
+// using the model's existing relationships. This bypasses in-memory joins entirely
+// and returns rows already at entity × year × month grain with SUM(volume).
+async function fetchPowerBITemporalAggregateFromConnection(
+  supabase: any,
+  sourceMetadata: Record<string, unknown>,
+  entityKey: string, // e.g. "Lote Café.CODLOT"
+  volumeCandidates: string[], // e.g. ["Lote Café.QTDSAC", "Lote Café.QTDPES"]
+  calendarCandidates: { year: string; month: string; quarter?: string }, // e.g. { year: "Calendário.Ano", month: "Calendário.Mês Número" }
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string; volumeColUsed?: string | null }> {
+  try {
+    const connectionId = normalizeStringValue(sourceMetadata.connection_id);
+    const workspaceId = normalizeStringValue(sourceMetadata.workspace_id);
+    const datasetId = normalizeStringValue(sourceMetadata.dataset_id);
+
+    if (!connectionId || !workspaceId || !datasetId) {
+      return { rows: [], source: "none", error: "missing_connection_metadata" };
+    }
+    if (!entityKey.includes(".")) {
+      return { rows: [], source: "none", error: "entity_key_must_be_table_qualified" };
+    }
+
+    const { data: conn, error: connError } = await supabase
+      .from("external_connections")
+      .select("metadata, data_sources!external_connections_data_source_id_fkey(connection_config)")
+      .eq("id", connectionId)
+      .maybeSingle();
+
+    if (connError || !conn) {
+      return { rows: [], source: "none", error: `connection_lookup_failed:${connError?.message || "not_found"}` };
+    }
+
+    const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
+    const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
+    const clientId = normalizeStringValue(cfg.client_id);
+    const clientSecret = normalizeStringValue(cfg.client_secret);
+    const tenantId = normalizeStringValue(cfg.tenant_id);
+
+    if (!clientId || !clientSecret || !tenantId) {
+      return { rows: [], source: "none", error: "missing_powerbi_credentials" };
+    }
+
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://analysis.windows.net/powerbi/api/.default",
+      }).toString(),
+    });
+    if (!tokenResp.ok) {
+      return { rows: [], source: "none", error: `token_failed:${tokenResp.status}` };
+    }
+    const tokenJson = await tokenResp.json();
+    const accessToken = tokenJson?.access_token as string | undefined;
+    if (!accessToken) return { rows: [], source: "none", error: "token_missing_access_token" };
+
+    const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`;
+    const runDax = async (query: string): Promise<{ ok: boolean; rows: Record<string, unknown>[]; error?: string }> => {
+      const resp = await fetch(executeUrl, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ queries: [{ query }], serializerSettings: { includeNulls: true } }),
+      });
+      const rawBody = await resp.text();
+      if (!resp.ok) {
+        return { ok: false, rows: [], error: `${resp.status}:${rawBody.slice(0, 300)}` };
+      }
+      const parsed = JSON.parse(rawBody);
+      return { ok: true, rows: parsed?.results?.[0]?.tables?.[0]?.rows || [] };
+    };
+
+    // Parse table.column from canonical names
+    const splitTableCol = (canonical: string): { table: string; column: string } => {
+      const idx = canonical.indexOf(".");
+      return { table: canonical.substring(0, idx), column: canonical.substring(idx + 1) };
+    };
+
+    const entityParts = splitTableCol(entityKey);
+    const yearParts = splitTableCol(calendarCandidates.year);
+    const monthParts = splitTableCol(calendarCandidates.month);
+
+    // Try volume candidates in order; first that succeeds wins
+    const tryVolumes: Array<string | null> = [...volumeCandidates, null]; // null = COUNTROWS fallback
+    let lastError = "no_attempts";
+
+    for (const volCandidate of tryVolumes) {
+      let measureExpr: string;
+      let measureAlias: string;
+
+      if (volCandidate) {
+        const volParts = splitTableCol(volCandidate);
+        measureExpr = `SUM(${escapeDaxTable(volParts.table)}[${volParts.column}])`;
+        measureAlias = "agg_sacas_mes";
+      } else {
+        // Fallback to COUNT
+        measureExpr = `COUNTROWS(${escapeDaxTable(entityParts.table)})`;
+        measureAlias = "agg_sacas_mes";
+      }
+
+      const dax = `EVALUATE
+TOPN(
+  50000,
+  SUMMARIZECOLUMNS(
+    ${escapeDaxTable(entityParts.table)}[${entityParts.column}],
+    ${escapeDaxTable(yearParts.table)}[${yearParts.column}],
+    ${escapeDaxTable(monthParts.table)}[${monthParts.column}],
+    "${measureAlias}", ${measureExpr}
+  ),
+  ${escapeDaxTable(yearParts.table)}[${yearParts.column}], ASC,
+  ${escapeDaxTable(monthParts.table)}[${monthParts.column}], ASC
+)`;
+
+      const result = await runDax(dax);
+      if (result.ok && result.rows.length > 0) {
+        // Normalize keys: PBI returns "Lote Café[CODLOT]" → "Lote Café.CODLOT"
+        const normalized = result.rows.map((row) => {
+          const out: Record<string, unknown> = {};
+          for (const [rawKey, value] of Object.entries(row || {})) {
+            // Match Table[Column] format
+            const m = rawKey.match(/^([^[]+)\[([^\]]+)\]$/);
+            if (m) {
+              out[`${m[1].replace(/^'+|'+$/g, "").trim()}.${m[2].trim()}`] = value;
+            } else {
+              // Bare measure alias (like "agg_sacas_mes") or already-clean
+              out[rawKey.replace(/^\[|\]$/g, "").trim()] = value;
+            }
+          }
+          return out;
+        });
+
+        console.log(`[AutoML] Power BI SUMMARIZECOLUMNS aggregate OK: ${normalized.length} rows, volume=${volCandidate || "COUNTROWS"}`);
+        return { rows: normalized, source: "powerbi_summarizecolumns_aggregate", volumeColUsed: volCandidate };
+      }
+      lastError = result.error || "empty_rows";
+      console.warn(`[AutoML] SUMMARIZECOLUMNS attempt failed (volume=${volCandidate || "COUNTROWS"}): ${lastError.slice(0, 200)}`);
+    }
+
+    return { rows: [], source: "none", error: `summarizecolumns_failed:${lastError.slice(0, 200)}` };
+  } catch (error) {
+    return {
+      rows: [],
+      source: "none",
+      error: `powerbi_sample_exception:${(error as Error).message}`,
+    };
+  }
+}
+
 function mean(arr: number[]): number {
   if (arr.length === 0) return 0;
   return arr.reduce((a, b) => a + b, 0) / arr.length;
