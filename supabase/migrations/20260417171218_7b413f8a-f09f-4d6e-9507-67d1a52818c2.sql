@@ -1,0 +1,1 @@
+UPDATE public.project_settings SET active_run_id = NULL, training_state = 'failed', updated_at = now() WHERE project_id = 'aad62592-1394-4606-9b2e-a7b9d8e5a1cc' AND active_run_id = '9ff0d02a-4388-4a3d-af18-63bd4144a076';
