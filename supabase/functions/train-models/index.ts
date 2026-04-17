@@ -2396,6 +2396,7 @@ serve(async (req) => {
           .select("*")
           .eq("project_id", project_id)
           .eq("selection_version_used", currentSelectionVersion)
+          .in("status", ["ready", "warning"])
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -2406,7 +2407,10 @@ serve(async (req) => {
         }
       }
 
-      if (ssotBuilderDatasetId && (!modelingDataset || modelingDataset.id !== ssotBuilderDatasetId)) {
+      if (
+        ssotBuilderDatasetId
+        && (!modelingDataset || !isReadyModelingDataset(modelingDataset) || modelingDataset.id === ssotBuilderDatasetId)
+      ) {
         const { data: ssotDataset } = await supabase
           .from("project_modeling_datasets")
           .select("*")
@@ -2870,16 +2874,16 @@ serve(async (req) => {
 
     if (modelingDataset) {
       const builderSelVersion = modelingDataset.selection_version_used || 0;
-      const builderIsCurrent = modelingDataset.is_current !== false;
+      const builderStatus = String(modelingDataset.status || "");
+      const builderIsUsable = builderStatus === "ready" || builderStatus === "warning";
 
-      if (!builderIsCurrent) {
-        return blockResponse("BUILDER_OUTDATED", "O Builder está desatualizado (marcado como stale). Regere o dataset modelável.", { label: "Gerar Builder", go_to_step: 3 });
+      if (!builderIsUsable) {
+        return blockResponse("MODELING_DATASET_NOT_READY", "O dataset modelável selecionado não está pronto para treino.", { label: "Gerar Builder", go_to_step: 3 });
       }
       if (currentSelectionVersion > 0 && builderSelVersion < currentSelectionVersion) {
         return blockResponse("BUILDER_OUTDATED", `Builder (v${builderSelVersion}) desatualizado vs seleção (v${currentSelectionVersion}). Regere o dataset modelável.`, { label: "Regerar Builder", go_to_step: 3 });
       }
 
-      const builderStatus = modelingDataset.status;
       if (builderStatus === "blocked" || builderStatus === "error") {
         const reasons = Array.isArray(modelingDataset.blocked_reasons) ? modelingDataset.blocked_reasons.join("; ") : String(modelingDataset.blocked_reasons || "");
         return blockResponse("BUILDER_BLOCKED", `Builder bloqueado: ${reasons}`, { label: "Revisar Target/Features", go_to_step: 3 });

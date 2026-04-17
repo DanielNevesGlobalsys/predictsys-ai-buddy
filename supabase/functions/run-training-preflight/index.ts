@@ -71,6 +71,7 @@ serve(async (req: Request) => {
           return supabase.from("project_modeling_datasets").select("*")
             .eq("project_id", project_id)
             .eq("selection_version_used", sv)
+            .in("status", ["ready", "warning"])
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -356,7 +357,10 @@ serve(async (req: Request) => {
     let canonicalDataset = modelingDataset;
     let builderSource = "modeling_datasets_is_current";
 
-    if (ssotBuilderDatasetId && (!modelingDataset || (modelingDataset as any).id !== ssotBuilderDatasetId)) {
+    if (
+      ssotBuilderDatasetId
+      && (!modelingDataset || !["ready", "warning"].includes((modelingDataset as any).status || "") || (modelingDataset as any).id === ssotBuilderDatasetId)
+    ) {
       // Cross-check: SSOT points to a different dataset than is_current query
       const { data: ssotDataset } = await supabase
         .from("project_modeling_datasets")
@@ -370,8 +374,10 @@ serve(async (req: Request) => {
     }
 
     const builderSelVersion = canonicalDataset ? ((canonicalDataset as any).selection_version_used || 0) : null;
+    const builderStatus = canonicalDataset ? String((canonicalDataset as any).status || "") : "";
+    const builderIsReady = builderStatus === "ready" || builderStatus === "warning";
     const builderIsCurrent = canonicalDataset
-      ? ((canonicalDataset as any).is_current !== false && builderSelVersion !== null && builderSelVersion >= selectionVersion)
+      ? (builderIsReady && builderSelVersion !== null && builderSelVersion >= selectionVersion)
       : false;
 
     // Also check SSOT version consistency
@@ -379,14 +385,13 @@ serve(async (req: Request) => {
 
     if (canonicalDataset) {
       const md = canonicalDataset as any;
-      const isCurrent = md.is_current !== false;
       const isReady = md.status === "ready" || md.status === "warning";
       const isBlocked = md.status === "blocked";
       const versionMismatch = selectionVersion > 0 && (builderSelVersion || 0) < selectionVersion;
 
       // PRIORITY 1: Check if dataset is blocked FIRST (before version check)
       // A blocked dataset with stale version should show "blocked" not "outdated"
-      if (isCurrent && isBlocked) {
+      if (isBlocked) {
         const blockedReasons = (md.blocked_reasons as string[] || []);
         const needsRebuild = versionMismatch;
         gates.push({
@@ -405,7 +410,7 @@ serve(async (req: Request) => {
           },
         });
         canTrain = false;
-      } else if (!isCurrent || versionMismatch || !ssotVersionMatch) {
+      } else if (versionMismatch || !ssotVersionMatch) {
         // PRIORITY 2: Builder outdated — version mismatch
         gates.push({
           gate: "builder",
@@ -421,7 +426,7 @@ serve(async (req: Request) => {
           },
         });
         canTrain = false;
-      } else if (isCurrent && isReady) {
+      } else if (isReady) {
         gates.push({
           gate: "builder",
           status: md.status === "warning" ? "WARN" : "PASS",
