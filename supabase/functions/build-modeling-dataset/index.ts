@@ -1417,6 +1417,7 @@ serve(async (req: Request) => {
     const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
     let aggregationApplied = false;
     let aggregationStats: Record<string, any> | null = null;
+    const temporalAggregationBlockedReasons: string[] = [];
 
     if (isTemporalAggregated) {
       console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
@@ -1665,11 +1666,11 @@ serve(async (req: Request) => {
 
           aggregationApplied = true;
         } else {
-          allBlockedReasons.push(`Modo temporal_aggregated não conseguiu materializar linhas agregadas para "${aggTargetCol}".`);
+          temporalAggregationBlockedReasons.push(`Modo temporal_aggregated não conseguiu materializar linhas agregadas para "${aggTargetCol}".`);
           console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: aggregation produced zero rows for ${aggTargetCol}`);
         }
       } else {
-        allBlockedReasons.push(`Modo temporal_aggregated exige Entity Key e sinais temporais reais para materializar "${aggTargetCol}".`);
+        temporalAggregationBlockedReasons.push(`Modo temporal_aggregated exige Entity Key e sinais temporais reais para materializar "${aggTargetCol}".`);
         console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: missing entity/time signals for ${aggTargetCol}`);
       }
     }
@@ -1715,6 +1716,7 @@ serve(async (req: Request) => {
     let labelBuilderId: string | null = null;
     let labelBuildResult: LabelBuildResult | null = null;
     const allBlockedReasons: string[] = [];
+    allBlockedReasons.push(...temporalAggregationBlockedReasons);
 
     // ── Use resolveActiveTarget mode for consistent behavior across all functions ──
     const isHumanLabelingTarget = activeTarget.mode === "human";
