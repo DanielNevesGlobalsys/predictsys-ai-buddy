@@ -3291,7 +3291,75 @@ serve(async (req) => {
       // Determine if we can aggregate using calendar fields (Ano + Mês) when no date column exists
       const useCalendarFields = !aggTimeCol;
 
-      if (aggEntityKey && (aggTimeCol || useCalendarFields)) {
+      // ── PRIMARY STRATEGY: Power BI SUMMARIZECOLUMNS direct aggregation ──
+      // For Power BI temporal_aggregated targets, query the model directly with
+      // SUMMARIZECOLUMNS using existing relationships. This avoids broken in-memory joins.
+      let skipInMemoryAgg = false;
+      if (
+        isPowerBIMaterialized
+        && aggEntityKey
+        && aggEntityKey.includes(".")
+        && useCalendarFields
+        && sourceMetadata?.connection_id
+        && sourceMetadata?.workspace_id
+        && sourceMetadata?.dataset_id
+      ) {
+        console.log(`[AutoML] Attempting Power BI SUMMARIZECOLUMNS direct aggregation for ${aggEntityKey}`);
+        const calCandidates = { year: "Calendário.Ano", month: "Calendário.Mês Número", quarter: "Calendário.Trimestre" };
+        const volCandidates = ["Lote Café.QTDSAC", "Lote Café.QTDPES"];
+
+        const aggResult = await fetchPowerBITemporalAggregateFromConnection(
+          supabase,
+          sourceMetadata || {},
+          aggEntityKey,
+          volCandidates,
+          calCandidates,
+        );
+
+        if (aggResult.rows.length > 0) {
+          const aggRows = aggResult.rows;
+          const yearKey = calCandidates.year;
+          const monthKey = calCandidates.month;
+          const targetKey = "agg_sacas_mes";
+
+          const aggHeaders = [targetKey, yearKey, monthKey, "Calendário.Trimestre", aggEntityKey];
+          const aggLines: string[] = [];
+
+          for (const r of aggRows) {
+            const tv = Number(r[targetKey] ?? 0);
+            const yr = Number(r[yearKey] ?? 0);
+            const mn = Number(r[monthKey] ?? 0);
+            const qt = mn > 0 ? Math.ceil(mn / 3) : 0;
+            const ent = String(r[aggEntityKey] ?? "");
+            if (!ent || yr === 0 || mn === 0) continue;
+            aggLines.push([
+              String(tv),
+              String(yr),
+              String(mn),
+              String(qt),
+              ent.replace(/,/g, ";"),
+            ].join(","));
+          }
+
+          if (aggLines.length > 0) {
+            virtualHeaders = aggHeaders;
+            virtualSampledLines = aggLines;
+            delimiter = ",";
+            totalDatasetRows = aggLines.length;
+            trainingWarningsGlobal.push(
+              `Treino agregado via Power BI SUMMARIZECOLUMNS (${aggLines.length} linhas) usando volume ${aggResult.volumeColUsed || "COUNTROWS"}.`
+            );
+            console.log(`[AutoML] ✅ SUMMARIZECOLUMNS aggregation succeeded — skipping in-memory join (${aggLines.length} rows, volume=${aggResult.volumeColUsed || "COUNTROWS"})`);
+            skipInMemoryAgg = true;
+          } else {
+            console.warn(`[AutoML] SUMMARIZECOLUMNS returned ${aggRows.length} raw rows but 0 valid after filtering`);
+          }
+        } else {
+          console.warn(`[AutoML] SUMMARIZECOLUMNS path failed: ${aggResult.error || "unknown"} — falling back to in-memory aggregation`);
+        }
+      }
+
+      if (!skipInMemoryAgg && aggEntityKey && (aggTimeCol || useCalendarFields)) {
         let rawRows: Record<string, any>[] = virtualSampleRows;
         if (rawRows.length === 0) {
           const { data: sampleDataAgg2 } = await supabase
