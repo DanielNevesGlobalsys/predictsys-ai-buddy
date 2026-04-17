@@ -1322,6 +1322,30 @@ serve(async (req: Request) => {
       dataSourceType = datasetState.source_type || "upload";
       isVirtualManifest = datasetState.virtual_manifest || false;
       console.log(`[build-modeling-dataset] SSOT: dataset_state found. rows=${totalRows}, source=${dataSourceType}`);
+    } else if ((settings as any)?.ingestion_rows_detected > 0) {
+      totalRows = Number((settings as any).ingestion_rows_detected) || 0;
+      dataSourceType = (datasetState?.source_type || activeDataset?.source_type || (settings as any)?.ingestion_source_type || "upload") as string;
+      isVirtualManifest = Boolean(datasetState?.virtual_manifest);
+      console.log(`[build-modeling-dataset] Fallback: ingestion SSOT found. rows=${totalRows}, source=${dataSourceType}`);
+
+      await supabase.from("project_dataset_state").upsert({
+        project_id,
+        organization_id: project.organization_id,
+        source_type: dataSourceType,
+        active_dataset_ref: datasetState?.active_dataset_ref || (settings as any)?.ingestion_dataset_id || null,
+        row_count: totalRows,
+        col_count: Number(datasetState?.col_count || (settings as any)?.ingestion_cols_detected || projectColumns.length || 0),
+        eda_ready: datasetState?.eda_ready ?? true,
+        model_ready: false,
+        virtual_manifest: Boolean(datasetState?.virtual_manifest),
+        last_success_at: datasetState?.last_success_at || new Date().toISOString(),
+        active_schema_json: datasetState?.active_schema_json || null,
+        diagnostics: {
+          ...((datasetState?.diagnostics as Record<string, any>) || {}),
+          auto_repaired_from: "ingestion_ssot",
+          repaired_at: new Date().toISOString(),
+        },
+      }, { onConflict: "project_id" });
     } else if (manifest && manifest.rows_consolidated > 0) {
       totalRows = manifest.rows_consolidated;
       console.log(`[build-modeling-dataset] Fallback: manifest found. rows=${totalRows}`);
