@@ -2396,6 +2396,7 @@ serve(async (req) => {
           .select("*")
           .eq("project_id", project_id)
           .eq("selection_version_used", currentSelectionVersion)
+          .in("status", ["ready", "warning"])
           .order("created_at", { ascending: false })
           .limit(1)
           .maybeSingle();
@@ -2406,7 +2407,10 @@ serve(async (req) => {
         }
       }
 
-      if (ssotBuilderDatasetId && (!modelingDataset || modelingDataset.id !== ssotBuilderDatasetId)) {
+      if (
+        ssotBuilderDatasetId
+        && (!modelingDataset || !isReadyModelingDataset(modelingDataset) || modelingDataset.id === ssotBuilderDatasetId)
+      ) {
         const { data: ssotDataset } = await supabase
           .from("project_modeling_datasets")
           .select("*")
