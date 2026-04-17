@@ -8,6 +8,11 @@ import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } f
 import { detectTargetType, validateTargetTypeMismatch, coerceToNumber, checkLowVariance, computeTargetStats, sampleRows as mvpSampleRows, samplePlan, validateSchemaSelection, filterInvalidFeatures } from "../_shared/training-prepare-mvp-soft.ts";
 import { recoverAllStaleStates } from "../_shared/stale-state-recovery.ts";
 
+// Deno Edge Runtime global (provided by Supabase Edge Functions runtime)
+declare const EdgeRuntime: {
+  waitUntil(promise: Promise<unknown>): void;
+};
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
