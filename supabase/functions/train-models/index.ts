@@ -5205,7 +5205,7 @@ serve(async (req) => {
           features: allFeatureNames.length,
           problem_type,
           target_column,
-          dataset_version: settings?.dataset_version || 0,
+          dataset_version: (sourceMetadata as any)?.dataset_version || 0,
           selection_version: currentSelectionVersion,
         },
       });
@@ -5663,7 +5663,7 @@ serve(async (req) => {
           await supabase.from("platform_events").insert({
             event_type: "no_valid_features",
             project_id: project_id,
-            organization_id: settings.org_id || null,
+            organization_id: project.organization_id || null,
             source: "train-models",
             status: "blocked",
             metadata: {
@@ -5673,8 +5673,8 @@ serve(async (req) => {
               top_block_reasons: topBlockReasons,
               examples,
               target_column: target_column,
-              dataset_version: settings.dataset_version,
-              selection_version: settings.selection_version,
+              dataset_version: (sourceMetadata as any)?.dataset_version || 0,
+              selection_version: currentSelectionVersion,
             },
           });
         } catch (logErr) {
