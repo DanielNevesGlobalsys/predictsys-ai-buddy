@@ -21,11 +21,11 @@ const corsHeaders = {
 // ==================== SAMPLING CONSTANTS ====================
 // Minimum absolute rows required for reliable training
 const MIN_ROWS_FOR_TRAIN = 500;
-// Target sample size for train+val+test (healthy model size)
-// IMPORTANT: Keep this low to avoid CPU Time exceeded in Edge Functions
-const TARGET_SAMPLE_SIZE = 12_000;
+// Target sample size for train+val+test (kept very small to fit Edge CPU budget)
+// Edge Functions have ~150ms-2s CPU time; ML training must stay under that.
+const TARGET_SAMPLE_SIZE = 4_000;
 // Maximum rows to read with early stop (for large datasets)
-const MAX_ROWS_TO_READ = 40_000;
+const MAX_ROWS_TO_READ = 15_000;
 // Minimum samples per class to avoid warning
 const MIN_CLASS_SAMPLES = 50;
 
