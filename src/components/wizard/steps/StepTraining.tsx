@@ -463,7 +463,7 @@ const StepTraining = ({
 
   const pollTrainingRun = async (runId: string, maxAttempts = 90) => {
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      const [eventsRes, latestModelRes] = await Promise.all([
+      const [eventsRes, latestModelRes, settingsRes] = await Promise.all([
         supabase
           .from("platform_events")
           .select("event_type, metadata, created_at")
@@ -478,6 +478,11 @@ const StepTraining = ({
           .order("trained_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
+        supabase
+          .from("project_settings")
+          .select("active_run_id")
+          .eq("project_id", projectData.id)
+          .maybeSingle(),
       ]);
 
       const matchedEvent = (eventsRes.data || []).find((event: any) => event?.metadata?.run_id === runId);
@@ -488,6 +493,14 @@ const StepTraining = ({
       const latestModel = latestModelRes.data as any;
       if (latestModel?.status === "trained" && latestModel?.hyperparameters?.run_id === runId) {
         return { status: "success" as const, latestModel };
+      }
+
+      const currentRunId = ((settingsRes.data as any)?.active_run_id as string | null) || null;
+      if (currentRunId !== runId) {
+        if (latestModel?.status === "trained") {
+          return { status: "success" as const, latestModel };
+        }
+        return { status: "settled" as const };
       }
 
       if (matchedEvent?.event_type === "training_run_blocked" || matchedEvent?.event_type === "job_error") {
@@ -562,14 +575,7 @@ const StepTraining = ({
             return;
           }
 
-          const { data: settingsData } = await supabase
-            .from("project_settings")
-            .select("active_run_id")
-            .eq("project_id", projectData.id)
-            .maybeSingle();
-
-          const currentRunId = ((settingsData as any)?.active_run_id as string | null) || null;
-          if (currentRunId !== runId) {
+          if (pollResult.status === "settled") {
             setActiveRunId(null);
             await loadExistingModels();
             return;
