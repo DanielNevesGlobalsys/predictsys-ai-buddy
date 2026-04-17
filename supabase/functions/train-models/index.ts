@@ -3390,9 +3390,19 @@ serve(async (req) => {
         const builderFeatureNames = Array.isArray(modelingDataset?.features_final)
           ? modelingDataset.features_final.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
           : [];
-        const selectedFeatureNames = Array.isArray(selection?.selected_features)
-          ? selection.selected_features.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0)
-          : [];
+        const rawSelectedFeatures = selection?.selected_features;
+        let selectedFeatureNames: string[] = [];
+        if (Array.isArray(rawSelectedFeatures)) {
+          selectedFeatureNames = rawSelectedFeatures.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0);
+        } else if (typeof rawSelectedFeatures === "string") {
+          try {
+            const parsed = JSON.parse(rawSelectedFeatures);
+            if (Array.isArray(parsed)) {
+              selectedFeatureNames = parsed.filter((value: unknown): value is string => typeof value === "string" && value.trim().length > 0);
+            }
+          } catch (_) { /* ignore */ }
+        }
+        console.log(`[AutoML] AGG-DAX feature inputs: builder=${builderFeatureNames.length}, selection=${selectedFeatureNames.length}, selection_typeof=${typeof rawSelectedFeatures}, isArray=${Array.isArray(rawSelectedFeatures)}`);
         const requestedAggregatedFeatures = uniqueNonEmptyColumns([
           ...builderFeatureNames,
           ...selectedFeatureNames,
@@ -3400,6 +3410,7 @@ serve(async (req) => {
           calCandidates.month,
           calCandidates.quarter,
         ]).filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
+        console.log(`[AutoML] AGG-DAX requestedAggregatedFeatures (${requestedAggregatedFeatures.length}): ${requestedAggregatedFeatures.slice(0, 10).join(", ")}${requestedAggregatedFeatures.length > 10 ? "..." : ""}`);
 
         const aggResult = await fetchPowerBITemporalAggregateFromConnection(
           supabase,
