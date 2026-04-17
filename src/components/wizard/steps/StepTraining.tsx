@@ -423,7 +423,7 @@ const StepTraining = ({
     }
   };
 
-  const loadExistingModels = async () => {
+  const loadExistingModels = useCallback(async () => {
     if (!projectData.id) return;
 
     const { data: modelsData, error: modelsError } = await supabase
@@ -457,7 +457,7 @@ const StepTraining = ({
       setModels(modelsWithMetrics);
       setTrainingComplete(modelsData.some(m => m.status === "trained"));
     }
-  };
+  }, [projectData.id]);
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -599,7 +599,7 @@ const StepTraining = ({
       cancelled = true;
       pollingRunRef.current = null;
     };
-  }, [activeRunId, onTrainingComplete, projectData.id, t, trainingComplete]);
+  }, [activeRunId, loadExistingModels, onTrainingComplete, projectData.id, t, trainingComplete]);
 
   const syncProblemTypeToPipeline = async (newType: "classification" | "regression") => {
     if (!projectData.id) return;
