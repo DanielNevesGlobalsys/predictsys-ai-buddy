@@ -1021,6 +1021,20 @@ function trainLogisticRegression(X: number[][], y: number[], lambda = 0.1): { we
   return { weights, bias };
 }
 
+function capTrainingRows(
+  X: number[][],
+  y: number[],
+  maxRows: number,
+): { X: number[][]; y: number[]; capped: boolean } {
+  if (X.length <= maxRows) return { X, y, capped: false };
+  const indices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxRows);
+  return {
+    X: indices.map((i) => X[i]),
+    y: indices.map((i) => y[i]),
+    capped: true,
+  };
+}
+
 function predictLinear(X: number[][], weights: number[], bias: number): number[] {
   return X.map(row => {
     let pred = bias;
@@ -1957,27 +1971,34 @@ function trainSingleModel(
   console.log(`[AutoML] Algoritmo: ${strategy.algorithm}, Params:`, strategy.params);
   
   const isClassification = strategy.type === "classification";
+  const maxTrainRows = typeof strategy.params.maxTrainRows === "number" ? strategy.params.maxTrainRows : Number.POSITIVE_INFINITY;
+  const cappedTrain = Number.isFinite(maxTrainRows) ? capTrainingRows(Xtrain, ytrain, maxTrainRows) : { X: Xtrain, y: ytrain, capped: false };
+  const trainX = cappedTrain.X;
+  const trainY = cappedTrain.y;
+  if (cappedTrain.capped) {
+    console.log(`[resource_guard] ${strategy.id}: treino limitado a ${trainX.length.toLocaleString()} linhas para reduzir CPU`);
+  }
   let model: any;
   let predictions: number[];
   let featureImportances: { feature_name: string; importance_value: number }[];
   
   switch (strategy.algorithm) {
     case "logistic_regression":
-      model = trainLogisticRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      model = trainLogisticRegression(trainX, trainY, strategy.params.lambda || 0.1);
       predictions = predictLogistic(Xtest, model.weights, model.bias);
       featureImportances = calcFeatureImportance(model.weights, featureNames);
       break;
       
     case "linear_regression":
-      model = trainLinearRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      model = trainLinearRegression(trainX, trainY, strategy.params.lambda || 0.1);
       predictions = predictLinear(Xtest, model.weights, model.bias);
       featureImportances = calcFeatureImportance(model.weights, featureNames);
       break;
       
     case "gradient_boosting":
       model = trainGradientBoosting(
-        Xtrain, 
-        ytrain, 
+        trainX, 
+        trainY, 
         isClassification,
         strategy.params.nEstimators || 50,
         strategy.params.maxDepth || 6,
@@ -1989,8 +2010,8 @@ function trainSingleModel(
       
     case "random_forest":
       model = trainGradientBoosting(
-        Xtrain, 
-        ytrain, 
+        trainX, 
+        trainY, 
         isClassification,
         strategy.params.nEstimators || 50,
         strategy.params.maxDepth || 6,
