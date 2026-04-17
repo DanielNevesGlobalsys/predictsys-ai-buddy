@@ -1,7 +1,7 @@
 // train-models v2.5.0 — uses compute_eda_ready RPC as SSOT
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { parquetRead } from "npm:hyparquet@1.24.1";
+import { parquetRead } from "https://esm.sh/hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature } from "../_shared/feature-engineering.ts";
 import { evaluateTargetTrainability, trainabilityHumanMessage, evaluateTargetTrainabilityFromSSOT } from "../_shared/evaluate-target-trainability.ts";
 import { resolveActiveTarget, buildHumanTargetStats, buildTrainabilityReport } from "../_shared/resolve-active-target.ts";
