@@ -1219,6 +1219,8 @@ serve(async (req: Request) => {
     const inference = inferenceRes.data;
     const existingContract = contractRes.data;
     const modelSelection = selectionRes.data as { target_column: string | null; selection_version: number; selected_features: string[]; problem_type: string | null; target_hash: string | null } | null;
+    const activeDataset = activeDatasetRes.data as { id: string; source_type: string | null; storage_path: string | null; source_metadata: Record<string, any> | null } | null;
+    const activeDatasetSourceMetadata = (activeDataset?.source_metadata as Record<string, any> | null) || {};
 
     // ── Determine row_count from SSOT (dataset_state > manifest > project) ──
     let totalRows = 0;
