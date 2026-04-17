@@ -71,6 +71,7 @@ serve(async (req: Request) => {
           return supabase.from("project_modeling_datasets").select("*")
             .eq("project_id", project_id)
             .eq("selection_version_used", sv)
+            .in("status", ["ready", "warning"])
             .order("created_at", { ascending: false })
             .limit(1)
             .maybeSingle();
@@ -356,7 +357,10 @@ serve(async (req: Request) => {
     let canonicalDataset = modelingDataset;
     let builderSource = "modeling_datasets_is_current";
 
-    if (ssotBuilderDatasetId && (!modelingDataset || (modelingDataset as any).id !== ssotBuilderDatasetId)) {
+    if (
+      ssotBuilderDatasetId
+      && (!modelingDataset || !["ready", "warning"].includes((modelingDataset as any).status || "") || (modelingDataset as any).id === ssotBuilderDatasetId)
+    ) {
       // Cross-check: SSOT points to a different dataset than is_current query
       const { data: ssotDataset } = await supabase
         .from("project_modeling_datasets")
