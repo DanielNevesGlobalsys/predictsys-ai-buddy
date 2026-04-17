@@ -3402,15 +3402,17 @@ serve(async (req) => {
             }
           } catch (_) { /* ignore */ }
         }
-        console.log(`[AutoML] AGG-DAX feature inputs: builder=${builderFeatureNames.length}, selection=${selectedFeatureNames.length}, selection_typeof=${typeof rawSelectedFeatures}, isArray=${Array.isArray(rawSelectedFeatures)}`);
-        const requestedAggregatedFeatures = uniqueNonEmptyColumns([
-          ...builderFeatureNames,
-          ...selectedFeatureNames,
+        // CRITICAL: For DAX SUMMARIZECOLUMNS, we must NOT pass all selected features as group-by
+        // (causes cartesian explosion → WORKER_RESOURCE_LIMIT). The temporal aggregation grain is
+        // entity × time. Extra features will be joined back in-memory after aggregation OR derived
+        // from low-cardinality keys only. Here we pass an empty list to keep DAX minimal.
+        console.log(`[AutoML] AGG-DAX feature inputs (deferred): builder=${builderFeatureNames.length}, selection=${selectedFeatureNames.length}. Sending only entity+time to DAX to avoid cartesian explosion.`);
+        const requestedAggregatedFeatures: string[] = [
           calCandidates.year,
           calCandidates.month,
           calCandidates.quarter,
-        ]).filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
-        console.log(`[AutoML] AGG-DAX requestedAggregatedFeatures (${requestedAggregatedFeatures.length}): ${requestedAggregatedFeatures.slice(0, 10).join(", ")}${requestedAggregatedFeatures.length > 10 ? "..." : ""}`);
+        ].filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+         .filter((featureName) => featureName.toLowerCase() !== target_column.toLowerCase());
 
         const aggResult = await fetchPowerBITemporalAggregateFromConnection(
           supabase,
