@@ -268,7 +268,17 @@ async function fetchPowerBISampleRowsFromConnection(
                 }
                 return cleaned;
               });
-              return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+
+              const joinedKeys = Object.keys(joinedRows[0] || {});
+              const hasDimensionColumns = dimTables.some((dim) =>
+                joinedKeys.some((key) => key.startsWith(`${dim}.`))
+              );
+
+              if (hasDimensionColumns) {
+                return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+              }
+
+              console.warn(`[AutoML] Power BI ADDCOLUMNS returned only fact columns for ${factTable}; falling back to table-by-table flattening`);
             }
           }
         }
@@ -3121,7 +3131,7 @@ serve(async (req) => {
 
     if (isTemporalAggregated && useVirtualSample) {
       console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
-      const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
+          const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
       const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column
         || (activeTargetSettings as any)?.official_time_column
         || (activeTargetSettings as any)?.recommended_time_column

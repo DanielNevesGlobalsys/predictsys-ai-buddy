@@ -197,13 +197,103 @@ async function fetchPowerBISampleRowsFromConnection(
                 }
                 return cleaned;
               });
-              return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+
+              const joinedKeys = Object.keys(joinedRows[0] || {});
+              const hasDimensionColumns = dimTables.some((dim) =>
+                joinedKeys.some((key) => key.startsWith(`${dim}.`))
+              );
+
+              if (hasDimensionColumns) {
+                return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+              }
+
+              console.warn(`[build-modeling-dataset] Power BI ADDCOLUMNS returned only fact columns for ${factTable}; falling back to multi-table flattening`);
             }
           }
         }
       } catch (daxError) {
         console.warn(`[build-modeling-dataset] Power BI ADDCOLUMNS fallback failed:`, daxError);
       }
+
+      const tableData: Array<{ name: string; rows: Record<string, unknown>[]; colNames: string[] }> = [];
+      for (const entry of materializedTables!) {
+        const tableName = typeof entry === "string" ? entry : entry?.table_name;
+        if (!tableName) continue;
+        const cleanName = tableName.replace(/^\$+/, "").trim();
+        if (!cleanName) continue;
+
+        const rawRows = await executeDaxQuery(`EVALUATE TOPN(500, ${escapeDaxTable(cleanName)})`);
+        const prefixedRows = rawRows.map((row) => {
+          const prefixed: Record<string, unknown> = {};
+          for (const [key, value] of Object.entries(row || {})) {
+            const cleanKey = cleanupPowerBIColumnKey(key);
+            prefixed[usePrefix ? `${cleanName}.${cleanKey}` : cleanKey] = value;
+          }
+          return prefixed;
+        });
+        tableData.push({
+          name: cleanName,
+          rows: prefixedRows,
+          colNames: prefixedRows.length > 0 ? Object.keys(prefixedRows[0]) : [],
+        });
+      }
+
+      if (tableData.length === 0) {
+        return { rows: [], source: "powerbi_executequeries_multi_flat", error: "no_tables_fetched" };
+      }
+
+      const dimPatterns2 = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+      const sortedByFactScore = [...tableData].sort((a, b) => {
+        const aIsDim = dimPatterns2.test(a.name) ? 1 : 0;
+        const bIsDim = dimPatterns2.test(b.name) ? 1 : 0;
+        if (aIsDim !== bIsDim) return aIsDim - bIsDim;
+        return b.rows.length - a.rows.length;
+      });
+      const factTbl = sortedByFactScore[0];
+      const dimTbls = sortedByFactScore.slice(1);
+
+      const factColNamesLower = new Set(factTbl.colNames.map((column) => {
+        const parts = column.split(".");
+        return (parts.length > 1 ? parts[1] : parts[0]).toLowerCase();
+      }));
+
+      const dimLookups: Array<{ factKey: string; lookup: Map<string, Record<string, unknown>> }> = [];
+      for (const dim of dimTbls) {
+        const skCols = dim.colNames.filter((column) => {
+          const base = column.split(".").pop()!.toLowerCase();
+          return base.startsWith("sk_") && factColNamesLower.has(base);
+        });
+        const matchCols = skCols.length > 0 ? skCols : dim.colNames;
+
+        for (const dimCol of matchCols) {
+          const dimBase = dimCol.split(".").pop()!.toLowerCase();
+          if (!factColNamesLower.has(dimBase)) continue;
+
+          const factKey = factTbl.colNames.find((column) => column.split(".").pop()!.toLowerCase() === dimBase) || dimCol;
+          const lookup = new Map<string, Record<string, unknown>>();
+          for (const row of dim.rows) {
+            const keyVal = String(row[dimCol] ?? "");
+            if (keyVal && !lookup.has(keyVal)) lookup.set(keyVal, row);
+          }
+          dimLookups.push({ factKey, lookup });
+          break;
+        }
+      }
+
+      const allDimCols = dimTbls.flatMap((dim) => dim.colNames);
+      const flatRows = factTbl.rows.map((factRow) => {
+        const flat: Record<string, unknown> = { ...factRow };
+        for (const dimLookup of dimLookups) {
+          const dimRow = dimLookup.lookup.get(String(factRow[dimLookup.factKey] ?? ""));
+          if (dimRow) Object.assign(flat, dimRow);
+        }
+        for (const dimCol of allDimCols) {
+          if (!(dimCol in flat)) flat[dimCol] = "";
+        }
+        return flat;
+      });
+
+      return { rows: flatRows, source: "powerbi_executequeries_multi_flat" };
     }
 
     return { rows: [], source: "none", error: "powerbi_refresh_empty" };
@@ -1331,11 +1421,18 @@ serve(async (req: Request) => {
     if (isTemporalAggregated) {
       console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
       const aggEntityKey = (settings as any)?.entity_key || null;
-      const aggTimeCol = (settings as any)?.time_anchor_column || null;
+      const aggTimeCol = (settings as any)?.time_anchor_column
+        || (settings as any)?.official_time_column
+        || (settings as any)?.recommended_time_column
+        || null;
       const aggTargetCol = targetFromSettings || "agg_sacas_mes";
 
-      // ── RESILIENT AGGREGATION: proceed even without entity/time, injecting virtual target ──
-      if (aggEntityKey && aggTimeCol) {
+      const isPowerBIMaterialized = activeDataset?.source_type === "powerbi"
+        || activeDataset?.storage_path?.startsWith("powerbi_materialized/")
+        || activeDatasetSourceMetadata?.connection_mode === "executequeries";
+
+      // ── RESILIENT AGGREGATION: resolve entity + time/calendar from persisted sample or direct Power BI refresh ──
+      if (aggEntityKey) {
         // Load sample to compute aggregation stats
         const { data: sampleDataAgg } = await supabase
           .from("project_dataset_sample")
@@ -1344,9 +1441,37 @@ serve(async (req: Request) => {
           .maybeSingle();
 
         const sampleJsonAgg = (sampleDataAgg as any)?.sample_json as Record<string, any> | null;
-        const sampleRowsAgg: Record<string, any>[] = sampleJsonAgg?.rows ? (sampleJsonAgg.rows as any[]).slice(0, 1000) : [];
+        let sampleRowsAgg: Record<string, any>[] = sampleJsonAgg?.rows ? (sampleJsonAgg.rows as any[]).slice(0, 1000) : [];
+
+        const persistedKeys = Object.keys(sampleRowsAgg[0] || {});
+        const persistedTimeCandidates = [
+          aggTimeCol,
+          ...persistedKeys.filter((column) => /Calend[aá]rio\.(Ano|M[eê]s N[uú]mero|Trimestre)/i.test(column)),
+        ];
+        const persistedVolumeCandidates = ["Lote Café.QTDSAC", "QTDSAC", "Lote Café.QTDPES", "QTDPES"];
+        const needsPowerBIRefresh = isPowerBIMaterialized && (
+          sampleRowsAgg.length === 0
+          || !hasAnyNonEmptyValue(sampleRowsAgg, persistedTimeCandidates)
+          || !hasAnyNonEmptyValue(sampleRowsAgg, persistedVolumeCandidates)
+        );
+
+        if (needsPowerBIRefresh) {
+          const refreshedSample = await fetchPowerBISampleRowsFromConnection(supabase, activeDatasetSourceMetadata || {});
+          if (refreshedSample.rows.length > 0) {
+            sampleRowsAgg = refreshedSample.rows.slice(0, 1000) as Record<string, any>[];
+            console.log(`[build-modeling-dataset] Power BI sample refreshed for aggregation: source=${refreshedSample.source}, rows=${sampleRowsAgg.length}`);
+          } else {
+            console.warn(`[build-modeling-dataset] Power BI refresh returned no rows for aggregation (${refreshedSample.error || "unknown_error"})`);
+          }
+        }
 
         if (sampleRowsAgg.length > 0) {
+          const sampleKeys = Object.keys(sampleRowsAgg[0] || {});
+          const calYearCol = sampleKeys.find(k => /Calend[aá]rio\.Ano$/i.test(k)) || null;
+          const calMonthCol = sampleKeys.find(k => /Calend[aá]rio\.M[eê]s N[uú]mero$/i.test(k)) || null;
+          const calQuarterCol = sampleKeys.find(k => /Calend[aá]rio\.Trimestre$/i.test(k)) || null;
+          const canUseCalendarFields = !aggTimeCol && !!(calYearCol && calMonthCol);
+
           // ── FIND the actual numeric source column for aggregation ──
           // Priority: QTDSAC > sacas > QTDPES > peso > any numeric measure
           const AGG_SOURCE_CANDIDATES = ["qtdsac", "sacas", "qtd_sacas", "qtdpes", "peso", "volume", "quantidade"];
@@ -1376,9 +1501,21 @@ serve(async (req: Request) => {
 
           for (const row of sampleRowsAgg) {
             const entity = String(row[aggEntityKey] || "");
-            const rawDate = String(row[aggTimeCol] || "");
-            const month = rawDate.substring(0, 7); // "YYYY-MM"
-            if (!entity || !month || month.length < 7) continue;
+            if (!entity) continue;
+
+            let month = "";
+            if (aggTimeCol) {
+              const rawDate = String(row[aggTimeCol] || "");
+              month = rawDate.substring(0, 7);
+            } else if (canUseCalendarFields) {
+              const year = parseInt(String(row[calYearCol!] || "0"), 10);
+              const monthNum = parseInt(String(row[calMonthCol!] || "0"), 10);
+              if (year > 0 && monthNum > 0) {
+                month = `${year}-${String(monthNum).padStart(2, "0")}`;
+              }
+            }
+
+            if (!month || month.length < 7) continue;
 
             // Get the numeric value from the source column
             let numericValue = 1; // fallback = count
@@ -1452,9 +1589,11 @@ serve(async (req: Request) => {
 
           aggregationStats = {
             source_column: aggSourceCol || "COUNT(*)",
-            formula: aggSourceCol ? `SUM(${aggSourceCol}) GROUP BY ${aggEntityKey}, MONTH(${aggTimeCol})` : `COUNT(*) GROUP BY ${aggEntityKey}, MONTH(${aggTimeCol})`,
+            formula: aggSourceCol
+              ? `SUM(${aggSourceCol}) GROUP BY ${aggEntityKey}, ${aggTimeCol ? `MONTH(${aggTimeCol})` : "Calendário.Ano+Calendário.Mês Número"}`
+              : `COUNT(*) GROUP BY ${aggEntityKey}, ${aggTimeCol ? `MONTH(${aggTimeCol})` : "Calendário.Ano+Calendário.Mês Número"}`,
             entity_used: aggEntityKey,
-            time_used: aggTimeCol,
+            time_used: aggTimeCol || "calendar_year_month",
             truncation: "month",
             sample_raw_rows: sampleRowsAgg.length,
             sample_agg_rows: aggRows.length,
@@ -1499,6 +1638,16 @@ serve(async (req: Request) => {
             { name: "ref_year", type: "numeric", distinct_count: new Set(aggRows.map(r => parseInt(r.month.split("-")[0]))).size },
           );
 
+          if (calYearCol && !enrichedColumns.find(c => c.name === calYearCol)) {
+            enrichedColumns.push({ name: calYearCol, type: "numeric", distinct_count: distinctMonths });
+          }
+          if (calMonthCol && !enrichedColumns.find(c => c.name === calMonthCol)) {
+            enrichedColumns.push({ name: calMonthCol, type: "numeric", distinct_count: 12 });
+          }
+          if (calQuarterCol && !enrichedColumns.find(c => c.name === calQuarterCol)) {
+            enrichedColumns.push({ name: calQuarterCol, type: "numeric", distinct_count: 4 });
+          }
+
           // Add calendar features from model_selection selected_features
           const selectedFeatures = (modelSelection?.selected_features as string[]) || [];
           for (const sf of selectedFeatures) {
@@ -1515,12 +1664,8 @@ serve(async (req: Request) => {
           aggregationApplied = true;
         }
       } else {
-        // Entity/time not set but mode is temporal_aggregated — inject virtual target into schema
-        console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED: entity/time missing but injecting virtual target "${aggTargetCol}" into schema`);
-        if (!enrichedColumns.find(c => c.name === aggTargetCol)) {
-          enrichedColumns.push({ name: aggTargetCol, type: "numeric", distinct_count: 100, mean: 50, std: 30 });
-        }
-        aggregationApplied = true;
+        allBlockedReasons.push(`Modo temporal_aggregated exige Entity Key e sinais temporais reais para materializar "${aggTargetCol}".`);
+        console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: missing entity/time signals for ${aggTargetCol}`);
       }
     }
 
