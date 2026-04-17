@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useTranslation } from "react-i18next";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -181,6 +181,8 @@ const StepTraining = ({
 
   // primaryMetric is now resolved dynamically from training response or profile
   const [resolvedPrimaryMetric, setResolvedPrimaryMetric] = useState<string | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const pollingRunRef = useRef<string | null>(null);
   const primaryMetric = resolvedPrimaryMetric || (projectData.problem_type === "classification" ? "AUC" : "R²");
 
   const loadSelectionVersion = useCallback(async () => {
@@ -421,7 +423,7 @@ const StepTraining = ({
     }
   };
 
-  const loadExistingModels = async () => {
+  const loadExistingModels = useCallback(async () => {
     if (!projectData.id) return;
 
     const { data: modelsData, error: modelsError } = await supabase
@@ -455,13 +457,13 @@ const StepTraining = ({
       setModels(modelsWithMetrics);
       setTrainingComplete(modelsData.some(m => m.status === "trained"));
     }
-  };
+  }, [projectData.id]);
 
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-  const pollTrainingRun = async (runId: string) => {
-    for (let attempt = 0; attempt < 90; attempt++) {
-      const [eventsRes, latestModelRes] = await Promise.all([
+  const pollTrainingRun = async (runId: string, maxAttempts = 90) => {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      const [eventsRes, latestModelRes, settingsRes] = await Promise.all([
         supabase
           .from("platform_events")
           .select("event_type, metadata, created_at")
@@ -476,11 +478,29 @@ const StepTraining = ({
           .order("trained_at", { ascending: false })
           .limit(1)
           .maybeSingle(),
+        supabase
+          .from("project_settings")
+          .select("active_run_id")
+          .eq("project_id", projectData.id)
+          .maybeSingle(),
       ]);
 
       const matchedEvent = (eventsRes.data || []).find((event: any) => event?.metadata?.run_id === runId);
       if (matchedEvent?.event_type === "training_run_succeeded") {
         return { status: "success" as const, latestModel: latestModelRes.data as any };
+      }
+
+      const latestModel = latestModelRes.data as any;
+      if (latestModel?.status === "trained" && latestModel?.hyperparameters?.run_id === runId) {
+        return { status: "success" as const, latestModel };
+      }
+
+      const currentRunId = ((settingsRes.data as any)?.active_run_id as string | null) || null;
+      if (currentRunId !== runId) {
+        if (latestModel?.status === "trained") {
+          return { status: "success" as const, latestModel };
+        }
+        return { status: "settled" as const };
       }
 
       if (matchedEvent?.event_type === "training_run_blocked" || matchedEvent?.event_type === "job_error") {
@@ -492,6 +512,94 @@ const StepTraining = ({
 
     return { status: "timeout" as const };
   };
+
+  useEffect(() => {
+    if (!projectData.id || trainingComplete || pollingRunRef.current) return;
+
+    let cancelled = false;
+
+    const resumeActiveTraining = async () => {
+      const targetRunId = activeRunId || (() => null)();
+      const runId = targetRunId || await (async () => {
+        const { data } = await supabase
+          .from("project_settings")
+          .select("active_run_id")
+          .eq("project_id", projectData.id)
+          .maybeSingle();
+
+        return ((data as any)?.active_run_id as string | null) || null;
+      })();
+
+      if (!runId || cancelled || pollingRunRef.current === runId) return;
+
+      pollingRunRef.current = runId;
+      setActiveRunId(runId);
+      setIsTraining(true);
+      setError(null);
+
+      try {
+        while (!cancelled) {
+          const pollResult = await pollTrainingRun(runId);
+          if (cancelled) return;
+
+          if (pollResult.status === "success") {
+            const hp = (pollResult.latestModel as any)?.hyperparameters || {};
+            setQualityResult({
+              model_quality_flag: hp.model_quality_flag || "ok",
+              can_promote_to_production: hp.can_promote_to_production ?? (pollResult.latestModel as any)?.is_production ?? true,
+              dashboard_allowed: hp.dashboard_allowed ?? true,
+              dashboard_allowed_reason: hp.dashboard_allowed_reason || undefined,
+              improvement_vs_baseline: hp.improvement_vs_baseline ?? 0,
+              metrics_valid: hp.metrics_valid ?? true,
+              metrics_invalid_reasons: hp.metrics_invalid_reasons || [],
+              training_warnings: hp.training_warnings || [],
+              baseline_summary: hp.baseline_metrics || {},
+              metrics_summary: hp.metrics_clamped || {},
+              train_diagnostics: hp.train_diagnostics || undefined,
+            });
+
+            await loadExistingModels();
+            setTrainingComplete(true);
+            setActiveRunId(null);
+            onTrainingComplete?.();
+            toast.success(t("stepTraining.trainingSuccess"));
+            return;
+          }
+
+          if (pollResult.status === "error") {
+            const metadata = (pollResult.event as any)?.metadata || {};
+            const message = metadata.message || metadata.error_message || "Erro interno no treinamento";
+            setError(message);
+            setActiveRunId(null);
+            toast.error(message);
+            return;
+          }
+
+          if (pollResult.status === "settled") {
+            setActiveRunId(null);
+            await loadExistingModels();
+            return;
+          }
+        }
+      } catch (resumeError) {
+        console.error("[StepTraining] resumeActiveTraining error:", resumeError);
+        if (!cancelled) {
+          setError(resumeError instanceof Error ? resumeError.message : "Erro ao atualizar o status do treinamento.");
+          setActiveRunId(null);
+        }
+      } finally {
+        if (!cancelled) setIsTraining(false);
+        pollingRunRef.current = null;
+      }
+    };
+
+    void resumeActiveTraining();
+
+    return () => {
+      cancelled = true;
+      pollingRunRef.current = null;
+    };
+  }, [activeRunId, loadExistingModels, onTrainingComplete, projectData.id, t, trainingComplete]);
 
   const syncProblemTypeToPipeline = async (newType: "classification" | "regression") => {
     if (!projectData.id) return;
@@ -609,6 +717,7 @@ const StepTraining = ({
     }
 
     const startTime = Date.now();
+    let queuedRunId: string | null = null;
     setIsTraining(true);
     setError(null);
     setPreflightReport(null);
@@ -647,53 +756,9 @@ const StepTraining = ({
       }
 
       if ((data as any)?.status === "queued" && (data as any)?.run_id) {
+        queuedRunId = (data as any).run_id;
+        setActiveRunId(queuedRunId);
         toast.success("Treinamento iniciado em background.");
-        const pollResult = await pollTrainingRun((data as any).run_id);
-
-        if (pollResult.status === "success") {
-          const hp = (pollResult.latestModel as any)?.hyperparameters || {};
-          setQualityResult({
-            model_quality_flag: hp.model_quality_flag || "ok",
-            can_promote_to_production: hp.can_promote_to_production ?? (pollResult.latestModel as any)?.is_production ?? true,
-            dashboard_allowed: hp.dashboard_allowed ?? true,
-            dashboard_allowed_reason: hp.dashboard_allowed_reason || undefined,
-            improvement_vs_baseline: hp.improvement_vs_baseline ?? 0,
-            metrics_valid: hp.metrics_valid ?? true,
-            metrics_invalid_reasons: hp.metrics_invalid_reasons || [],
-            training_warnings: hp.training_warnings || [],
-            baseline_summary: hp.baseline_metrics || {},
-            metrics_summary: hp.metrics_clamped || {},
-            train_diagnostics: hp.train_diagnostics || undefined,
-          });
-
-          await loadExistingModels();
-          setTrainingComplete(true);
-          onTrainingComplete?.();
-          toast.success(t("stepTraining.trainingSuccess"));
-
-          trackEventWithTiming({
-            event_type: "model_trained",
-            project_id: projectData.id,
-            status: "success",
-            source: "app",
-          }, startTime);
-          return;
-        }
-
-        if (pollResult.status === "error") {
-          const metadata = (pollResult.event as any)?.metadata || {};
-          const message = metadata.message || metadata.error_message || "Erro interno no treinamento";
-          const crashError = new Error(message);
-          (crashError as any).__trainingCrash = {
-            request_id: metadata.request_id || "N/A",
-            code: metadata.code || "UNKNOWN",
-            step: metadata.step || "init",
-            ui_request_id: uiRequestId,
-          };
-          throw crashError;
-        }
-
-        toast.message("Treinamento ainda está processando. Atualize em instantes.");
         return;
       }
 
@@ -823,7 +888,9 @@ const StepTraining = ({
         source: "app",
       }, startTime);
     } finally {
-      setIsTraining(false);
+      if (!queuedRunId) {
+        setIsTraining(false);
+      }
     }
   };
 

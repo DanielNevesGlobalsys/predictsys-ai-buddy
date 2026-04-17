@@ -2293,6 +2293,7 @@ serve(async (req) => {
         source: "edge",
         metadata: { run_id, code, message },
       }));
+      safeFire(supabase.from("project_settings").update({ active_run_id: null }).eq("project_id", project_id));
       safeFire(supabase.rpc("rpc_set_pipeline_state", {
         p_project_id: project_id,
         p_stage: "training",
@@ -6443,6 +6444,7 @@ serve(async (req) => {
       source: "edge",
       metadata: { run_id, selection_version: currentSelectionVersion, duration_ms: Date.now() - startMs },
     }));
+    safeFire(supabase.from("project_settings").update({ active_run_id: null }).eq("project_id", project_id));
 
     // Build CTAs for UI
     const ctas: { label: string; go_to_step?: number }[] = [];
@@ -6643,6 +6645,9 @@ serve(async (req) => {
             timestamp: new Date().toISOString(),
           });
         } catch (evtErr) { console.error("[TRAINING_CRASH] Failed to log event:", evtErr); }
+        try {
+          await sb.from("project_settings").update({ active_run_id: null }).eq("project_id", crashProjectId);
+        } catch { /* best-effort */ }
       }
     } catch (_diagErr) {
       console.error("[TRAINING_CRASH] Diagnostics collection failed:", _diagErr);
