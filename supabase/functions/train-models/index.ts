@@ -4024,6 +4024,74 @@ serve(async (req) => {
         (columns.find(c => c.column_name === target_column)?.inferred_type || "").match(/categ|texto/i) !== null
       );
 
+      let virtualLinesToProcess = virtualSampledLines;
+      if (!useFullDataset && virtualLinesToProcess.length > effectiveTargetSampleSize) {
+        console.log(`[resource_guard] Virtual aggregated sampling: ${virtualLinesToProcess.length.toLocaleString()} → ${effectiveTargetSampleSize.toLocaleString()} linhas (${sampleStrategy})`);
+
+        if (useHumanLabelsAsTarget) {
+          virtualLinesToProcess = shuffle(virtualLinesToProcess).slice(0, effectiveTargetSampleSize);
+        } else if (sampleStrategy === "stratified_quantile" && !isTargetCategorical && targetIndex !== -1) {
+          const parsedTargets = virtualLinesToProcess
+            .map((line) => {
+              const values = parseCSVLine(line, delimiter);
+              const targetValue = parseFloat((values[targetIndex] || "").replace(",", "."));
+              return { line, targetValue };
+            })
+            .filter((row) => !isNaN(row.targetValue));
+
+          if (parsedTargets.length > 0) {
+            const nBins = 10;
+            const sortedTargets = parsedTargets.map((row) => row.targetValue).sort((a, b) => a - b);
+            const binEdges: number[] = [];
+            for (let b = 1; b < nBins; b++) {
+              binEdges.push(sortedTargets[Math.floor(sortedTargets.length * b / nBins)]);
+            }
+
+            const bins = new Map<number, string[]>();
+            for (let b = 0; b < nBins; b++) bins.set(b, []);
+
+            for (const row of parsedTargets) {
+              let bin = nBins - 1;
+              for (let b = 0; b < binEdges.length; b++) {
+                if (row.targetValue <= binEdges[b]) {
+                  bin = b;
+                  break;
+                }
+              }
+              bins.get(bin)!.push(row.line);
+            }
+
+            const perBin = Math.max(1, Math.floor(effectiveTargetSampleSize / nBins));
+            const sampledLines: string[] = [];
+            bins.forEach((lines) => {
+              sampledLines.push(...shuffle(lines).slice(0, Math.max(perBin, Math.min(lines.length, 50))));
+            });
+            virtualLinesToProcess = shuffle(sampledLines).slice(0, effectiveTargetSampleSize);
+          } else {
+            virtualLinesToProcess = shuffle(virtualLinesToProcess).slice(0, effectiveTargetSampleSize);
+          }
+        } else if (sampleStrategy === "stratified_class" && isTargetCategorical && targetIndex !== -1) {
+          const buckets = new Map<string, string[]>();
+          for (const line of virtualLinesToProcess) {
+            const values = parseCSVLine(line, delimiter);
+            const bucketKey = (values[targetIndex] || "__empty__").trim() || "__empty__";
+            if (!buckets.has(bucketKey)) buckets.set(bucketKey, []);
+            buckets.get(bucketKey)!.push(line);
+          }
+
+          const sampledLines: string[] = [];
+          const perBucket = Math.max(1, Math.floor(effectiveTargetSampleSize / Math.max(1, buckets.size)));
+          buckets.forEach((lines) => {
+            sampledLines.push(...shuffle(lines).slice(0, Math.min(lines.length, perBucket)));
+          });
+          virtualLinesToProcess = shuffle(sampledLines).slice(0, effectiveTargetSampleSize);
+        } else {
+          virtualLinesToProcess = shuffle(virtualLinesToProcess).slice(0, effectiveTargetSampleSize);
+        }
+
+        trainingWarningsGlobal.push(`Treino virtual agregado amostrado: ${virtualSampledLines.length.toLocaleString()} → ${virtualLinesToProcess.length.toLocaleString()} linhas (${sampleStrategy})`);
+      }
+
       console.log(`\nFeatures base: ${baseFeatureNames.length} colunas`);
       console.log(`Features engenharia: ${engineeredFeatureNames.length}`);
       console.log(`Target: ${target_column} (categorical: ${isTargetCategorical})`);
@@ -4037,7 +4105,7 @@ serve(async (req) => {
         // Identify which feature indices are categorical (non-numeric)
         const catFeatureIdxs: number[] = [];
         // Sample first few lines to detect
-        const sampleCheckLines = virtualSampledLines.slice(0, Math.min(10, virtualSampledLines.length));
+        const sampleCheckLines = virtualLinesToProcess.slice(0, Math.min(10, virtualLinesToProcess.length));
         for (const fi of featureIndices) {
           let numericCount = 0;
           for (const line of sampleCheckLines) {
@@ -4055,7 +4123,7 @@ serve(async (req) => {
           // Build encoders
           for (const fi of catFeatureIdxs) {
             const valueSet = new Map<string, number>();
-            for (const line of virtualSampledLines) {
+            for (const line of virtualLinesToProcess) {
               const vals = parseCSVLine(line, delimiter);
               const v = (vals[fi] || "").trim();
               if (v && !valueSet.has(v)) valueSet.set(v, valueSet.size);
@@ -4066,7 +4134,7 @@ serve(async (req) => {
       }
 
       // Parse CSV lines into X, y
-      for (const line of virtualSampledLines) {
+      for (const line of virtualLinesToProcess) {
         const values = parseCSVLine(line, delimiter);
 
         // Build raw record for feature engineering
