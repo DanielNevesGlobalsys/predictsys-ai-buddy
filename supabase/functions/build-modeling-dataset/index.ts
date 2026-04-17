@@ -1417,10 +1417,13 @@ serve(async (req: Request) => {
     const isTemporalAggregated = datasetBuildMode === "temporal_aggregated";
     let aggregationApplied = false;
     let aggregationStats: Record<string, any> | null = null;
+    const temporalAggregationBlockedReasons: string[] = [];
 
     if (isTemporalAggregated) {
       console.log(`[build-modeling-dataset] TEMPORAL_AGGREGATED mode detected. Applying aggregation.`);
-      const aggEntityKey = (settings as any)?.entity_key || null;
+      const aggEntityKey = (settings as any)?.entity_key
+        || (settings as any)?.official_entity_key
+        || null;
       const aggTimeCol = (settings as any)?.time_anchor_column
         || (settings as any)?.official_time_column
         || (settings as any)?.recommended_time_column
@@ -1662,9 +1665,12 @@ serve(async (req: Request) => {
           }
 
           aggregationApplied = true;
+        } else {
+          temporalAggregationBlockedReasons.push(`Modo temporal_aggregated não conseguiu materializar linhas agregadas para "${aggTargetCol}".`);
+          console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: aggregation produced zero rows for ${aggTargetCol}`);
         }
       } else {
-        allBlockedReasons.push(`Modo temporal_aggregated exige Entity Key e sinais temporais reais para materializar "${aggTargetCol}".`);
+        temporalAggregationBlockedReasons.push(`Modo temporal_aggregated exige Entity Key e sinais temporais reais para materializar "${aggTargetCol}".`);
         console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: missing entity/time signals for ${aggTargetCol}`);
       }
     }
@@ -1710,6 +1716,7 @@ serve(async (req: Request) => {
     let labelBuilderId: string | null = null;
     let labelBuildResult: LabelBuildResult | null = null;
     const allBlockedReasons: string[] = [];
+    allBlockedReasons.push(...temporalAggregationBlockedReasons);
 
     // ── Use resolveActiveTarget mode for consistent behavior across all functions ──
     const isHumanLabelingTarget = activeTarget.mode === "human";
@@ -2215,6 +2222,20 @@ serve(async (req: Request) => {
     console.log(`[build-modeling-dataset] Target hash: ${targetHashStr}, contract_version: ${contractVersion}`);
 
     // ==================== STATUS ====================
+    const resolvedBuilderEntityKey = entityKey || (settings as any)?.official_entity_key || null;
+    const resolvedBuilderTimeCol = anchorTimeCol || (settings as any)?.official_time_column || (settings as any)?.recommended_time_column || null;
+
+    if (isTemporalAggregated && (!aggregationApplied || !resolvedBuilderEntityKey)) {
+      const temporalBlockReasons = [
+        !resolvedBuilderEntityKey ? `Modo temporal_aggregated exige entity key oficial para materializar "${targetColumn}".` : null,
+        !aggregationApplied ? `Modo temporal_aggregated não gerou dataset agregado canônico para "${targetColumn}".` : null,
+      ].filter((reason): reason is string => Boolean(reason));
+
+      for (const reason of temporalBlockReasons) {
+        if (!allBlockedReasons.includes(reason)) allBlockedReasons.push(reason);
+      }
+    }
+
     const totalFeaturesFinal = report.features_final.length + report.features_generated.length;
     const coveragePct = enrichedColumns.length > 0 ? Math.round((report.features_final.length / enrichedColumns.length) * 100) : 0;
 
@@ -2244,8 +2265,8 @@ serve(async (req: Request) => {
         dataset_id: manifest?.dataset_id || datasetState?.active_dataset_ref || null,
         intent_version: aiCtx?.intent?.version || "v1",
         manifest_version: manifest?.id || null,
-        entity_key: entityKey,
-        anchor_time_col: anchorTimeCol,
+        entity_key: resolvedBuilderEntityKey,
+        anchor_time_col: resolvedBuilderTimeCol,
         target_column: targetColumn,
         target_type: targetType,
         target_source: targetSource,
@@ -2268,8 +2289,10 @@ serve(async (req: Request) => {
           intent,
           timeCols,
           eventCols,
-          entityKey,
-          anchorTimeCol,
+          entityKey: resolvedBuilderEntityKey,
+          anchorTimeCol: resolvedBuilderTimeCol,
+          officialEntityKey: (settings as any)?.official_entity_key || null,
+          officialTimeCol: (settings as any)?.official_time_column || null,
           targetColumn,
           targetType,
           targetSource,
@@ -2287,6 +2310,8 @@ serve(async (req: Request) => {
             overfit_warning: report.overfit_warning,
           },
           training_gate: trainingGate,
+          aggregation_applied: aggregationApplied,
+          aggregation_stats: aggregationStats,
           split_policy_id: splitPolicyId,
           leakage_guard: {
             removals_count: leakageGuardRemovals.length,

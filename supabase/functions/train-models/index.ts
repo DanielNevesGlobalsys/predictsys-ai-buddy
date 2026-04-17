@@ -133,6 +133,18 @@ function cleanupPowerBIColumnKey(key: string): string {
   return (dotParts[dotParts.length - 1] || noQuotes).trim();
 }
 
+function normalizePowerBIResultKey(rawKey: string): string {
+  const bracketMatches = [...rawKey.matchAll(/'?([^'\[]+)'?\[([^\]]+)\]/g)];
+  if (bracketMatches.length > 0) {
+    const last = bracketMatches[bracketMatches.length - 1];
+    const table = (last[1] || "").replace(/^'+|'+$/g, "").trim();
+    const column = (last[2] || "").trim();
+    return table ? `${table}.${column}` : column;
+  }
+
+  return rawKey.replace(/^\[|\]$/g, "").replace(/^'+|'+$/g, "").trim();
+}
+
 function escapeDaxTable(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
 }
@@ -507,14 +519,7 @@ TOPN(
         const normalized = result.rows.map((row) => {
           const out: Record<string, unknown> = {};
           for (const [rawKey, value] of Object.entries(row || {})) {
-            // Match Table[Column] format
-            const m = rawKey.match(/^([^[]+)\[([^\]]+)\]$/);
-            if (m) {
-              out[`${m[1].replace(/^'+|'+$/g, "").trim()}.${m[2].trim()}`] = value;
-            } else {
-              // Bare measure alias (like "agg_sacas_mes") or already-clean
-              out[rawKey.replace(/^\[|\]$/g, "").trim()] = value;
-            }
+            out[normalizePowerBIResultKey(rawKey)] = value;
           }
           return out;
         });
@@ -2301,8 +2306,13 @@ serve(async (req) => {
 
     // ── Gate 2: Entity Key validation ──
     // Hierarchy: entity_key > official_entity_key (both from project_settings)
+    const builderEntityKey = modelingDataset?.entity_key
+      || modelingDataset?.build_log?.entityKey
+      || modelingDataset?.build_log?.officialEntityKey
+      || null;
     const entityKey = (activeTargetSettings as any)?.entity_key
       || (activeTargetSettings as any)?.official_entity_key
+      || builderEntityKey
       || null;
     console.log(`[Gating] Entity Key resolution: entity_key=${(activeTargetSettings as any)?.entity_key || "null"}, official_entity_key=${(activeTargetSettings as any)?.official_entity_key || "null"}, resolved=${entityKey}`);
     if (!entityKey) {
@@ -3282,10 +3292,18 @@ serve(async (req) => {
 
     if (isTemporalAggregated && useVirtualSample) {
       console.log(`[AutoML] Applying temporal aggregation to virtual sample...`);
-          const aggEntityKey = entityKey || (activeTargetSettings as any)?.entity_key || null;
+      const aggEntityKey = entityKey
+        || (activeTargetSettings as any)?.entity_key
+        || builderEntityKey
+        || null;
+      const builderTimeCol = modelingDataset?.anchor_time_col
+        || modelingDataset?.build_log?.anchorTimeCol
+        || modelingDataset?.build_log?.officialTimeCol
+        || null;
       const aggTimeCol = (activeTargetSettings as any)?.time_anchor_column
         || (activeTargetSettings as any)?.official_time_column
         || (activeTargetSettings as any)?.recommended_time_column
+        || builderTimeCol
         || null;
 
       // Determine if we can aggregate using calendar fields (Ano + Mês) when no date column exists
