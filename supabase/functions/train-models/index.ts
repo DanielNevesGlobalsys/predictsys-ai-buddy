@@ -419,6 +419,7 @@ async function fetchPowerBITemporalAggregateFromConnection(
   sourceMetadata: Record<string, unknown>,
   entityKey: string, // e.g. "Lote Café.CODLOT"
   volumeCandidates: string[], // e.g. ["Lote Café.QTDSAC", "Lote Café.QTDPES"]
+  measureCandidates: string[],
   calendarCandidates: { year: string; month: string; quarter?: string }, // e.g. { year: "Calendário.Ano", month: "Calendário.Mês Número" }
 ): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string; volumeColUsed?: string | null; usedCountFallback?: boolean }> {
   try {
@@ -496,22 +497,39 @@ async function fetchPowerBITemporalAggregateFromConnection(
     const monthParts = splitTableCol(calendarCandidates.month);
 
     // Try volume candidates in order; first that succeeds wins
-    const tryVolumes: Array<string | null> = [...volumeCandidates, null]; // null = COUNTROWS fallback
+    const tryMeasures: Array<{ label: string; expr: string; isCountFallback: boolean; volumeColUsed: string | null }> = [
+      ...measureCandidates.map((measure) => {
+        const idx = measure.indexOf(".");
+        const table = measure.substring(0, idx);
+        const column = measure.substring(idx + 1);
+        return {
+          label: measure,
+          expr: `${escapeDaxTable(table)}[${column}]`,
+          isCountFallback: false,
+          volumeColUsed: measure,
+        };
+      }),
+      ...volumeCandidates.map((volCandidate) => {
+        const volParts = splitTableCol(volCandidate);
+        return {
+          label: volCandidate,
+          expr: `SUM(${escapeDaxTable(volParts.table)}[${volParts.column}])`,
+          isCountFallback: false,
+          volumeColUsed: volCandidate,
+        };
+      }),
+      {
+        label: "COUNTROWS",
+        expr: `COUNTROWS(${escapeDaxTable(entityParts.table)})`,
+        isCountFallback: true,
+        volumeColUsed: null,
+      },
+    ];
     let lastError = "no_attempts";
 
-    for (const volCandidate of tryVolumes) {
-      let measureExpr: string;
-      let measureAlias: string;
-
-      if (volCandidate) {
-        const volParts = splitTableCol(volCandidate);
-        measureExpr = `SUM(${escapeDaxTable(volParts.table)}[${volParts.column}])`;
-        measureAlias = "agg_sacas_mes";
-      } else {
-        // Fallback to COUNT
-        measureExpr = `COUNTROWS(${escapeDaxTable(entityParts.table)})`;
-        measureAlias = "agg_sacas_mes";
-      }
+    for (const measureCandidate of tryMeasures) {
+      const measureExpr = measureCandidate.expr;
+      const measureAlias = "agg_sacas_mes";
 
       const dax = `EVALUATE
 TOPN(
@@ -537,16 +555,16 @@ TOPN(
           return out;
         });
 
-        console.log(`[AutoML] Power BI SUMMARIZECOLUMNS aggregate OK: ${normalized.length} rows, volume=${volCandidate || "COUNTROWS"}`);
+        console.log(`[AutoML] Power BI SUMMARIZECOLUMNS aggregate OK: ${normalized.length} rows, volume=${measureCandidate.label}`);
         return {
           rows: normalized,
           source: "powerbi_summarizecolumns_aggregate",
-          volumeColUsed: volCandidate,
-          usedCountFallback: !volCandidate,
+          volumeColUsed: measureCandidate.volumeColUsed,
+          usedCountFallback: measureCandidate.isCountFallback,
         };
       }
       lastError = result.error || "empty_rows";
-      console.warn(`[AutoML] SUMMARIZECOLUMNS attempt failed (volume=${volCandidate || "COUNTROWS"}): ${lastError.slice(0, 200)}`);
+      console.warn(`[AutoML] SUMMARIZECOLUMNS attempt failed (volume=${measureCandidate.label}): ${lastError.slice(0, 200)}`);
     }
 
     return { rows: [], source: "none", error: `summarizecolumns_failed:${lastError.slice(0, 200)}` };
@@ -3343,12 +3361,19 @@ serve(async (req) => {
         console.log(`[AutoML] Attempting Power BI SUMMARIZECOLUMNS direct aggregation for ${aggEntityKey}`);
         const calCandidates = { year: "Calendário.Ano", month: "Calendário.Mês Número", quarter: "Calendário.Trimestre" };
         const volCandidates = ["Lote Café.QTDSAC", "Lote Café.QTDPES"];
+        const measureCandidates = [
+          "Medidas Movimentação Café.Qtd. Saca",
+          "Medidas Movimentação Café.Sacas Captadas",
+          "Medidas Amostra.Qtd. Saca Amostra",
+          "Detalhe Amostra.Sacas Captadas das Amostras",
+        ];
 
         const aggResult = await fetchPowerBITemporalAggregateFromConnection(
           supabase,
           sourceMetadata || {},
           aggEntityKey,
           volCandidates,
+          measureCandidates,
           calCandidates,
         );
 
