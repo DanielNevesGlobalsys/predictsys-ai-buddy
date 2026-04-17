@@ -145,6 +145,19 @@ function normalizePowerBIResultKey(rawKey: string): string {
   return rawKey.replace(/^\[|\]$/g, "").replace(/^'+|'+$/g, "").trim();
 }
 
+function getFirstExistingValue(
+  row: Record<string, unknown>,
+  candidateKeys: Array<string | null | undefined>,
+): unknown {
+  for (const key of candidateKeys) {
+    if (!key) continue;
+    if (Object.prototype.hasOwnProperty.call(row, key)) {
+      return row[key];
+    }
+  }
+  return undefined;
+}
+
 function escapeDaxTable(name: string): string {
   return `'${name.replace(/'/g, "''")}'`;
 }
@@ -407,7 +420,7 @@ async function fetchPowerBITemporalAggregateFromConnection(
   entityKey: string, // e.g. "Lote Café.CODLOT"
   volumeCandidates: string[], // e.g. ["Lote Café.QTDSAC", "Lote Café.QTDPES"]
   calendarCandidates: { year: string; month: string; quarter?: string }, // e.g. { year: "Calendário.Ano", month: "Calendário.Mês Número" }
-): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string; volumeColUsed?: string | null }> {
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string; volumeColUsed?: string | null; usedCountFallback?: boolean }> {
   try {
     const connectionId = normalizeStringValue(sourceMetadata.connection_id);
     const workspaceId = normalizeStringValue(sourceMetadata.workspace_id);
@@ -525,7 +538,12 @@ TOPN(
         });
 
         console.log(`[AutoML] Power BI SUMMARIZECOLUMNS aggregate OK: ${normalized.length} rows, volume=${volCandidate || "COUNTROWS"}`);
-        return { rows: normalized, source: "powerbi_summarizecolumns_aggregate", volumeColUsed: volCandidate };
+        return {
+          rows: normalized,
+          source: "powerbi_summarizecolumns_aggregate",
+          volumeColUsed: volCandidate,
+          usedCountFallback: !volCandidate,
+        };
       }
       lastError = result.error || "empty_rows";
       console.warn(`[AutoML] SUMMARIZECOLUMNS attempt failed (volume=${volCandidate || "COUNTROWS"}): ${lastError.slice(0, 200)}`);
@@ -3338,17 +3356,24 @@ serve(async (req) => {
           const aggRows = aggResult.rows;
           const yearKey = calCandidates.year;
           const monthKey = calCandidates.month;
+          const yearAliases = [yearKey, "Ano", "ref_year"];
+          const monthAliases = [monthKey, "Mês Número", "Mes Número", "Mes Numero", "ref_month"];
+          const entityAliases = [aggEntityKey, aggEntityKey.split(".").pop() || aggEntityKey];
           const targetKey = "agg_sacas_mes";
 
-          const aggHeaders = [targetKey, yearKey, monthKey, "Calendário.Trimestre", aggEntityKey];
+          if (aggResult.usedCountFallback) {
+            console.warn(`[AutoML] SUMMARIZECOLUMNS used COUNTROWS fallback for ${targetKey}; refusing to treat this as canonical volume aggregation.`);
+          }
+
+          const aggHeaders = [targetKey, "ref_year", "ref_month", "ref_quarter", aggEntityKey];
           const aggLines: string[] = [];
 
           for (const r of aggRows) {
-            const tv = Number(r[targetKey] ?? 0);
-            const yr = Number(r[yearKey] ?? 0);
-            const mn = Number(r[monthKey] ?? 0);
+            const tv = Number(getFirstExistingValue(r, [targetKey]) ?? 0);
+            const yr = Number(getFirstExistingValue(r, yearAliases) ?? 0);
+            const mn = Number(getFirstExistingValue(r, monthAliases) ?? 0);
             const qt = mn > 0 ? Math.ceil(mn / 3) : 0;
-            const ent = String(r[aggEntityKey] ?? "");
+            const ent = String(getFirstExistingValue(r, entityAliases) ?? "");
             if (!ent || yr === 0 || mn === 0) continue;
             aggLines.push([
               String(tv),
@@ -3359,7 +3384,7 @@ serve(async (req) => {
             ].join(","));
           }
 
-          if (aggLines.length > 0) {
+          if (aggLines.length > 0 && !aggResult.usedCountFallback) {
             virtualHeaders = aggHeaders;
             virtualSampledLines = aggLines;
             delimiter = ",";
@@ -3369,6 +3394,8 @@ serve(async (req) => {
             );
             console.log(`[AutoML] ✅ SUMMARIZECOLUMNS aggregation succeeded — skipping in-memory join (${aggLines.length} rows, volume=${aggResult.volumeColUsed || "COUNTROWS"})`);
             skipInMemoryAgg = true;
+          } else if (aggLines.length > 0 && aggResult.usedCountFallback) {
+            console.warn(`[AutoML] SUMMARIZECOLUMNS produced ${aggLines.length} grouped rows, but only with COUNTROWS fallback; falling back to stricter in-memory aggregation`);
           } else {
             console.warn(`[AutoML] SUMMARIZECOLUMNS returned ${aggRows.length} raw rows but 0 valid after filtering`);
           }
