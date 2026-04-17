@@ -1487,45 +1487,82 @@ serve(async (req: Request) => {
           ];
           const allSampleKeys = Object.keys(sampleRowsAgg[0] || {});
 
-          // Helper: confirm a column is numeric (>=1 finite, non-zero value in sample)
-          const isNumericColumn = (colName: string): boolean => {
-            for (let i = 0; i < Math.min(sampleRowsAgg.length, 200); i++) {
+          // Helper: confirm a column is numeric-typed in the sample
+          // STRICT: requires at least one finite, positive value
+          const isNumericPositive = (colName: string): boolean => {
+            for (let i = 0; i < Math.min(sampleRowsAgg.length, 500); i++) {
               const v = sampleRowsAgg[i]?.[colName];
               const parsed = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(",", "."));
               if (Number.isFinite(parsed) && parsed > 0) return true;
             }
             return false;
           };
+          // LOOSE: accepts numeric column even if all sampled values are 0 (sample may be unrepresentative)
+          const isNumericTyped = (colName: string): boolean => {
+            let parseableCount = 0;
+            for (let i = 0; i < Math.min(sampleRowsAgg.length, 500); i++) {
+              const v = sampleRowsAgg[i]?.[colName];
+              if (v === null || v === undefined || v === "") continue;
+              const parsed = typeof v === "number" ? v : parseFloat(String(v).replace(",", "."));
+              if (Number.isFinite(parsed)) parseableCount++;
+            }
+            return parseableCount >= 5; // at least a few numeric values present
+          };
 
           let aggSourceCol: string | null = null;
-          // Pass 1: token match on full column name + numeric validation
+          let aggSourceConfidence: "positive" | "typed_zero" = "positive";
+
+          // ── ROUND 1: Strict (positive value) match ──
+          // Pass 1.1: full token match
           for (const token of AGG_SOURCE_CANDIDATES) {
-            const match = allSampleKeys.find(k => k.toLowerCase().includes(token) && isNumericColumn(k));
+            const match = allSampleKeys.find(k => k.toLowerCase().includes(token) && isNumericPositive(k));
             if (match) { aggSourceCol = match; break; }
           }
-          // Pass 2: token match on column name without table prefix + numeric validation
+          // Pass 1.2: suffix token match
           if (!aggSourceCol) {
             for (const token of AGG_SOURCE_CANDIDATES) {
               const match = allSampleKeys.find(k => {
                 const colPart = k.includes(".") ? k.split(".").pop()!.toLowerCase() : k.toLowerCase();
-                return colPart.includes(token) && isNumericColumn(k);
+                return colPart.includes(token) && isNumericPositive(k);
               });
               if (match) { aggSourceCol = match; break; }
             }
           }
-          // Pass 3: ANY column starting with SAC* (cooperado/lote café SAC variants) — numeric & positive
+          // Pass 1.3: SAC* prefix match
           if (!aggSourceCol) {
             const match = allSampleKeys.find(k => {
               const colPart = k.includes(".") ? k.split(".").pop()! : k;
-              return /^sac/i.test(colPart) && isNumericColumn(k);
+              return /^sac/i.test(colPart) && isNumericPositive(k);
             });
             if (match) aggSourceCol = match;
           }
-          // Pass 4: any numeric column containing "sac" anywhere (last resort before COUNT)
+
+          // ── ROUND 2: Loose match (sample may be all zeros but column is numeric) ──
+          // The persisted sample can be unrepresentative; the full dataset likely has non-zero values.
           if (!aggSourceCol) {
-            const match = allSampleKeys.find(k => /sac/i.test(k) && isNumericColumn(k));
-            if (match) aggSourceCol = match;
+            console.warn(`[build-modeling-dataset] No positive-value volumetric column in sample. Falling back to typed-numeric match (sample may be unrepresentative).`);
+            // Pass 2.1: SAC* prefix, numeric typed
+            const sacMatch = allSampleKeys.find(k => {
+              const colPart = k.includes(".") ? k.split(".").pop()! : k;
+              return /^sac/i.test(colPart) && isNumericTyped(k);
+            });
+            if (sacMatch) {
+              aggSourceCol = sacMatch;
+              aggSourceConfidence = "typed_zero";
+            }
           }
+          if (!aggSourceCol) {
+            // Pass 2.2: any token match, numeric typed
+            for (const token of AGG_SOURCE_CANDIDATES) {
+              const match = allSampleKeys.find(k => {
+                const colPart = k.includes(".") ? k.split(".").pop()!.toLowerCase() : k.toLowerCase();
+                return (colPart.includes(token) || k.toLowerCase().includes(token)) && isNumericTyped(k);
+              });
+              if (match) { aggSourceCol = match; aggSourceConfidence = "typed_zero"; break; }
+            }
+          }
+
+          console.log(`[build-modeling-dataset] AGG_SOURCE_CONFIDENCE: ${aggSourceConfidence}`);
 
           console.log(`[build-modeling-dataset] AGG_SOURCE: column="${aggSourceCol}", entity="${aggEntityKey}", time="${aggTimeCol}"`);
 
