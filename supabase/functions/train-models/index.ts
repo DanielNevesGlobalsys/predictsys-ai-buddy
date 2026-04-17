@@ -4134,7 +4134,7 @@ serve(async (req) => {
       }
 
       // Parse CSV lines into X, y
-      for (const line of virtualSampledLines) {
+      for (const line of virtualLinesToProcess) {
         const values = parseCSVLine(line, delimiter);
 
         // Build raw record for feature engineering
