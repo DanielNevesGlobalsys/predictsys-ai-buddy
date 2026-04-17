@@ -1735,7 +1735,8 @@ serve(async (req: Request) => {
           }
 
           const requiresCanonicalVolumeSignal = /^agg_/i.test(aggTargetCol);
-          const usedCountFallback = !aggSourceCol || sourceValueCount === 0;
+          const usedCountFallback = !aggSourceCol;
+          const sampleHadNoPositive = aggSourceCol && sourceValueCount === 0;
 
           if (requiresCanonicalVolumeSignal && usedCountFallback) {
             temporalAggregationBlockedReasons.push(
@@ -1743,7 +1744,11 @@ serve(async (req: Request) => {
             );
             console.warn(`[build-modeling-dataset] TEMPORAL_AGGREGATED blocked: canonical target ${aggTargetCol} fell back to COUNT(*)`);
           } else {
+            // Source column found (even if sample had all zeros) — proceed; full dataset will provide real values
             aggregationApplied = true;
+            if (sampleHadNoPositive) {
+              console.warn(`[build-modeling-dataset] AGG: source column "${aggSourceCol}" found but sample had all-zero values. Trusting full dataset for training.`);
+            }
           }
         } else {
           temporalAggregationBlockedReasons.push(`Modo temporal_aggregated não conseguiu materializar linhas agregadas para "${aggTargetCol}".`);
