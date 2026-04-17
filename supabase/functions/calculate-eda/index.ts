@@ -1,5 +1,5 @@
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
-import { parquetRead } from "npm:hyparquet@1.24.1";
+import { parquetRead } from "https://esm.sh/hyparquet@1.24.1";
 import { applyFeatureTransforms, type ProjectFeature, type RawRecord } from "../_shared/feature-engineering.ts";
 
 const corsHeaders = {
