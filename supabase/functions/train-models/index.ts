@@ -689,7 +689,7 @@ function validateTarget(
 
     // Check for sequential/ID pattern
     const sorted = [...yValues].sort((a, b) => a - b);
-    const diffs = [];
+    const diffs: number[] = [];
     for (let i = 1; i < Math.min(sorted.length, 1000); i++) {
       diffs.push(sorted[i] - sorted[i - 1]);
     }
@@ -2617,7 +2617,6 @@ serve(async (req) => {
               
               // Update the in-memory selection for the rest of training
               selection.selected_features = validFeatures;
-              trainingWarningsGlobal.push(`${invalidFeatures.length} feature(s) removida(s) por reconciliação com schema do builder.`);
             } else {
               // Not enough valid features — block
               for (const f of invalidFeatures) {
@@ -2661,6 +2660,17 @@ serve(async (req) => {
 
     // ── Gate 3 prep: warnings accumulator ──
     const trainingWarningsGlobal: string[] = [];
+
+    if (Array.isArray(selection?.selected_features)) {
+      const schemaColumns = getModelingDatasetSchemaColumns(modelingDataset);
+      if (schemaColumns.length > 0) {
+        const schemaLower = new Set(schemaColumns.map((column) => column.toLowerCase()));
+        const removedBySchema = selection.selected_features.filter((feature: string) => !schemaLower.has(feature.toLowerCase()));
+        if (removedBySchema.length > 0) {
+          trainingWarningsGlobal.push(`${removedBySchema.length} feature(s) removida(s) por reconciliação com schema do builder.`);
+        }
+      }
+    }
 
     // ── MVP-Soft Prepare: training_prepare events + feature filter + sample plan ──
     {
