@@ -1476,23 +1476,55 @@ serve(async (req: Request) => {
           const canUseCalendarFields = !aggTimeCol && !!(calYearCol && calMonthCol);
 
           // ── FIND the actual numeric source column for aggregation ──
-          // Priority: QTDSAC > sacas > QTDPES > peso > any numeric measure
-          const AGG_SOURCE_CANDIDATES = ["qtdsac", "sacas", "qtd_sacas", "qtdpes", "peso", "volume", "quantidade"];
+          // Priority: QTDSAC > SACREM/SACAMO/SACEST/SACREA (cooperado/lote café variants)
+          // > sacas > QTDPES > peso > volume > quantidade > any numeric measure containing "sac"
+          const AGG_SOURCE_CANDIDATES = [
+            "qtdsac", "qtd_sacas", "qtd_sac",
+            "sacrem", "sacamo", "sacest", "sacrea",
+            "sacas",
+            "qtdpes", "qtd_pes", "peso",
+            "volume", "quantidade", "qtd",
+          ];
           const allSampleKeys = Object.keys(sampleRowsAgg[0] || {});
+
+          // Helper: confirm a column is numeric (>=1 finite, non-zero value in sample)
+          const isNumericColumn = (colName: string): boolean => {
+            for (let i = 0; i < Math.min(sampleRowsAgg.length, 200); i++) {
+              const v = sampleRowsAgg[i]?.[colName];
+              const parsed = typeof v === "number" ? v : parseFloat(String(v ?? "").replace(",", "."));
+              if (Number.isFinite(parsed) && parsed > 0) return true;
+            }
+            return false;
+          };
+
           let aggSourceCol: string | null = null;
+          // Pass 1: token match on full column name + numeric validation
           for (const token of AGG_SOURCE_CANDIDATES) {
-            const match = allSampleKeys.find(k => k.toLowerCase().includes(token));
+            const match = allSampleKeys.find(k => k.toLowerCase().includes(token) && isNumericColumn(k));
             if (match) { aggSourceCol = match; break; }
           }
-          // Fallback: search with table prefix
+          // Pass 2: token match on column name without table prefix + numeric validation
           if (!aggSourceCol) {
             for (const token of AGG_SOURCE_CANDIDATES) {
               const match = allSampleKeys.find(k => {
                 const colPart = k.includes(".") ? k.split(".").pop()!.toLowerCase() : k.toLowerCase();
-                return colPart.includes(token);
+                return colPart.includes(token) && isNumericColumn(k);
               });
               if (match) { aggSourceCol = match; break; }
             }
+          }
+          // Pass 3: ANY column starting with SAC* (cooperado/lote café SAC variants) — numeric & positive
+          if (!aggSourceCol) {
+            const match = allSampleKeys.find(k => {
+              const colPart = k.includes(".") ? k.split(".").pop()! : k;
+              return /^sac/i.test(colPart) && isNumericColumn(k);
+            });
+            if (match) aggSourceCol = match;
+          }
+          // Pass 4: any numeric column containing "sac" anywhere (last resort before COUNT)
+          if (!aggSourceCol) {
+            const match = allSampleKeys.find(k => /sac/i.test(k) && isNumericColumn(k));
+            if (match) aggSourceCol = match;
           }
 
           console.log(`[build-modeling-dataset] AGG_SOURCE: column="${aggSourceCol}", entity="${aggEntityKey}", time="${aggTimeCol}"`);
