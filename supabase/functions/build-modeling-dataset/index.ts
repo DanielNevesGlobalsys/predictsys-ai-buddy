@@ -8,6 +8,214 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+function uniqueNonEmptyColumns(values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+
+  for (const value of values) {
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+  }
+
+  return out;
+}
+
+function buildColumnListFromRows(rows: Record<string, any>[]): string[] {
+  return uniqueNonEmptyColumns(
+    rows.flatMap((row) => (row && typeof row === "object" ? Object.keys(row) : []))
+  );
+}
+
+function hasAnyNonEmptyValue(
+  rows: Record<string, any>[],
+  candidateColumns: Array<string | null | undefined>,
+): boolean {
+  const columns = candidateColumns.filter((value): value is string => typeof value === "string" && value.trim().length > 0);
+  if (rows.length === 0 || columns.length === 0) return false;
+
+  return rows.some((row) => columns.some((column) => {
+    const value = row?.[column];
+    return value !== null && value !== undefined && String(value).trim() !== "";
+  }));
+}
+
+function normalizeStringValue(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function cleanupPowerBIColumnKey(key: string): string {
+  const matches = key.match(/\[([^\]]+)\]/g);
+  if (matches && matches.length > 0) {
+    return matches[matches.length - 1].replace(/^\[/, "").replace(/\]$/, "").trim();
+  }
+
+  const noQuotes = key.replace(/^'+|'+$/g, "").replace(/^\[|\]$/g, "");
+  const dotParts = noQuotes.split(".");
+  return (dotParts[dotParts.length - 1] || noQuotes).trim();
+}
+
+function escapeDaxTable(name: string): string {
+  return `'${name.replace(/'/g, "''")}'`;
+}
+
+async function fetchPowerBISampleRowsFromConnection(
+  supabase: any,
+  sourceMetadata: Record<string, unknown>,
+): Promise<{ rows: Record<string, unknown>[]; source: string; error?: string }> {
+  try {
+    const connectionId = normalizeStringValue(sourceMetadata.connection_id);
+    const workspaceId = normalizeStringValue(sourceMetadata.workspace_id);
+    const datasetId = normalizeStringValue(sourceMetadata.dataset_id);
+    const materializedTables = Array.isArray(sourceMetadata.materialized_tables) ? sourceMetadata.materialized_tables : null;
+    const isMultiTable = Boolean(materializedTables && materializedTables.length > 0);
+    const tableNameRaw =
+      normalizeStringValue(sourceMetadata.effective_query_table_name) ||
+      normalizeStringValue(sourceMetadata.discovered_table_name) ||
+      normalizeStringValue(sourceMetadata.table_name);
+
+    if (!connectionId || !workspaceId || !datasetId) {
+      return { rows: [], source: "none", error: "missing_connection_metadata" };
+    }
+
+    if (!isMultiTable && !tableNameRaw) {
+      return { rows: [], source: "none", error: "missing_table_name" };
+    }
+
+    const { data: conn, error: connError } = await supabase
+      .from("external_connections")
+      .select("metadata, data_sources!external_connections_data_source_id_fkey(connection_config)")
+      .eq("id", connectionId)
+      .maybeSingle();
+
+    if (connError || !conn) {
+      return { rows: [], source: "none", error: `connection_lookup_failed:${connError?.message || "not_found"}` };
+    }
+
+    const dsRel = (conn as { data_sources?: Array<{ connection_config?: Record<string, unknown> }> | { connection_config?: Record<string, unknown> } }).data_sources;
+    const cfg = Array.isArray(dsRel) ? dsRel[0]?.connection_config || {} : dsRel?.connection_config || {};
+
+    const clientId = normalizeStringValue(cfg.client_id);
+    const clientSecret = normalizeStringValue(cfg.client_secret);
+    const tenantId = normalizeStringValue(cfg.tenant_id);
+
+    if (!clientId || !clientSecret || !tenantId) {
+      return { rows: [], source: "none", error: "missing_powerbi_credentials" };
+    }
+
+    const tokenResp = await fetch(`https://login.microsoftonline.com/${tenantId}/oauth2/v2.0/token`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "client_credentials",
+        client_id: clientId,
+        client_secret: clientSecret,
+        scope: "https://analysis.windows.net/powerbi/api/.default",
+      }).toString(),
+    });
+
+    if (!tokenResp.ok) {
+      const tokenError = await tokenResp.text();
+      return { rows: [], source: "none", error: `token_failed:${tokenResp.status}:${tokenError.slice(0, 200)}` };
+    }
+
+    const tokenJson = await tokenResp.json();
+    const accessToken = tokenJson?.access_token as string | undefined;
+    if (!accessToken) {
+      return { rows: [], source: "none", error: "token_missing_access_token" };
+    }
+
+    const executeUrl = `https://api.powerbi.com/v1.0/myorg/groups/${workspaceId}/datasets/${datasetId}/executeQueries`;
+    const executeDaxQuery = async (query: string): Promise<Record<string, unknown>[]> => {
+      const resp = await fetch(executeUrl, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          queries: [{ query }],
+          serializerSettings: { includeNulls: true },
+        }),
+      });
+      const rawBody = await resp.text();
+      if (!resp.ok) {
+        console.warn(`[build-modeling-dataset] Power BI executeQueries failed (${resp.status}): ${rawBody.slice(0, 200)}`);
+        return [];
+      }
+      const parsed = JSON.parse(rawBody);
+      return parsed?.results?.[0]?.tables?.[0]?.rows || [];
+    };
+
+    if (isMultiTable) {
+      const usePrefix = materializedTables!.length > 1;
+      const tableNames = materializedTables!
+        .map((entry: any) => typeof entry === "string" ? entry : entry?.table_name)
+        .filter((name: any): name is string => !!name)
+        .map((name: string) => name.replace(/^\$+/, "").trim())
+        .filter((name: string) => name.length > 0);
+
+      try {
+        if (tableNames.length >= 2) {
+          const dimPatterns = /^(Calend|Data|Tempo|Time|Date|Dim_|Filial|Produto|Safra|Origem|Representant|Cooperad)/i;
+          const factCandidates = tableNames.filter((name) => !dimPatterns.test(name));
+          const factTable = factCandidates.length > 0 ? factCandidates[0] : tableNames[0];
+          const dimTables = tableNames.filter((name) => name !== factTable);
+
+          const dimColsMap: Record<string, string[]> = {};
+          for (const dim of dimTables) {
+            const colRows = await executeDaxQuery(`EVALUATE TOPN(1, ${escapeDaxTable(dim)})`);
+            if (colRows.length > 0) {
+              dimColsMap[dim] = Object.keys(colRows[0]).map((key) => cleanupPowerBIColumnKey(key));
+            }
+          }
+
+          const relatedCols: string[] = [];
+          for (const [dim, cols] of Object.entries(dimColsMap)) {
+            for (const col of cols.slice(0, 15)) {
+              relatedCols.push(`"${dim}.${col}", RELATED(${escapeDaxTable(dim)}[${col}])`);
+            }
+          }
+
+          if (relatedCols.length > 0) {
+            const daxQuery = `EVALUATE TOPN(500, ADDCOLUMNS(${escapeDaxTable(factTable)}, ${relatedCols.join(", ")}))`;
+            const rawRows = await executeDaxQuery(daxQuery);
+            if (rawRows.length > 0) {
+              const joinedRows = rawRows.map((row) => {
+                const cleaned: Record<string, unknown> = {};
+                for (const [key, value] of Object.entries(row || {})) {
+                  const cleanKey = cleanupPowerBIColumnKey(key);
+                  const fullKey = key.includes("[") && !key.includes(".") && !cleanKey.includes(".") ? `${factTable}.${cleanKey}` : cleanKey;
+                  cleaned[usePrefix ? fullKey : cleanKey] = value;
+                }
+                return cleaned;
+              });
+              return { rows: joinedRows, source: "powerbi_dax_addcolumns_flat" };
+            }
+          }
+        }
+      } catch (daxError) {
+        console.warn(`[build-modeling-dataset] Power BI ADDCOLUMNS fallback failed:`, daxError);
+      }
+    }
+
+    return { rows: [], source: "none", error: "powerbi_refresh_empty" };
+  } catch (error) {
+    return {
+      rows: [],
+      source: "none",
+      error: `powerbi_sample_exception:${(error as Error).message}`,
+    };
+  }
+}
+
 // ==================== TYPES ====================
 
 interface LabelPlan {
