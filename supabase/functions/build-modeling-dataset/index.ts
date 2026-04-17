@@ -1195,7 +1195,7 @@ serve(async (req: Request) => {
 
     // ── FRESH READ: Always read target from project_settings (SSOT for target) ──
     // The builder NEVER accepts target from the client request body. It reads from the DB.
-    const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes, selectionRes] = await Promise.all([
+    const [aiCtxRes, datasetStateRes, manifestRes, columnsRes, catStatsRes, numStatsRes, settingsRes, inferenceRes, contractRes, selectionRes, activeDatasetRes] = await Promise.all([
       supabase.from("project_ai_context").select("context").eq("project_id", project_id).maybeSingle(),
       supabase.from("project_dataset_state").select("*").eq("project_id", project_id).maybeSingle(),
       supabase.from("import_manifests").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
@@ -1206,6 +1206,7 @@ serve(async (req: Request) => {
       supabase.from("project_problem_inference").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_modeling_contracts").select("*").eq("project_id", project_id).order("created_at", { ascending: false }).limit(1).maybeSingle(),
       supabase.from("project_model_selection").select("*").eq("project_id", project_id).maybeSingle(),
+      supabase.from("project_datasets").select("id, source_type, storage_path, source_metadata").eq("project_id", project_id).eq("is_active", true).maybeSingle(),
     ]);
 
     const aiCtx = (aiCtxRes.data?.context as Record<string, any>) || {};
