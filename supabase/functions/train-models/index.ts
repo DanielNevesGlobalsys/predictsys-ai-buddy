@@ -889,6 +889,7 @@ interface ModelStrategy {
     learningRate?: number;
     lambda?: number;
     epochs?: number;
+    maxTrainRows?: number;
   };
   reason: string;
 }
