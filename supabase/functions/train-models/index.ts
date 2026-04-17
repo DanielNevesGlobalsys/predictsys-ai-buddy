@@ -3823,18 +3823,32 @@ serve(async (req) => {
       if (isTemporalAggregated) {
         // In aggregated mode, headers are the aggregated schema (target + features)
         // Use model_selection selected_features to pick which ones to use
-        const selFeatures = (selection?.selected_features as string[]) || [];
+        const rawSelFeatures = selection?.selected_features;
+        let selFeatures: string[] = [];
+        if (Array.isArray(rawSelFeatures)) {
+          selFeatures = rawSelFeatures.filter((v): v is string => typeof v === "string");
+        } else if (typeof rawSelFeatures === "string") {
+          try { const p = JSON.parse(rawSelFeatures); if (Array.isArray(p)) selFeatures = p.filter((v): v is string => typeof v === "string"); } catch (_) {}
+        }
         const selSet = new Set(selFeatures.map(f => f.toLowerCase()));
+        // Always allow temporal anchors (year/month/quarter) as features even when not in selection,
+        // because they are intrinsic to temporal_aggregated modeling.
+        const temporalAnchorSet = new Set([
+          "calendário.ano", "calendario.ano", "ref_year",
+          "calendário.mês número", "calendario.mes número", "calendario.mes numero", "ref_month",
+          "calendário.trimestre", "calendario.trimestre", "ref_quarter",
+        ]);
 
         for (let i = 0; i < headers.length; i++) {
           const h = headers[i];
-          if (h.toLowerCase() === target_column.toLowerCase()) continue;
-          // If selection has features, only use selected ones; else use all non-target
-          if (selSet.size > 0 && !selSet.has(h.toLowerCase())) continue;
+          const hLower = h.toLowerCase();
+          if (hLower === target_column.toLowerCase()) continue;
+          // If selection has features, only use selected ones OR temporal anchors; else use all non-target
+          if (selSet.size > 0 && !selSet.has(hLower) && !temporalAnchorSet.has(hLower)) continue;
           featureIndices.push(i);
           baseFeatureNames.push(h);
         }
-        console.log(`[AutoML] Aggregated feature selection: ${baseFeatureNames.length} features from headers: ${baseFeatureNames.join(", ")}`);
+        console.log(`[AutoML] Aggregated feature selection: ${baseFeatureNames.length} features (selSet=${selSet.size}, headers=${headers.length}) — first 10: ${baseFeatureNames.slice(0, 10).join(", ")}`);
       } else {
         const numericColumns = columns.filter(c =>
           (c.inferred_type === "numérico" || c.inferred_type === "numerico") && c.column_name !== target_column
