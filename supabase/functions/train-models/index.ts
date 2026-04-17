@@ -689,7 +689,7 @@ function validateTarget(
 
     // Check for sequential/ID pattern
     const sorted = [...yValues].sort((a, b) => a - b);
-    const diffs = [];
+    const diffs: number[] = [];
     for (let i = 1; i < Math.min(sorted.length, 1000); i++) {
       diffs.push(sorted[i] - sorted[i - 1]);
     }
@@ -889,6 +889,7 @@ interface ModelStrategy {
     learningRate?: number;
     lambda?: number;
     epochs?: number;
+    maxTrainRows?: number;
   };
   reason: string;
 }
@@ -1019,6 +1020,20 @@ function trainLogisticRegression(X: number[][], y: number[], lambda = 0.1): { we
   }
   
   return { weights, bias };
+}
+
+function capTrainingRows(
+  X: number[][],
+  y: number[],
+  maxRows: number,
+): { X: number[][]; y: number[]; capped: boolean } {
+  if (X.length <= maxRows) return { X, y, capped: false };
+  const indices = shuffle(Array.from({ length: X.length }, (_, i) => i)).slice(0, maxRows);
+  return {
+    X: indices.map((i) => X[i]),
+    y: indices.map((i) => y[i]),
+    capped: true,
+  };
 }
 
 function predictLinear(X: number[][], weights: number[], bias: number): number[] {
@@ -1957,27 +1972,34 @@ function trainSingleModel(
   console.log(`[AutoML] Algoritmo: ${strategy.algorithm}, Params:`, strategy.params);
   
   const isClassification = strategy.type === "classification";
+  const maxTrainRows = typeof strategy.params.maxTrainRows === "number" ? strategy.params.maxTrainRows : Number.POSITIVE_INFINITY;
+  const cappedTrain = Number.isFinite(maxTrainRows) ? capTrainingRows(Xtrain, ytrain, maxTrainRows) : { X: Xtrain, y: ytrain, capped: false };
+  const trainX = cappedTrain.X;
+  const trainY = cappedTrain.y;
+  if (cappedTrain.capped) {
+    console.log(`[resource_guard] ${strategy.id}: treino limitado a ${trainX.length.toLocaleString()} linhas para reduzir CPU`);
+  }
   let model: any;
   let predictions: number[];
   let featureImportances: { feature_name: string; importance_value: number }[];
   
   switch (strategy.algorithm) {
     case "logistic_regression":
-      model = trainLogisticRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      model = trainLogisticRegression(trainX, trainY, strategy.params.lambda || 0.1);
       predictions = predictLogistic(Xtest, model.weights, model.bias);
       featureImportances = calcFeatureImportance(model.weights, featureNames);
       break;
       
     case "linear_regression":
-      model = trainLinearRegression(Xtrain, ytrain, strategy.params.lambda || 0.1);
+      model = trainLinearRegression(trainX, trainY, strategy.params.lambda || 0.1);
       predictions = predictLinear(Xtest, model.weights, model.bias);
       featureImportances = calcFeatureImportance(model.weights, featureNames);
       break;
       
     case "gradient_boosting":
       model = trainGradientBoosting(
-        Xtrain, 
-        ytrain, 
+        trainX, 
+        trainY, 
         isClassification,
         strategy.params.nEstimators || 50,
         strategy.params.maxDepth || 6,
@@ -1989,8 +2011,8 @@ function trainSingleModel(
       
     case "random_forest":
       model = trainGradientBoosting(
-        Xtrain, 
-        ytrain, 
+        trainX, 
+        trainY, 
         isClassification,
         strategy.params.nEstimators || 50,
         strategy.params.maxDepth || 6,
@@ -2596,7 +2618,6 @@ serve(async (req) => {
               
               // Update the in-memory selection for the rest of training
               selection.selected_features = validFeatures;
-              trainingWarningsGlobal.push(`${invalidFeatures.length} feature(s) removida(s) por reconciliação com schema do builder.`);
             } else {
               // Not enough valid features — block
               for (const f of invalidFeatures) {
@@ -2640,6 +2661,17 @@ serve(async (req) => {
 
     // ── Gate 3 prep: warnings accumulator ──
     const trainingWarningsGlobal: string[] = [];
+
+    if (Array.isArray(selection?.selected_features)) {
+      const schemaColumns = getModelingDatasetSchemaColumns(modelingDataset);
+      if (schemaColumns.length > 0) {
+        const schemaLower = new Set(schemaColumns.map((column) => column.toLowerCase()));
+        const removedBySchema = selection.selected_features.filter((feature: string) => !schemaLower.has(feature.toLowerCase()));
+        if (removedBySchema.length > 0) {
+          trainingWarningsGlobal.push(`${removedBySchema.length} feature(s) removida(s) por reconciliação com schema do builder.`);
+        }
+      }
+    }
 
     // ── MVP-Soft Prepare: training_prepare events + feature filter + sample plan ──
     {
@@ -5174,7 +5206,7 @@ serve(async (req) => {
           features: allFeatureNames.length,
           problem_type,
           target_column,
-          dataset_version: settings?.dataset_version || 0,
+          dataset_version: (sourceMetadata as any)?.dataset_version || 0,
           selection_version: currentSelectionVersion,
         },
       });
@@ -5632,7 +5664,7 @@ serve(async (req) => {
           await supabase.from("platform_events").insert({
             event_type: "no_valid_features",
             project_id: project_id,
-            organization_id: settings.org_id || null,
+            organization_id: project.organization_id || null,
             source: "train-models",
             status: "blocked",
             metadata: {
@@ -5642,8 +5674,8 @@ serve(async (req) => {
               top_block_reasons: topBlockReasons,
               examples,
               target_column: target_column,
-              dataset_version: settings.dataset_version,
-              selection_version: settings.selection_version,
+              dataset_version: (sourceMetadata as any)?.dataset_version || 0,
+              selection_version: currentSelectionVersion,
             },
           });
         } catch (logErr) {
@@ -5798,6 +5830,11 @@ serve(async (req) => {
     // ============ DUAL MODEL TRAINING ============
     console.log(`\n=== Dual Model Training ===`);
     
+    const isLargeVirtualAggregatedTraining = useVirtualSample && effectiveDatasetBuildMode === "temporal_aggregated" && Xfinal.length >= 8000;
+    if (isLargeVirtualAggregatedTraining) {
+      console.log(`[resource_guard] Large virtual aggregated training detected (${Xfinal.length} rows) — enabling lightweight training path`);
+    }
+
     // Model A: Linear (Ridge / Logistic)
     const strategyA: ModelStrategy = isClassification
       ? {
@@ -5805,7 +5842,7 @@ serve(async (req) => {
           name: "Regressão Logística Regularizada",
           type: "classification",
           algorithm: "logistic_regression",
-          params: { epochs: 100, lambda: 0.1 },
+          params: { epochs: 100, lambda: 0.1, maxTrainRows: isLargeVirtualAggregatedTraining ? 5000 : undefined },
           reason: "Modelo A (linear) para comparação."
         }
       : {
@@ -5813,7 +5850,7 @@ serve(async (req) => {
           name: "Regressão Linear Regularizada (Ridge)",
           type: "regression",
           algorithm: "linear_regression",
-          params: { epochs: 100, lambda: 0.1 },
+          params: { epochs: 100, lambda: 0.1, maxTrainRows: isLargeVirtualAggregatedTraining ? 5000 : undefined },
           reason: "Modelo A (linear) para comparação."
         };
 
@@ -5824,9 +5861,10 @@ serve(async (req) => {
       type: isClassification ? "classification" : "regression",
       algorithm: "gradient_boosting",
       params: {
-        nEstimators: Math.min(8, Math.max(3, Math.floor(Xtrain.length / 800))),
-        maxDepth: 3,
-        learningRate: 0.15,
+        nEstimators: isLargeVirtualAggregatedTraining ? 3 : Math.min(8, Math.max(3, Math.floor(Xtrain.length / 800))),
+        maxDepth: isLargeVirtualAggregatedTraining ? 2 : 3,
+        learningRate: isLargeVirtualAggregatedTraining ? 0.2 : 0.15,
+        maxTrainRows: isLargeVirtualAggregatedTraining ? 1500 : 2500,
       },
       reason: "Modelo B (não-linear) para comparação."
     };
@@ -5837,8 +5875,23 @@ serve(async (req) => {
     console.log(`[AutoML] Treinando Modelo A: ${strategyA.name}`);
     const resultA = trainSingleModel(strategyA, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
     
-    console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
-    const resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+    let resultB: TrainResult;
+    if (isLargeVirtualAggregatedTraining) {
+      console.log(`[resource_guard] Skipping non-linear challenger for large virtual aggregated dataset to avoid worker timeout`);
+      resultB = {
+        model: { weights: [...(resultA.model.weights || [])], bias: resultA.model.bias || 0 },
+        predictions: [...resultA.predictions],
+        metrics: { ...resultA.metrics },
+        featureImportances: [...resultA.featureImportances],
+        sanity: {
+          ...resultA.sanity,
+          fail_reasons: [...resultA.sanity.fail_reasons, "skipped_non_linear_resource_guard"],
+        },
+      };
+    } else {
+      console.log(`[AutoML] Treinando Modelo B: ${strategyB.name}`);
+      resultB = trainSingleModel(strategyB, Xtrain, ytrainForModel, Xtest, ytestForModel, finalFeatureNames);
+    }
 
     // ==================== RESOLVE METRICS PROFILE ====================
     const intentContract = trainAiCtx?.intent_contract || trainAiCtx?.intent || {};
